@@ -402,7 +402,7 @@ class RCNS2_worker():
 
         if os.path.getsize(f"{self.resultfolder}/mgmt_result.bed") > 0:
 
-            cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={self.resultfolder}/mgmt_result.bed --out_dir={self.resultfolder} --probes={HVPATH}/bin/mgmt_probes.Rdata --model=.{HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
+            cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={self.resultfolder}/mgmt_result.bed --out_dir={self.resultfolder} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
             os.system(
                 cmd
             )
