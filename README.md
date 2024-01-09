@@ -103,7 +103,11 @@ The Copy Number Variation panel shows a real time estimate of copy number assumi
 
 The coverage panel shows per chromosome coverage and coverage for the targets and off target regions during sequencing. You can also visualise the change in coverage over time.
 
+![img.png](images/img6.png)
+
 This panel also provides a filterable table of targets.
+
+![img_1.png](images/img_7.png)
 
 The final tab (currently) shows the methylation status across the MGMT promoter region. This plot will take considerable time to generate sufficient coverage to be meaningful.
 
