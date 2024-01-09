@@ -121,6 +121,12 @@ This tool uses a range of third party tools and applications including:
 - [cnv_from_bam] https://github.com/adoni5/cnv_from_bam
 - [methylartist] https://github.com/adamewing/methylartist
 
+We are grateful to the authors of these tools for their work.
+
+We also thank a lot of people who have contributed to these tools including: Graeme Fox, Simon Deacon, Rory Munro, Satrio Wibowo, Thomas Murray, Inswasti Cahyani, Nadine Holmes, Simon Paine, Stuart Smith and many others from outside Nottingham.
+
+We are particularly grateful to Areeba Patel, Felix Sahm and colleagues for their work on Rapid-CNS2.
+
 This list is non-exhaustive and the software is under active development.
 
 Documentation is currently unavailable.
