@@ -33,6 +33,7 @@ dependencies = [
   "pysam",
   "pandas",
   "sturgeon@git+https://github.com/marcpaga/sturgeon",
+  "methylartist@git+https://github.com/mattloose/methylartist",
   "natsort",
   "pywebview",
 ]
