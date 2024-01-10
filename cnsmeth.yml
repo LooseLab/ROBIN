@@ -1,0 +1,13 @@
+name: cnsmeth
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - r-base
+  - python=3.8
+  - pip
+  - pip:
+    - readfish
+    - ont-pyguppy-client-lib
+    - git+https://github.com/LooseLab/cnsmeth
