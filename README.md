@@ -25,12 +25,18 @@ channels:
   - defaults
 dependencies:
   - r-base
+  - bioconda::bioconductor-genomicranges
+  - r-optparse
+  - r-data.table
+  - conda-forge::r-ranger
+  - r-matrixStats
+  - r-glmnet
   - python=3.8
   - pip
   - pip:
     - readfish
     - ont-pyguppy-client-lib
-    - git+https://github.com/LooseLab/cnsmeth
+    #- git+https://github.com/LooseLab/cnsmeth
 
 ```
 then to install:
