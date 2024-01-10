@@ -12,6 +12,7 @@ from methnicegui.mgmt_panel import MGMT_Panel
 from watchdog.observers import Observer
 from pathlib import Path
 from queue import Queue
+import pandas as pd
 
 import threading
 import time
