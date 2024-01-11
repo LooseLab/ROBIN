@@ -64,7 +64,7 @@ class BrainMeth:
         self.cnv = CNV_Plot()
         self.target_coverage = TargetCoverage()
         self.mgmt_panel = MGMT_Panel()
-        self.rcns2_worker = RCNS2_worker(self.bamforcns, self.cnv, self.target_coverage, self.mgmt_panel, threads=self.threads, output_folder=self.output)
+        self.rcns2_worker = RCNS2_worker(self.bamforcns, self.cnv, self.target_coverage, self.mgmt_panel, threads=self.threads, output_folder=self.output, showerrors=self.showerrors)
 
         self.information_panel()
 

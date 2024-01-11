@@ -23,7 +23,7 @@ HVPATH=os.path.join(
 
 
 class RCNS2_worker():
-    def __init__(self, bamqueue, cnv, target_coverage, mgmt_panel, threads=4, output_folder=None, threshold=0.05, showerrors=False,):
+    def __init__(self, bamqueue, cnv, target_coverage, mgmt_panel, threads=4, output_folder=None, threshold=0.05, showerrors=False):
         self.bamqueue = bamqueue
         self.cnv = cnv
         self.threads = threads
