@@ -347,7 +347,7 @@ class BrainMeth:
                             self.bam_count["file"] = {}
                         self.bam_count["file"][os.path.join(path, f)] = time.time()
                         if self.simtime:
-                            time.sleep(30)
+                            time.sleep(1)
 
     def rapid_cns2(self):
         """
