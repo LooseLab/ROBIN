@@ -13,7 +13,7 @@ dependencies:
   - r-glmnet
   - python=3.8
   - pip
-  - pip:
-    - readfish
-    - ont-pyguppy-client-lib
+  #- pip:
+  #  - readfish
+  #  - ont-pyguppy-client-lib
     #- git+https://github.com/LooseLab/cnsmeth
