@@ -23,7 +23,7 @@ HVPATH=os.path.join(
 
 
 class RCNS2_worker():
-    def __init__(self, bamqueue, cnv, target_coverage, mgmt_panel, threads=4, output_folder=None, threshold=0.05, showerrors=False):
+    def __init__(self, bamqueue, cnv, target_coverage, mgmt_panel, threads=4, output_folder=None, threshold=0.05, showerrors=False, browse=False):
         self.bamqueue = bamqueue
         self.cnv = cnv
         self.threads = threads
@@ -32,31 +32,35 @@ class RCNS2_worker():
         self.threshold = threshold
         self.mgmt_panel=mgmt_panel
         self.nofiles = False
+        self.browse = browse
         self.rcns2_bam_count = 0
         self.showerrors = showerrors
         self.rapidcns_status_txt = {"message": "Waiting for data."}
         self.st_bam_count = 0
         self.resultfolder = os.path.join(self.outputfolder, "results")
-        if not os.path.exists(self.resultfolder):
-            os.mkdir(self.resultfolder)
         self.subsetbamfolder = os.path.join(self.outputfolder, "subsetbams")
-        if not os.path.exists(self.subsetbamfolder):
-            os.mkdir(self.subsetbamfolder)
         self.donebamfolder = os.path.join(self.outputfolder, "donebams")
-        if not os.path.exists(self.donebamfolder):
-            os.mkdir(self.donebamfolder)
         self.targetsbamfolder = os.path.join(self.outputfolder, "targetsbams")
-        if not os.path.exists(self.targetsbamfolder):
-            os.mkdir(self.targetsbamfolder)
         self.sortedbamfile = os.path.join(self.subsetbamfolder, "sorted.bam")
         self.merged_bam_file = None
         self.rcns2folder = os.path.join(self.outputfolder, "rcns2")
-        if not os.path.exists(self.rcns2folder):
-            os.mkdir(self.rcns2folder)
         self.rcns2_df_store = pd.DataFrame()
-        self.rapidcns2_processing = threading.Thread(target=self.rapid_cns2, args=())
-        self.rapidcns2_processing.daemon = True
-        self.rapidcns2_processing.start()
+        if not self.browse:
+            if not os.path.exists(self.resultfolder):
+                os.mkdir(self.resultfolder)
+            if not os.path.exists(self.subsetbamfolder):
+                os.mkdir(self.subsetbamfolder)
+            if not os.path.exists(self.donebamfolder):
+                os.mkdir(self.donebamfolder)
+            if not os.path.exists(self.targetsbamfolder):
+                os.mkdir(self.targetsbamfolder)
+            if not os.path.exists(self.rcns2folder):
+                os.mkdir(self.rcns2folder)
+            self.rapidcns2_processing = threading.Thread(target=self.rapid_cns2, args=())
+            self.rapidcns2_processing.daemon = True
+            self.rapidcns2_processing.start()
+        else:
+            print("Browse mode - not running RapidCNS2 live")
 
     def rapid_cns2(self):
         """
@@ -110,11 +114,17 @@ class RCNS2_worker():
                 )
 
                 self.rapidcns_status_txt["message"] = "Running modkit pileup."
-
+                if self.showerrors:
+                    print (
+                        f"modkit pileup -t {self.threads} --filter-threshold 0.73 --combine-mods {self.sortedbamfile} "
+                        f"{self.rapidcnsbamfile}.bed --suppress-progress  >/dev/null 2>&1 "
+                    )
                 os.system(
                     f"modkit pileup -t {self.threads} --filter-threshold 0.73 --combine-mods {self.sortedbamfile} "
                     f"{self.rapidcnsbamfile}.bed --suppress-progress  >/dev/null 2>&1 "
                 )  #
+
+                #ToDo: Implement saving of target coverage data.
 
                 if not_first_run:
                     self.rapidcns_status_txt[
@@ -531,7 +541,6 @@ class RCNS2_worker():
         """
         self.rcns2_time_chart.options["series"] = []
         for series, data in datadf.to_dict().items():
-            # print(series)
             data_list = [[key, value] for key, value in data.items()]
             # print(data_list)
             if series != "number_probes":
@@ -553,4 +562,116 @@ class RCNS2_worker():
                     }
                 )
         self.rcns2_time_chart.update()
+
+    def load_prior_data(self):
+        """
+        Load prior data from a file.
+        :return:
+        """
+        print("Loading prior data")
+        self.rcns2_df_store = pd.read_csv(
+                os.path.join(self.resultfolder, "rcns2_scores.csv")
+        ).set_index("timestamp")
+        print (self.rcns2_df_store)
+        columns_greater_than_threshold = (self.rcns2_df_store > self.threshold * 100).any()
+        columns_not_greater_than_threshold = ~columns_greater_than_threshold
+        result = self.rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
+
+        self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
+
+        batch = find_largest_integer(self.rcns2folder, "live_", "_votes.tsv")
+
+        if batch:
+
+            scores = pd.read_table(
+                f"{self.rcns2folder}/live_{batch}_votes.tsv", delim_whitespace=True
+            )
+            scores = scores.sort_values(by=["cal_Freq"], ascending=False).head(10)
+            self.update_rcns2_plot(
+                scores.index.to_list(),
+                list(scores["cal_Freq"].values / 100),
+                "ALL",
+            )
+
+        self.rapidcns_status_txt[
+            "message"
+        ] = "Predictions Complete."
+
+        self.cnv.cnv_plotting(self.donebamfolder)
+
+    def replay_prior_data(self):
+        self.background_task = threading.Thread(target=self._replay_prior_data, args=())
+        self.background_task.daemon = True
+        self.background_task.start()
+
+    def _replay_prior_data(self):
+        """
+        Replay prior data from a file.
+        :return:
+        """
+        print("Replaying prior data")
+        self.rcns2_df_store = pd.read_csv(
+                os.path.join(self.resultfolder, "rcns2_scores.csv")
+        ).set_index("timestamp")
+        self.rapidcns_status_txt[
+            "message"
+        ] = f"Replaying prior data."
+        #print (self.rcns2_df_store)
+        min_index_value = self.rcns2_df_store.index.min()
+        max_index_value = self.rcns2_df_store.index.max()
+        start_time=time.time()
+        elapsed_time = 0
+        scale_factor = 300
+        scaled_elapsed_time = elapsed_time * scale_factor
+
+        print (max_index_value-min_index_value)
+
+        df_len = 0
+
+        while (1000 * scaled_elapsed_time) + min_index_value < max_index_value:
+            print ("replaying_data")
+            elapsed_time = time.time() - start_time
+            scaled_elapsed_time = elapsed_time * scale_factor
+            print(scaled_elapsed_time)
+
+            temp_rcns2_df_store = self.rcns2_df_store[self.rcns2_df_store.index < (min_index_value + (1000 * scaled_elapsed_time))]
+            columns_greater_than_threshold = (temp_rcns2_df_store > self.threshold * 100).any()
+            columns_not_greater_than_threshold = ~columns_greater_than_threshold
+            result = temp_rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
+            if temp_rcns2_df_store.drop(columns=result).shape[0] > df_len:
+                df_len = temp_rcns2_df_store.drop(columns=result).shape[0]
+                self.update_rcns2_time_chart(temp_rcns2_df_store.drop(columns=result))
+                self.rapidcns_status_txt[
+                    "message"
+                ] = f"Replaying prior RCNS2 data - step {df_len}."
+                lastrow = temp_rcns2_df_store.iloc[-1]#.drop("number_probes")
+                lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+                self.update_rcns2_plot(
+                    lastrow_plot.index.to_list(),
+                    list(lastrow_plot.values/100),
+                    "replay",
+                )
+            time.sleep(0.5)
+        self.rapidcns_status_txt[
+            "message"
+        ] = f"Viewing historical RCNS2 data."
+
+
+def find_largest_integer(directory_path, prefix, suffix):
+    files = os.listdir(directory_path)
+
+    # Filter files that match the pattern live_N_sample.txt
+    matching_files = [file for file in files if file.startswith(prefix) and file.endswith(suffix)]
+
+    if not matching_files:
+        print("No matching files found.")
+        return None
+
+    # Extract integers from the file names
+    integers = [int(file.split('_')[1]) for file in matching_files]
+
+    # Find the largest integer
+    largest_integer = max(integers)
+
+    return largest_integer
 

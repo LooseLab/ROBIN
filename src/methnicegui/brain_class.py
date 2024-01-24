@@ -8,6 +8,7 @@ from methnicegui.RCNS2_worker import RCNS2_worker
 from methnicegui.copy_number_component import CNV_Plot
 from methnicegui.target_coverage import TargetCoverage
 from methnicegui.mgmt_panel import MGMT_Panel
+from methnicegui.local_file_picker import local_file_picker
 
 from watchdog.observers import Observer
 from pathlib import Path
@@ -29,6 +30,7 @@ class BrainMeth:
         output=None,
         sequencing_summary=None,
         showerrors=False,
+        browse=False,
     ):
         self.threads = threads
         self.simtime = simtime
@@ -36,37 +38,116 @@ class BrainMeth:
         self.output = output
         self.sequencing_summary = sequencing_summary
         self.showerrors = showerrors
+        self.browse = browse
 
         self.bam_count = {"counter": 0}
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
 
         print ("BrainMeth Loaded")
-
-        self.event_handler = BamEventHandler(self.bam_count)
-        self.observer = Observer()
-        self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
-        self.observer.start()
-
-        self.bam_processing = threading.Thread(target=self.process_bams, args=())
-        self.bam_processing.daemon = True
-        self.bam_processing.start()
-
-
-        self.check_for_existing_bams = threading.Thread(
-            target=self.check_existing_bams,
-            args=(),
-            kwargs={"sequencing_summary": self.sequencing_summary},
-        )
-        self.check_for_existing_bams.daemon = True
-        self.check_for_existing_bams.start()
-        self.sturgeon_worker = Sturgeon_worker(self.bamforsturgeon, threads=self.threads, output_folder=self.output)
         self.cnv = CNV_Plot()
         self.target_coverage = TargetCoverage()
         self.mgmt_panel = MGMT_Panel()
-        self.rcns2_worker = RCNS2_worker(self.bamforcns, self.cnv, self.target_coverage, self.mgmt_panel, threads=self.threads, output_folder=self.output, showerrors=self.showerrors)
 
-        self.information_panel()
+        if not self.browse:
+            self.event_handler = BamEventHandler(self.bam_count)
+            self.observer = Observer()
+            self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
+            self.observer.start()
+
+            self.bam_processing = threading.Thread(target=self.process_bams, args=())
+            self.bam_processing.daemon = True
+            self.bam_processing.start()
+
+
+            self.check_for_existing_bams = threading.Thread(
+                target=self.check_existing_bams,
+                args=(),
+                kwargs={"sequencing_summary": self.sequencing_summary},
+            )
+            self.check_for_existing_bams.daemon = True
+            self.check_for_existing_bams.start()
+            self.sturgeon_worker = Sturgeon_worker(self.bamforsturgeon, threads=self.threads, output_folder=self.output)
+
+
+
+            self.rcns2_worker = RCNS2_worker(self.bamforcns, self.cnv, self.target_coverage, self.mgmt_panel,
+                                             threads=self.threads, output_folder=self.output,
+                                             showerrors=self.showerrors, browse=self.browse)
+
+            self.information_panel()
+        else:
+            ui.label("Browse mode enabled. Please choose a folder to see data from.")
+            ui.button('Choose file', on_click=self.pick_file, icon='folder')
+
+            self.content = ui.column().classes('w-full')
+
+    async def pick_file(self) -> None:
+        result = await local_file_picker('~', multiple=True)
+        ui.notify(f'You selected {result}')
+        self.content.clear()
+        with self.content:
+            ui.label(f"Monitoring the path:{result}").tailwind("drop-shadow", "font-bold")
+            with ui.tabs().classes('w-full') as tabs:
+                methylation = ui.tab('Methylation Classification')
+                copy_numer = ui.tab('Copy Number Variation')
+                coverage = ui.tab('Target Coverage')
+                mgmt = ui.tab('MGMT')
+            with ui.tab_panels(tabs, value=methylation).classes('w-full'):
+                with ui.tab_panel(methylation).classes('w-full'):
+                    with ui.card().classes('w-full'):
+                        with ui.column().classes('w-full'):
+                            self.rcns2_worker = RCNS2_worker(self.bamforcns, self.cnv, self.target_coverage,
+                                                             self.mgmt_panel,
+                                                             threads=self.threads, output_folder=result[0],
+                                                             showerrors=self.showerrors, browse=self.browse)
+                            self.sturgeon_worker = Sturgeon_worker(self.bamforsturgeon, threads=self.threads, output_folder=result[0],showerrors=self.showerrors, browse=self.browse)
+
+                            with ui.card().classes("w-full h-auto"):
+
+                                with ui.grid(columns=2).classes("w-full h-auto"):
+                                    with ui.column():
+                                        with ui.card().style("width: 100%"):
+                                            self.rcns2_worker.status_rcns2()
+                                            self.rcns2_worker.create_rcns2_chart("RapidCNS2")
+
+
+                                    with ui.column():
+                                        with ui.card().style("width: 100%"):
+                                            self.sturgeon_worker.status_sturgeon()
+                                            self.sturgeon_worker.create_sturgeon_chart("Sturgeon")
+
+                            with ui.card().style("width: 100%"):
+                                self.rcns2_worker.create_rcns2_time_chart()
+
+                            with ui.card().style("width: 100%"):
+                                self.sturgeon_worker.create_sturgeon_time_chart()
+                            ui.button('replay data', on_click=self.replay, icon="replay")
+
+
+
+                with ui.tab_panel(copy_numer).classes('w-full'):
+                    with ui.card().style("width: 100%"):
+                        self.cnv.create_cnv_scatter("CNV Scatter")
+                        pass
+                    ui.button('replay cnv data', on_click=self.replay_cnv, icon="replay")
+
+                with ui.tab_panel(coverage).classes('w-full'):
+                    self.target_coverage.setup_ui()
+
+                with ui.tab_panel(mgmt).classes('w-full'):
+                    self.mgmt_panel.setup_ui(mgmt)
+
+                self.rcns2_worker.load_prior_data()
+                self.sturgeon_worker.load_prior_data()
+
+                #self.rcns2_worker.replay_prior_data()
+    def replay(self):
+        self.rcns2_worker.replay_prior_data()
+        self.sturgeon_worker.replay_prior_data()
+
+    def replay_cnv(self):
+        ui.notify("Replaying CNV data")
 
 
     def information_panel(self):
@@ -209,3 +290,4 @@ class BrainMeth:
                         self.bam_count["file"][os.path.join(path, f)] = time.time()
                         if self.simtime:
                             time.sleep(30)
+

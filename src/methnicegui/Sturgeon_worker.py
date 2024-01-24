@@ -13,27 +13,32 @@ from sturgeon.callmapping import (
 )
 
 class Sturgeon_worker():
-    def __init__(self, bamqueue, threads=4, output_folder=None, threshold=0.05):
+    def __init__(self, bamqueue, threads=4, output_folder=None, threshold=0.05, showerrors=False, browse=False):
+        self.browse=browse
         self.bamqueue = bamqueue
         self.threads = threads
         self.threshold = threshold
         self.st_bam_count = 0
         self.outputfolder = output_folder
         self.bedfoldercount = os.path.join(self.outputfolder, "bedscount")
-        if not os.path.exists(self.bedfoldercount):
-            os.makedirs(self.bedfoldercount)
         self.resultfolder = os.path.join(self.outputfolder, "results")
-        if not os.path.exists(self.resultfolder):
-            os.mkdir(self.resultfolder)
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
-        self.result=None
+        self.showerrors = showerrors
+        self.result = None
         self.sturgeon_df_store = pd.DataFrame()
-        self.sturgeon_status_txt= {"message": "Waiting for data."}
-        self.sturgeon_processing = threading.Thread(target=self.sturgeon, args=())
-        self.sturgeon_processing.daemon = True
-        self.sturgeon_processing.start()
+        self.sturgeon_status_txt = {"message": "Waiting for data."}
+        if not self.browse:
+            if not os.path.exists(self.bedfoldercount):
+                os.makedirs(self.bedfoldercount)
+
+            if not os.path.exists(self.resultfolder):
+                os.mkdir(self.resultfolder)
+
+            self.sturgeon_processing = threading.Thread(target=self.sturgeon, args=())
+            self.sturgeon_processing.daemon = True
+            self.sturgeon_processing.start()
 
     def sturgeon(self) -> None:
         """
@@ -273,3 +278,90 @@ class Sturgeon_worker():
                     }
                 )
         self.sturgeon_time_chart.update()
+
+    def load_prior_data(self):
+        self.sturgeon_df_store= pd.read_csv(
+            os.path.join(self.resultfolder, "sturgeon_scores.csv")
+        ).set_index("timestamp")
+        columns_greater_than_threshold = (self.sturgeon_df_store > self.threshold).any()
+        columns_not_greater_than_threshold = ~columns_greater_than_threshold
+        result = self.sturgeon_df_store.columns[columns_not_greater_than_threshold].tolist()
+
+        self.update_sturgeon_time_chart(self.sturgeon_df_store.drop(columns=result))
+        mydf = pd.read_csv(
+            os.path.join(
+                self.resultfolder,
+                "final_merged_probes_methyl_calls_general.csv",
+            )
+        )
+
+        self.st_num_probes = mydf.iloc[-1]["number_probes"]
+        lastrow = mydf.iloc[-1].drop("number_probes")
+        lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+        self.update_sturgeon_plot(
+            lastrow_plot.index.to_list(),
+            list(lastrow_plot.values),
+            self.st_bam_count,
+        )
+
+        self.sturgeon_status_txt[
+            "message"
+        ] = "Predictions Complete."
+
+    def replay_prior_data(self):
+        self.background_tast = threading.Thread(target=self._replay_prior_data, args=())
+        self.background_tast.daemon = True
+        self.background_tast.start()
+
+    def _replay_prior_data(self):
+        """
+        Replay prior data from a file.
+        :return:
+        """
+        print("Replaying prior Sturgeon data")
+        self.sturgeon_status_txt[
+            "message"
+        ] = f"Replaying prior Sturgeon data."
+        self.sturgeon_df_store = pd.read_csv(
+            os.path.join(self.resultfolder, "sturgeon_scores.csv")
+        ).set_index("timestamp")
+        min_index_value = self.sturgeon_df_store.index.min()
+        max_index_value = self.sturgeon_df_store.index.max()
+        start_time=time.time()
+        elapsed_time = 0
+        scale_factor = 300
+        scaled_elapsed_time = elapsed_time * scale_factor
+
+        print (max_index_value-min_index_value)
+
+        df_len = 0
+
+        while (1000 * scaled_elapsed_time) + min_index_value < max_index_value:
+            print ("replaying_data")
+            elapsed_time = time.time() - start_time
+            scaled_elapsed_time = elapsed_time * scale_factor
+            print(scaled_elapsed_time)
+
+            temp_sturgeon_df_store = self.sturgeon_df_store[self.sturgeon_df_store.index < (min_index_value + (1000 * scaled_elapsed_time))]
+
+            columns_greater_than_threshold = (temp_sturgeon_df_store > self.threshold).any()
+            columns_not_greater_than_threshold = ~columns_greater_than_threshold
+            result = temp_sturgeon_df_store.columns[columns_not_greater_than_threshold].tolist()
+            if temp_sturgeon_df_store.drop(columns=result).shape[0] > df_len:
+                self.update_sturgeon_time_chart(temp_sturgeon_df_store.drop(columns=result))
+                df_len = temp_sturgeon_df_store.drop(columns=result).shape[0]
+                self.sturgeon_status_txt[
+                    "message"
+                ] = f"Replaying prior Sturgeon data - step {df_len}."
+                lastrow = temp_sturgeon_df_store.iloc[-1].drop("number_probes")
+                lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+                self.update_sturgeon_plot(
+                    lastrow_plot.index.to_list(),
+                    list(lastrow_plot.values),
+                    "replay",
+                )
+
+            time.sleep(0.5)
+        self.sturgeon_status_txt[
+            "message"
+        ] = f"Viewing historical Sturgeon data."

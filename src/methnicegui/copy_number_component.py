@@ -1,12 +1,15 @@
 # Python imports.
 from __future__ import annotations
 
-from nicegui import Tailwind, ui, app
-from nicegui.events import ValueChangeEventArguments
+
+from nicegui import Tailwind, ui, app, run
+import threading
+
+import time
+import datetime
 
 from methnicegui import theme
 from cnv_from_bam import iterate_bam_file
-import logging
 import os
 
 os.environ["CI"] = "1"
@@ -16,6 +19,9 @@ import numpy as np
 import pandas as pd
 
 from methnicegui import resources
+
+import queue
+
 
 class CNV_Plot():
     def __init__(self, **kwargs):
@@ -31,9 +37,20 @@ class CNV_Plot():
         self.cnv_dict = {}
         self.cnv_dict["bin_width"] = 0
         self.cnv_dict["variance"] = 0
+        self.display_row = None
+        self.cnv_queue = queue.Queue()
+        self.worker = threading.Thread(target=self._cnv_plotting, args=())
+        self.worker.daemon = True
+        self.worker.start()
+
+
+
 
 
     def create_cnv_scatter(self, title):
+        self.display_row = ui.row()
+        with self.display_row:
+            ui.label("Copy Number Variation").tailwind("drop-shadow", "font-bold")
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
@@ -103,14 +120,30 @@ class CNV_Plot():
         )
 
     def cnv_plotting(self, bam_path):
-        #bam_path = Path(self.donebamfolder)
-        self.result = iterate_bam_file(
-            bam_path, _threads=4, mapq_filter=60, log_level=logging.getLevelName("WARN")
-        )
-        self.cnv_dict["bin_width"] = self.result.bin_width
-        self.cnv_dict["variance"] = self.result.variance
-        # print(self.result)
-        self._update_cnv_plot()
+        self.cnv_queue.put(bam_path)
+
+
+    def _cnv_plotting(self):
+        while True:
+            if self.display_row:
+                if not self.cnv_queue.empty():
+                    bam_path = self.cnv_queue.get()
+                    self.display_row.clear()
+                    with self.display_row:
+                        ui.label("Copy Number Variation").tailwind("drop-shadow", "font-bold")
+                        ui.label(f"Last update: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        ui.label(f"{bam_path}")
+                    self.result = iterate_bam_file(
+                            bam_path, _threads=8, mapq_filter=60#, log_level=logging.getLevelName("WARN")
+                        )
+                    print(self.result)
+                    self.cnv_dict["bin_width"] = self.result.bin_width
+                    self.cnv_dict["variance"] = self.result.variance
+                        # print(self.result)
+                    self._update_cnv_plot()
+            time.sleep(5)
+
+
 
     def _update_cnv_plot(self, gene_target=None):
         if self.result:

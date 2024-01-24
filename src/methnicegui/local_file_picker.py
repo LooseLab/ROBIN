@@ -81,10 +81,10 @@ class local_file_picker(ui.dialog):
         rows = await ui.run_javascript(f'getElement({self.grid.id}).gridOptions.api.getSelectedRows()')
         self.submit([r['path'] for r in rows])
 
-async def pick_file() -> None:
-    result = await local_file_picker('~', multiple=True)
-    ui.notify(f'You chose {result}')
+#async def pick_file() -> None:
+#    result = await local_file_picker('~', multiple=True)
+#    ui.notify(f'You chose {result}')
 
-ui.button('Choose file', on_click=pick_file, icon='folder')
+#ui.button('Choose file', on_click=pick_file, icon='folder')
 
-ui.run()
+#ui.run()
