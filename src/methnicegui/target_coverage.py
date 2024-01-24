@@ -22,7 +22,7 @@ class TargetCoverage:
         with ui.card().style("width: 100%"):
             self.create_coverage_time_chart()
         with ui.card().style("width: 100%"):
-            self.f = ui.input('Filter')
+            self.f = ui.input("Filter")
             self.targ_df = ui.row()
 
     def create_coverage_plot(self, title):
@@ -31,12 +31,7 @@ class TargetCoverage:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "yAxis": {"type": "value"},
                     "xAxis": {
                         "type": "category",
@@ -85,12 +80,7 @@ class TargetCoverage:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "yAxis": {"type": "value"},
                     "xAxis": {
                         "type": "category",
@@ -152,42 +142,38 @@ class TargetCoverage:
         ]
         self.echart4.update()
 
-
     def create_coverage_time_chart(self):
         self.coverage_time_chart = (
             ui.echart(
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": "Coverage Over Time"},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
                     #'tooltip': {
                     #    'order': 'valueDesc',
                     #    'trigger': 'axis'
                     # },
-                    "series": [{
-                        "type": "line",
-                        "smooth": True,
-                        "name": "Coverage",
-                        "emphasis": {"focus": "series"},
-                        "endLabel": {
-                            "show": True,
-                            "formatter": "{a}",
-                            "distance": 20,
-                        },
-                        "lineStyle": {
-                            "width": 2,
-                        },
-                        "data": [],
-                        }],
-                    }
-                )
+                    "series": [
+                        {
+                            "type": "line",
+                            "smooth": True,
+                            "name": "Coverage",
+                            "emphasis": {"focus": "series"},
+                            "endLabel": {
+                                "show": True,
+                                "formatter": "{a}",
+                                "distance": 20,
+                            },
+                            "lineStyle": {
+                                "width": 2,
+                            },
+                            "data": [],
+                        }
+                    ],
+                }
+            )
             .style("height: 350px")
             .classes("border-double")
         )
@@ -204,5 +190,7 @@ class TargetCoverage:
         genome = covdf["endpos"].sum()
         coverage = bases / genome
         currenttime = time.time() * 1000
-        self.coverage_time_chart.options["series"][0]["data"].append([currenttime, coverage])
+        self.coverage_time_chart.options["series"][0]["data"].append(
+            [currenttime, coverage]
+        )
         self.coverage_time_chart.update()

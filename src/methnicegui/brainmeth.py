@@ -50,7 +50,7 @@ class BrainMeth:
         self.rcns2finished = False
         self.stugeonfinished = False
         self.nofiles = False
-        self.showerrors=showerrors
+        self.showerrors = showerrors
         self.bamfolder = watchfolder
         self.threads = threads
         self.imagefile = os.path.join(
@@ -143,9 +143,11 @@ class BrainMeth:
                 )
                 with ui.row().classes("ml-auto"):
                     self.dark = ui.dark_mode()
-                    ui.switch(
-                        "Dark Mode", on_change=self.dark_mode
-                    ).classes('ml-4 bg-transparent').props('color="black"')  # .classes('ml-4')#.props('outline')
+                    ui.switch("Dark Mode", on_change=self.dark_mode).classes(
+                        "ml-4 bg-transparent"
+                    ).props(
+                        'color="black"'
+                    )  # .classes('ml-4')#.props('outline')
                     ui.button(
                         "Quit", icon="logout", on_click=dialog.open
                     )  # .classes('ml-4')#.props('outline') #.classes('shadow-lg')
@@ -162,12 +164,12 @@ class BrainMeth:
                     self.bam_count, "counter", backward=lambda n: f"BAM files seen: {n}"
                 ).tailwind("drop-shadow")
 
-        with ui.tabs().classes('w-full') as tabs:
-            methylation = ui.tab('Methylation Classification')
-            copy_numer = ui.tab('Copy Number Variation')
-            coverage = ui.tab('Target Coverage')
-            mgmt = ui.tab('MGMT')
-        with ui.tab_panels(tabs, value=methylation).classes('w-full'):
+        with ui.tabs().classes("w-full") as tabs:
+            methylation = ui.tab("Methylation Classification")
+            copy_numer = ui.tab("Copy Number Variation")
+            coverage = ui.tab("Target Coverage")
+            mgmt = ui.tab("MGMT")
+        with ui.tab_panels(tabs, value=methylation).classes("w-full"):
             with ui.tab_panel(methylation):
                 with ui.card().style("width: 100%"):
                     with ui.grid(columns=2).classes("w-full h-auto"):
@@ -212,10 +214,14 @@ class BrainMeth:
                             value="All",
                         ).style("width: 150px")
                         ui.label().bind_text_from(
-                            self.cnv_dict, "bin_width", backward=lambda n: f"Bin Width: {n}"
+                            self.cnv_dict,
+                            "bin_width",
+                            backward=lambda n: f"Bin Width: {n}",
                         )
                         ui.label().bind_text_from(
-                            self.cnv_dict, "variance", backward=lambda n: f"Variance: {n}"
+                            self.cnv_dict,
+                            "variance",
+                            backward=lambda n: f"Variance: {n}",
                         )
                     self.create_scatter("Copy Number Variation")
 
@@ -232,27 +238,22 @@ class BrainMeth:
                 with ui.card().style("width: 100%"):
                     self.create_coverage_time_chart()
                 with ui.card().style("width: 100%"):
-                    self.f = ui.input('Filter')
+                    self.f = ui.input("Filter")
                     self.targ_df = ui.row()
 
             self.mgmt = ui.tab_panel(mgmt)
             with self.mgmt:
                 with ui.card().style("width: 100%"):
                     ui.label("MGMT Methylation").tailwind("drop-shadow", "font-bold")
-                    #self.mgmtcontent=ui.column()
-                    #with self.mgmtcontent:
+                    # self.mgmtcontent=ui.column()
+                    # with self.mgmtcontent:
                     self.mgmtplot = ui.row()
-                    with self.mgmtplot.classes('w-full'):
+                    with self.mgmtplot.classes("w-full"):
                         ui.label("Plot not yet available.")
-                        #ui.image("/tmp/run2/targetsbams/25_sorted.png").props("fit=scale-down")
+                        # ui.image("/tmp/run2/targetsbams/25_sorted.png").props("fit=scale-down")
                     self.mgmtable = ui.row()
                     with self.mgmtable:
                         ui.label("Table not yet available.")
-
-
-
-
-
 
         with ui.footer():
             ui.label(
@@ -336,7 +337,7 @@ class BrainMeth:
                 self.bam_count["file"][row["full_path"]] = time.time()
                 # print (index,row)
             self.runfinished = True
-            #os.kill(os.getpid(), signal.SIGINT)
+            # os.kill(os.getpid(), signal.SIGINT)
         else:
             # print ("Checking Bams")
             for path, dirs, files in os.walk(self.bamfolder):
@@ -389,7 +390,7 @@ class BrainMeth:
 
                 self.rapidcns_status_txt["message"] = "Merging bam files."
 
-                #The bam file created here consists of all the reads from the bam files in the most recent batch.
+                # The bam file created here consists of all the reads from the bam files in the most recent batch.
 
                 pysam.cat("-o", tempbam.name, *bams)
 
@@ -480,7 +481,7 @@ class BrainMeth:
                         merged_df["numreads_df1"] + merged_df["numreads_df2"]
                     )
                     merged_df["covbases"] = (
-                            merged_df["covbases_df1"] + merged_df["covbases_df2"]
+                        merged_df["covbases_df1"] + merged_df["covbases_df2"]
                     )
                     merged_df["meandepth"] = (
                         merged_df["meandepth_df1"] + merged_df["meandepth_df2"]
@@ -595,11 +596,15 @@ class BrainMeth:
                 self.update_coverage_plot(covdf)
                 self.update_coverage_plot_targets(covdf, bedcovdf)
                 self.update_coverage_time_plot(covdf)
-                self.target_coverage_df=bedcovdf
-                self.target_coverage_df['coverage']=self.target_coverage_df['bases']/self.target_coverage_df['length']
+                self.target_coverage_df = bedcovdf
+                self.target_coverage_df["coverage"] = (
+                    self.target_coverage_df["bases"] / self.target_coverage_df["length"]
+                )
                 with self.targ_df:
                     self.targ_df.clear()
-                    ui.table.from_pandas(self.target_coverage_df, pagination=10, row_key='name').bind_filter_from(self.f, 'value').classes('w-full')
+                    ui.table.from_pandas(
+                        self.target_coverage_df, pagination=10, row_key="name"
+                    ).bind_filter_from(self.f, "value").classes("w-full")
                 # self.log("Merged Bed File Info:")
                 # self.log(self.merged_bed_file.info())
 
@@ -607,17 +612,20 @@ class BrainMeth:
                     "message"
                 ] = "Running RapidCNS2 methylation classification."
 
-                command = f"Rscript ../hv_rapidCNS2/bin/methylation_classification_nanodx_v0.1.R -s " +\
-                    f"live_{batch} -o {self.rcns2folder} -i {self.rapidcnsbamfile}.bed " +\
-                    f"-p ../hv_rapidCNS2/bin/top_probes_hm450.Rdata " +\
-                    f"--training_data ../hv_rapidCNS2/bin/capper_top_100k_betas_binarised.Rdata " +\
-                    f"--array_file ../hv_rapidCNS2/bin/HM450.hg38.manifest.gencode.v22.Rdata " +\
-                    f"-t {self.threads} "
+                command = (
+                    f"Rscript ../hv_rapidCNS2/bin/methylation_classification_nanodx_v0.1.R -s "
+                    + f"live_{batch} -o {self.rcns2folder} -i {self.rapidcnsbamfile}.bed "
+                    + f"-p ../hv_rapidCNS2/bin/top_probes_hm450.Rdata "
+                    + f"--training_data ../hv_rapidCNS2/bin/capper_top_100k_betas_binarised.Rdata "
+                    + f"--array_file ../hv_rapidCNS2/bin/HM450.hg38.manifest.gencode.v22.Rdata "
+                    + f"-t {self.threads} "
+                )
 
                 if not self.showerrors:
                     command += ">/dev/null 2>&1"
 
-                returned_value = subprocess.call(command,
+                returned_value = subprocess.call(
+                    command,
                     shell=True,
                 )
                 if self.showerrors:
@@ -637,10 +645,13 @@ class BrainMeth:
                     os.path.join(self.resultfolder, "rcns2_scores.csv")
                 )
 
-                columns_greater_than_threshold = (self.rcns2_df_store > self.threshold*100).any()
+                columns_greater_than_threshold = (
+                    self.rcns2_df_store > self.threshold * 100
+                ).any()
                 columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                result = self.rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
-
+                result = self.rcns2_df_store.columns[
+                    columns_not_greater_than_threshold
+                ].tolist()
 
                 self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
                 # with self.rcns2_container:
@@ -659,7 +670,6 @@ class BrainMeth:
                     "message"
                 ] = "RapidCNS2 methylation classification done. Waiting for data."
 
-
                 os.rename(
                     f"{self.sortedbamfile}",
                     os.path.join(self.donebamfolder, f"{batch}_sorted.bam"),
@@ -669,16 +679,23 @@ class BrainMeth:
                     os.path.join(self.donebamfolder, f"{batch}_sorted.bam.csi"),
                 )
                 self.cnv_plotting()
-                self.keep_regions(os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch)
+                self.keep_regions(
+                    os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch
+                )
                 self.mgmtmethylpredict(self.rapidcnsbamfile)
 
                 pass
             time.sleep(5)
 
-            if len(self.bamforcns)==0:
+            if len(self.bamforcns) == 0:
                 self.rcns2finished = True
-                if self.nofiles and self.stugeonfinished and self.runfinished and self.rcns2finished:
-                    print ("All done")
+                if (
+                    self.nofiles
+                    and self.stugeonfinished
+                    and self.runfinished
+                    and self.rcns2finished
+                ):
+                    print("All done")
                     os.kill(os.getpid(), signal.SIGINT)
 
     def mgmtmethylpredict(self, bamfile):
@@ -688,62 +705,57 @@ class BrainMeth:
         os.system(
             f"bedtools intersect -a {bamfile}.bed -b {MGMT_BED} > {self.resultfolder}/mgmt_result.bed"
         )
-        print(f"bedtools intersect -a {bamfile}.bed -b {MGMT_BED} > {self.resultfolder}/mgmt_result.bed")
+        print(
+            f"bedtools intersect -a {bamfile}.bed -b {MGMT_BED} > {self.resultfolder}/mgmt_result.bed"
+        )
 
         if os.path.getsize(f"{self.resultfolder}/mgmt_result.bed") > 0:
-
             cmd = f"Rscript ../hv_rapidCNS2/bin/mgmt_pred_v0.3.R --input={self.resultfolder}/mgmt_result.bed --out_dir={self.resultfolder} --probes=../hv_rapidCNS2/bin/mgmt_probes.Rdata --model=../hv_rapidCNS2/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
-            os.system(
-                cmd
+            os.system(cmd)
+            results = pd.read_csv(
+                os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
             )
-            results = pd.read_csv(os.path.join(self.resultfolder,"live_analysis_mgmt_status.csv"))
             self.mgmtable.clear()
             with self.mgmtable:
                 ui.table.from_pandas(results)
             print(cmd)
-            print ("MGMT predictor done")
+            print("MGMT predictor done")
             self.rapidcns_status_txt["message"] = "MGMT predictor done."
 
         else:
-            print ("No MGMT sites yet found.")
+            print("No MGMT sites yet found.")
             self.rapidcns_status_txt["message"] = "No MGMT sites yet found."
-
-
-
 
     def keep_regions(self, bamtoextract, batch):
         print("Keeping regions")
         bam_out = os.path.join(self.targetsbamfolder, f"{batch}_sorted.bam")
         plot_out = os.path.join(self.targetsbamfolder, f"{batch}_sorted.png")
-        bedfile = os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'unique_genes.bed')
+        bedfile = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
+        )
         os.system(
             f"samtools view --write-index -L {bedfile} -@{self.threads} -o {bam_out} {bamtoextract} "
-            #f">/dev/null 2>&1"
+            # f">/dev/null 2>&1"
         )
         merged_bam_out = os.path.join(self.targetsbamfolder, f"{batch}_merged.bam")
         to_be_merged = os.path.join(self.targetsbamfolder, f"*_sorted.bam")
         os.system(
             f"samtools merge --write-index -@{self.threads} -f {merged_bam_out} {to_be_merged}"
-            #f">/dev/null 2>&1"
+            # f">/dev/null 2>&1"
         )
-        os.system(
-            f"rm {to_be_merged}"
+        os.system(f"rm {to_be_merged}")
+        os.system(f"mv {merged_bam_out} {bam_out}")
+        os.system(f"mv {merged_bam_out}.csi {bam_out}.csi")
+        print(
+            f"methylartist locus -i chr10:129466536-129467536 -b {bam_out} -o {plot_out}  --motif CG --mods m"
         )
-        os.system(
-            f"mv {merged_bam_out} {bam_out}"
-        )
-        os.system(
-            f"mv {merged_bam_out}.csi {bam_out}.csi"
-        )
-        print(f"methylartist locus -i chr10:129466536-129467536 -b {bam_out} -o {plot_out}  --motif CG --mods m")
         os.system(
             f"methylartist locus -i chr10:129466536-129467536 -b {bam_out} -o {plot_out}  --motif CG --mods m"
         )
         if os.path.exists(plot_out):
             self.mgmtplot.clear()
-            with self.mgmtplot.classes('w-full'):
-                ui.image(plot_out).props('fit=scale-down')
-
+            with self.mgmtplot.classes("w-full"):
+                ui.image(plot_out).props("fit=scale-down")
 
     def cnv_plotting(self):
         bam_path = Path(self.donebamfolder)
@@ -769,7 +781,7 @@ class BrainMeth:
             max = "dataMax"
 
             if gene_target:
-                print ("Gene Target")
+                print("Gene Target")
                 start_pos = self.gene_bed.iloc[int(gene_target)].start_pos
                 end_pos = self.gene_bed.iloc[int(gene_target)].end_pos
                 chrom = self.gene_bed.iloc[int(gene_target)].chrom
@@ -1047,11 +1059,17 @@ class BrainMeth:
                         os.path.join(self.resultfolder, "sturgeon_scores.csv")
                     )
 
-                    columns_greater_than_threshold = (self.sturgeon_df_store > self.threshold).any()
+                    columns_greater_than_threshold = (
+                        self.sturgeon_df_store > self.threshold
+                    ).any()
                     columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                    result = self.sturgeon_df_store.columns[columns_not_greater_than_threshold].tolist()
+                    result = self.sturgeon_df_store.columns[
+                        columns_not_greater_than_threshold
+                    ].tolist()
 
-                    self.update_sturgeon_time_chart(self.sturgeon_df_store.drop(columns=result))
+                    self.update_sturgeon_time_chart(
+                        self.sturgeon_df_store.drop(columns=result)
+                    )
 
                     self.update_sturgeon_plot(
                         lastrow_plot.index.to_list(),
@@ -1080,12 +1098,7 @@ class BrainMeth:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": "Sturgeon Over Time"},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
                     #'tooltip': {
@@ -1136,12 +1149,7 @@ class BrainMeth:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": "RCNS2 Over Time"},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
                     #'tooltip': {
@@ -1192,12 +1200,7 @@ class BrainMeth:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "value", "max": "dataMax"},
                     #'yAxis': {'axisLabel': {':formatter': 'value => "Ploidy" + value'}},
                     "yAxis": {"type": "value"},
@@ -1232,12 +1235,7 @@ class BrainMeth:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "value", "max": 1},
                     "yAxis": {"type": "category", "data": [], "inverse": True},
                     #'legend': {},
@@ -1286,12 +1284,7 @@ class BrainMeth:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "yAxis": {"type": "value"},
                     "xAxis": {
                         "type": "category",
@@ -1359,12 +1352,7 @@ class BrainMeth:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "yAxis": {"type": "value"},
                     "xAxis": {
                         "type": "category",
@@ -1413,12 +1401,7 @@ class BrainMeth:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "value", "max": 1},
                     "yAxis": {"type": "category", "data": [], "inverse": True},
                     #'legend': {},
@@ -1435,35 +1418,32 @@ class BrainMeth:
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": "Coverage Over Time"},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
                     #'tooltip': {
                     #    'order': 'valueDesc',
                     #    'trigger': 'axis'
                     # },
-                    "series": [{
-                        "type": "line",
-                        "smooth": True,
-                        "name": "Coverage",
-                        "emphasis": {"focus": "series"},
-                        "endLabel": {
-                            "show": True,
-                            "formatter": "{a}",
-                            "distance": 20,
-                        },
-                        "lineStyle": {
-                            "width": 2,
-                        },
-                        "data": [],
-                        }],
-                    }
-                )
+                    "series": [
+                        {
+                            "type": "line",
+                            "smooth": True,
+                            "name": "Coverage",
+                            "emphasis": {"focus": "series"},
+                            "endLabel": {
+                                "show": True,
+                                "formatter": "{a}",
+                                "distance": 20,
+                            },
+                            "lineStyle": {
+                                "width": 2,
+                            },
+                            "data": [],
+                        }
+                    ],
+                }
+            )
             .style("height: 350px")
             .classes("border-double")
         )
@@ -1480,7 +1460,9 @@ class BrainMeth:
         genome = covdf["endpos"].sum()
         coverage = bases / genome
         currenttime = time.time() * 1000
-        self.coverage_time_chart.options["series"][0]["data"].append([currenttime, coverage])
+        self.coverage_time_chart.options["series"][0]["data"].append(
+            [currenttime, coverage]
+        )
         self.coverage_time_chart.update()
 
     def update(self):

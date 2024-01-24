@@ -7,24 +7,52 @@ from methnicegui import images
 
 from methnicegui import theme
 
-class Methnice():
-    def __init__(self, threads: int, simtime: bool, watchfolder: Path, output: Path, sequencing_summary: Path, showerrors: bool, browse: bool):
+
+class Methnice:
+    def __init__(
+        self,
+        threads: int,
+        simtime: bool,
+        watchfolder: Path,
+        output: Path,
+        sequencing_summary: Path,
+        showerrors: bool,
+        browse: bool,
+    ):
         self.threads = threads
         self.simtime = simtime
         self.watchfolder = watchfolder
         self.output = output
         self.sequencing_summary = sequencing_summary
         self.showerrors = showerrors
-        self.browse=browse
+        self.browse = browse
 
     def index_page(self) -> None:
         my_connection = None
-        with theme.frame('Real Time Brain Tumour Classification', my_connection):
+        with theme.frame("Real Time Brain Tumour Classification", my_connection):
             # my_connection.connect_to_minknow()
-            BrainMeth(threads=self.threads, simtime=self.simtime, watchfolder=self.watchfolder, output=self.output, sequencing_summary=self.sequencing_summary, showerrors=self.showerrors, browse=self.browse)
+            BrainMeth(
+                threads=self.threads,
+                simtime=self.simtime,
+                watchfolder=self.watchfolder,
+                output=self.output,
+                sequencing_summary=self.sequencing_summary,
+                showerrors=self.showerrors,
+                browse=self.browse,
+            )
 
 
-def run_class(port: int, reload: bool, threads: int, simtime: bool, watchfolder: Path, output: Path, sequencing_summary: Path, showerrors: bool, browse: bool):
+def run_class(
+    port: int,
+    reload: bool,
+    threads: int,
+    simtime: bool,
+    watchfolder: Path,
+    output: Path,
+    sequencing_summary: Path,
+    showerrors: bool,
+    browse: bool,
+):
     """
     Helper function to run the app.
     :param port: The port to serve the app on.
@@ -34,7 +62,15 @@ def run_class(port: int, reload: bool, threads: int, simtime: bool, watchfolder:
     iconfile = os.path.join(
         os.path.dirname(os.path.abspath(images.__file__)), "favicon.ico"
     )
-    mainpage = Methnice(threads=threads, simtime=simtime, watchfolder=watchfolder, output=output, sequencing_summary=sequencing_summary, showerrors=showerrors, browse=browse)
+    mainpage = Methnice(
+        threads=threads,
+        simtime=simtime,
+        watchfolder=watchfolder,
+        output=output,
+        sequencing_summary=sequencing_summary,
+        showerrors=showerrors,
+        browse=browse,
+    )
     app.on_startup(mainpage.index_page)
     ui.run(
         port=port, reload=reload, title="RCBTC", favicon=iconfile
@@ -63,7 +99,13 @@ def run_class(port: int, reload: bool, threads: int, simtime: bool, watchfolder:
     default=None,
     help="Path to sequencing summary file. If provided, timestamps will be taken from this file.",
 )
-@click.option("--browse", is_flag=True, show_default=True, default=False, help="Browse Historic Data.")
+@click.option(
+    "--browse",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Browse Historic Data.",
+)
 @click.argument(
     "watchfolder",
     type=click.Path(
@@ -78,15 +120,27 @@ def run_class(port: int, reload: bool, threads: int, simtime: bool, watchfolder:
     ),
     required=False,
 )
-def package_run(port, threads, simtime, showerrors, sequencing_summary, watchfolder, output, browse): # , threads, simtime, watchfolder, output, sequencing_summary):
-    '''
+def package_run(
+    port, threads, simtime, showerrors, sequencing_summary, watchfolder, output, browse
+):  # , threads, simtime, watchfolder, output, sequencing_summary):
+    """
     Entrypoint for when GUI is launched directly.
     :return: None
-    '''
+    """
     if browse:
         # Handle the case when --browse is set
         click.echo("Browse mode is enabled. Watchfolder and output are not required.")
-        run_class(port=port, reload=False, threads=threads, simtime=simtime, watchfolder=None, output=None, sequencing_summary=sequencing_summary, showerrors=showerrors,browse=browse)
+        run_class(
+            port=port,
+            reload=False,
+            threads=threads,
+            simtime=simtime,
+            watchfolder=None,
+            output=None,
+            sequencing_summary=sequencing_summary,
+            showerrors=showerrors,
+            browse=browse,
+        )
         # Your logic for browse mode
     else:
         # Handle the case when --browse is not set
@@ -96,7 +150,18 @@ def package_run(port, threads, simtime, showerrors, sequencing_summary, watchfol
             sys.exit(1)
         # Your logic for non-browse mode
 
-        run_class(port=port, reload=False, threads=threads, simtime=simtime, watchfolder=watchfolder, output=output, sequencing_summary=sequencing_summary, showerrors=showerrors, browse=browse)
+        run_class(
+            port=port,
+            reload=False,
+            threads=threads,
+            simtime=simtime,
+            watchfolder=watchfolder,
+            output=output,
+            sequencing_summary=sequencing_summary,
+            showerrors=showerrors,
+            browse=browse,
+        )
+
 
 if __name__ in {"__main__", "__mp_main__"}:
     print("GUI launched by auto-reload function.")

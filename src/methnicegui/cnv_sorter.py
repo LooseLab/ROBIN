@@ -3,11 +3,13 @@ import shutil
 import tempfile
 from natsort import natsorted
 
+
 class SymbolicLinkCreator:
     """
     Class to create a subset of symbolic links to files in a given folder.
     This will be used to help handle multiple bam files to recreate copy number plots over time.
     """
+
     def __init__(self, bam_path):
         self.bam_path = bam_path
         self.temp_folder = None
@@ -42,7 +44,6 @@ class SymbolicLinkCreator:
     def pathtofiles(self):
         return self.temp_folder
 
-
     def print_folders(self):
         for file in natsorted(os.listdir(os.path.abspath(self.temp_folder))):
             if file.endswith(".bam"):
@@ -76,4 +77,3 @@ class SymbolicLinkCreator:
         finally:
             # Cleanup: Remove temporary folder and symbolic links in case of any exception
             shutil.rmtree(temp_folder, ignore_errors=True)
-

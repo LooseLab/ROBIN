@@ -23,7 +23,7 @@ from methnicegui import resources
 import queue
 
 
-class CNV_Plot():
+class CNV_Plot:
     def __init__(self, **kwargs):
         print("CNV_Plot Initialised")
         self.gene_bed = pd.read_table(
@@ -42,10 +42,6 @@ class CNV_Plot():
         self.worker = threading.Thread(target=self._cnv_plotting, args=())
         self.worker.daemon = True
         self.worker.start()
-
-
-
-
 
     def create_cnv_scatter(self, title):
         self.display_row = ui.row()
@@ -77,22 +73,16 @@ class CNV_Plot():
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
+                    "xAxis": {
+                        "type": "value",
+                        "max": "dataMax",
+                        "splitLine": {"show": False},
                     },
-                    "xAxis": {"type": "value",
-                              "max": "dataMax",
-                              'splitLine': {
-                                  'show': False
-                                },
-                              },
                     #'yAxis': {'axisLabel': {':formatter': 'value => "Ploidy" + value'}},
-                    "yAxis": {"type": "value",
-
-                              },
+                    "yAxis": {
+                        "type": "value",
+                    },
                     #'legend': {'type':'scroll','formatter': '{name}','top': 'bottom'},
                     "dataZoom": [
                         {"type": "slider", "xAxisIndex": 0, "filterMode": "none"},
@@ -122,7 +112,6 @@ class CNV_Plot():
     def cnv_plotting(self, bam_path):
         self.cnv_queue.put(bam_path)
 
-
     def _cnv_plotting(self):
         while True:
             if self.display_row:
@@ -130,20 +119,24 @@ class CNV_Plot():
                     bam_path = self.cnv_queue.get()
                     self.display_row.clear()
                     with self.display_row:
-                        ui.label("Copy Number Variation").tailwind("drop-shadow", "font-bold")
-                        ui.label(f"Last update: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+                        ui.label("Copy Number Variation").tailwind(
+                            "drop-shadow", "font-bold"
+                        )
+                        ui.label(
+                            f"Last update: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+                        )
                         ui.label(f"{bam_path}")
                     self.result = iterate_bam_file(
-                            bam_path, _threads=8, mapq_filter=60#, log_level=logging.getLevelName("WARN")
-                        )
+                        bam_path,
+                        _threads=8,
+                        mapq_filter=60,  # , log_level=logging.getLevelName("WARN")
+                    )
                     print(self.result)
                     self.cnv_dict["bin_width"] = self.result.bin_width
                     self.cnv_dict["variance"] = self.result.variance
-                        # print(self.result)
+                    # print(self.result)
                     self._update_cnv_plot()
             time.sleep(5)
-
-
 
     def _update_cnv_plot(self, gene_target=None):
         if self.result:
@@ -156,7 +149,7 @@ class CNV_Plot():
             max = "dataMax"
 
             if gene_target:
-                print ("Gene Target")
+                print("Gene Target")
                 start_pos = self.gene_bed.iloc[int(gene_target)].start_pos
                 end_pos = self.gene_bed.iloc[int(gene_target)].end_pos
                 chrom = self.gene_bed.iloc[int(gene_target)].chrom
@@ -318,23 +311,18 @@ class CNV_Plot():
             self.scatter_echart.update()
 
 
-
-
-
 def index_page() -> None:
-    #from check_connection import ConnectionDialog
-    #initial_ip = "127.0.0.1"
-    #my_connection = ConnectionDialog(initial_ip)
+    # from check_connection import ConnectionDialog
+    # initial_ip = "127.0.0.1"
+    # my_connection = ConnectionDialog(initial_ip)
     my_connection = None
-    with theme.frame('MethClass Interactive',my_connection):
-        #my_connection.connect_to_minknow()
+    with theme.frame("MethClass Interactive", my_connection):
+        # my_connection.connect_to_minknow()
         ui.label(f"Hello")
         CNV_PLOT = CNV_Plot()
         CNV_PLOT.create_cnv_scatter("CNV Scatter")
         CNV_PLOT.cnv_plotting("/Users/mattloose/datasets/ds1305_sort.hg38.h2m.bam")
-        #my_object = MinknowHistograms(my_connection.positions[0])
-
-
+        # my_object = MinknowHistograms(my_connection.positions[0])
 
 
 def run_class(port: int, reload: bool):
@@ -350,13 +338,15 @@ def run_class(port: int, reload: bool):
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
 
 
-def main(): # , threads, simtime, watchfolder, output, sequencing_summary):
+def main():  # , threads, simtime, watchfolder, output, sequencing_summary):
     from check_connection import ConnectionDialog
+
     """
     Entrypoint for when GUI is launched directly.
     :return: None
     """
     run_class(port=12398, reload=False)
+
 
 # Entrypoint for when GUI is launched by the CLI.
 # e.g.: python my_app/my_cli.py

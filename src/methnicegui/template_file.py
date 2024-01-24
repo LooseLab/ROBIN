@@ -26,19 +26,15 @@ import math
 import os
 
 
-
-
 def index_page() -> None:
-    #from check_connection import ConnectionDialog
-    #initial_ip = "127.0.0.1"
-    #my_connection = ConnectionDialog(initial_ip)
+    # from check_connection import ConnectionDialog
+    # initial_ip = "127.0.0.1"
+    # my_connection = ConnectionDialog(initial_ip)
     my_connection = None
-    with theme.frame('MethClass Interactive',my_connection):
-        #my_connection.connect_to_minknow()
+    with theme.frame("MethClass Interactive", my_connection):
+        # my_connection.connect_to_minknow()
         ui.label(f"Hello")
-        #my_object = MinknowHistograms(my_connection.positions[0])
-
-
+        # my_object = MinknowHistograms(my_connection.positions[0])
 
 
 def run_class(port: int, reload: bool):
@@ -54,13 +50,15 @@ def run_class(port: int, reload: bool):
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
 
 
-def main(): # , threads, simtime, watchfolder, output, sequencing_summary):
+def main():  # , threads, simtime, watchfolder, output, sequencing_summary):
     from check_connection import ConnectionDialog
+
     """
     Entrypoint for when GUI is launched directly.
     :return: None
     """
     run_class(port=12398, reload=False)
+
 
 # Entrypoint for when GUI is launched by the CLI.
 # e.g.: python my_app/my_cli.py

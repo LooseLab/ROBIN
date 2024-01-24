@@ -12,9 +12,18 @@ from sturgeon.callmapping import (
     probes_methyl_calls_to_bed,
 )
 
-class Sturgeon_worker():
-    def __init__(self, bamqueue, threads=4, output_folder=None, threshold=0.05, showerrors=False, browse=False):
-        self.browse=browse
+
+class Sturgeon_worker:
+    def __init__(
+        self,
+        bamqueue,
+        threads=4,
+        output_folder=None,
+        threshold=0.05,
+        showerrors=False,
+        browse=False,
+    ):
+        self.browse = browse
         self.bamqueue = bamqueue
         self.threads = threads
         self.threshold = threshold
@@ -159,11 +168,17 @@ class Sturgeon_worker():
                         os.path.join(self.resultfolder, "sturgeon_scores.csv")
                     )
 
-                    columns_greater_than_threshold = (self.sturgeon_df_store > self.threshold).any()
+                    columns_greater_than_threshold = (
+                        self.sturgeon_df_store > self.threshold
+                    ).any()
                     columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                    result = self.sturgeon_df_store.columns[columns_not_greater_than_threshold].tolist()
+                    result = self.sturgeon_df_store.columns[
+                        columns_not_greater_than_threshold
+                    ].tolist()
 
-                    self.update_sturgeon_time_chart(self.sturgeon_df_store.drop(columns=result))
+                    self.update_sturgeon_time_chart(
+                        self.sturgeon_df_store.drop(columns=result)
+                    )
 
                     self.update_sturgeon_plot(
                         lastrow_plot.index.to_list(),
@@ -193,12 +208,7 @@ class Sturgeon_worker():
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "value", "max": 1},
                     "yAxis": {"type": "category", "data": [], "inverse": True},
                     #'legend': {},
@@ -226,19 +236,13 @@ class Sturgeon_worker():
         ]
         self.echart2.update()
 
-
     def create_sturgeon_time_chart(self):
         self.sturgeon_time_chart = (
             ui.echart(
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": "Sturgeon Over Time"},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
                     "series": [],
@@ -280,12 +284,14 @@ class Sturgeon_worker():
         self.sturgeon_time_chart.update()
 
     def load_prior_data(self):
-        self.sturgeon_df_store= pd.read_csv(
+        self.sturgeon_df_store = pd.read_csv(
             os.path.join(self.resultfolder, "sturgeon_scores.csv")
         ).set_index("timestamp")
         columns_greater_than_threshold = (self.sturgeon_df_store > self.threshold).any()
         columns_not_greater_than_threshold = ~columns_greater_than_threshold
-        result = self.sturgeon_df_store.columns[columns_not_greater_than_threshold].tolist()
+        result = self.sturgeon_df_store.columns[
+            columns_not_greater_than_threshold
+        ].tolist()
 
         self.update_sturgeon_time_chart(self.sturgeon_df_store.drop(columns=result))
         mydf = pd.read_csv(
@@ -304,9 +310,7 @@ class Sturgeon_worker():
             self.st_bam_count,
         )
 
-        self.sturgeon_status_txt[
-            "message"
-        ] = "Predictions Complete."
+        self.sturgeon_status_txt["message"] = "Predictions Complete."
 
     def replay_prior_data(self):
         self.background_tast = threading.Thread(target=self._replay_prior_data, args=())
@@ -319,36 +323,43 @@ class Sturgeon_worker():
         :return:
         """
         print("Replaying prior Sturgeon data")
-        self.sturgeon_status_txt[
-            "message"
-        ] = f"Replaying prior Sturgeon data."
+        self.sturgeon_status_txt["message"] = f"Replaying prior Sturgeon data."
         self.sturgeon_df_store = pd.read_csv(
             os.path.join(self.resultfolder, "sturgeon_scores.csv")
         ).set_index("timestamp")
         min_index_value = self.sturgeon_df_store.index.min()
         max_index_value = self.sturgeon_df_store.index.max()
-        start_time=time.time()
+        start_time = time.time()
         elapsed_time = 0
         scale_factor = 300
         scaled_elapsed_time = elapsed_time * scale_factor
 
-        print (max_index_value-min_index_value)
+        print(max_index_value - min_index_value)
 
         df_len = 0
 
         while (1000 * scaled_elapsed_time) + min_index_value < max_index_value:
-            print ("replaying_data")
+            print("replaying_data")
             elapsed_time = time.time() - start_time
             scaled_elapsed_time = elapsed_time * scale_factor
             print(scaled_elapsed_time)
 
-            temp_sturgeon_df_store = self.sturgeon_df_store[self.sturgeon_df_store.index < (min_index_value + (1000 * scaled_elapsed_time))]
+            temp_sturgeon_df_store = self.sturgeon_df_store[
+                self.sturgeon_df_store.index
+                < (min_index_value + (1000 * scaled_elapsed_time))
+            ]
 
-            columns_greater_than_threshold = (temp_sturgeon_df_store > self.threshold).any()
+            columns_greater_than_threshold = (
+                temp_sturgeon_df_store > self.threshold
+            ).any()
             columns_not_greater_than_threshold = ~columns_greater_than_threshold
-            result = temp_sturgeon_df_store.columns[columns_not_greater_than_threshold].tolist()
+            result = temp_sturgeon_df_store.columns[
+                columns_not_greater_than_threshold
+            ].tolist()
             if temp_sturgeon_df_store.drop(columns=result).shape[0] > df_len:
-                self.update_sturgeon_time_chart(temp_sturgeon_df_store.drop(columns=result))
+                self.update_sturgeon_time_chart(
+                    temp_sturgeon_df_store.drop(columns=result)
+                )
                 df_len = temp_sturgeon_df_store.drop(columns=result).shape[0]
                 self.sturgeon_status_txt[
                     "message"
@@ -362,6 +373,4 @@ class Sturgeon_worker():
                 )
 
             time.sleep(0.5)
-        self.sturgeon_status_txt[
-            "message"
-        ] = f"Viewing historical Sturgeon data."
+        self.sturgeon_status_txt["message"] = f"Viewing historical Sturgeon data."

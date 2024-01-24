@@ -17,20 +17,31 @@ from methnicegui import submodules
 
 os.environ["CI"] = "1"
 
-HVPATH=os.path.join(
-            os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
-        )
+HVPATH = os.path.join(
+    os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
+)
 
 
-class RCNS2_worker():
-    def __init__(self, bamqueue, cnv, target_coverage, mgmt_panel, threads=4, output_folder=None, threshold=0.05, showerrors=False, browse=False):
+class RCNS2_worker:
+    def __init__(
+        self,
+        bamqueue,
+        cnv,
+        target_coverage,
+        mgmt_panel,
+        threads=4,
+        output_folder=None,
+        threshold=0.05,
+        showerrors=False,
+        browse=False,
+    ):
         self.bamqueue = bamqueue
         self.cnv = cnv
         self.threads = threads
         self.outputfolder = output_folder
         self.target_coverage = target_coverage
         self.threshold = threshold
-        self.mgmt_panel=mgmt_panel
+        self.mgmt_panel = mgmt_panel
         self.nofiles = False
         self.browse = browse
         self.rcns2_bam_count = 0
@@ -56,7 +67,9 @@ class RCNS2_worker():
                 os.mkdir(self.targetsbamfolder)
             if not os.path.exists(self.rcns2folder):
                 os.mkdir(self.rcns2folder)
-            self.rapidcns2_processing = threading.Thread(target=self.rapid_cns2, args=())
+            self.rapidcns2_processing = threading.Thread(
+                target=self.rapid_cns2, args=()
+            )
             self.rapidcns2_processing.daemon = True
             self.rapidcns2_processing.start()
         else:
@@ -102,7 +115,7 @@ class RCNS2_worker():
 
                 self.rapidcns_status_txt["message"] = "Merging bam files."
 
-                #The bam file created here consists of all the reads from the bam files in the most recent batch.
+                # The bam file created here consists of all the reads from the bam files in the most recent batch.
 
                 pysam.cat("-o", tempbam.name, *bams)
 
@@ -115,7 +128,7 @@ class RCNS2_worker():
 
                 self.rapidcns_status_txt["message"] = "Running modkit pileup."
                 if self.showerrors:
-                    print (
+                    print(
                         f"modkit pileup -t {self.threads} --filter-threshold 0.73 --combine-mods {self.sortedbamfile} "
                         f"{self.rapidcnsbamfile}.bed --suppress-progress  >/dev/null 2>&1 "
                     )
@@ -124,7 +137,7 @@ class RCNS2_worker():
                     f"{self.rapidcnsbamfile}.bed --suppress-progress  >/dev/null 2>&1 "
                 )  #
 
-                #ToDo: Implement saving of target coverage data.
+                # ToDo: Implement saving of target coverage data.
 
                 if not_first_run:
                     self.rapidcns_status_txt[
@@ -199,7 +212,7 @@ class RCNS2_worker():
                         merged_df["numreads_df1"] + merged_df["numreads_df2"]
                     )
                     merged_df["covbases"] = (
-                            merged_df["covbases_df1"] + merged_df["covbases_df2"]
+                        merged_df["covbases_df1"] + merged_df["covbases_df2"]
                     )
                     merged_df["meandepth"] = (
                         merged_df["meandepth_df1"] + merged_df["meandepth_df2"]
@@ -314,11 +327,17 @@ class RCNS2_worker():
                 self.target_coverage.update_coverage_plot(covdf)
                 self.target_coverage.update_coverage_plot_targets(covdf, bedcovdf)
                 self.target_coverage.update_coverage_time_plot(covdf)
-                self.target_coverage_df=bedcovdf
-                self.target_coverage_df['coverage']=self.target_coverage_df['bases']/self.target_coverage_df['length']
+                self.target_coverage_df = bedcovdf
+                self.target_coverage_df["coverage"] = (
+                    self.target_coverage_df["bases"] / self.target_coverage_df["length"]
+                )
                 with self.target_coverage.targ_df:
                     self.target_coverage.targ_df.clear()
-                    ui.table.from_pandas(self.target_coverage_df, pagination=10, row_key='name').bind_filter_from(self.target_coverage.f, 'value').classes('w-full')
+                    ui.table.from_pandas(
+                        self.target_coverage_df, pagination=10, row_key="name"
+                    ).bind_filter_from(self.target_coverage.f, "value").classes(
+                        "w-full"
+                    )
                 # self.log("Merged Bed File Info:")
                 # self.log(self.merged_bed_file.info())
 
@@ -326,17 +345,20 @@ class RCNS2_worker():
                     "message"
                 ] = "Running RapidCNS2 methylation classification."
 
-                command = f"Rscript {HVPATH}/bin/methylation_classification_nanodx_v0.1.R -s " +\
-                    f"live_{batch} -o {self.rcns2folder} -i {self.rapidcnsbamfile}.bed " +\
-                    f"-p {HVPATH}/bin/top_probes_hm450.Rdata " +\
-                    f"--training_data {HVPATH}/bin/capper_top_100k_betas_binarised.Rdata " +\
-                    f"--array_file {HVPATH}/bin/HM450.hg38.manifest.gencode.v22.Rdata " +\
-                    f"-t {self.threads} "
+                command = (
+                    f"Rscript {HVPATH}/bin/methylation_classification_nanodx_v0.1.R -s "
+                    + f"live_{batch} -o {self.rcns2folder} -i {self.rapidcnsbamfile}.bed "
+                    + f"-p {HVPATH}/bin/top_probes_hm450.Rdata "
+                    + f"--training_data {HVPATH}/bin/capper_top_100k_betas_binarised.Rdata "
+                    + f"--array_file {HVPATH}/bin/HM450.hg38.manifest.gencode.v22.Rdata "
+                    + f"-t {self.threads} "
+                )
 
                 if not self.showerrors:
                     command += ">/dev/null 2>&1"
 
-                returned_value = subprocess.call(command,
+                returned_value = subprocess.call(
+                    command,
                     shell=True,
                 )
                 if self.showerrors:
@@ -356,10 +378,13 @@ class RCNS2_worker():
                     os.path.join(self.resultfolder, "rcns2_scores.csv")
                 )
 
-                columns_greater_than_threshold = (self.rcns2_df_store > self.threshold*100).any()
+                columns_greater_than_threshold = (
+                    self.rcns2_df_store > self.threshold * 100
+                ).any()
                 columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                result = self.rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
-
+                result = self.rcns2_df_store.columns[
+                    columns_not_greater_than_threshold
+                ].tolist()
 
                 self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
                 # with self.rcns2_container:
@@ -378,7 +403,6 @@ class RCNS2_worker():
                     "message"
                 ] = "RapidCNS2 methylation classification done. Waiting for data."
 
-
                 os.rename(
                     f"{self.sortedbamfile}",
                     os.path.join(self.donebamfolder, f"{batch}_sorted.bam"),
@@ -389,16 +413,23 @@ class RCNS2_worker():
                 )
                 self.cnv.cnv_plotting(self.donebamfolder)
 
-                self.keep_regions(os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch)
+                self.keep_regions(
+                    os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch
+                )
                 self.mgmtmethylpredict(self.rapidcnsbamfile)
 
                 pass
             time.sleep(5)
 
-            if self.bamqueue.qsize()==0:
+            if self.bamqueue.qsize() == 0:
                 self.rcns2finished = True
-                if self.nofiles and self.stugeonfinished and self.runfinished and self.rcns2finished:
-                    print ("All done")
+                if (
+                    self.nofiles
+                    and self.stugeonfinished
+                    and self.runfinished
+                    and self.rcns2finished
+                ):
+                    print("All done")
                     os.kill(os.getpid(), signal.SIGINT)
 
     def mgmtmethylpredict(self, bamfile):
@@ -408,60 +439,57 @@ class RCNS2_worker():
         os.system(
             f"bedtools intersect -a {bamfile}.bed -b {MGMT_BED} > {self.resultfolder}/mgmt_result.bed"
         )
-        print(f"bedtools intersect -a {bamfile}.bed -b {MGMT_BED} > {self.resultfolder}/mgmt_result.bed")
+        print(
+            f"bedtools intersect -a {bamfile}.bed -b {MGMT_BED} > {self.resultfolder}/mgmt_result.bed"
+        )
 
         if os.path.getsize(f"{self.resultfolder}/mgmt_result.bed") > 0:
-
             cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={self.resultfolder}/mgmt_result.bed --out_dir={self.resultfolder} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
-            os.system(
-                cmd
+            os.system(cmd)
+            results = pd.read_csv(
+                os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
             )
-            results = pd.read_csv(os.path.join(self.resultfolder,"live_analysis_mgmt_status.csv"))
             self.mgmt_panel.mgmtable.clear()
             with self.mgmt_panel.mgmtable:
                 ui.table.from_pandas(results)
             print(cmd)
-            print ("MGMT predictor done")
+            print("MGMT predictor done")
             self.rapidcns_status_txt["message"] = "MGMT predictor done."
 
         else:
-            print ("No MGMT sites yet found.")
+            print("No MGMT sites yet found.")
             self.rapidcns_status_txt["message"] = "No MGMT sites yet found."
 
     def keep_regions(self, bamtoextract, batch):
         print("Keeping regions")
         bam_out = os.path.join(self.targetsbamfolder, f"{batch}_sorted.bam")
         plot_out = os.path.join(self.targetsbamfolder, f"{batch}_sorted.png")
-        bedfile = os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'unique_genes.bed')
+        bedfile = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
+        )
         os.system(
             f"samtools view --write-index -L {bedfile} -@{self.threads} -o {bam_out} {bamtoextract} "
-            #f">/dev/null 2>&1"
+            # f">/dev/null 2>&1"
         )
         merged_bam_out = os.path.join(self.targetsbamfolder, f"{batch}_merged.bam")
         to_be_merged = os.path.join(self.targetsbamfolder, f"*_sorted.bam")
         os.system(
             f"samtools merge --write-index -@{self.threads} -f {merged_bam_out} {to_be_merged}"
-            #f">/dev/null 2>&1"
+            # f">/dev/null 2>&1"
         )
-        os.system(
-            f"rm {to_be_merged}"
+        os.system(f"rm {to_be_merged}")
+        os.system(f"mv {merged_bam_out} {bam_out}")
+        os.system(f"mv {merged_bam_out}.csi {bam_out}.csi")
+        print(
+            f"methylartist locus -i chr10:129466536-129467536 -b {bam_out} -o {plot_out}  --motif CG --mods m"
         )
-        os.system(
-            f"mv {merged_bam_out} {bam_out}"
-        )
-        os.system(
-            f"mv {merged_bam_out}.csi {bam_out}.csi"
-        )
-        print(f"methylartist locus -i chr10:129466536-129467536 -b {bam_out} -o {plot_out}  --motif CG --mods m")
         os.system(
             f"methylartist locus -i chr10:129466536-129467536 -b {bam_out} -o {plot_out}  --motif CG --mods m"
         )
         if os.path.exists(plot_out):
             self.mgmt_panel.mgmtplot.clear()
-            with self.mgmt_panel.mgmtplot.classes('w-full'):
-                ui.image(plot_out).props('fit=scale-down')
-
-
+            with self.mgmt_panel.mgmtplot.classes("w-full"):
+                ui.image(plot_out).props("fit=scale-down")
 
     def status_rcns2(self):
         ui.label().bind_text_from(
@@ -470,19 +498,13 @@ class RCNS2_worker():
             backward=lambda n: f"RapidCNS2 Status: {n}",
         )
 
-
     def create_rcns2_chart(self, title):
         self.echart = (
             ui.echart(
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "value", "max": 1},
                     "yAxis": {"type": "category", "data": [], "inverse": True},
                     # 'legend': {},
@@ -514,12 +536,7 @@ class RCNS2_worker():
                 {
                     "grid": {"containLabel": True},
                     "title": {"text": "RCNS2 Over Time"},
-                    'toolbox': {
-                        'show': True,
-                        'feature': {
-                            'saveAsImage': {}
-                        }
-                    },
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
                     #'tooltip': {
@@ -570,19 +587,22 @@ class RCNS2_worker():
         """
         print("Loading prior data")
         self.rcns2_df_store = pd.read_csv(
-                os.path.join(self.resultfolder, "rcns2_scores.csv")
+            os.path.join(self.resultfolder, "rcns2_scores.csv")
         ).set_index("timestamp")
-        print (self.rcns2_df_store)
-        columns_greater_than_threshold = (self.rcns2_df_store > self.threshold * 100).any()
+        print(self.rcns2_df_store)
+        columns_greater_than_threshold = (
+            self.rcns2_df_store > self.threshold * 100
+        ).any()
         columns_not_greater_than_threshold = ~columns_greater_than_threshold
-        result = self.rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
+        result = self.rcns2_df_store.columns[
+            columns_not_greater_than_threshold
+        ].tolist()
 
         self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
 
         batch = find_largest_integer(self.rcns2folder, "live_", "_votes.tsv")
 
         if batch:
-
             scores = pd.read_table(
                 f"{self.rcns2folder}/live_{batch}_votes.tsv", delim_whitespace=True
             )
@@ -593,9 +613,7 @@ class RCNS2_worker():
                 "ALL",
             )
 
-        self.rapidcns_status_txt[
-            "message"
-        ] = "Predictions Complete."
+        self.rapidcns_status_txt["message"] = "Predictions Complete."
 
         self.cnv.cnv_plotting(self.donebamfolder)
 
@@ -611,67 +629,71 @@ class RCNS2_worker():
         """
         print("Replaying prior data")
         self.rcns2_df_store = pd.read_csv(
-                os.path.join(self.resultfolder, "rcns2_scores.csv")
+            os.path.join(self.resultfolder, "rcns2_scores.csv")
         ).set_index("timestamp")
-        self.rapidcns_status_txt[
-            "message"
-        ] = f"Replaying prior data."
-        #print (self.rcns2_df_store)
+        self.rapidcns_status_txt["message"] = f"Replaying prior data."
+        # print (self.rcns2_df_store)
         min_index_value = self.rcns2_df_store.index.min()
         max_index_value = self.rcns2_df_store.index.max()
-        start_time=time.time()
+        start_time = time.time()
         elapsed_time = 0
         scale_factor = 300
         scaled_elapsed_time = elapsed_time * scale_factor
 
-        print (max_index_value-min_index_value)
+        print(max_index_value - min_index_value)
 
         df_len = 0
 
         while (1000 * scaled_elapsed_time) + min_index_value < max_index_value:
-            print ("replaying_data")
+            print("replaying_data")
             elapsed_time = time.time() - start_time
             scaled_elapsed_time = elapsed_time * scale_factor
             print(scaled_elapsed_time)
 
-            temp_rcns2_df_store = self.rcns2_df_store[self.rcns2_df_store.index < (min_index_value + (1000 * scaled_elapsed_time))]
-            columns_greater_than_threshold = (temp_rcns2_df_store > self.threshold * 100).any()
+            temp_rcns2_df_store = self.rcns2_df_store[
+                self.rcns2_df_store.index
+                < (min_index_value + (1000 * scaled_elapsed_time))
+            ]
+            columns_greater_than_threshold = (
+                temp_rcns2_df_store > self.threshold * 100
+            ).any()
             columns_not_greater_than_threshold = ~columns_greater_than_threshold
-            result = temp_rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
+            result = temp_rcns2_df_store.columns[
+                columns_not_greater_than_threshold
+            ].tolist()
             if temp_rcns2_df_store.drop(columns=result).shape[0] > df_len:
                 df_len = temp_rcns2_df_store.drop(columns=result).shape[0]
                 self.update_rcns2_time_chart(temp_rcns2_df_store.drop(columns=result))
                 self.rapidcns_status_txt[
                     "message"
                 ] = f"Replaying prior RCNS2 data - step {df_len}."
-                lastrow = temp_rcns2_df_store.iloc[-1]#.drop("number_probes")
+                lastrow = temp_rcns2_df_store.iloc[-1]  # .drop("number_probes")
                 lastrow_plot = lastrow.sort_values(ascending=False).head(10)
                 self.update_rcns2_plot(
                     lastrow_plot.index.to_list(),
-                    list(lastrow_plot.values/100),
+                    list(lastrow_plot.values / 100),
                     "replay",
                 )
             time.sleep(0.5)
-        self.rapidcns_status_txt[
-            "message"
-        ] = f"Viewing historical RCNS2 data."
+        self.rapidcns_status_txt["message"] = f"Viewing historical RCNS2 data."
 
 
 def find_largest_integer(directory_path, prefix, suffix):
     files = os.listdir(directory_path)
 
     # Filter files that match the pattern live_N_sample.txt
-    matching_files = [file for file in files if file.startswith(prefix) and file.endswith(suffix)]
+    matching_files = [
+        file for file in files if file.startswith(prefix) and file.endswith(suffix)
+    ]
 
     if not matching_files:
         print("No matching files found.")
         return None
 
     # Extract integers from the file names
-    integers = [int(file.split('_')[1]) for file in matching_files]
+    integers = [int(file.split("_")[1]) for file in matching_files]
 
     # Find the largest integer
     largest_integer = max(integers)
 
     return largest_integer
-

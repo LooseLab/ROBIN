@@ -12,33 +12,33 @@ from methnicegui import images
 import os
 
 IMAGEFILE = os.path.join(
-            os.path.dirname(os.path.abspath(images.__file__)), "MethBrain_small.png"
-        )
+    os.path.dirname(os.path.abspath(images.__file__)), "MethBrain_small.png"
+)
 
 
 @contextmanager
 def frame(navtitle: str, myconnection):
     """Custom page frame to share the same styling and behavior across all pages"""
-    with ui.dialog().props('persistent') as dialog, ui.card():
+    with ui.dialog().props("persistent") as dialog, ui.card():
         ui.label("Quitting the app will stop running code. Are you sure?")
         ui.label("If you want to keep code running, click Cancel.")
-        ui.label("You can safely close this window and code will keep running in the background.")
-        ui.button("Cancel", on_click=dialog.close).props("outline").classes(
-            "shadow-lg"
+        ui.label(
+            "You can safely close this window and code will keep running in the background."
         )
-        ui.button(
-            "Really Quit", icon="logout", on_click=cleanup_and_exit
-        ).props("outline").classes("shadow-lg")
+        ui.button("Cancel", on_click=dialog.close).props("outline").classes("shadow-lg")
+        ui.button("Really Quit", icon="logout", on_click=cleanup_and_exit).props(
+            "outline"
+        ).classes("shadow-lg")
 
-    with ui.header(fixed=True).classes(replace="row items-center p-2").style('box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)') as header:
+    with ui.header(fixed=True).classes(replace="row items-center p-2").style(
+        "box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)"
+    ) as header:
         with ui.grid(columns=2).style("width: 100%"):
-            ui.label(navtitle).tailwind(
-                "text-2xl font-bold font-italic drop-shadow"
-            )
+            ui.label(navtitle).tailwind("text-2xl font-bold font-italic drop-shadow")
             with ui.row().classes("ml-auto"):
-                ui.switch(
-                    "Dark Mode", on_change=dark_mode
-                ).classes('ml-4 bg-transparent').props('color="black"')
+                ui.switch("Dark Mode", on_change=dark_mode).classes(
+                    "ml-4 bg-transparent"
+                ).props('color="black"')
                 ui.button(
                     "Quit", icon="logout", on_click=dialog.open
                 )  # .classes('ml-4')#.props('outline') #.classes('shadow-lg')
@@ -48,7 +48,9 @@ def frame(navtitle: str, myconnection):
         yield
     with ui.footer():
         ui.image(IMAGEFILE).style("width: 30px")
-        ui.label().bind_text_from(myconnection, 'ip', backward=lambda n: f'Connected to: {n}')
+        ui.label().bind_text_from(
+            myconnection, "ip", backward=lambda n: f"Connected to: {n}"
+        )
         ui.label(
             "Some aspects of this application are ©Looselab - all analyses provided for research use only."
         ).tailwind("text-sm font-italic")
@@ -60,6 +62,7 @@ def cleanup_and_exit():
     :return: None
     """
     app.shutdown()
+
 
 def dark_mode(event: ValueChangeEventArguments):
     """

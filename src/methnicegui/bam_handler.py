@@ -1,5 +1,6 @@
 from watchdog.events import FileSystemEventHandler
 
+
 class BamEventHandler(FileSystemEventHandler):
     def __init__(self, bam_count):
         """This class handles events from the file system watcher."""
