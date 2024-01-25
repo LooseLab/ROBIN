@@ -326,29 +326,31 @@ class Sturgeon_worker:
         self.sturgeon_status_txt["message"] = f"Replaying prior Sturgeon data."
         self.sturgeon_df_store = pd.read_csv(
             os.path.join(self.resultfolder, "sturgeon_scores.csv")
-        ).set_index("timestamp")
-        min_index_value = self.sturgeon_df_store.index.min()
-        max_index_value = self.sturgeon_df_store.index.max()
-        start_time = time.time()
-        elapsed_time = 0
-        scale_factor = 300
-        scaled_elapsed_time = elapsed_time * scale_factor
+        )
+        self.sturgeon_df_store["offset"] = (
+            self.sturgeon_df_store["timestamp"] - self.sturgeon_df_store["timestamp"][0]
+        )
+        self.sturgeon_df_store.set_index("timestamp")
 
-        print(max_index_value - min_index_value)
+        self.sturgeon_status_txt["message"] = f"Replaying prior data."
 
-        df_len = 0
+        scale_factor = 1200
+        counter = 0
+        current_time = time.time()
+        for index, row in self.sturgeon_df_store.iterrows():
+            counter += 1
+            # print(index, row)
+            if time.time() < current_time + (row["offset"] / 1000 / scale_factor):
+                time.sleep(
+                    current_time + (row["offset"] / 1000 / scale_factor) - time.time()
+                )
+            # time.sleep(row["offset"] / 1000 / scale_factor)
 
-        while (1000 * scaled_elapsed_time) + min_index_value < max_index_value:
-            print("replaying_data")
-            elapsed_time = time.time() - start_time
-            scaled_elapsed_time = elapsed_time * scale_factor
-            print(scaled_elapsed_time)
-
-            temp_sturgeon_df_store = self.sturgeon_df_store[
-                self.sturgeon_df_store.index
-                < (min_index_value + (1000 * scaled_elapsed_time))
-            ]
-
+            temp_sturgeon_df_store = (
+                self.sturgeon_df_store.head(counter)
+                .drop(columns=["offset", "number_probes"])
+                .set_index("timestamp")
+            )
             columns_greater_than_threshold = (
                 temp_sturgeon_df_store > self.threshold
             ).any()
@@ -356,21 +358,16 @@ class Sturgeon_worker:
             result = temp_sturgeon_df_store.columns[
                 columns_not_greater_than_threshold
             ].tolist()
-            if temp_sturgeon_df_store.drop(columns=result).shape[0] > df_len:
-                self.update_sturgeon_time_chart(
-                    temp_sturgeon_df_store.drop(columns=result)
-                )
-                df_len = temp_sturgeon_df_store.drop(columns=result).shape[0]
-                self.sturgeon_status_txt[
-                    "message"
-                ] = f"Replaying prior Sturgeon data - step {df_len}."
-                lastrow = temp_sturgeon_df_store.iloc[-1].drop("number_probes")
-                lastrow_plot = lastrow.sort_values(ascending=False).head(10)
-                self.update_sturgeon_plot(
-                    lastrow_plot.index.to_list(),
-                    list(lastrow_plot.values),
-                    "replay",
-                )
 
-            time.sleep(0.5)
+            self.update_sturgeon_time_chart(temp_sturgeon_df_store.drop(columns=result))
+            self.sturgeon_status_txt[
+                "message"
+            ] = f"Replaying prior RCNS2 data - step {counter}."
+            lastrow = row.drop(["offset", "number_probes", "timestamp"])
+            lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+            self.update_sturgeon_plot(
+                lastrow_plot.index.to_list(),
+                list(lastrow_plot.values),
+                "replay",
+            )
         self.sturgeon_status_txt["message"] = f"Viewing historical Sturgeon data."

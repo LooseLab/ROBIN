@@ -614,8 +614,9 @@ class RCNS2_worker:
             )
 
         self.rapidcns_status_txt["message"] = "Predictions Complete."
-
-        self.cnv.cnv_plotting(self.donebamfolder)
+        ##Here we have to pass a folder of files rather than an individual file.
+        self.cnv.update_cnv_dict = {}
+        self.cnv.cnv_plotting(self.donebamfolder, folder=True)
 
     def replay_prior_data(self):
         self.background_task = threading.Thread(target=self._replay_prior_data, args=())
@@ -630,30 +631,35 @@ class RCNS2_worker:
         print("Replaying prior data")
         self.rcns2_df_store = pd.read_csv(
             os.path.join(self.resultfolder, "rcns2_scores.csv")
-        ).set_index("timestamp")
+        )
+        self.rcns2_df_store["offset"] = (
+            self.rcns2_df_store["timestamp"] - self.rcns2_df_store["timestamp"][0]
+        )
+        self.rcns2_df_store.set_index("timestamp")
+        # bamsubsets = self.cnv.replay(self.donebamfolder)
         self.rapidcns_status_txt["message"] = f"Replaying prior data."
-        # print (self.rcns2_df_store)
-        min_index_value = self.rcns2_df_store.index.min()
-        max_index_value = self.rcns2_df_store.index.max()
-        start_time = time.time()
-        elapsed_time = 0
-        scale_factor = 300
-        scaled_elapsed_time = elapsed_time * scale_factor
 
-        print(max_index_value - min_index_value)
+        scale_factor = 1200
+        counter = 0
+        current_time = time.time()
+        self.cnv.update_cnv_dict = {}
+        for index, row in self.rcns2_df_store.iterrows():
+            counter += 1
+            # print (index, row)
 
-        df_len = 0
+            if time.time() < current_time + (row["offset"] / 1000 / scale_factor):
+                time.sleep(
+                    current_time + (row["offset"] / 1000 / scale_factor) - time.time()
+                )
 
-        while (1000 * scaled_elapsed_time) + min_index_value < max_index_value:
-            print("replaying_data")
-            elapsed_time = time.time() - start_time
-            scaled_elapsed_time = elapsed_time * scale_factor
-            print(scaled_elapsed_time)
-
-            temp_rcns2_df_store = self.rcns2_df_store[
-                self.rcns2_df_store.index
-                < (min_index_value + (1000 * scaled_elapsed_time))
-            ]
+            self.cnv.cnv_plotting(
+                os.path.join(self.donebamfolder, f"{counter}_sorted.bam")
+            )
+            temp_rcns2_df_store = (
+                self.rcns2_df_store.head(counter)
+                .drop(columns=["offset"])
+                .set_index("timestamp")
+            )
             columns_greater_than_threshold = (
                 temp_rcns2_df_store > self.threshold * 100
             ).any()
@@ -661,20 +667,19 @@ class RCNS2_worker:
             result = temp_rcns2_df_store.columns[
                 columns_not_greater_than_threshold
             ].tolist()
-            if temp_rcns2_df_store.drop(columns=result).shape[0] > df_len:
-                df_len = temp_rcns2_df_store.drop(columns=result).shape[0]
-                self.update_rcns2_time_chart(temp_rcns2_df_store.drop(columns=result))
-                self.rapidcns_status_txt[
-                    "message"
-                ] = f"Replaying prior RCNS2 data - step {df_len}."
-                lastrow = temp_rcns2_df_store.iloc[-1]  # .drop("number_probes")
-                lastrow_plot = lastrow.sort_values(ascending=False).head(10)
-                self.update_rcns2_plot(
-                    lastrow_plot.index.to_list(),
-                    list(lastrow_plot.values / 100),
-                    "replay",
-                )
-            time.sleep(0.5)
+
+            self.update_rcns2_time_chart(temp_rcns2_df_store.drop(columns=result))
+            self.rapidcns_status_txt[
+                "message"
+            ] = f"Replaying prior RCNS2 data - step {counter}."
+            lastrow = row.drop(["offset", "timestamp"])
+            lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+            self.update_rcns2_plot(
+                lastrow_plot.index.to_list(),
+                list(lastrow_plot.values / 100),
+                "replay",
+            )
+
         self.rapidcns_status_txt["message"] = f"Viewing historical RCNS2 data."
 
 

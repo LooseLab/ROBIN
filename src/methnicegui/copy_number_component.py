@@ -4,12 +4,14 @@ from __future__ import annotations
 
 from nicegui import Tailwind, ui, app, run
 import threading
+from natsort import natsorted
 
 import time
 import datetime
 
 from methnicegui import theme
 from cnv_from_bam import iterate_bam_file
+
 import os
 
 os.environ["CI"] = "1"
@@ -35,6 +37,7 @@ class CNV_Plot:
             delim_whitespace=True,
         )
         self.cnv_dict = {}
+        self.update_cnv_dict = {}
         self.cnv_dict["bin_width"] = 0
         self.cnv_dict["variance"] = 0
         self.display_row = None
@@ -109,8 +112,14 @@ class CNV_Plot:
             .classes("border-double")
         )
 
-    def cnv_plotting(self, bam_path):
-        self.cnv_queue.put(bam_path)
+    def cnv_plotting(self, bam_path, folder=False):
+        if folder:
+            # self.cnv_queue.put(bam_path)
+            for file in natsorted(os.listdir(os.path.abspath(bam_path))):
+                if file.endswith(".bam"):
+                    self.cnv_queue.put(os.path.join(bam_path, file))
+        else:
+            self.cnv_queue.put(bam_path)
 
     def _cnv_plotting(self):
         while True:
@@ -126,17 +135,19 @@ class CNV_Plot:
                             f"Last update: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
                         )
                         ui.label(f"{bam_path}")
+                    ### Make this function take a single file rather than a folder
                     self.result = iterate_bam_file(
                         bam_path,
                         _threads=8,
-                        mapq_filter=60,  # , log_level=logging.getLevelName("WARN")
+                        mapq_filter=60,
+                        copy_numbers=self.update_cnv_dict,  # , log_level=logging.getLevelName("WARN")
                     )
                     print(self.result)
                     self.cnv_dict["bin_width"] = self.result.bin_width
                     self.cnv_dict["variance"] = self.result.variance
                     # print(self.result)
                     self._update_cnv_plot()
-            time.sleep(5)
+            time.sleep(0.1)
 
     def _update_cnv_plot(self, gene_target=None):
         if self.result:
