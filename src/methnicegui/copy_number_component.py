@@ -41,6 +41,8 @@ class CNV_Plot:
         self.cnv_dict["bin_width"] = 0
         self.cnv_dict["variance"] = 0
         self.display_row = None
+        self.progress=0
+        self.filecounter = 0
         self.cnv_queue = queue.Queue()
         self.worker = threading.Thread(target=self._cnv_plotting, args=())
         self.worker.daemon = True
@@ -49,7 +51,11 @@ class CNV_Plot:
     def create_cnv_scatter(self, title):
         self.display_row = ui.row()
         with self.display_row:
+            #self.progrock.visible = False
             ui.label("Copy Number Variation").tailwind("drop-shadow", "font-bold")
+        with ui.row().classes("w-full"):
+            self.progrock = ui.linear_progress(show_value=False).bind_value(self, "progress")
+            #self.progrock.visible = False
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
@@ -74,6 +80,7 @@ class CNV_Plot:
         self.scatter_echart = (
             ui.echart(
                 {
+                    "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -114,17 +121,20 @@ class CNV_Plot:
 
     def cnv_plotting(self, bam_path, folder=False):
         if folder:
-            # self.cnv_queue.put(bam_path)
             for file in natsorted(os.listdir(os.path.abspath(bam_path))):
                 if file.endswith(".bam"):
+                    self.filecounter += 1
                     self.cnv_queue.put(os.path.join(bam_path, file))
+
         else:
+            self.filecounter += 1
             self.cnv_queue.put(bam_path)
 
     def _cnv_plotting(self):
         while True:
             if self.display_row:
                 if not self.cnv_queue.empty():
+                    self.progrock.visible = True
                     bam_path = self.cnv_queue.get()
                     self.display_row.clear()
                     with self.display_row:
@@ -142,11 +152,14 @@ class CNV_Plot:
                         mapq_filter=60,
                         copy_numbers=self.update_cnv_dict,  # , log_level=logging.getLevelName("WARN")
                     )
+                    self.progress = (self.filecounter - self.cnv_queue.qsize() ) / self.filecounter
                     print(self.result)
                     self.cnv_dict["bin_width"] = self.result.bin_width
                     self.cnv_dict["variance"] = self.result.variance
                     # print(self.result)
                     self._update_cnv_plot()
+                else:
+                    self.progrock.visible = False
             time.sleep(0.1)
 
     def _update_cnv_plot(self, gene_target=None):

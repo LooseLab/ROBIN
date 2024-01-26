@@ -88,7 +88,7 @@ class BrainMeth:
             self.content = ui.column().classes("w-full")
 
     async def pick_file(self) -> None:
-        result = await local_file_picker("~", multiple=True)
+        result = await local_file_picker("/", multiple=True)
         ui.notify(f"You selected {result}")
         self.content.clear()
         with self.content:
@@ -146,6 +146,7 @@ class BrainMeth:
 
                 with ui.tab_panel(copy_numer).classes("w-full"):
                     with ui.card().style("width: 100%"):
+
                         self.cnv.create_cnv_scatter("CNV Scatter")
                         pass
 
@@ -158,13 +159,16 @@ class BrainMeth:
                 self.rcns2_worker.load_prior_data()
                 self.sturgeon_worker.load_prior_data()
 
-            ui.button("replay data", on_click=self.replay, icon="replay")
+            self.replaycontrol = ui.button("replay data", on_click=self.replay, icon="replay")
 
             # self.rcns2_worker.replay_prior_data()
 
     def replay(self):
+        ui.notify("Replaying data")
+        self.replaycontrol.visible = False
         self.rcns2_worker.replay_prior_data()
         self.sturgeon_worker.replay_prior_data()
+
 
     def replay_cnv(self):
         ui.notify("Replaying CNV data")
