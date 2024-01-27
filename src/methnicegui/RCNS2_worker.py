@@ -642,7 +642,7 @@ class RCNS2_worker:
         scale_factor = 1200
         counter = 0
         current_time = time.time()
-        self.cnv.update_cnv_dict = {}
+        #self.cnv.update_cnv_dict = {}
         for index, row in self.rcns2_df_store.iterrows():
             counter += 1
             # print (index, row)
@@ -651,10 +651,12 @@ class RCNS2_worker:
                 time.sleep(
                     current_time + (row["offset"] / 1000 / scale_factor) - time.time()
                 )
+            else:
+                time.sleep(0.1)
 
-            self.cnv.cnv_plotting(
-                os.path.join(self.donebamfolder, f"{counter}_sorted.bam")
-            )
+            #self.cnv.cnv_plotting(
+            #    os.path.join(self.donebamfolder, f"{counter}_sorted.bam")
+            #)
             temp_rcns2_df_store = (
                 self.rcns2_df_store.head(counter)
                 .drop(columns=["offset"])

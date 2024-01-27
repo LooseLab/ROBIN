@@ -206,6 +206,7 @@ class Sturgeon_worker:
         self.echart2 = (
             ui.echart(
                 {
+                    "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -344,6 +345,8 @@ class Sturgeon_worker:
                 time.sleep(
                     current_time + (row["offset"] / 1000 / scale_factor) - time.time()
                 )
+            else:
+                time.sleep(0.001)
             # time.sleep(row["offset"] / 1000 / scale_factor)
 
             temp_sturgeon_df_store = (
