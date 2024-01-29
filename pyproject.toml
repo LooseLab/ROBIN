@@ -34,6 +34,9 @@ dependencies = [
   "pandas",
   "sturgeon@git+https://github.com/marcpaga/sturgeon",
   "methylartist@git+https://github.com/mattloose/methylartist",
+  "tqdm",
+  "gff3_parser",
+  "dna_features_viewer",
   "natsort",
   "pywebview",
 ]
