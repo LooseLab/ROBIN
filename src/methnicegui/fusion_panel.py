@@ -59,12 +59,14 @@ class Fusion_Panel:
                 tracker = []
                 first_index = 0
                 sequence_length = 0
+                x_label = ""
                 for index, row in self.gene_table[self.gene_table['gene_name'].eq(title)].iterrows():
                     if [row['Start'], row['End']] in tracker:
                         continue
                     else:
                         # tracker.append([row['Start'], row['End']])
                         if row['Type'] == 'gene':
+                            x_label=row[0]
                             features.append(
                                 GraphicFeature(start=int(row['Start']), end=int(row['End']), strand=STRAND[row['Strand']],
                                                thickness=2, color="#ffd700",
@@ -82,6 +84,7 @@ class Fusion_Panel:
                         GraphicFeature(start=int(row[5]), end=int(row[6]), strand=STRAND[row[9]],
                                        color="#ccffcc"))
 
+                plt.xlabel(x_label)
                 record = GraphicRecord(sequence_length=sequence_length, first_index=first_index, features=features)
                 record.plot(ax=ax)
 
@@ -106,31 +109,34 @@ class Fusion_Panel:
             f"bedtools intersect -a {self.gene_bed} -b {os.path.join(bampath, 'merged.bam')} -wa -wb > {os.path.join(bampath ,'mappings.txt')}"
         )
         #print(f"File being read is {os.path.join(bampath ,'mappings.txt')}")
-        self.fusion_candidates = pd.read_csv(os.path.join(bampath ,'mappings.txt'), sep="\t", header=None)
+        try:
+            self.fusion_candidates = pd.read_csv(os.path.join(bampath ,'mappings.txt'), sep="\t", header=None)
 
-        self.fusion_candidates = self.fusion_candidates[self.fusion_candidates[8].gt(50)]
-        uniques = self.fusion_candidates[7].duplicated(keep=False)
-        doubles = self.fusion_candidates[uniques]
-        counts = doubles.groupby(7)[3].transform('nunique')
-        self.fusiontable.clear()
-        #print(doubles[counts > 1].sort_values(by=7))
-        #print(doubles[counts > 1].sort_values(by=7).groupby([3,5]).aggregate("count"))
-        #print(doubles[counts > 1].sort_values(by=7).groupby([3,6]).aggregate("count"))
-        #result = doubles[counts > 1].sort_values(by=7).groupby(3).apply(self.count_shared_values).reset_index(name='shared_count')
-        #print(result)
-        #print(type(result))
-        with self.fusiontable:
-            #ui.table(result).classes("w-full")
-            #ui.table.from_pandas(result)
-            ui.table.from_pandas(doubles[counts > 1].sort_values(by=7).rename(columns={0:"chromBED",1:"BS",2:"BE",3:"Gene",4:"chrom",5:"mS",6:"mE",7:"readID",8:"mapQ",9:"strand"})).classes("w-full")
-        self.fusionplot.clear()
-        with self.fusionplot.classes("w-full"):
-            for gene in doubles[counts > 1].sort_values(by=7)[3].unique():
-                if len(doubles[counts > 1].sort_values(by=7)[doubles[counts > 1].sort_values(by=7)[3].eq(gene)]) > 1:
-                    self.create_fusion_plot(gene, doubles[counts > 1].sort_values(by=7)[doubles[counts > 1].sort_values(by=7)[3].eq(gene)])
-            #self.create_fusion_plot("Fusion Plot")
-            #self.update_fusion_plot(self.fusion_candidates)
-            pass
+            self.fusion_candidates = self.fusion_candidates[self.fusion_candidates[8].gt(50)]
+            uniques = self.fusion_candidates[7].duplicated(keep=False)
+            doubles = self.fusion_candidates[uniques]
+            counts = doubles.groupby(7)[3].transform('nunique')
+            self.fusiontable.clear()
+            #print(doubles[counts > 1].sort_values(by=7))
+            #print(doubles[counts > 1].sort_values(by=7).groupby([3,5]).aggregate("count"))
+            #print(doubles[counts > 1].sort_values(by=7).groupby([3,6]).aggregate("count"))
+            #result = doubles[counts > 1].sort_values(by=7).groupby(3).apply(self.count_shared_values).reset_index(name='shared_count')
+            #print(result)
+            #print(type(result))
+            with self.fusiontable:
+                #ui.table(result).classes("w-full")
+                #ui.table.from_pandas(result)
+                ui.table.from_pandas(doubles[counts > 1].sort_values(by=7).rename(columns={0:"chromBED",1:"BS",2:"BE",3:"Gene",4:"chrom",5:"mS",6:"mE",7:"readID",8:"mapQ",9:"strand"})).classes("w-full")
+            self.fusionplot.clear()
+            with self.fusionplot.classes("w-full"):
+                for gene in doubles[counts > 1].sort_values(by=7)[3].unique():
+                    if len(doubles[counts > 1].sort_values(by=7)[doubles[counts > 1].sort_values(by=7)[3].eq(gene)]) > 1:
+                        self.create_fusion_plot(gene, doubles[counts > 1].sort_values(by=7)[doubles[counts > 1].sort_values(by=7)[3].eq(gene)])
+                #self.create_fusion_plot("Fusion Plot")
+                #self.update_fusion_plot(self.fusion_candidates)
+                pass
+        except Exception as e:
+            print(f"{e}")
 
 
     def count_shared_values(self, group):
