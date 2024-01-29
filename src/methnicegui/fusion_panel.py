@@ -29,18 +29,9 @@ class Fusion_Panel:
                 os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
             )
         self.gene_gff3 = os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)), "gencode.v45.annotation.gff3"
+            os.path.dirname(os.path.abspath(resources.__file__)), "subset_gencode.v45.annotation.gff3"
         )
         self.gene_table = gff3_parser.parse_gff3(self.gene_gff3, verbose = False, parse_attributes = True)
-        #print(self.gene_table[self.gene_table['gene_name'].eq('BRAF')])
-        #print(self.gene_table[self.gene_table['gene_name'].eq('KIAA1549')])
-        #print(self.gene_table[self.gene_table['gene_name'].eq('BRAF')]['Type'].unique())
-        #for index, row in self.gene_table[self.gene_table['gene_name'].eq('BRAF')].iterrows():
-        #    if row['Type'] == 'gene': # and row['transcript_type'] == 'protein_coding':
-        #        print(row['Start'])
-        #        print(row['End'])
-        #        print(row['Strand'])
-        #        print(row)
 
 
 
