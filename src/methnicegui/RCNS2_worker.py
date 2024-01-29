@@ -418,6 +418,8 @@ class RCNS2_worker:
                 self.keep_regions(
                     os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch
                 )
+
+                self.fusion_panel.parse_bams(self.donebamfolder)
                 self.mgmtmethylpredict(self.rapidcnsbamfile)
 
                 pass

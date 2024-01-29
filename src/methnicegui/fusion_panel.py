@@ -117,24 +117,14 @@ class Fusion_Panel:
             doubles = self.fusion_candidates[uniques]
             counts = doubles.groupby(7)[3].transform('nunique')
             self.fusiontable.clear()
-            #print(doubles[counts > 1].sort_values(by=7))
-            #print(doubles[counts > 1].sort_values(by=7).groupby([3,5]).aggregate("count"))
-            #print(doubles[counts > 1].sort_values(by=7).groupby([3,6]).aggregate("count"))
-            #result = doubles[counts > 1].sort_values(by=7).groupby(3).apply(self.count_shared_values).reset_index(name='shared_count')
-            #print(result)
-            #print(type(result))
+
             with self.fusiontable:
-                #ui.table(result).classes("w-full")
-                #ui.table.from_pandas(result)
                 ui.table.from_pandas(doubles[counts > 1].sort_values(by=7).rename(columns={0:"chromBED",1:"BS",2:"BE",3:"Gene",4:"chrom",5:"mS",6:"mE",7:"readID",8:"mapQ",9:"strand"})).classes("w-full")
             self.fusionplot.clear()
             with self.fusionplot.classes("w-full"):
                 for gene in doubles[counts > 1].sort_values(by=7)[3].unique():
                     if len(doubles[counts > 1].sort_values(by=7)[doubles[counts > 1].sort_values(by=7)[3].eq(gene)]) > 1:
                         self.create_fusion_plot(gene, doubles[counts > 1].sort_values(by=7)[doubles[counts > 1].sort_values(by=7)[3].eq(gene)])
-                #self.create_fusion_plot("Fusion Plot")
-                #self.update_fusion_plot(self.fusion_candidates)
-                pass
         except Exception as e:
             print(f"{e}")
 

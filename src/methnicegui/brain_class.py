@@ -209,6 +209,7 @@ class BrainMeth:
             copy_numer = ui.tab("Copy Number Variation")
             coverage = ui.tab("Target Coverage")
             mgmt = ui.tab("MGMT")
+            fusions = ui.tab("Fusions")
         with ui.tab_panels(tabs, value=methylation).classes("w-full"):
             with ui.tab_panel(methylation).classes("w-full"):
                 with ui.card().style("width: 100%"):
@@ -240,6 +241,9 @@ class BrainMeth:
 
             with ui.tab_panel(mgmt).classes("w-full"):
                 self.mgmt_panel.setup_ui(mgmt)
+
+            with ui.tab_panel(fusions).classes("w-full"):
+                self.fusion_panel.setup_ui(None)
 
     def process_bams(self) -> None:
         """
