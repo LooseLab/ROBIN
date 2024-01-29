@@ -29,6 +29,7 @@ class RCNS2_worker:
         cnv,
         target_coverage,
         mgmt_panel,
+        fusion_panel,
         threads=4,
         output_folder=None,
         threshold=0.05,
@@ -42,6 +43,7 @@ class RCNS2_worker:
         self.target_coverage = target_coverage
         self.threshold = threshold
         self.mgmt_panel = mgmt_panel
+        self.fusion_panel = fusion_panel
         self.nofiles = False
         self.browse = browse
         self.rcns2_bam_count = 0
@@ -79,7 +81,7 @@ class RCNS2_worker:
         """
         This function runs RapidCNS2 on the bam files.
         It runs as a worker to not block the main thread.
-        It grabs batches of bam files from the bamforcns list once the list contains 5 or more BAM files.
+        It grabs batches of bam files from the bamforcns list once the list contains 2 or more BAM files.
         :return:
         """
         cov_df = None  # This will be a pandas dataframe to store coverage information.
@@ -534,6 +536,7 @@ class RCNS2_worker:
         self.rcns2_time_chart = (
             ui.echart(
                 {
+                    "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": "RCNS2 Over Time"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -563,6 +566,7 @@ class RCNS2_worker:
             if series != "number_probes":
                 self.rcns2_time_chart.options["series"].append(
                     {
+                        "animation": False,
                         "type": "line",
                         "smooth": True,
                         "name": series,
@@ -579,6 +583,7 @@ class RCNS2_worker:
                     }
                 )
         self.rcns2_time_chart.update()
+
 
     def load_prior_data(self):
         """
@@ -617,6 +622,19 @@ class RCNS2_worker:
         ##Here we have to pass a folder of files rather than an individual file.
         self.cnv.update_cnv_dict = {}
         self.cnv.cnv_plotting(self.donebamfolder, folder=True)
+        plot_out = os.path.join(self.targetsbamfolder, f"{batch}_sorted.png")
+        if os.path.exists(plot_out):
+            self.mgmt_panel.mgmtplot.clear()
+            with self.mgmt_panel.mgmtplot.classes("w-full"):
+                ui.image(plot_out).props("fit=scale-down")
+            results = pd.read_csv(
+                os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
+            )
+            self.mgmt_panel.mgmtable.clear()
+            with self.mgmt_panel.mgmtable:
+                ui.table.from_pandas(results)
+        print(self.donebamfolder)
+        self.fusion_panel.parse_bams(self.donebamfolder)
 
     def replay_prior_data(self):
         self.background_task = threading.Thread(target=self._replay_prior_data, args=())
@@ -681,8 +699,20 @@ class RCNS2_worker:
                 list(lastrow_plot.values / 100),
                 "replay",
             )
+            plot_out = os.path.join(self.targetsbamfolder, f"{counter}_sorted.png")
+            if os.path.exists(plot_out):
+                self.mgmt_panel.mgmtplot.clear()
+                with self.mgmt_panel.mgmtplot.classes("w-full"):
+                    ui.image(plot_out).props("fit=scale-down")
+                results = pd.read_csv(
+                    os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
+                )
+                self.mgmt_panel.mgmtable.clear()
+                with self.mgmt_panel.mgmtable:
+                    ui.table.from_pandas(results)
 
         self.rapidcns_status_txt["message"] = f"Viewing historical RCNS2 data."
+        #replaycontrol.visible = True
 
 
 def find_largest_integer(directory_path, prefix, suffix):

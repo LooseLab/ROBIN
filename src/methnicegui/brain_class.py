@@ -8,6 +8,7 @@ from methnicegui.RCNS2_worker import RCNS2_worker
 from methnicegui.copy_number_component import CNV_Plot
 from methnicegui.target_coverage import TargetCoverage
 from methnicegui.mgmt_panel import MGMT_Panel
+from methnicegui.fusion_panel import Fusion_Panel
 from methnicegui.local_file_picker import local_file_picker
 
 from watchdog.observers import Observer
@@ -47,6 +48,7 @@ class BrainMeth:
         self.cnv = CNV_Plot()
         self.target_coverage = TargetCoverage()
         self.mgmt_panel = MGMT_Panel()
+        self.fusion_panel = Fusion_Panel()
 
         if not self.browse:
             self.event_handler = BamEventHandler(self.bam_count)
@@ -74,6 +76,7 @@ class BrainMeth:
                 self.cnv,
                 self.target_coverage,
                 self.mgmt_panel,
+                self.fusion_panel,
                 threads=self.threads,
                 output_folder=self.output,
                 showerrors=self.showerrors,
@@ -100,6 +103,7 @@ class BrainMeth:
                 copy_numer = ui.tab("Copy Number Variation")
                 coverage = ui.tab("Target Coverage")
                 mgmt = ui.tab("MGMT")
+                fusions = ui.tab("Fusions")
             with ui.tab_panels(tabs, value=methylation).classes("w-full"):
                 with ui.tab_panel(methylation).classes("w-full"):
                     with ui.card().classes("w-full"):
@@ -109,6 +113,7 @@ class BrainMeth:
                                 self.cnv,
                                 self.target_coverage,
                                 self.mgmt_panel,
+                                self.fusion_panel,
                                 threads=self.threads,
                                 output_folder=result[0],
                                 showerrors=self.showerrors,
@@ -155,6 +160,9 @@ class BrainMeth:
 
                 with ui.tab_panel(mgmt).classes("w-full"):
                     self.mgmt_panel.setup_ui(mgmt)
+
+                with ui.tab_panel(fusions).classes("w-full"):
+                    self.fusion_panel.setup_ui(None)
 
                 self.rcns2_worker.load_prior_data()
                 self.sturgeon_worker.load_prior_data()

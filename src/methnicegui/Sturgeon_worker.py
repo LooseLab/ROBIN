@@ -241,6 +241,7 @@ class Sturgeon_worker:
         self.sturgeon_time_chart = (
             ui.echart(
                 {
+                    "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": "Sturgeon Over Time"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -267,6 +268,7 @@ class Sturgeon_worker:
             if series != "number_probes":
                 self.sturgeon_time_chart.options["series"].append(
                     {
+                        "animation": False,
                         "type": "line",
                         "smooth": True,
                         "name": series,
