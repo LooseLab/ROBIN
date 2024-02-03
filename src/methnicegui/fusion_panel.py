@@ -91,47 +91,56 @@ class Fusion_Panel:
 
     def create_fusion_plot(self, title,reads):
         with ui.card().classes('no-shadow border-[2px]'):
-            with ui.pyplot(figsize=(18, 4)):
-                ax = plt.gca()
-                plt.title(title)
-
+            with ui.pyplot(figsize=(16, 2)):
+                ax1 = plt.gca()
                 features = []
                 tracker = []
                 first_index = 0
                 sequence_length = 100
                 x_label = ""
-                #print(f"Looking for {title}")
+                plt.title(title)
+
                 for index, row in self.gene_table[self.gene_table['gene_name'].eq(title.strip())].iterrows():
-                    #print("Found gene")
+                    # print("Found gene")
                     if [row['Start'], row['End']] in tracker:
                         continue
                     else:
                         # tracker.append([row['Start'], row['End']])
                         if row['Type'] == 'gene':
-                            x_label=row[0]
+                            x_label = row[0]
                             features.append(
-                                GraphicFeature(start=int(row['Start']), end=int(row['End']), strand=STRAND[row['Strand']],
+                                GraphicFeature(start=int(row['Start']), end=int(row['End']),
+                                               strand=STRAND[row['Strand']],
                                                thickness=4, color="#ffd700",
-                                               #label=row['gene_name']
+                                               # label=row['gene_name']
                                                )
                             )
                             first_index = int(row['Start']) - 1000
                             sequence_length = int(row['End']) - int(row['Start']) + 2000
                         if row['Type'] == 'CDS' and row['transcript_type'] == 'protein_coding':
                             features.append(
-                                GraphicFeature(start=int(row['Start']), end=int(row['End']), strand=STRAND[row['Strand']],
+                                GraphicFeature(start=int(row['Start']), end=int(row['End']),
+                                               strand=STRAND[row['Strand']],
                                                color="#ffcccc", ))  # label=row['exon_id']))
-                #count = 0
-                for index,row in reads.sort_values(by=7).iterrows():
-                    #count += 1
+                record = GraphicRecord(sequence_length=sequence_length, first_index=first_index,
+                                       features=features)
+                ax1.set_xlabel(x_label)
+                record.plot(ax=ax1)
+
+            with ui.pyplot(figsize=(16, 1)):
+                ax = plt.gca()
+                features = []
+                x_label = ""
+                for index, row in reads.sort_values(by=7).iterrows():
+                    # count += 1
                     features.append(
                         GraphicFeature(start=int(row[5]), end=int(row[6]), strand=STRAND[row[9]],
-                                       color=row['Color']))#, label=f"Read:{count}"))
+                                       color=row['Color']))  # , label=f"Read:{count}"))
 
                 record = GraphicRecord(sequence_length=sequence_length, first_index=first_index, features=features)
                 ax.set_xlabel(x_label)
+                record.plot(ax=ax, with_ruler=False, draw_line=True)
 
-                record.plot(ax=ax)
 
     def parse_bams(self, bampath):
         bamfiles = natsort.natsorted(os.listdir(bampath))
@@ -265,6 +274,7 @@ class Fusion_Panel:
                                 #for gene in result_all[goodpairs].sort_values(by=7)[3].unique():
                                 #if len(result_all[goodpairs].sort_values(by=7)[result_all[goodpairs].sort_values(by=7)[3].eq(gene)]) > 2:
                                 self.create_fusion_plot(gene, result_all[goodpairs].sort_values(by=7)[result_all[goodpairs].sort_values(by=7)[3].eq(gene)])
+                    break
         except Exception as e:
             print(f"{e}")
 
