@@ -207,9 +207,11 @@ class BrainMeth:
                         ).style("width: 150px")
                         self.gene_select = ui.select(
                             options={"All": "All"},
-                            on_change=lambda e: self.update_cnv_plot()
-                            if e.value == "All"
-                            else self.update_cnv_plot(gene_target=e.value),
+                            on_change=lambda e: (
+                                self.update_cnv_plot()
+                                if e.value == "All"
+                                else self.update_cnv_plot(gene_target=e.value)
+                            ),
                             label="Select Gene",
                             value="All",
                         ).style("width: 150px")
@@ -369,9 +371,9 @@ class BrainMeth:
                 print("Running RapidCNS")
                 bams = []
                 print(f"there are {len(self.bamforcns)} bams for processing")
-                self.rapidcns_status_txt[
-                    "message"
-                ] = f"Processing {len(self.bamforcns)} bam files for RapidCNS2."
+                self.rapidcns_status_txt["message"] = (
+                    f"Processing {len(self.bamforcns)} bam files for RapidCNS2."
+                )
                 while len(self.bamforcns) > 0:
                     bams.append(self.bamforcns.pop())
                     self.rcns2_bam_count += 1
@@ -409,9 +411,9 @@ class BrainMeth:
                 )  #
 
                 if not_first_run:
-                    self.rapidcns_status_txt[
-                        "message"
-                    ] = "Merging bed file with previous bed files."
+                    self.rapidcns_status_txt["message"] = (
+                        "Merging bed file with previous bed files."
+                    )
                     bed_a = pd.read_table(
                         f"{self.rapidcnsbamfile}.bed",
                         names=[
@@ -608,9 +610,9 @@ class BrainMeth:
                 # self.log("Merged Bed File Info:")
                 # self.log(self.merged_bed_file.info())
 
-                self.rapidcns_status_txt[
-                    "message"
-                ] = "Running RapidCNS2 methylation classification."
+                self.rapidcns_status_txt["message"] = (
+                    "Running RapidCNS2 methylation classification."
+                )
 
                 command = (
                     f"Rscript ../hv_rapidCNS2/bin/methylation_classification_nanodx_v0.1.R -s "
@@ -666,9 +668,9 @@ class BrainMeth:
                     self.rcns2_bam_count,
                 )
 
-                self.rapidcns_status_txt[
-                    "message"
-                ] = "RapidCNS2 methylation classification done. Waiting for data."
+                self.rapidcns_status_txt["message"] = (
+                    "RapidCNS2 methylation classification done. Waiting for data."
+                )
 
                 os.rename(
                     f"{self.sortedbamfile}",
@@ -960,9 +962,9 @@ class BrainMeth:
                 self.stugeonfinished = False
                 bams = []
                 # self.log(f"there are {len(self.bamforsturgeon)} bams for sturgeon processing")
-                self.sturgeon_status_txt[
-                    "message"
-                ] = f"Processing {len(self.bamforsturgeon)} bam files for Sturgeon."
+                self.sturgeon_status_txt["message"] = (
+                    f"Processing {len(self.bamforsturgeon)} bam files for Sturgeon."
+                )
                 while len(self.bamforsturgeon) > 0:
                     bams.append(self.bamforsturgeon.pop())
                     self.st_bam_count += 1
@@ -971,9 +973,9 @@ class BrainMeth:
 
                 pysam.cat("-o", tempbam.name, *bams)
 
-                self.sturgeon_status_txt[
-                    "message"
-                ] = "Bam files merged - starting extraction."
+                self.sturgeon_status_txt["message"] = (
+                    "Bam files merged - starting extraction."
+                )
 
                 file = tempbam.name
 
@@ -1001,9 +1003,9 @@ class BrainMeth:
                         # self.log(e)
                         pass
 
-                    self.sturgeon_status_txt[
-                        "message"
-                    ] = "Sturgeon Bed files generated. Merging with previous."
+                    self.sturgeon_status_txt["message"] = (
+                        "Sturgeon Bed files generated. Merging with previous."
+                    )
 
                     calls_per_probe_file = os.path.join(
                         temp2, "merged_probes_methyl_calls.txt"
@@ -1032,9 +1034,9 @@ class BrainMeth:
                         self.bedfoldercount, "final_merged_probes_methyl_calls.bed"
                     )
                     probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
-                    self.sturgeon_status_txt[
-                        "message"
-                    ] = "Bed files merged. Generating predictions."
+                    self.sturgeon_status_txt["message"] = (
+                        "Bed files merged. Generating predictions."
+                    )
                     os.system(
                         f"sturgeon predict -i {self.bedfoldercount} -o {self.resultfolder} "
                         f"--model-files {self.modelfile} >/dev/null 2>&1"
@@ -1077,9 +1079,9 @@ class BrainMeth:
                         self.st_bam_count,
                     )
 
-                    self.sturgeon_status_txt[
-                        "message"
-                    ] = "Predictions generated. Waiting for data."
+                    self.sturgeon_status_txt["message"] = (
+                        "Predictions generated. Waiting for data."
+                    )
 
             time.sleep(5)
 

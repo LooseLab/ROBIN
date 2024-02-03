@@ -96,9 +96,9 @@ class RCNS2_worker:
                 print("Running RapidCNS")
                 bams = []
                 print(f"there are {self.bamqueue.qsize()} bams for processing")
-                self.rapidcns_status_txt[
-                    "message"
-                ] = f"Processing {self.bamqueue.qsize()} bam files for RapidCNS2."
+                self.rapidcns_status_txt["message"] = (
+                    f"Processing {self.bamqueue.qsize()} bam files for RapidCNS2."
+                )
                 while self.bamqueue.qsize() > 0:
                     bams.append(self.bamqueue.get())
                     self.rcns2_bam_count += 1
@@ -142,9 +142,9 @@ class RCNS2_worker:
                 # ToDo: Implement saving of target coverage data.
 
                 if not_first_run:
-                    self.rapidcns_status_txt[
-                        "message"
-                    ] = "Merging bed file with previous bed files."
+                    self.rapidcns_status_txt["message"] = (
+                        "Merging bed file with previous bed files."
+                    )
                     bed_a = pd.read_table(
                         f"{self.rapidcnsbamfile}.bed",
                         names=[
@@ -343,9 +343,9 @@ class RCNS2_worker:
                 # self.log("Merged Bed File Info:")
                 # self.log(self.merged_bed_file.info())
 
-                self.rapidcns_status_txt[
-                    "message"
-                ] = "Running RapidCNS2 methylation classification."
+                self.rapidcns_status_txt["message"] = (
+                    "Running RapidCNS2 methylation classification."
+                )
 
                 command = (
                     f"Rscript {HVPATH}/bin/methylation_classification_nanodx_v0.1.R -s "
@@ -401,9 +401,9 @@ class RCNS2_worker:
                     self.rcns2_bam_count,
                 )
 
-                self.rapidcns_status_txt[
-                    "message"
-                ] = "RapidCNS2 methylation classification done. Waiting for data."
+                self.rapidcns_status_txt["message"] = (
+                    "RapidCNS2 methylation classification done. Waiting for data."
+                )
 
                 os.rename(
                     f"{self.sortedbamfile}",
@@ -586,7 +586,6 @@ class RCNS2_worker:
                 )
         self.rcns2_time_chart.update()
 
-
     def load_prior_data(self):
         """
         Load prior data from a file.
@@ -662,7 +661,7 @@ class RCNS2_worker:
         scale_factor = 1200
         counter = 0
         current_time = time.time()
-        #self.cnv.update_cnv_dict = {}
+        # self.cnv.update_cnv_dict = {}
         for index, row in self.rcns2_df_store.iterrows():
             counter += 1
             # print (index, row)
@@ -674,9 +673,9 @@ class RCNS2_worker:
             else:
                 time.sleep(0.1)
 
-            #self.cnv.cnv_plotting(
+            # self.cnv.cnv_plotting(
             #    os.path.join(self.donebamfolder, f"{counter}_sorted.bam")
-            #)
+            # )
             temp_rcns2_df_store = (
                 self.rcns2_df_store.head(counter)
                 .drop(columns=["offset"])
@@ -691,9 +690,9 @@ class RCNS2_worker:
             ].tolist()
 
             self.update_rcns2_time_chart(temp_rcns2_df_store.drop(columns=result))
-            self.rapidcns_status_txt[
-                "message"
-            ] = f"Replaying prior RCNS2 data - step {counter}."
+            self.rapidcns_status_txt["message"] = (
+                f"Replaying prior RCNS2 data - step {counter}."
+            )
             lastrow = row.drop(["offset", "timestamp"])
             lastrow_plot = lastrow.sort_values(ascending=False).head(10)
             self.update_rcns2_plot(
@@ -714,7 +713,7 @@ class RCNS2_worker:
                     ui.table.from_pandas(results)
 
         self.rapidcns_status_txt["message"] = f"Viewing historical RCNS2 data."
-        #replaycontrol.visible = True
+        # replaycontrol.visible = True
 
 
 def find_largest_integer(directory_path, prefix, suffix):

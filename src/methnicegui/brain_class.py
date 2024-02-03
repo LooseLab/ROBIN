@@ -167,7 +167,9 @@ class BrainMeth:
                 self.rcns2_worker.load_prior_data()
                 self.sturgeon_worker.load_prior_data()
 
-            self.replaycontrol = ui.button("replay data", on_click=self.replay, icon="replay")
+            self.replaycontrol = ui.button(
+                "replay data", on_click=self.replay, icon="replay"
+            )
 
             # self.rcns2_worker.replay_prior_data()
 
@@ -176,7 +178,6 @@ class BrainMeth:
         self.replaycontrol.visible = False
         self.rcns2_worker.replay_prior_data()
         self.sturgeon_worker.replay_prior_data()
-
 
     def replay_cnv(self):
         ui.notify("Replaying CNV data")

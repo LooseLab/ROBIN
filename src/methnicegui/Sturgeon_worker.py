@@ -69,9 +69,9 @@ class Sturgeon_worker:
                 self.stugeonfinished = False
                 bams = []
                 # self.log(f"there are {len(self.bamforsturgeon)} bams for sturgeon processing")
-                self.sturgeon_status_txt[
-                    "message"
-                ] = f"Processing {self.bamqueue.qsize()} bam files for Sturgeon."
+                self.sturgeon_status_txt["message"] = (
+                    f"Processing {self.bamqueue.qsize()} bam files for Sturgeon."
+                )
                 while self.bamqueue.qsize() > 0:
                     bams.append(self.bamqueue.get())
                     self.st_bam_count += 1
@@ -80,9 +80,9 @@ class Sturgeon_worker:
 
                 pysam.cat("-o", tempbam.name, *bams)
 
-                self.sturgeon_status_txt[
-                    "message"
-                ] = "Bam files merged - starting extraction."
+                self.sturgeon_status_txt["message"] = (
+                    "Bam files merged - starting extraction."
+                )
 
                 file = tempbam.name
 
@@ -110,9 +110,9 @@ class Sturgeon_worker:
                         # self.log(e)
                         pass
 
-                    self.sturgeon_status_txt[
-                        "message"
-                    ] = "Sturgeon Bed files generated. Merging with previous."
+                    self.sturgeon_status_txt["message"] = (
+                        "Sturgeon Bed files generated. Merging with previous."
+                    )
 
                     calls_per_probe_file = os.path.join(
                         temp2, "merged_probes_methyl_calls.txt"
@@ -141,9 +141,9 @@ class Sturgeon_worker:
                         self.bedfoldercount, "final_merged_probes_methyl_calls.bed"
                     )
                     probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
-                    self.sturgeon_status_txt[
-                        "message"
-                    ] = "Bed files merged. Generating predictions."
+                    self.sturgeon_status_txt["message"] = (
+                        "Bed files merged. Generating predictions."
+                    )
                     os.system(
                         f"sturgeon predict -i {self.bedfoldercount} -o {self.resultfolder} "
                         f"--model-files {self.modelfile} >/dev/null 2>&1"
@@ -186,9 +186,9 @@ class Sturgeon_worker:
                         self.st_bam_count,
                     )
 
-                    self.sturgeon_status_txt[
-                        "message"
-                    ] = "Predictions generated. Waiting for data."
+                    self.sturgeon_status_txt["message"] = (
+                        "Predictions generated. Waiting for data."
+                    )
 
             time.sleep(5)
 
@@ -365,9 +365,9 @@ class Sturgeon_worker:
             ].tolist()
 
             self.update_sturgeon_time_chart(temp_sturgeon_df_store.drop(columns=result))
-            self.sturgeon_status_txt[
-                "message"
-            ] = f"Replaying prior RCNS2 data - step {counter}."
+            self.sturgeon_status_txt["message"] = (
+                f"Replaying prior RCNS2 data - step {counter}."
+            )
             lastrow = row.drop(["offset", "number_probes", "timestamp"])
             lastrow_plot = lastrow.sort_values(ascending=False).head(10)
             self.update_sturgeon_plot(

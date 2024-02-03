@@ -41,7 +41,7 @@ class CNV_Plot:
         self.cnv_dict["bin_width"] = 0
         self.cnv_dict["variance"] = 0
         self.display_row = None
-        self.progress=0
+        self.progress = 0
         self.filecounter = 0
         self.cnv_queue = queue.Queue()
         self.worker = threading.Thread(target=self._cnv_plotting, args=())
@@ -51,11 +51,13 @@ class CNV_Plot:
     def create_cnv_scatter(self, title):
         self.display_row = ui.row()
         with self.display_row:
-            #self.progrock.visible = False
+            # self.progrock.visible = False
             ui.label("Copy Number Variation").tailwind("drop-shadow", "font-bold")
         with ui.row().classes("w-full"):
-            self.progrock = ui.linear_progress(show_value=False).bind_value(self, "progress")
-            #self.progrock.visible = False
+            self.progrock = ui.linear_progress(show_value=False).bind_value(
+                self, "progress"
+            )
+            # self.progrock.visible = False
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
@@ -65,9 +67,11 @@ class CNV_Plot:
             ).style("width: 150px")
             self.gene_select = ui.select(
                 options={"All": "All"},
-                on_change=lambda e: self._update_cnv_plot()
-                if e.value == "All"
-                else self._update_cnv_plot(gene_target=e.value),
+                on_change=lambda e: (
+                    self._update_cnv_plot()
+                    if e.value == "All"
+                    else self._update_cnv_plot(gene_target=e.value)
+                ),
                 label="Select Gene",
                 value="All",
             ).style("width: 150px")
@@ -152,7 +156,9 @@ class CNV_Plot:
                         mapq_filter=60,
                         copy_numbers=self.update_cnv_dict,  # , log_level=logging.getLevelName("WARN")
                     )
-                    self.progress = (self.filecounter - self.cnv_queue.qsize() ) / self.filecounter
+                    self.progress = (
+                        self.filecounter - self.cnv_queue.qsize()
+                    ) / self.filecounter
                     print(self.result)
                     self.cnv_dict["bin_width"] = self.result.bin_width
                     self.cnv_dict["variance"] = self.result.variance
