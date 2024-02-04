@@ -1,12 +1,12 @@
-from nicegui import Tailwind, ui, app
+from nicegui import ui
 import threading
 import time
-import os, signal
+import os
 import pysam
 import pandas as pd
 import shutil
 import tempfile
-from methnicegui import models, resources
+from methnicegui import models
 from sturgeon.callmapping import (
     merge_probes_methyl_calls,
     probes_methyl_calls_to_bed,
@@ -326,7 +326,7 @@ class Sturgeon_worker:
         :return:
         """
         print("Replaying prior Sturgeon data")
-        self.sturgeon_status_txt["message"] = f"Replaying prior Sturgeon data."
+        self.sturgeon_status_txt["message"] = "Replaying prior Sturgeon data."
         self.sturgeon_df_store = pd.read_csv(
             os.path.join(self.resultfolder, "sturgeon_scores.csv")
         )
@@ -335,7 +335,7 @@ class Sturgeon_worker:
         )
         self.sturgeon_df_store.set_index("timestamp")
 
-        self.sturgeon_status_txt["message"] = f"Replaying prior data."
+        self.sturgeon_status_txt["message"] = "Replaying prior data."
 
         scale_factor = 1200
         counter = 0
@@ -375,4 +375,4 @@ class Sturgeon_worker:
                 list(lastrow_plot.values),
                 "replay",
             )
-        self.sturgeon_status_txt["message"] = f"Viewing historical Sturgeon data."
+        self.sturgeon_status_txt["message"] = "Viewing historical Sturgeon data."

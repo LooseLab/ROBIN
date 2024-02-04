@@ -1,4 +1,4 @@
-from nicegui import Tailwind, ui, app
+from nicegui import ui
 
 
 class MGMT_Panel:

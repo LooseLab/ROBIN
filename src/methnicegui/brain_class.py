@@ -1,6 +1,4 @@
-from nicegui import Tailwind, ui, app
-from nicegui.events import ValueChangeEventArguments
-from io import StringIO
+from nicegui import ui
 
 from methnicegui.bam_handler import BamEventHandler
 from methnicegui.Sturgeon_worker import Sturgeon_worker
@@ -162,7 +160,7 @@ class BrainMeth:
                     self.mgmt_panel.setup_ui(mgmt)
 
                 with ui.tab_panel(fusions).classes("w-full"):
-                    self.fusion_panel.setup_ui(None)
+                    self.fusion_panel.setup_ui()
 
                 self.rcns2_worker.load_prior_data()
                 self.sturgeon_worker.load_prior_data()

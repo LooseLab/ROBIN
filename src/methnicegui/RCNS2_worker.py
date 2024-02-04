@@ -1,16 +1,17 @@
-from nicegui import Tailwind, ui, app
+from nicegui import ui
 
 from io import StringIO
 
 import threading
 import time
-import os, signal
+import os
+import signal
 import pysam
 import pandas as pd
 import subprocess
 import tempfile
 
-from methnicegui import models, resources
+from methnicegui import resources
 
 from methnicegui.merge_bedmethyl import merge_bedmethyl, save_bedmethyl
 from methnicegui import submodules
@@ -476,7 +477,7 @@ class RCNS2_worker:
             # f">/dev/null 2>&1"
         )
         merged_bam_out = os.path.join(self.targetsbamfolder, f"{batch}_merged.bam")
-        to_be_merged = os.path.join(self.targetsbamfolder, f"*_sorted.bam")
+        to_be_merged = os.path.join(self.targetsbamfolder, "*_sorted.bam")
         os.system(
             f"samtools merge --write-index -@{self.threads} -f {merged_bam_out} {to_be_merged}"
             # f">/dev/null 2>&1"
@@ -656,7 +657,7 @@ class RCNS2_worker:
         )
         self.rcns2_df_store.set_index("timestamp")
         # bamsubsets = self.cnv.replay(self.donebamfolder)
-        self.rapidcns_status_txt["message"] = f"Replaying prior data."
+        self.rapidcns_status_txt["message"] = "Replaying prior data."
 
         scale_factor = 1200
         counter = 0
@@ -712,7 +713,7 @@ class RCNS2_worker:
                 with self.mgmt_panel.mgmtable:
                     ui.table.from_pandas(results)
 
-        self.rapidcns_status_txt["message"] = f"Viewing historical RCNS2 data."
+        self.rapidcns_status_txt["message"] = "Viewing historical RCNS2 data."
         # replaycontrol.visible = True
 
 

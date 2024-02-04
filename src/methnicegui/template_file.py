@@ -1,29 +1,9 @@
 # Python imports.
 from __future__ import annotations
-from nicegui import Tailwind, ui, app
-from nicegui.events import ValueChangeEventArguments
-from methnicegui import images
+from nicegui import ui
 
-import threading
-
-import time
-
-from random import random
 
 import theme
-
-from minknow_api.manager import Manager
-import minknow_api.manager_pb2 as manager_pb2
-from minknow_api.statistics_pb2 import (
-    ReadLengthHistogramSplit,
-    ReadEndReason,
-    DataSelection,
-)
-
-import time
-import numpy as np
-import math
-import os
 
 
 def index_page() -> None:
@@ -33,7 +13,7 @@ def index_page() -> None:
     my_connection = None
     with theme.frame("MethClass Interactive", my_connection):
         # my_connection.connect_to_minknow()
-        ui.label(f"Hello")
+        ui.label("Hello")
         # my_object = MinknowHistograms(my_connection.positions[0])
 
 
@@ -51,8 +31,6 @@ def run_class(port: int, reload: bool):
 
 
 def main():  # , threads, simtime, watchfolder, output, sequencing_summary):
-    from check_connection import ConnectionDialog
-
     """
     Entrypoint for when GUI is launched directly.
     :return: None

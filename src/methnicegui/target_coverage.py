@@ -1,6 +1,5 @@
-from nicegui import Tailwind, ui, app
+from nicegui import ui
 import time
-import os, signal
 import natsort
 import numpy as np
 
@@ -62,7 +61,7 @@ class TargetCoverage:
             key=lambda x: np.argsort(natsort.index_natsorted(covdf["#rname"])),
         )
         sorteddf = sorteddf[sorteddf["#rname"] != "chrM"]
-        self.echart3.options["title"]["text"] = f"Per Chromosome Coverage"
+        self.echart3.options["title"]["text"] = "Per Chromosome Coverage"
         self.echart3.options["xAxis"]["data"] = sorteddf["#rname"].to_list()
         self.echart3.options["series"] = [
             {
@@ -124,7 +123,7 @@ class TargetCoverage:
             key=lambda x: np.argsort(natsort.index_natsorted(covdf["#rname"])),
         )
         sorteddf = sorteddf[sorteddf["#rname"] != "chrM"]
-        self.echart4.options["title"]["text"] = f"Per Chromosome Target Coverage"
+        self.echart4.options["title"]["text"] = "Per Chromosome Target Coverage"
         self.echart4.options["xAxis"]["data"] = sorteddf["#rname"].to_list()
         self.echart4.options["series"] = [
             {

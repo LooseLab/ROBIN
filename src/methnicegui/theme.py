@@ -4,7 +4,7 @@ This module contains the theme for the GUI.
 
 from contextlib import contextmanager
 
-from nicegui import Tailwind, ui, app
+from nicegui import ui, app
 from nicegui.events import ValueChangeEventArguments
 
 from methnicegui import images
@@ -32,7 +32,7 @@ def frame(navtitle: str, myconnection):
 
     with ui.header(fixed=True).classes(replace="row items-center p-2").style(
         "box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)"
-    ) as header:
+    ):
         with ui.grid(columns=2).style("width: 100%"):
             ui.label(navtitle).tailwind("text-2xl font-bold font-italic drop-shadow")
             with ui.row().classes("ml-auto"):
