@@ -1,5 +1,5 @@
 from watchdog.events import FileSystemEventHandler
-
+import time
 
 class BamEventHandler(FileSystemEventHandler):
     def __init__(self, bam_count):
