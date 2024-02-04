@@ -242,7 +242,7 @@ class BrainMeth:
                 self.mgmt_panel.setup_ui(mgmt)
 
             with ui.tab_panel(fusions).classes("w-full"):
-                self.fusion_panel.setup_ui(None)
+                self.fusion_panel.setup_ui()
 
     def process_bams(self) -> None:
         """
