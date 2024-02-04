@@ -19,16 +19,16 @@ IMAGEFILE = os.path.join(
 @contextmanager
 def frame(navtitle: str, myconnection):
     """Custom page frame to share the same styling and behavior across all pages"""
-    with ui.dialog().props("persistent") as dialog, ui.card():
-        ui.label("Quitting the app will stop running code. Are you sure?")
-        ui.label("If you want to keep code running, click Cancel.")
-        ui.label(
-            "You can safely close this window and code will keep running in the background."
-        )
-        ui.button("Cancel", on_click=dialog.close).props("outline").classes("shadow-lg")
-        ui.button("Really Quit", icon="logout", on_click=cleanup_and_exit).props(
-            "outline"
-        ).classes("shadow-lg")
+    #with ui.dialog().props("persistent") as dialog, ui.card():
+    #    ui.label("Quitting the app will stop running code. Are you sure?")
+    #    ui.label("If you want to keep code running, click Cancel.")
+    #    ui.label(
+    #        "You can safely close this window and code will keep running in the background."
+    #    )
+    #    ui.button("Cancel", on_click=dialog.close).props("outline").classes("shadow-lg")
+    #    ui.button("Really Quit", icon="logout", on_click=cleanup_and_exit).props(
+    #        "outline"
+    #    ).classes("shadow-lg")
 
     with ui.header(fixed=True).classes(replace="row items-center p-2").style(
         "box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)"
@@ -39,21 +39,34 @@ def frame(navtitle: str, myconnection):
                 ui.switch("Dark Mode", on_change=dark_mode).classes(
                     "ml-4 bg-transparent"
                 ).props('color="black"')
-                ui.button(
-                    "Quit", icon="logout", on_click=dialog.open
-                )  # .classes('ml-4')#.props('outline') #.classes('shadow-lg')
+                #ui.button(
+                #    "Quit", icon="logout", on_click=dialog.open
+                #)  # .classes('ml-4')#.props('outline') #.classes('shadow-lg')
                 ui.image(IMAGEFILE).style("width: 50px")
 
     with ui.column().classes("w-full"):
         yield
     with ui.footer():
+        with ui.dialog() as dialog, ui.card():
+            ui.label('Useful Information.').tailwind("text-2xl font-bold font-italic drop-shadow")
+            ui.separator()
+            ui.link('Code on GitHub', 'https://github.com/looselab/cnsmeth')
+            ui.link('Rapid CNS2 Paper', 'https://link.springer.com/article/10.1007/s00401-022-02415-6')
+            ui.link('Sturgeon Classifier', 'https://www.nature.com/articles/s41586-023-06615-2')
+            ui.link('Protocol', 'https://www.protocols.io/view/intra-operative-nanopore-sequencing-to-classify-br-c65qzg5w')
+            ui.link('Oxford Nanopore', 'https://nanoporetech.com/')
+            ui.link('epi2me labs', 'https://labs.epi2me.io/')
+            ui.link('Looselab', 'https://looselab.github.io/')
+            ui.button('Close', on_click=dialog.close)
         ui.image(IMAGEFILE).style("width: 30px")
+        ui.button('More Information', on_click=dialog.open)
         ui.label().bind_text_from(
             myconnection, "ip", backward=lambda n: f"Connected to: {n}"
         )
         ui.label(
             "Some aspects of this application are ©Looselab - all analyses provided for research use only."
         ).tailwind("text-sm font-italic")
+
 
 
 def cleanup_and_exit():
