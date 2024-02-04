@@ -1,28 +1,19 @@
 # Python imports.
 from __future__ import annotations
-
-
-from nicegui import Tailwind, ui, app, run
+from nicegui import ui
 import threading
-from natsort import natsorted
-
 import time
 import datetime
-
-from methnicegui import theme
-from cnv_from_bam import iterate_bam_file
-
 import os
-
-os.environ["CI"] = "1"
-
 import natsort
 import numpy as np
 import pandas as pd
-
-from methnicegui import resources
-
 import queue
+from natsort import natsorted
+from methnicegui import theme, resources
+from cnv_from_bam import iterate_bam_file
+
+os.environ["CI"] = "1"
 
 
 class CNV_Plot:
@@ -348,7 +339,7 @@ def index_page() -> None:
     my_connection = None
     with theme.frame("MethClass Interactive", my_connection):
         # my_connection.connect_to_minknow()
-        ui.label(f"Hello")
+        ui.label("Hello")
         CNV_PLOT = CNV_Plot()
         CNV_PLOT.create_cnv_scatter("CNV Scatter")
         CNV_PLOT.cnv_plotting("/Users/mattloose/datasets/ds1305_sort.hg38.h2m.bam")
@@ -369,8 +360,6 @@ def run_class(port: int, reload: bool):
 
 
 def main():  # , threads, simtime, watchfolder, output, sequencing_summary):
-    from check_connection import ConnectionDialog
-
     """
     Entrypoint for when GUI is launched directly.
     :return: None
