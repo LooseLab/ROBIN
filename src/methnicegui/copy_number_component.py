@@ -18,7 +18,6 @@ os.environ["CI"] = "1"
 
 class CNV_Plot:
     def __init__(self, **kwargs):
-        print("CNV_Plot Initialised")
         self.gene_bed = pd.read_table(
             os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
@@ -331,19 +330,20 @@ class CNV_Plot:
             # self.gene_select.update()
             self.scatter_echart.update()
 
-
+@ui.page('/')
 def index_page() -> None:
-    # from check_connection import ConnectionDialog
-    # initial_ip = "127.0.0.1"
-    # my_connection = ConnectionDialog(initial_ip)
+    """
+    The main page for the app.
+    This is a simple helper function to enable standalone testing of the app.
+    """
     my_connection = None
-    with theme.frame("MethClass Interactive", my_connection):
+    with theme.frame("Copy Number Variation Interactive", my_connection):
         # my_connection.connect_to_minknow()
-        ui.label("Hello")
         CNV_PLOT = CNV_Plot()
         CNV_PLOT.create_cnv_scatter("CNV Scatter")
-        CNV_PLOT.cnv_plotting("/Users/mattloose/datasets/ds1305_sort.hg38.h2m.bam")
-        # my_object = MinknowHistograms(my_connection.positions[0])
+        CNV_PLOT.cnv_plotting("tests/static/sort.test.bam")
+
+
 
 
 def run_class(port: int, reload: bool):
@@ -356,16 +356,10 @@ def run_class(port: int, reload: bool):
     index_page()
     ui.run(
         port=port, reload=reload, title="MethClass NiceGUI"
-    )  # , native=True, fullscreen=False, window_size=(1200, 1000))
+    )
 
-
-def main():  # , threads, simtime, watchfolder, output, sequencing_summary):
-    """
-    Entrypoint for when GUI is launched directly.
-    :return: None
-    """
-    run_class(port=12398, reload=False)
-
+def run_wrapper():
+    run_class(port=12398, reload=True)
 
 # Entrypoint for when GUI is launched by the CLI.
 # e.g.: python my_app/my_cli.py
@@ -374,7 +368,7 @@ if __name__ in {"__main__", "__mp_main__"}:
     Entrypoint for when GUI is launched by the CLI
     :return: None
     """
-    if __name__ == "__mp_main__":
-        print("GUI launched by auto-reload")
+    print("GUI launched by auto-reload")
+    run_wrapper()
 
-    run_class(port=12398, reload=True)
+

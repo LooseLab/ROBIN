@@ -59,6 +59,10 @@ allow-direct-references=true
 dependencies = [
   "coverage[toml]>=6.5",
   "pytest",
+  "pytest-asyncio",
+  "pytest-selenium",
+  "selenium",
+  "icecream",
 ]
 [tool.hatch.envs.default.scripts]
 test = "pytest {args:tests}"
