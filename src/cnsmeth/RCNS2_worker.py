@@ -11,10 +11,10 @@ import pandas as pd
 import subprocess
 import tempfile
 
-from methnicegui import resources
+from cnsmeth import resources
 
-from methnicegui.merge_bedmethyl import merge_bedmethyl, save_bedmethyl
-from methnicegui import submodules
+from cnsmeth.merge_bedmethyl import merge_bedmethyl, save_bedmethyl
+from cnsmeth import submodules
 
 os.environ["CI"] = "1"
 

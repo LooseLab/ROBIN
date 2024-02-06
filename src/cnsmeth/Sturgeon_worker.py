@@ -6,7 +6,7 @@ import pysam
 import pandas as pd
 import shutil
 import tempfile
-from methnicegui import models
+from cnsmeth import models
 from sturgeon.callmapping import (
     merge_probes_methyl_calls,
     probes_methyl_calls_to_bed,

@@ -14,7 +14,7 @@ import pandas as pd
 
 
 from nicegui import ui
-from methnicegui import theme, resources
+from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 
 from matplotlib import pyplot as plt
@@ -408,7 +408,7 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         fusion = Fusion_Panel()
         fusion.setup_ui()
-        fusion.parse_bams("tests/static/")
+        fusion.parse_bams("tests/static/testRun/donebams")
 
 
 

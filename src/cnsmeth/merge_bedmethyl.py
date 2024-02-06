@@ -1,4 +1,6 @@
-#### Shamelessly lifted from chatGPT
+"""
+Helper functions to sort and merge bedmethyl files.
+"""
 
 import pandas as pd
 import csv

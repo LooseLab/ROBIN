@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import queue
 from natsort import natsorted
-from methnicegui import theme, resources
+from cnsmeth import theme, resources
 from cnv_from_bam import iterate_bam_file
 
 os.environ["CI"] = "1"

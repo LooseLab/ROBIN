@@ -1,12 +1,12 @@
 import click
-from methnicegui.brain_class import BrainMeth
+from cnsmeth.brain_class import BrainMeth
 from pathlib import Path
 from nicegui import ui, app
 import os
 import sys
-from methnicegui import images
+from cnsmeth import images
 
-from methnicegui import theme
+from cnsmeth import theme
 
 
 class Methnice:
