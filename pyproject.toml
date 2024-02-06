@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "methnicegui"
+name = "cnsmeth"
 dynamic = ["version"]
 description = ''
 readme = "README.md"
@@ -34,20 +34,23 @@ dependencies = [
   "pandas",
   "sturgeon@git+https://github.com/marcpaga/sturgeon",
   "methylartist@git+https://github.com/mattloose/methylartist",
+  "tqdm",
+  "gff3_parser",
+  "dna_features_viewer",
   "natsort",
   "pywebview",
 ]
 
 [project.scripts]
-cnsmeth = "methnicegui.main2:package_run"
+cnsmeth = "cnsmeth.main2:package_run"
 
 [project.urls]
-Documentation = "https://github.com/unknown/methnicegui#readme"
-Issues = "https://github.com/unknown/methnicegui/issues"
-Source = "https://github.com/unknown/methnicegui"
+Documentation = "https://github.com/unknown/cnsmeth#readme"
+Issues = "https://github.com/unknown/cnsmeth/issues"
+Source = "https://github.com/unknown/cnsmeth"
 
 [tool.hatch.version]
-path = "src/methnicegui/__about__.py"
+path = "src/cnsmeth/__about__.py"
 
 [tool.hatch.metadata]
 allow-direct-references=true
@@ -56,12 +59,16 @@ allow-direct-references=true
 dependencies = [
   "coverage[toml]>=6.5",
   "pytest",
+  "pytest-asyncio",
+  "pytest-selenium",
+  "selenium",
+  "icecream",
 ]
 [tool.hatch.envs.default.scripts]
 test = "pytest {args:tests}"
 test-cov = "coverage run -m pytest {args:tests}"
 cov-report = [
-  "- coverage combine",
+  "-coverage combine",
   "coverage report",
 ]
 cov = [
@@ -77,19 +84,19 @@ dependencies = [
   "mypy>=1.0.0",
 ]
 [tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/methnicegui tests}"
+check = "mypy --install-types --non-interactive {args:src/cnsmeth tests}"
 
 [tool.coverage.run]
-source_pkgs = ["methnicegui", "tests"]
+source_pkgs = ["cnsmeth", "tests"]
 branch = true
 parallel = true
 omit = [
-  "src/methnicegui/__about__.py",
+  "src/cnsmeth/__about__.py",
 ]
 
 [tool.coverage.paths]
-methnicegui = ["src/methnicegui", "*/methnicegui/src/methnicegui"]
-tests = ["tests", "*/methnicegui/tests"]
+cnsmeth = ["src/cnsmeth", "*/cnsmeth/src/cnsmeth"]
+tests = ["tests", "*/cnsmeth/tests"]
 
 [tool.coverage.report]
 exclude_lines = [
