@@ -17,7 +17,7 @@ def test_CNV_Plot_label(screen: Screen) -> None:
     """
     index_page()
     screen.open('/')
-    screen.implicitly_wait(t=30.0)
+    screen.wait(30.0)
     screen.wait_for('tests/static/bam/test_set.hg38.bk.sam.bam')
     screen.should_contain('Bin Width: 7779058')
     screen.should_contain('Variance: 3.147')
