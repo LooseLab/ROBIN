@@ -1,3 +1,8 @@
+"""
+Provides a class that handles events from the file system watcher.
+"""
+
+
 from watchdog.events import FileSystemEventHandler
 import time
 

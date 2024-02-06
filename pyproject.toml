@@ -42,7 +42,7 @@ dependencies = [
 ]
 
 [project.scripts]
-cnsmeth = "cnsmeth.main2:package_run"
+cnsmeth = "cnsmeth.CNSstartup:package_run"
 
 [project.urls]
 Documentation = "https://github.com/unknown/cnsmeth#readme"
