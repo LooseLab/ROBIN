@@ -3,10 +3,10 @@ from nicegui import ui
 from cnsmeth.bam_handler import BamEventHandler
 from cnsmeth.Sturgeon_worker import Sturgeon_worker
 from cnsmeth.RCNS2_worker import RCNS2_worker
-from cnsmeth.copy_number_component import CNV_Plot
-from cnsmeth.target_coverage import TargetCoverage
-from cnsmeth.mgmt_panel import MGMT_Panel
-from cnsmeth.fusion_panel import Fusion_Panel
+from cnsmeth.subpages.copy_number_component import CNV_Plot
+from cnsmeth.subpages.target_coverage import TargetCoverage
+from cnsmeth.subpages.mgmt_panel import MGMT_Panel
+from cnsmeth.subpages.fusion_panel import Fusion_Panel
 from cnsmeth.local_file_picker import local_file_picker
 
 from watchdog.observers import Observer
