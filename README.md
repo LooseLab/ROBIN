@@ -1,4 +1,4 @@
-# ![MethBrain_small.png](src%2Fmethnicegui%2Fimages%2FMethBrain_small.png)CNSmeth
+# ![MethBrain_small.png](src/cnsmeth/images/MethBrain_small.png)CNSmeth
 
 [![PyPI - Version](https://img.shields.io/pypi/v/methnicegui.svg)](https://pypi.org/project/methnicegui)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/methnicegui.svg)](https://pypi.org/project/methnicegui)
