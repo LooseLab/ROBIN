@@ -88,7 +88,7 @@ class RCNS2_worker:
         cov_df = None  # This will be a pandas dataframe to store coverage information.
         not_first_run = False
         batch = 0
-        wait_for_batch_size = 2
+        wait_for_batch_size = 1
         while True:
             if self.bamqueue.qsize() > wait_for_batch_size:
                 self.rcns2finished = False
@@ -369,59 +369,60 @@ class RCNS2_worker:
                     print(returned_value)
                 # self.log(returned_value)
 
-                scores = pd.read_table(
-                    f"{self.rcns2folder}/live_{batch}_votes.tsv", delim_whitespace=True
-                )
-                scores_to_save = scores.drop(columns=["Freq"]).T
-                scores_to_save["timestamp"] = time.time() * 1000
-                self.rcns2_df_store = pd.concat(
-                    [self.rcns2_df_store, scores_to_save.set_index("timestamp")]
-                )
-                self.rcns2_df_store.to_csv(
-                    os.path.join(self.resultfolder, "rcns2_scores.csv")
-                )
+                if os.path.isfile(f"{self.rcns2folder}/live_{batch}_votes.tsv"):
+                    scores = pd.read_table(
+                        f"{self.rcns2folder}/live_{batch}_votes.tsv", delim_whitespace=True
+                    )
+                    scores_to_save = scores.drop(columns=["Freq"]).T
+                    scores_to_save["timestamp"] = time.time() * 1000
+                    self.rcns2_df_store = pd.concat(
+                        [self.rcns2_df_store, scores_to_save.set_index("timestamp")]
+                    )
+                    self.rcns2_df_store.to_csv(
+                        os.path.join(self.resultfolder, "rcns2_scores.csv")
+                    )
 
-                columns_greater_than_threshold = (
-                    self.rcns2_df_store > self.threshold * 100
-                ).any()
-                columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                result = self.rcns2_df_store.columns[
-                    columns_not_greater_than_threshold
-                ].tolist()
+                    columns_greater_than_threshold = (
+                        self.rcns2_df_store > self.threshold * 100
+                    ).any()
+                    columns_not_greater_than_threshold = ~columns_greater_than_threshold
+                    result = self.rcns2_df_store.columns[
+                        columns_not_greater_than_threshold
+                    ].tolist()
 
-                self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
-                # with self.rcns2_container:
-                #    self.rcns2_container.clear()
-                #    ui.table.from_pandas(self.rcns2_df_store, pagination=3).classes('max-h-80')
-                scores = scores.sort_values(by=["cal_Freq"], ascending=False).head(10)
-                # print(scores.index.to_list())
-                # print(list(scores["cal_Freq"].values / 100))
-                self.update_rcns2_plot(
-                    scores.index.to_list(),
-                    list(scores["cal_Freq"].values / 100),
-                    self.rcns2_bam_count,
-                )
+                    self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
+                    # with self.rcns2_container:
+                    #    self.rcns2_container.clear()
+                    #    ui.table.from_pandas(self.rcns2_df_store, pagination=3).classes('max-h-80')
+                    scores = scores.sort_values(by=["cal_Freq"], ascending=False).head(10)
+                    # print(scores.index.to_list())
+                    # print(list(scores["cal_Freq"].values / 100))
+                    self.update_rcns2_plot(
+                        scores.index.to_list(),
+                        list(scores["cal_Freq"].values / 100),
+                        self.rcns2_bam_count,
+                    )
 
-                self.rapidcns_status_txt["message"] = (
-                    "RapidCNS2 methylation classification done. Waiting for data."
-                )
+                    self.rapidcns_status_txt["message"] = (
+                        "RapidCNS2 methylation classification done. Waiting for data."
+                    )
 
-                os.rename(
-                    f"{self.sortedbamfile}",
-                    os.path.join(self.donebamfolder, f"{batch}_sorted.bam"),
-                )
-                os.rename(
-                    f"{self.sortedbamfile}.csi",
-                    os.path.join(self.donebamfolder, f"{batch}_sorted.bam.csi"),
-                )
-                self.cnv.cnv_plotting(self.donebamfolder, folder=True)
+                    os.rename(
+                        f"{self.sortedbamfile}",
+                        os.path.join(self.donebamfolder, f"{batch}_sorted.bam"),
+                    )
+                    os.rename(
+                        f"{self.sortedbamfile}.csi",
+                        os.path.join(self.donebamfolder, f"{batch}_sorted.bam.csi"),
+                    )
+                    self.cnv.cnv_plotting(self.donebamfolder, folder=True)
 
-                self.keep_regions(
-                    os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch
-                )
+                    self.keep_regions(
+                        os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch
+                    )
 
-                self.fusion_panel.parse_bams(self.donebamfolder)
-                self.mgmtmethylpredict(self.rapidcnsbamfile)
+                    self.fusion_panel.parse_bams(self.donebamfolder)
+                    self.mgmtmethylpredict(self.rapidcnsbamfile)
 
                 pass
             time.sleep(5)

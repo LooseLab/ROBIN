@@ -330,7 +330,6 @@ class CNV_Plot:
             # self.gene_select.update()
             self.scatter_echart.update()
 
-@ui.page('/')
 def index_page() -> None:
     """
     The main page for the app.
@@ -341,7 +340,7 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         CNV_PLOT = CNV_Plot()
         CNV_PLOT.create_cnv_scatter("CNV Scatter")
-        CNV_PLOT.cnv_plotting("tests/static/sort.test.bam")
+        CNV_PLOT.cnv_plotting("tests/static/bam/", folder=True)
 
 
 

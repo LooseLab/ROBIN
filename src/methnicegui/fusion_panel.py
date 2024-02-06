@@ -408,11 +408,8 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         fusion = Fusion_Panel()
         fusion.setup_ui()
-        fusion.parse_bams("/Users/mattloose/datasets/nicegui_ds1305/donebams/")
-        # fusion.parse_bams("/Users/mattloose/006bams")
-        # CNV_PLOT.create_cnv_scatter("CNV Scatter")
-        # CNV_PLOT.cnv_plotting("/Users/mattloose/datasets/ds1305_sort.hg38.h2m.bam")
-        # my_object = MinknowHistograms(my_connection.positions[0])
+        fusion.parse_bams("tests/static/")
+
 
 
 def run_class(port: int, reload: bool):
