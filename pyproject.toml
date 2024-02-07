@@ -32,7 +32,7 @@ dependencies = [
   "watchdog",
   "pysam",
   "pandas",
-  "sturgeon@git+https://github.com/marcpaga/sturgeon",
+  "sturgeon@git+https://github.com/looselab/sturgeon",
   "methylartist@git+https://github.com/mattloose/methylartist",
   "tqdm",
   "gff3_parser",
