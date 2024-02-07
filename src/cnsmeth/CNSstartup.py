@@ -28,6 +28,7 @@ class Methnice:
         self.showerrors = showerrors
         self.browse = browse
 
+    @ui.page('/home')
     def index_page(self) -> None:
         my_connection = None
         with theme.frame("Real Time Brain Tumour Classification", my_connection):

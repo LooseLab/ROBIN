@@ -316,9 +316,9 @@ class Sturgeon_worker:
         self.sturgeon_status_txt["message"] = "Predictions Complete."
 
     def replay_prior_data(self):
-        self.background_tast = threading.Thread(target=self._replay_prior_data, args=())
-        self.background_tast.daemon = True
-        self.background_tast.start()
+        self.background_task = threading.Thread(target=self._replay_prior_data, args=())
+        self.background_task.daemon = True
+        self.background_task.start()
 
     def _replay_prior_data(self):
         """
@@ -376,3 +376,4 @@ class Sturgeon_worker:
                 "replay",
             )
         self.sturgeon_status_txt["message"] = "Viewing historical Sturgeon data."
+
