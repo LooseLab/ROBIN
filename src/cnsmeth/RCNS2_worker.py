@@ -650,6 +650,7 @@ class RCNS2_worker:
         :return:
         """
         print("Replaying prior data")
+        self.cnv.reset_cnv_plot()
         self.rcns2_df_store = pd.read_csv(
             os.path.join(self.resultfolder, "rcns2_scores.csv")
         )
@@ -675,9 +676,9 @@ class RCNS2_worker:
             else:
                 time.sleep(0.1)
 
-            # self.cnv.cnv_plotting(
-            #    os.path.join(self.donebamfolder, f"{counter}_sorted.bam")
-            # )
+            self.cnv.cnv_plotting(
+                os.path.join(self.donebamfolder, f"{counter}_sorted.bam")
+            )
             temp_rcns2_df_store = (
                 self.rcns2_df_store.head(counter)
                 .drop(columns=["offset"])
@@ -706,6 +707,7 @@ class RCNS2_worker:
             if os.path.exists(plot_out):
                 self.mgmt_panel.mgmtplot.clear()
                 with self.mgmt_panel.mgmtplot.classes("w-full"):
+                    print(plot_out)
                     ui.image(plot_out).props("fit=scale-down")
                 results = pd.read_csv(
                     os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
@@ -713,8 +715,16 @@ class RCNS2_worker:
                 self.mgmt_panel.mgmtable.clear()
                 with self.mgmt_panel.mgmtable:
                     ui.table.from_pandas(results)
+            else:
+                self.keep_regions(
+                    os.path.join(self.donebamfolder, f"{counter}_sorted.bam"), counter
+                )
+
+            #self.fusion_panel.parse_bams(self.donebamfolder)
+            #self.mgmtmethylpredict(self.rapidcnsbamfile)
 
         self.rapidcns_status_txt["message"] = "Viewing historical RCNS2 data."
+
         # replaycontrol.visible = True
 
 

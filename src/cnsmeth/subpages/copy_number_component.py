@@ -43,11 +43,6 @@ class CNV_Plot:
         with self.display_row:
             # self.progrock.visible = False
             ui.label("Copy Number Variation").tailwind("drop-shadow", "font-bold")
-        with ui.row().classes("w-full"):
-            self.progrock = ui.linear_progress(show_value=False).bind_value(
-                self, "progress"
-            )
-            # self.progrock.visible = False
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
@@ -112,6 +107,10 @@ class CNV_Plot:
             .style("height: 450px")
             .classes("border-double")
         )
+        with ui.row().classes("w-full"):
+            self.progrock = ui.linear_progress(show_value=False).bind_value(
+                self, "progress"
+            )
 
     def cnv_plotting(self, bam_path, folder=False):
         if folder:
@@ -119,10 +118,13 @@ class CNV_Plot:
                 if file.endswith(".bam"):
                     self.filecounter += 1
                     self.cnv_queue.put(os.path.join(bam_path, file))
-
         else:
             self.filecounter += 1
             self.cnv_queue.put(bam_path)
+
+    def reset_cnv_plot(self):
+        self.update_cnv_dict = {}
+        self.result = None
 
     def _cnv_plotting(self):
         while True:
