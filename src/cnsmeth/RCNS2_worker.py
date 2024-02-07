@@ -13,7 +13,7 @@ import tempfile
 
 from cnsmeth import resources
 
-from cnsmeth.merge_bedmethyl import merge_bedmethyl, save_bedmethyl
+from cnsmeth.utilities.merge_bedmethyl import merge_bedmethyl, save_bedmethyl
 from cnsmeth import submodules
 
 os.environ["CI"] = "1"
