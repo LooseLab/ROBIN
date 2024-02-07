@@ -1,4 +1,4 @@
-from methnicegui.copy_number_component import index_page
+from cnsmeth.subpages.copy_number_component import index_page
 from nicegui.testing import Screen
 import time
 
