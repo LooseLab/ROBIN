@@ -17,7 +17,10 @@ from nicegui import ui
 from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 
+import matplotlib
+matplotlib.use('agg')
 from matplotlib import pyplot as plt
+
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
@@ -210,14 +213,18 @@ class Fusion_Panel:
                 ax.set_xlabel(x_label)
                 record.plot(ax=ax, with_ruler=False, draw_line=True)
 
-    def parse_bams(self, bampath):
+    def parse_bams(self, bampath, filter_bam_list=None):
         """
         Function to parse bamfiles. This function parses bamfiles to identify fusion candidates.
         The function subsets the bamfiles with the bed file and only keeps reads with supplementary alignments.
         The function then merges the newly formed bamfiles and looks for fusions between the target gene panel and the merged bamfile.
         :param bampath: The path to the bamfiles.
+        :param filter_bam_list: A list of bamfiles to include in the analysis.
         """
         bamfiles = natsort.natsorted(os.listdir(bampath))
+        bamstoprocess = []
+        if filter_bam_list:
+            bamfiles = set(bamfiles).intersection(filter_bam_list)
         # Check if all bamfiles have already been subset - if not subset them with the bed file and only keep reads with supplementary alignments
         for file in bamfiles:
             if file.endswith(".bam"):
@@ -231,10 +238,11 @@ class Fusion_Panel:
                         os.system(
                             f"samtools view --write-index -N {tempreadfile.name} -o {os.path.join(bampath, subset_file)} {os.path.join(bampath, file)}"
                         )
+                    bamstoprocess.append(f"subset_{file}")
 
         # Now we merge the newly formed bamfiles:
         os.system(
-            f"samtools cat -o {os.path.join(bampath, 'merged.bam')} {os.path.join(bampath ,'subset_*.bam')}"
+            f'samtools cat -o {os.path.join(bampath, "merged.bam")} {" ".join([os.path.join(bampath,bam) for bam in bamstoprocess])}'
         )
         # This code will look for fusions between the target gene panel and the merged bamfile assuming that the fusion has occurred between these genes.
         os.system(

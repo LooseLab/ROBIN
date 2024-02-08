@@ -650,6 +650,7 @@ class RCNS2_worker:
         :return:
         """
         print("Replaying prior data")
+        self.filter_bam_list = []
         self.cnv.reset_cnv_plot()
         self.rcns2_df_store = pd.read_csv(
             os.path.join(self.resultfolder, "rcns2_scores.csv")
@@ -679,6 +680,7 @@ class RCNS2_worker:
             self.cnv.cnv_plotting(
                 os.path.join(self.donebamfolder, f"{counter}_sorted.bam")
             )
+            self.filter_bam_list.append(f"{counter}_sorted.bam")
             temp_rcns2_df_store = (
                 self.rcns2_df_store.head(counter)
                 .drop(columns=["offset"])
@@ -720,7 +722,7 @@ class RCNS2_worker:
                     os.path.join(self.donebamfolder, f"{counter}_sorted.bam"), counter
                 )
 
-            #self.fusion_panel.parse_bams(self.donebamfolder)
+            self.fusion_panel.parse_bams(self.donebamfolder, filter_bam_list=self.filter_bam_list)
             #self.mgmtmethylpredict(self.rapidcnsbamfile)
 
         self.rapidcns_status_txt["message"] = "Viewing historical RCNS2 data."
