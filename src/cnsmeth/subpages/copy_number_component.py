@@ -116,8 +116,9 @@ class CNV_Plot:
         if folder:
             for file in natsorted(os.listdir(os.path.abspath(bam_path))):
                 if file.endswith(".bam"):
-                    self.filecounter += 1
-                    self.cnv_queue.put(os.path.join(bam_path, file))
+                    if not file.startswith("subset"):
+                        self.filecounter += 1
+                        self.cnv_queue.put(os.path.join(bam_path, file))
         else:
             self.filecounter += 1
             self.cnv_queue.put(bam_path)
@@ -343,6 +344,7 @@ def index_page() -> None:
         CNV_PLOT = CNV_Plot()
         CNV_PLOT.create_cnv_scatter("CNV Scatter")
         CNV_PLOT.cnv_plotting("tests/static/bam/", folder=True)
+        #CNV_PLOT.cnv_plotting("../../../datasets/cns_test_data/", folder=True)
 
 
 
