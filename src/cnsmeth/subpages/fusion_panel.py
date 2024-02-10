@@ -13,6 +13,7 @@ import natsort
 import pandas as pd
 
 
+
 from nicegui import ui
 from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
@@ -120,7 +121,7 @@ class Fusion_Panel:
                         self.fusionplot = ui.row()
                         with self.fusionplot.classes("w-full"):
                             ui.label("Plot not yet available.")
-                        self.fusiontable = ui.row()
+                        self.fusiontable = ui.row().classes("w-full")
                         with self.fusiontable:
                             ui.label("Table not yet available.")
 
@@ -138,7 +139,7 @@ class Fusion_Panel:
                         self.fusionplot_all = ui.row()
                         with self.fusionplot_all.classes("w-full"):
                             ui.label("Plot not yet available.")
-                        self.fusiontable_all = ui.row()
+                        self.fusiontable_all = ui.row().classes("w-full")
                         with self.fusiontable_all:
                             ui.label("Table not yet available.")
 
@@ -155,12 +156,11 @@ class Fusion_Panel:
                 first_index = 0
                 sequence_length = 100
                 x_label = ""
-                plt.title(title)
                 for index, row in self.gene_table[
                     self.gene_table["gene_name"].eq(title.strip())
                 ].iterrows():
                     if row["Type"] == "gene":
-                        x_label = row[0]
+                        x_label = row['Seqid']
                         features.append(
                             GraphicFeature(
                                 start=int(row["Start"]),
@@ -189,13 +189,13 @@ class Fusion_Panel:
                     first_index=first_index,
                     features=features,
                 )
-                ax1.set_xlabel(x_label)
+                ax1.set_title(f'{title} - {x_label}')
                 record.plot(ax=ax1)
+
 
             with ui.pyplot(figsize=(16, 1)):
                 ax = plt.gca()
                 features = []
-                x_label = ""
                 for index, row in reads.sort_values(by=7).iterrows():
                     features.append(
                         GraphicFeature(
@@ -210,7 +210,6 @@ class Fusion_Panel:
                     first_index=first_index,
                     features=features,
                 )
-                ax.set_xlabel(x_label)
                 record.plot(ax=ax, with_ruler=False, draw_line=True)
 
     def parse_bams(self, bampath, filter_bam_list=None):
@@ -225,12 +224,15 @@ class Fusion_Panel:
         bamstoprocess = []
         if filter_bam_list:
             bamfiles = set(bamfiles).intersection(filter_bam_list)
+
+        first_file = True
         # Check if all bamfiles have already been subset - if not subset them with the bed file and only keep reads with supplementary alignments
         for file in bamfiles:
             if file.endswith(".bam"):
                 if file[0].isdigit():
-                    if not os.path.exists(os.path.join(bampath, f"subset_{file}")):
-                        subset_file = f"subset_{file}"
+                    #print("Processing: ", file)
+                    subset_file = f"subset_{file}"
+                    if not os.path.exists(os.path.join(bampath, subset_file)):
                         tempreadfile = tempfile.NamedTemporaryFile()
                         os.system(
                             f"samtools view -L {self.gene_bed} -d SA {os.path.join(bampath, file)} | cut -f1 > {tempreadfile.name}"
@@ -238,12 +240,28 @@ class Fusion_Panel:
                         os.system(
                             f"samtools view --write-index -N {tempreadfile.name} -o {os.path.join(bampath, subset_file)} {os.path.join(bampath, file)}"
                         )
-                    bamstoprocess.append(f"subset_{file}")
+                        if first_file:
+                            os.system(
+                                f'samtools cat -o {os.path.join(bampath, "merged.bam")} {os.path.join(bampath, subset_file)}'
+                            )
+                            first_file = False
+                        else:
+                            os.system(
+                                f'samtools cat -o {os.path.join(bampath, "temp_merged.bam")} {os.path.join(bampath, "merged.bam")} {os.path.join(bampath, subset_file)}'
+                            )
+                            os.system(
+                                f'mv {os.path.join(bampath, "temp_merged.bam")} {os.path.join(bampath, "merged.bam")}'
+                            )
+                    else:
+                        first_file = False
+                    #bamstoprocess.append(f"subset_{file}")
+
 
         # Now we merge the newly formed bamfiles:
-        os.system(
-            f'samtools cat -o {os.path.join(bampath, "merged.bam")} {" ".join([os.path.join(bampath,bam) for bam in bamstoprocess])}'
-        )
+        # If this list is too long we end up with an issue of too many open files.
+        #os.system(
+        #    f'samtools cat -o {os.path.join(bampath, "merged.bam")} {" ".join([os.path.join(bampath,bam) for bam in bamstoprocess])}'
+        #)
         # This code will look for fusions between the target gene panel and the merged bamfile assuming that the fusion has occurred between these genes.
         os.system(
             f"bedtools intersect -a {self.gene_bed} -b {os.path.join(bampath, 'merged.bam')} -wa -wb > {os.path.join(bampath ,'mappings.txt')}"
@@ -271,23 +289,40 @@ class Fusion_Panel:
             result = doubles[counts > 1]
             self.fusiontable.clear()
             with self.fusiontable:
-                f = ui.input("Filter")
-                ui.table.from_pandas(
-                    result.sort_values(by=7).rename(
-                        columns={
-                            0: "chromBED",
-                            1: "BS",
-                            2: "BE",
-                            3: "Gene",
-                            4: "chrom",
-                            5: "mS",
-                            6: "mE",
-                            7: "readID",
-                            8: "mapQ",
-                            9: "strand",
-                        }
-                    )
-                ).bind_filter_from(f, "value").classes("w-full")
+                ui.aggrid.from_pandas(result.sort_values(by=7).rename(
+                    columns={
+                        0: "chromBED",
+                        1: "BS",
+                        2: "BE",
+                        3: "Gene",
+                        4: "chrom",
+                        5: "mS",
+                        6: "mE",
+                        7: "readID",
+                        8: "mapQ",
+                        9: "strand",
+                    }
+                ),
+                theme='material',
+                options={
+                    'defaultColDef': {
+                        'sortable': True,
+                        'resizable': True,
+                    },
+                    'columnDefs': [
+                        {'headerName': 'Chromosome', 'field': 'chromBED', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
+                        {'headerName': 'BS', 'field': 'BS', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
+                        {'headerName': 'BE', 'field': 'BE', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
+                        {'headerName': 'Gene', 'field': 'Gene', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
+                        {'headerName': 'chrom', 'field': 'chrom', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
+                        {'headerName': 'mS', 'field': 'mS', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
+                        {'headerName': 'mE', 'field': 'mE', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
+                        {'headerName': 'readID', 'field': 'readID', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
+                        {'headerName': 'mapQ', 'field': 'mapQ', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
+                        {'headerName': 'strand', 'field': 'strand', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
+                    ],
+                },
+                auto_size_columns=False).classes('max-h-100 min-w-full')
             self.fusionplot.clear()
 
             result, goodpairs = self._annotate_results(result)
@@ -340,9 +375,7 @@ class Fusion_Panel:
 
             self.fusiontable_all.clear()
             with self.fusiontable_all:
-                f_all = ui.input("Filter")
-                ui.table.from_pandas(
-                    result_all.sort_values(by=7).rename(
+                ui.aggrid.from_pandas(result_all.sort_values(by=7).rename(
                         columns={
                             0: "chromBED",
                             1: "BS",
@@ -355,8 +388,37 @@ class Fusion_Panel:
                             8: "mapQ",
                             9: "strand",
                         }
-                    )
-                ).bind_filter_from(f_all, "value").classes("w-full")
+                    ),
+                    theme='material',
+                    options={
+                        'defaultColDef': {
+                            'sortable': True,
+                            'resizable': True,
+                        },
+                        'columnDefs': [
+                            {'headerName': 'Chromosome', 'field': 'chromBED', 'filter': 'agTextColumnFilter',
+                             'floatingFilter': False},
+                            {'headerName': 'BS', 'field': 'BS', 'filter': 'agNumberColumnFilter',
+                             'floatingFilter': False},
+                            {'headerName': 'BE', 'field': 'BE', 'filter': 'agNumberColumnFilter',
+                             'floatingFilter': False},
+                            {'headerName': 'Gene', 'field': 'Gene', 'filter': 'agTextColumnFilter',
+                             'floatingFilter': False},
+                            {'headerName': 'chrom', 'field': 'chrom', 'filter': 'agTextColumnFilter',
+                             'floatingFilter': False},
+                            {'headerName': 'mS', 'field': 'mS', 'filter': 'agNumberColumnFilter',
+                             'floatingFilter': False},
+                            {'headerName': 'mE', 'field': 'mE', 'filter': 'agNumberColumnFilter',
+                             'floatingFilter': False},
+                            {'headerName': 'readID', 'field': 'readID', 'filter': 'agTextColumnFilter',
+                             'floatingFilter': False},
+                            {'headerName': 'mapQ', 'field': 'mapQ', 'filter': 'agNumberColumnFilter',
+                             'floatingFilter': False},
+                            {'headerName': 'strand', 'field': 'strand', 'filter': 'agTextColumnFilter',
+                             'floatingFilter': False},
+                        ],
+                    },
+                    auto_size_columns=True).classes('max-h-100 min-w-full')
             self.fusionplot_all.clear()
 
             result_all, goodpairs = self._annotate_results(result_all)
@@ -416,7 +478,9 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         fusion = Fusion_Panel()
         fusion.setup_ui()
-        fusion.parse_bams("tests/static/testRun/donebams")
+        #fusion.parse_bams("tests/static/testRun/donebams")
+        #fusion.parse_bams("../../../datasets/cns_test_data/bams")
+        fusion.parse_bams("/Users/mattloose/datasets/cns_test_data/sort_bams")
 
 
 
