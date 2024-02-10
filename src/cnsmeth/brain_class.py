@@ -90,7 +90,7 @@ class BrainMeth:
 
     async def pick_file(self) -> None:
         result = await local_file_picker("/", multiple=True)
-        print (result)
+        print(result)
         if result:
             ui.notify(f"You selected {result}")
             self.content.clear()

@@ -376,4 +376,3 @@ class Sturgeon_worker:
                 "replay",
             )
         self.sturgeon_status_txt["message"] = "Viewing historical Sturgeon data."
-

@@ -85,7 +85,8 @@ class RCNS2_worker:
         It grabs batches of bam files from the bamforcns list once the list contains 2 or more BAM files.
         :return:
         """
-        cov_df = None  # This will be a pandas dataframe to store coverage information.
+        covdf = None  # This will be a pandas dataframe to store coverage information.
+        bedcovdf = None
         not_first_run = False
         batch = 0
         wait_for_batch_size = 1
@@ -191,11 +192,7 @@ class RCNS2_worker:
                         header=None,
                         delim_whitespace=True,
                     )
-                    # Doing this is slow - we should just hold the file in memory surely?
-                    # bedB = pd.read_table(f"{self.previous_rapidcnsbamfile}.bed",
-                    # names = ['chrom', 'start_pos', 'end_pos', 'mod', 'score', 'strand',
-                    # 'start_pos2', 'end_pos2', 'colour','Nvalid', 'fraction', 'Nmod', 'Ncanon',
-                    # 'Nother', 'Ndel', 'Nfail', 'Ndiff', 'Nnocall'], header=None, delim_whitespace=True)
+
                     self.merged_bed_file = merge_bedmethyl(bed_a, self.merged_bed_file)
                     save_bedmethyl(self.merged_bed_file, f"{self.rapidcnsbamfile}.bed")
                     newcovdf = pd.read_csv(
@@ -371,7 +368,8 @@ class RCNS2_worker:
 
                 if os.path.isfile(f"{self.rcns2folder}/live_{batch}_votes.tsv"):
                     scores = pd.read_table(
-                        f"{self.rcns2folder}/live_{batch}_votes.tsv", delim_whitespace=True
+                        f"{self.rcns2folder}/live_{batch}_votes.tsv",
+                        delim_whitespace=True,
                     )
                     scores_to_save = scores.drop(columns=["Freq"]).T
                     scores_to_save["timestamp"] = time.time() * 1000
@@ -390,11 +388,15 @@ class RCNS2_worker:
                         columns_not_greater_than_threshold
                     ].tolist()
 
-                    self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
+                    self.update_rcns2_time_chart(
+                        self.rcns2_df_store.drop(columns=result)
+                    )
                     # with self.rcns2_container:
                     #    self.rcns2_container.clear()
                     #    ui.table.from_pandas(self.rcns2_df_store, pagination=3).classes('max-h-80')
-                    scores = scores.sort_values(by=["cal_Freq"], ascending=False).head(10)
+                    scores = scores.sort_values(by=["cal_Freq"], ascending=False).head(
+                        10
+                    )
                     # print(scores.index.to_list())
                     # print(list(scores["cal_Freq"].values / 100))
                     self.update_rcns2_plot(
@@ -722,8 +724,10 @@ class RCNS2_worker:
                     os.path.join(self.donebamfolder, f"{counter}_sorted.bam"), counter
                 )
 
-            self.fusion_panel.parse_bams(self.donebamfolder, filter_bam_list=self.filter_bam_list)
-            #self.mgmtmethylpredict(self.rapidcnsbamfile)
+            self.fusion_panel.parse_bams(
+                self.donebamfolder, filter_bam_list=self.filter_bam_list
+            )
+            # self.mgmtmethylpredict(self.rapidcnsbamfile)
 
         self.rapidcns_status_txt["message"] = "Viewing historical RCNS2 data."
 

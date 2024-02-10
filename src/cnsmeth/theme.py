@@ -33,25 +33,35 @@ def frame(navtitle: str, myconnection):
         yield
     with ui.footer():
         with ui.dialog() as dialog, ui.card():
-            ui.label('Useful Information.').tailwind("text-2xl font-bold font-italic drop-shadow")
+            ui.label("Useful Information.").tailwind(
+                "text-2xl font-bold font-italic drop-shadow"
+            )
             ui.separator()
-            ui.link('Code on GitHub', 'https://github.com/looselab/cnsmeth')
-            ui.link('Rapid CNS2 Paper', 'https://link.springer.com/article/10.1007/s00401-022-02415-6')
-            ui.link('Sturgeon Classifier', 'https://www.nature.com/articles/s41586-023-06615-2')
-            ui.link('Protocol', 'https://www.protocols.io/view/intra-operative-nanopore-sequencing-to-classify-br-c65qzg5w')
-            ui.link('Oxford Nanopore', 'https://nanoporetech.com/')
-            ui.link('epi2me labs', 'https://labs.epi2me.io/')
-            ui.link('Looselab', 'https://looselab.github.io/')
-            ui.button('Close', on_click=dialog.close)
+            ui.link("Code on GitHub", "https://github.com/looselab/cnsmeth")
+            ui.link(
+                "Rapid CNS2 Paper",
+                "https://link.springer.com/article/10.1007/s00401-022-02415-6",
+            )
+            ui.link(
+                "Sturgeon Classifier",
+                "https://www.nature.com/articles/s41586-023-06615-2",
+            )
+            ui.link(
+                "Protocol",
+                "https://www.protocols.io/view/intra-operative-nanopore-sequencing-to-classify-br-c65qzg5w",
+            )
+            ui.link("Oxford Nanopore", "https://nanoporetech.com/")
+            ui.link("epi2me labs", "https://labs.epi2me.io/")
+            ui.link("Looselab", "https://looselab.github.io/")
+            ui.button("Close", on_click=dialog.close)
         ui.image(IMAGEFILE).style("width: 30px")
-        ui.button('More Information', on_click=dialog.open)
+        ui.button("More Information", on_click=dialog.open)
         ui.label().bind_text_from(
             myconnection, "ip", backward=lambda n: f"Connected to: {n}"
         )
         ui.label(
             "Some aspects of this application are ©Looselab - all analyses provided for research use only."
         ).tailwind("text-sm font-italic")
-
 
 
 def cleanup_and_exit():
