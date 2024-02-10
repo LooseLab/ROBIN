@@ -392,6 +392,8 @@ class Fusion_Panel:
                     theme='material',
                     options={
                         'defaultColDef': {
+                            'flex': 1,
+                            'minWidth': 150,
                             'sortable': True,
                             'resizable': True,
                         },
