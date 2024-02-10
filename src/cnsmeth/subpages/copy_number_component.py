@@ -333,6 +333,7 @@ class CNV_Plot:
             # self.gene_select.update()
             self.scatter_echart.update()
 
+
 def index_page() -> None:
     """
     The main page for the app.
@@ -343,10 +344,10 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         CNV_PLOT = CNV_Plot()
         CNV_PLOT.create_cnv_scatter("CNV Scatter")
-        CNV_PLOT.cnv_plotting("tests/static/bam/", folder=True)
-        #CNV_PLOT.cnv_plotting("../../../datasets/cns_test_data/", folder=True)
-
-
+        # CNV_PLOT.cnv_plotting("tests/static/bam/", folder=True)
+        CNV_PLOT.cnv_plotting(
+            "/Users/mattloose/datasets/cns_test_data/bams", folder=True
+        )
 
 
 def run_class(port: int, reload: bool):
@@ -357,12 +358,12 @@ def run_class(port: int, reload: bool):
     :return:
     """
     index_page()
-    ui.run(
-        port=port, reload=reload, title="MethClass NiceGUI"
-    )
+    ui.run(port=port, reload=reload, title="MethClass NiceGUI")
+
 
 def run_wrapper():
     run_class(port=12398, reload=True)
+
 
 # Entrypoint for when GUI is launched by the CLI.
 # e.g.: python my_app/my_cli.py
@@ -373,5 +374,3 @@ if __name__ in {"__main__", "__mp_main__"}:
     """
     print("GUI launched by auto-reload")
     run_wrapper()
-
-

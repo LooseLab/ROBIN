@@ -13,13 +13,13 @@ import natsort
 import pandas as pd
 
 
-
 from nicegui import ui
 from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 
 import matplotlib
-matplotlib.use('agg')
+
+matplotlib.use("agg")
 from matplotlib import pyplot as plt
 
 
@@ -160,7 +160,7 @@ class Fusion_Panel:
                     self.gene_table["gene_name"].eq(title.strip())
                 ].iterrows():
                     if row["Type"] == "gene":
-                        x_label = row['Seqid']
+                        x_label = row["Seqid"]
                         features.append(
                             GraphicFeature(
                                 start=int(row["Start"]),
@@ -189,9 +189,8 @@ class Fusion_Panel:
                     first_index=first_index,
                     features=features,
                 )
-                ax1.set_title(f'{title} - {x_label}')
+                ax1.set_title(f"{title} - {x_label}")
                 record.plot(ax=ax1)
-
 
             with ui.pyplot(figsize=(16, 1)):
                 ax = plt.gca()
@@ -221,7 +220,7 @@ class Fusion_Panel:
         :param filter_bam_list: A list of bamfiles to include in the analysis.
         """
         bamfiles = natsort.natsorted(os.listdir(bampath))
-        bamstoprocess = []
+
         if filter_bam_list:
             bamfiles = set(bamfiles).intersection(filter_bam_list)
 
@@ -230,7 +229,7 @@ class Fusion_Panel:
         for file in bamfiles:
             if file.endswith(".bam"):
                 if file[0].isdigit():
-                    #print("Processing: ", file)
+                    # print("Processing: ", file)
                     subset_file = f"subset_{file}"
                     if not os.path.exists(os.path.join(bampath, subset_file)):
                         tempreadfile = tempfile.NamedTemporaryFile()
@@ -254,14 +253,7 @@ class Fusion_Panel:
                             )
                     else:
                         first_file = False
-                    #bamstoprocess.append(f"subset_{file}")
 
-
-        # Now we merge the newly formed bamfiles:
-        # If this list is too long we end up with an issue of too many open files.
-        #os.system(
-        #    f'samtools cat -o {os.path.join(bampath, "merged.bam")} {" ".join([os.path.join(bampath,bam) for bam in bamstoprocess])}'
-        #)
         # This code will look for fusions between the target gene panel and the merged bamfile assuming that the fusion has occurred between these genes.
         os.system(
             f"bedtools intersect -a {self.gene_bed} -b {os.path.join(bampath, 'merged.bam')} -wa -wb > {os.path.join(bampath ,'mappings.txt')}"
@@ -289,40 +281,92 @@ class Fusion_Panel:
             result = doubles[counts > 1]
             self.fusiontable.clear()
             with self.fusiontable:
-                ui.aggrid.from_pandas(result.sort_values(by=7).rename(
-                    columns={
-                        0: "chromBED",
-                        1: "BS",
-                        2: "BE",
-                        3: "Gene",
-                        4: "chrom",
-                        5: "mS",
-                        6: "mE",
-                        7: "readID",
-                        8: "mapQ",
-                        9: "strand",
-                    }
-                ),
-                theme='material',
-                options={
-                    'defaultColDef': {
-                        'sortable': True,
-                        'resizable': True,
+                ui.aggrid.from_pandas(
+                    result.sort_values(by=7).rename(
+                        columns={
+                            0: "chromBED",
+                            1: "BS",
+                            2: "BE",
+                            3: "Gene",
+                            4: "chrom",
+                            5: "mS",
+                            6: "mE",
+                            7: "readID",
+                            8: "mapQ",
+                            9: "strand",
+                        }
+                    ),
+                    theme="material",
+                    options={
+                        "defaultColDef": {
+                            "sortable": True,
+                            "resizable": True,
+                        },
+                        "columnDefs": [
+                            {
+                                "headerName": "Chromosome",
+                                "field": "chromBED",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "BS",
+                                "field": "BS",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "BE",
+                                "field": "BE",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "Gene",
+                                "field": "Gene",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "chrom",
+                                "field": "chrom",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "mS",
+                                "field": "mS",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "mE",
+                                "field": "mE",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "readID",
+                                "field": "readID",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "mapQ",
+                                "field": "mapQ",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "strand",
+                                "field": "strand",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
+                        ],
                     },
-                    'columnDefs': [
-                        {'headerName': 'Chromosome', 'field': 'chromBED', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
-                        {'headerName': 'BS', 'field': 'BS', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
-                        {'headerName': 'BE', 'field': 'BE', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
-                        {'headerName': 'Gene', 'field': 'Gene', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
-                        {'headerName': 'chrom', 'field': 'chrom', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
-                        {'headerName': 'mS', 'field': 'mS', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
-                        {'headerName': 'mE', 'field': 'mE', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
-                        {'headerName': 'readID', 'field': 'readID', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
-                        {'headerName': 'mapQ', 'field': 'mapQ', 'filter': 'agNumberColumnFilter', 'floatingFilter': False},
-                        {'headerName': 'strand', 'field': 'strand', 'filter': 'agTextColumnFilter', 'floatingFilter': False},
-                    ],
-                },
-                auto_size_columns=False).classes('max-h-100 min-w-full')
+                    auto_size_columns=False,
+                ).classes("max-h-100 min-w-full")
             self.fusionplot.clear()
 
             result, goodpairs = self._annotate_results(result)
@@ -375,7 +419,8 @@ class Fusion_Panel:
 
             self.fusiontable_all.clear()
             with self.fusiontable_all:
-                ui.aggrid.from_pandas(result_all.sort_values(by=7).rename(
+                ui.aggrid.from_pandas(
+                    result_all.sort_values(by=7).rename(
                         columns={
                             0: "chromBED",
                             1: "BS",
@@ -389,38 +434,79 @@ class Fusion_Panel:
                             9: "strand",
                         }
                     ),
-                    theme='material',
+                    theme="material",
                     options={
-                        'defaultColDef': {
-                            'flex': 1,
-                            'minWidth': 150,
-                            'sortable': True,
-                            'resizable': True,
+                        "defaultColDef": {
+                            "flex": 1,
+                            "minWidth": 150,
+                            "sortable": True,
+                            "resizable": True,
                         },
-                        'columnDefs': [
-                            {'headerName': 'Chromosome', 'field': 'chromBED', 'filter': 'agTextColumnFilter',
-                             'floatingFilter': False},
-                            {'headerName': 'BS', 'field': 'BS', 'filter': 'agNumberColumnFilter',
-                             'floatingFilter': False},
-                            {'headerName': 'BE', 'field': 'BE', 'filter': 'agNumberColumnFilter',
-                             'floatingFilter': False},
-                            {'headerName': 'Gene', 'field': 'Gene', 'filter': 'agTextColumnFilter',
-                             'floatingFilter': False},
-                            {'headerName': 'chrom', 'field': 'chrom', 'filter': 'agTextColumnFilter',
-                             'floatingFilter': False},
-                            {'headerName': 'mS', 'field': 'mS', 'filter': 'agNumberColumnFilter',
-                             'floatingFilter': False},
-                            {'headerName': 'mE', 'field': 'mE', 'filter': 'agNumberColumnFilter',
-                             'floatingFilter': False},
-                            {'headerName': 'readID', 'field': 'readID', 'filter': 'agTextColumnFilter',
-                             'floatingFilter': False},
-                            {'headerName': 'mapQ', 'field': 'mapQ', 'filter': 'agNumberColumnFilter',
-                             'floatingFilter': False},
-                            {'headerName': 'strand', 'field': 'strand', 'filter': 'agTextColumnFilter',
-                             'floatingFilter': False},
+                        "columnDefs": [
+                            {
+                                "headerName": "Chromosome",
+                                "field": "chromBED",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "BS",
+                                "field": "BS",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "BE",
+                                "field": "BE",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "Gene",
+                                "field": "Gene",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "chrom",
+                                "field": "chrom",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "mS",
+                                "field": "mS",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "mE",
+                                "field": "mE",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "readID",
+                                "field": "readID",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "mapQ",
+                                "field": "mapQ",
+                                "filter": "agNumberColumnFilter",
+                                "floatingFilter": False,
+                            },
+                            {
+                                "headerName": "strand",
+                                "field": "strand",
+                                "filter": "agTextColumnFilter",
+                                "floatingFilter": False,
+                            },
                         ],
                     },
-                    auto_size_columns=True).classes('max-h-100 min-w-full')
+                    auto_size_columns=True,
+                ).classes("max-h-100 min-w-full")
             self.fusionplot_all.clear()
 
             result_all, goodpairs = self._annotate_results(result_all)
@@ -480,10 +566,9 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         fusion = Fusion_Panel()
         fusion.setup_ui()
-        #fusion.parse_bams("tests/static/testRun/donebams")
-        #fusion.parse_bams("../../../datasets/cns_test_data/bams")
+        # fusion.parse_bams("tests/static/testRun/donebams")
+        # fusion.parse_bams("../../../datasets/cns_test_data/bams")
         fusion.parse_bams("/Users/mattloose/datasets/cns_test_data/sort_bams")
-
 
 
 def run_class(port: int, reload: bool):
