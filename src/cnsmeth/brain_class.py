@@ -128,7 +128,7 @@ class BrainMeth:
                                 )
 
                                 with ui.card().classes("w-full h-auto"):
-                                    with ui.grid(columns=2).classes("w-full h-auto"):
+                                    with ui.grid(columns=3).classes("w-full h-auto"):
                                         with ui.column():
                                             with ui.card().style("width: 100%"):
                                                 self.rcns2_worker.status_rcns2()
@@ -142,6 +142,13 @@ class BrainMeth:
                                                 self.sturgeon_worker.create_sturgeon_chart(
                                                     "Sturgeon"
                                                 )
+                                        with ui.column():
+                                            with ui.card().style("width: 100%"):
+                                                #self.sturgeon_worker.status_sturgeon()
+                                                self.sturgeon_worker.create_nanodx_chart(
+                                                    "NanoDX"
+                                                )
+
 
                                 with ui.card().style("width: 100%"):
                                     self.rcns2_worker.create_rcns2_time_chart()
@@ -214,21 +221,29 @@ class BrainMeth:
         with ui.tab_panels(tabs, value=methylation).classes("w-full"):
             with ui.tab_panel(methylation).classes("w-full"):
                 with ui.card().style("width: 100%"):
-                    with ui.grid(columns=2).classes("w-full h-auto"):
-                        with ui.column():
-                            with ui.card().style("width: 100%"):
-                                self.rcns2_worker.status_rcns2()
-                                self.rcns2_worker.create_rcns2_chart("RapidCNS2")
-
+                    with ui.grid(columns=3).classes("w-full h-auto"):
                         with ui.column():
                             with ui.card().style("width: 100%"):
                                 self.sturgeon_worker.status_sturgeon()
                                 self.sturgeon_worker.create_sturgeon_chart(
                                     "Sturgeon Prediction"
                                 )
+                        with ui.column():
+                            with ui.card().style("width: 100%"):
+                                self.sturgeon_worker.status_nanodx()
+                                self.sturgeon_worker.create_nanodx_chart(
+                                    "NanoDX"
+                                )
+                        with ui.column():
+                            with ui.card().style("width: 100%"):
+                                self.rcns2_worker.status_rcns2()
+                                self.rcns2_worker.create_rcns2_chart("RapidCNS2")
 
                 with ui.card().style("width: 100%"):
                     self.sturgeon_worker.create_sturgeon_time_chart()
+
+                with ui.card().style("width: 100%"):
+                    self.sturgeon_worker.create_nanodx_time_chart()
 
                 with ui.card().style("width: 100%"):
                     self.rcns2_worker.create_rcns2_time_chart()
