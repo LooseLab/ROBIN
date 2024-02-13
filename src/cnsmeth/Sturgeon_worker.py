@@ -11,10 +11,6 @@ from sturgeon.callmapping import (
     merge_probes_methyl_calls,
     probes_methyl_calls_to_bed,
 )
-
-from cnsmeth.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
-
-
 class Sturgeon_worker:
     def __init__(
         self,
@@ -39,9 +35,7 @@ class Sturgeon_worker:
         self.showerrors = showerrors
         self.result = None
         self.sturgeon_df_store = pd.DataFrame()
-        self.nanoDX_df_store = pd.DataFrame()
         self.sturgeon_status_txt = {"message": "Waiting for data."}
-        self.NN = NN_classifier("/Users/mattloose/GIT/nanoDx/models/Capper_et_al_NN.pkl")
         if not self.browse:
             if not os.path.exists(self.bedfoldercount):
                 os.makedirs(self.bedfoldercount)
@@ -72,10 +66,12 @@ class Sturgeon_worker:
             if self.bamqueue.qsize() > 0:
                 self.stugeonfinished = False
                 bams = []
-                # self.log(f"there are {len(self.bamforsturgeon)} bams for sturgeon processing")
+
                 self.sturgeon_status_txt["message"] = (
                     f"Processing {self.bamqueue.qsize()} bam files for Sturgeon."
                 )
+
+                # Pull all bam files from the queue and cat them together into a temporary file.
                 while self.bamqueue.qsize() > 0:
                     bams.append(self.bamqueue.get())
                     self.st_bam_count += 1
@@ -87,6 +83,9 @@ class Sturgeon_worker:
                 self.sturgeon_status_txt["message"] = (
                     "Bam files merged - starting extraction."
                 )
+
+                # Run modkit extract and sturgeon inputtobed to generate sturgeon bed files
+                # Note: these are not the same as those required for NanoDX
 
                 file = tempbam.name
 
@@ -113,8 +112,6 @@ class Sturgeon_worker:
                         print(e)
                         # self.log(e)
                         pass
-
-                    #ToDo: create specific probe labels for nanoDX
 
                     self.sturgeon_status_txt["message"] = (
                         "Sturgeon Bed files generated. Merging with previous."
@@ -160,36 +157,6 @@ class Sturgeon_worker:
                             "final_merged_probes_methyl_calls_general.csv",
                         )
                     )
-                    ### Adding in NanoDX predict
-                    input = pd.read_csv(bed_output_file, sep="\t")
-                    predictions, class_labels, n_features = self.NN.predict(input)
-                    nanoDX_df = pd.DataFrame({'class': class_labels, 'score': predictions})
-
-
-
-                    nanoDX_save = nanoDX_df.set_index('class').T
-                    nanoDX_save['number_probes'] = n_features
-                    nanoDX_save['timestamp'] = time.time() * 1000
-
-                    self.nanoDX_df_store = pd.concat(
-                        [self.nanoDX_df_store, nanoDX_save.set_index("timestamp")]
-                    )
-
-                    self.nanoDX_df_store.to_csv(
-                        os.path.join(self.resultfolder, "nanoDX_scores.csv")
-                    )
-
-                    columns_greater_than_threshold = (
-                            self.nanoDX_df_store > self.threshold
-                    ).any()
-                    columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                    result = self.nanoDX_df_store.columns[
-                        columns_not_greater_than_threshold
-                    ].tolist()
-
-                    self.update_nanodx_time_chart(
-                        self.nanoDX_df_store.drop(columns=result)
-                    )
 
                     self.st_num_probes = mydf.iloc[-1]["number_probes"]
                     lastrow = mydf.iloc[-1].drop("number_probes")
@@ -223,13 +190,6 @@ class Sturgeon_worker:
                         self.st_num_probes
                     )
 
-                    self.update_nanodx_plot(
-                        nanoDX_df['class'].head(10).values,
-                        nanoDX_df['score'].head(10).values,
-                        self.st_bam_count,
-                        n_features,
-                    )
-
                     self.sturgeon_status_txt["message"] = (
                         "Predictions generated. Waiting for data."
                     )
@@ -245,9 +205,6 @@ class Sturgeon_worker:
             "message",
             backward=lambda n: f"Sturgeon Status: {n}",
         )
-
-    def status_nanodx(self):
-        ui.label("NanoDX processing follows Sturgeon.")
 
     def create_sturgeon_chart(self, title):
         self.echart2 = (
@@ -284,42 +241,6 @@ class Sturgeon_worker:
         ]
         self.echart2.update()
 
-    def create_nanodx_chart(self, title):
-        self.nanodxchart = (
-            ui.echart(
-                {
-                    "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "value", "max": 1},
-                    "yAxis": {"type": "category", "data": [], "inverse": True},
-                    #'legend': {},
-                    "series": [],
-                }
-            )
-            .style("height: 350px")
-            .classes("border-double")
-        )
-
-    def update_nanodx_plot(self, x, y, count, n_features):
-        """
-        Replaces the data in the RapidCNS2 plot.
-        :param x: list of tumour types
-        :param y: confidence scores for each tumour type
-        :param count: the number of bams used to generate the plot
-        :param n_feature: the number of features detected during data analysis
-        :return:
-        """
-        self.nanodxchart.options["title"][
-            "text"
-        ] = f"NanoDX: processed {count} bams and found {int(n_features)} features"
-        self.nanodxchart.options["yAxis"]["data"] = x
-        self.nanodxchart.options["series"] = [
-            {"type": "bar", "name": "NanoDX", "data": y}
-        ]
-        self.nanodxchart.update()
-
     def create_sturgeon_time_chart(self):
         self.sturgeon_time_chart = (
             ui.echart(
@@ -327,23 +248,6 @@ class Sturgeon_worker:
                     "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": "Sturgeon Over Time"},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "time"},
-                    "yAxis": {"type": "value", "data": [], "inverse": False},
-                    "series": [],
-                }
-            )
-            .style("height: 350px")
-            .classes("border-double")
-        )
-
-    def create_nanodx_time_chart(self):
-        self.nanodx_time_chart = (
-            ui.echart(
-                {
-                    "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": "NanoDX Over Time"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
@@ -385,38 +289,6 @@ class Sturgeon_worker:
                     }
                 )
         self.sturgeon_time_chart.update()
-
-    def update_nanodx_time_chart(self, datadf):
-        """
-
-        :param datadf: the data to plot
-        :return:
-        """
-        self.nanodx_time_chart.options["series"] = []
-        for series, data in datadf.to_dict().items():
-            # print(series)
-            data_list = [[key, value] for key, value in data.items()]
-            # print(data_list)
-            if series != "number_probes":
-                self.nanodx_time_chart.options["series"].append(
-                    {
-                        "animation": False,
-                        "type": "line",
-                        "smooth": True,
-                        "name": series,
-                        "emphasis": {"focus": "series"},
-                        "endLabel": {
-                            "show": True,
-                            "formatter": "{a}",
-                            "distance": 20,
-                        },
-                        "lineStyle": {
-                            "width": 2,
-                        },
-                        "data": data_list,
-                    }
-                )
-        self.nanodx_time_chart.update()
 
     def load_prior_data(self):
         self.sturgeon_df_store = pd.read_csv(
