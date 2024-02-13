@@ -3,6 +3,7 @@ from nicegui import ui
 from cnsmeth.utilities.bam_handler import BamEventHandler
 from cnsmeth.Sturgeon_worker import Sturgeon_worker
 from cnsmeth.RCNS2_worker import RCNS2_worker
+from cnsmeth.CrossNN_worker import CrossNN_worker
 from cnsmeth.subpages.copy_number_component import CNV_Plot
 from cnsmeth.subpages.target_coverage import TargetCoverage
 from cnsmeth.subpages.mgmt_panel import MGMT_Panel
@@ -41,6 +42,7 @@ class BrainMeth:
         self.bam_count = {"counter": 0}
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
+        self.bamfornanodx = Queue()
 
         print("BrainMeth Loaded")
         self.cnv = CNV_Plot()
@@ -67,6 +69,10 @@ class BrainMeth:
             self.check_for_existing_bams.start()
             self.sturgeon_worker = Sturgeon_worker(
                 self.bamforsturgeon, threads=self.threads, output_folder=self.output
+            )
+
+            self.nanodx_worker = CrossNN_worker(
+                self.bamfornanodx, threads=self.threads, output_folder=self.output
             )
 
             self.rcns2_worker = RCNS2_worker(
@@ -212,6 +218,11 @@ class BrainMeth:
                     "bamforsturgeon",
                     backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
                 ).tailwind("drop-shadow")
+                ui.label().bind_text_from(
+                    self,
+                    "bamfornanodx",
+                    backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
+                ).tailwind("drop-shadow")
         with ui.tabs().classes("w-full") as tabs:
             methylation = ui.tab("Methylation Classification")
             copy_numer = ui.tab("Copy Number Variation")
@@ -230,8 +241,8 @@ class BrainMeth:
                                 )
                         with ui.column():
                             with ui.card().style("width: 100%"):
-                                self.sturgeon_worker.status_nanodx()
-                                self.sturgeon_worker.create_nanodx_chart(
+                                self.nanodx_worker.status_nanodx()
+                                self.nanodx_worker.create_nanodx_chart(
                                     "NanoDX"
                                 )
                         with ui.column():
@@ -243,7 +254,7 @@ class BrainMeth:
                     self.sturgeon_worker.create_sturgeon_time_chart()
 
                 with ui.card().style("width: 100%"):
-                    self.sturgeon_worker.create_nanodx_time_chart()
+                    self.nanodx_worker.create_nanodx_time_chart()
 
                 with ui.card().style("width: 100%"):
                     self.rcns2_worker.create_rcns2_time_chart()
@@ -285,6 +296,7 @@ class BrainMeth:
                         time.sleep(5)
                     self.bamforcns.put(file[0])
                     self.bamforsturgeon.put(file[0])
+                    self.bamfornanodx.put(file[0])
                 time.sleep(1)
                 self.nofiles = True
             time.sleep(1)
@@ -312,7 +324,6 @@ class BrainMeth:
             )
             latest_timestamps["full_path"] = ""
             latest_timestamps["file_produced"] = latest_timestamps["template_end"] + now
-            print(latest_timestamps)
             for path, dirs, files in os.walk(self.watchfolder):
                 for f in files:
                     if "".join(Path(f).suffixes) in file_endings:
@@ -320,7 +331,6 @@ class BrainMeth:
                             latest_timestamps["filename_bam"] == f, "full_path"
                         ] = os.path.join(path, f)
                         # latest_timestamps[latest_timestamps['filename_bam'] == f]['full_path'] = os.path.join(path, f)
-            print(latest_timestamps)
             for index, row in latest_timestamps.iterrows():
                 current_time = time.time()
                 time_diff = row["file_produced"] - current_time
@@ -331,9 +341,7 @@ class BrainMeth:
                 if "file" not in self.bam_count:
                     self.bam_count["file"] = {}
                 self.bam_count["file"][row["full_path"]] = time.time()
-                # print (index,row)
             self.runfinished = True
-            # os.kill(os.getpid(), signal.SIGINT)
         else:
             for path, dirs, files in os.walk(self.watchfolder):
                 for f in files:
