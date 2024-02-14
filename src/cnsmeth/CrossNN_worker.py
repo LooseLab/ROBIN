@@ -8,9 +8,13 @@ import pysam
 import pandas as pd
 import shutil
 import tempfile
-from cnsmeth import models, theme
+from cnsmeth import models, theme, resources
 from cnsmeth.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
-from cnsmeth.utilities.merge_bedmethyl import merge_bedmethyl, save_bedmethyl
+from cnsmeth.utilities.merge_bedmethyl import (
+    merge_bedmethyl,
+    save_bedmethyl,
+    collapse_bedmethyl,
+)
 
 from queue import Queue
 
@@ -37,22 +41,25 @@ class CrossNN_worker:
         self.resultfolder = os.path.join(self.outputfolder, "results")
         self.running = False
         # ToDo: remove hard coded path
+        self.cpgs_file = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "hglft_genome_260e9_91a970_clean.bed",
+        )
         self.cpgs = pd.read_csv(
-            "/Users/mattloose/GIT/niceGUI/hglft_genome_260e9_91a970_clean.bed",
+            self.cpgs_file,
             sep="\t",
             header=None,
         )
 
         self.modelfile = os.path.join(
-            os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
+            os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
         )
         self.showerrors = showerrors
         self.result = None
         self.nanodx_df_store = pd.DataFrame()
         self.nanodx_status_txt = {"message": "Waiting for data."}
-        self.NN = NN_classifier(
-            "/Users/mattloose/GIT/nanoDx/models/Capper_et_al_NN.pkl"
-        )
+
+        self.NN = NN_classifier(self.modelfile)
         if not self.browse:
             if not os.path.exists(self.bedfoldercount):
                 os.makedirs(self.bedfoldercount)
@@ -115,14 +122,14 @@ class CrossNN_worker:
 
                 temp = tempfile.NamedTemporaryFile()
 
-
                 try:
                     # os.system(
                     #    f"modkit extract --ignore h -t {int(self.threads/2)} {file} {temp.name} "
                     #    f"--force --suppress-progress >/dev/null 2>&1"
                     # )
                     os.system(
-                        f"modkit pileup --include-bed /Users/mattloose/GIT/niceGUI/hglft_genome_260e9_91a970_clean.bed --filter-threshold 0.73 --combine-mods --cpg --reference /Users/mattloose/references/hg38_simple.fa --combine-strands --only-tabs -t 8 {sortfile} {temp.name} --suppress-progress"
+                        # f"modkit pileup --include-bed {self.cpgs_file} --filter-threshold 0.73 --combine-mods --cpg --reference /Users/mattloose/references/hg38_simple.fa --combine-strands --only-tabs -t 8 {sortfile} {temp.name} --suppress-progress"
+                        f"modkit pileup --include-bed {self.cpgs_file} --filter-threshold 0.73 --combine-mods --only-tabs -t 8 {sortfile} {temp.name} --suppress-progress"
                     )
                     # self.log("Done processing bam file")
                 except Exception as e:
@@ -233,6 +240,8 @@ class CrossNN_worker:
                     not_first_run = True
 
                 self.nanodx_status_txt["message"] = "Prediction underway."
+
+                self.merged_bed_file = collapse_bedmethyl(self.merged_bed_file)
 
                 ### Adding in NanoDX predict
                 test_df = pd.merge(
