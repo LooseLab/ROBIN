@@ -337,11 +337,63 @@ class RCNS2_worker:
                 )
                 with self.target_coverage.targ_df:
                     self.target_coverage.targ_df.clear()
-                    ui.table.from_pandas(
-                        self.target_coverage_df, pagination=10, row_key="name"
-                    ).bind_filter_from(self.target_coverage.f, "value").classes(
-                        "w-full"
-                    )
+                    ui.aggrid.from_pandas(
+                        self.target_coverage_df,
+                        theme="material",
+                        options={
+                            "defaultColDef": {
+                                "sortable": True,
+                                "resizable": True,
+                            },
+                            "columnDefs": [
+                                {
+                                    "headerName": "Chromosome",
+                                    "field": "chrom",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "Start",
+                                    "field": "startpos",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "End",
+                                    "field": "endpos",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "Gene/s",
+                                    "field": "name",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "Bases",
+                                    "field": "bases",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "Length",
+                                    "field": "length",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "Coverage",
+                                    "field": "coverage",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                ],
+                            "pagination": True,
+                            },
+
+                    ).classes("w-full, h-80")
+
                 # self.log("Merged Bed File Info:")
                 # self.log(self.merged_bed_file.info())
 
