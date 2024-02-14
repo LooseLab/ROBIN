@@ -21,7 +21,7 @@ class TargetCoverage:
         with ui.card().style("width: 100%"):
             self.create_coverage_time_chart()
         with ui.card().style("width: 100%"):
-            ui.label("Coverage over targets")
+            ui.label("Coverage over targets").tailwind("drop-shadow", "font-bold")
             self.targ_df = ui.row().classes("w-full")
 
     def create_coverage_plot(self, title):
