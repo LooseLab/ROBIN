@@ -4,6 +4,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  - bioconda::samtools>=1.19
   - r-essentials
   - bioconda::bioconductor-genomicranges
   - r-optparse
