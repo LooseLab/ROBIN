@@ -37,6 +37,7 @@ class RCNS2_worker:
         showerrors=False,
         browse=False,
     ):
+        self.offset = None
         self.bamqueue = bamqueue
         self.cnv = cnv
         self.threads = threads
@@ -51,6 +52,7 @@ class RCNS2_worker:
         self.showerrors = showerrors
         self.rapidcns_status_txt = {"message": "Waiting for data."}
         self.st_bam_count = 0
+        self.running = False
         self.resultfolder = os.path.join(self.outputfolder, "results")
         self.subsetbamfolder = os.path.join(self.outputfolder, "subsetbams")
         self.donebamfolder = os.path.join(self.outputfolder, "donebams")
@@ -89,9 +91,11 @@ class RCNS2_worker:
         bedcovdf = None
         not_first_run = False
         batch = 0
+        start_time = time.time()
         wait_for_batch_size = 1
         while True:
             if self.bamqueue.qsize() > wait_for_batch_size:
+                self.running = True
                 self.rcns2finished = False
                 wait_for_batch_size = 0
                 batch += 1
@@ -367,12 +371,36 @@ class RCNS2_worker:
                 # self.log(returned_value)
 
                 if os.path.isfile(f"{self.rcns2folder}/live_{batch}_votes.tsv"):
+                    os.rename(
+                        f"{self.sortedbamfile}",
+                        os.path.join(self.donebamfolder, f"{batch}_sorted.bam"),
+                    )
+                    os.rename(
+                        f"{self.sortedbamfile}.csi",
+                        os.path.join(self.donebamfolder, f"{batch}_sorted.bam.csi"),
+                    )
+                    self.cnv.cnv_plotting(self.donebamfolder, folder=True)
+
+                    self.keep_regions(
+                        os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch
+                    )
+
+                    self.fusion_panel.parse_bams(self.donebamfolder)
+                    self.mgmtmethylpredict(self.rapidcnsbamfile)
+
                     scores = pd.read_table(
                         f"{self.rcns2folder}/live_{batch}_votes.tsv",
                         delim_whitespace=True,
                     )
                     scores_to_save = scores.drop(columns=["Freq"]).T
-                    scores_to_save["timestamp"] = time.time() * 1000
+
+                    if self.offset:
+                        self.offset = time.time() - start_time
+                        scores_to_save['timestamp'] = (time.time() + self.offset) * 1000
+                    else:
+                        scores_to_save['timestamp'] = time.time() * 1000
+
+
                     self.rcns2_df_store = pd.concat(
                         [self.rcns2_df_store, scores_to_save.set_index("timestamp")]
                     )
@@ -409,24 +437,10 @@ class RCNS2_worker:
                         "RapidCNS2 methylation classification done. Waiting for data."
                     )
 
-                    os.rename(
-                        f"{self.sortedbamfile}",
-                        os.path.join(self.donebamfolder, f"{batch}_sorted.bam"),
-                    )
-                    os.rename(
-                        f"{self.sortedbamfile}.csi",
-                        os.path.join(self.donebamfolder, f"{batch}_sorted.bam.csi"),
-                    )
-                    self.cnv.cnv_plotting(self.donebamfolder, folder=True)
 
-                    self.keep_regions(
-                        os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch
-                    )
-
-                    self.fusion_panel.parse_bams(self.donebamfolder)
-                    self.mgmtmethylpredict(self.rapidcnsbamfile)
 
                 pass
+            self.running = False
             time.sleep(5)
 
             if self.bamqueue.qsize() == 0:
@@ -733,6 +747,34 @@ class RCNS2_worker:
 
         # replaycontrol.visible = True
 
+    def playback_thread(self, data: pd.DataFrame):
+        self.data = data
+        nanodx_thread_processing = threading.Thread(target=self.playback_rcns2, args=())
+        nanodx_thread_processing.daemon = True
+        nanodx_thread_processing.start()
+
+    def playback_rcns2(self):
+        start_time = time.time()
+        latest_timestamps = self.data
+        self.offset = 0
+        for index, row in latest_timestamps.iterrows():
+            current_time = time.time()
+            print(f"Current time: {current_time}")
+            print(f"Offset: {self.offset}")
+
+            time_diff = row["file_produced"] - current_time - self.offset
+            print(f"TimeDiff: {time_diff}")
+
+            if self.offset == 0:
+                self.offset = time_diff
+                time_diff = 0
+
+            while row["file_produced"] - current_time - self.offset > 0:
+                time.sleep(0.1)
+                if not self.running:
+                    self.offset += 2
+            self.bamqueue.put(row["full_path"])
+
 
 def find_largest_integer(directory_path, prefix, suffix):
     files = os.listdir(directory_path)
@@ -753,3 +795,4 @@ def find_largest_integer(directory_path, prefix, suffix):
     largest_integer = max(integers)
 
     return largest_integer
+
