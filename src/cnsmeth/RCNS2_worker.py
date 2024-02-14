@@ -396,10 +396,9 @@ class RCNS2_worker:
 
                     if self.offset:
                         self.offset = time.time() - start_time
-                        scores_to_save['timestamp'] = (time.time() + self.offset) * 1000
+                        scores_to_save["timestamp"] = (time.time() + self.offset) * 1000
                     else:
-                        scores_to_save['timestamp'] = time.time() * 1000
-
+                        scores_to_save["timestamp"] = time.time() * 1000
 
                     self.rcns2_df_store = pd.concat(
                         [self.rcns2_df_store, scores_to_save.set_index("timestamp")]
@@ -436,8 +435,6 @@ class RCNS2_worker:
                     self.rapidcns_status_txt["message"] = (
                         "RapidCNS2 methylation classification done. Waiting for data."
                     )
-
-
 
                 pass
             self.running = False
@@ -754,7 +751,7 @@ class RCNS2_worker:
         nanodx_thread_processing.start()
 
     def playback_rcns2(self):
-        start_time = time.time()
+        time.time()
         latest_timestamps = self.data
         self.offset = 0
         for index, row in latest_timestamps.iterrows():
@@ -795,4 +792,3 @@ def find_largest_integer(directory_path, prefix, suffix):
     largest_integer = max(integers)
 
     return largest_integer
-

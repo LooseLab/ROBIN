@@ -344,10 +344,10 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         CNV_PLOT = CNV_Plot()
         CNV_PLOT.create_cnv_scatter("CNV Scatter")
-        # CNV_PLOT.cnv_plotting("tests/static/bam/", folder=True)
-        CNV_PLOT.cnv_plotting(
-            "/Users/mattloose/datasets/cns_test_data/bams", folder=True
-        )
+        CNV_PLOT.cnv_plotting("tests/static/bam/", folder=True)
+        # CNV_PLOT.cnv_plotting(
+        #    "/Users/mattloose/datasets/cns_test_data/bams", folder=True
+        # )
 
 
 def run_class(port: int, reload: bool):

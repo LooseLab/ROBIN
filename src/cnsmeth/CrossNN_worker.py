@@ -14,6 +14,7 @@ from cnsmeth.utilities.merge_bedmethyl import merge_bedmethyl, save_bedmethyl
 
 from queue import Queue
 
+
 class CrossNN_worker:
     def __init__(
         self,
@@ -35,8 +36,12 @@ class CrossNN_worker:
         self.nanodxfolder = os.path.join(self.outputfolder, "nanodx")
         self.resultfolder = os.path.join(self.outputfolder, "results")
         self.running = False
-        #ToDo: remove hard coded path
-        self.cpgs = pd.read_csv("/Users/mattloose/GIT/niceGUI/hglft_genome_260e9_91a970_clean.bed", sep="\t",header=None)
+        # ToDo: remove hard coded path
+        self.cpgs = pd.read_csv(
+            "/Users/mattloose/GIT/niceGUI/hglft_genome_260e9_91a970_clean.bed",
+            sep="\t",
+            header=None,
+        )
 
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
@@ -45,7 +50,9 @@ class CrossNN_worker:
         self.result = None
         self.nanodx_df_store = pd.DataFrame()
         self.nanodx_status_txt = {"message": "Waiting for data."}
-        self.NN = NN_classifier("/Users/mattloose/GIT/nanoDx/models/Capper_et_al_NN.pkl")
+        self.NN = NN_classifier(
+            "/Users/mattloose/GIT/nanoDx/models/Capper_et_al_NN.pkl"
+        )
         if not self.browse:
             if not os.path.exists(self.bedfoldercount):
                 os.makedirs(self.bedfoldercount)
@@ -73,9 +80,7 @@ class CrossNN_worker:
         """
         not_first_run = False
         run_count = 0
-        self.nanodxfile = os.path.join(
-            self.nanodxfolder, f"nanodx_{run_count}.bed"
-        )
+        self.nanodxfile = os.path.join(self.nanodxfolder, f"nanodx_{run_count}.bed")
         start_time = time.time()
         # worker = get_current_worker()
         while True:
@@ -108,26 +113,22 @@ class CrossNN_worker:
                 # Run modkit extract and sturgeon inputtobed to generate sturgeon bed files
                 # Note: these are not the same as those required for NanoDX
 
-
-
                 temp = tempfile.NamedTemporaryFile()
 
-                with tempfile.TemporaryDirectory() as temp2:
-                    try:
-                        #os.system(
-                        #    f"modkit extract --ignore h -t {int(self.threads/2)} {file} {temp.name} "
-                        #    f"--force --suppress-progress >/dev/null 2>&1"
-                        #)
-                        os .system(
-                            f"modkit pileup --include-bed /Users/mattloose/GIT/niceGUI/hglft_genome_260e9_91a970_clean.bed --filter-threshold 0.73 --combine-mods --cpg --reference /Users/mattloose/references/hg38_simple.fa --combine-strands --only-tabs -t 8 {sortfile} {temp.name} --suppress-progress"
-                        )
-                        # self.log("Done processing bam file")
-                    except Exception as e:
-                        print(e)
-                        # self.log(e)
-                        pass
 
-
+                try:
+                    # os.system(
+                    #    f"modkit extract --ignore h -t {int(self.threads/2)} {file} {temp.name} "
+                    #    f"--force --suppress-progress >/dev/null 2>&1"
+                    # )
+                    os.system(
+                        f"modkit pileup --include-bed /Users/mattloose/GIT/niceGUI/hglft_genome_260e9_91a970_clean.bed --filter-threshold 0.73 --combine-mods --cpg --reference /Users/mattloose/references/hg38_simple.fa --combine-strands --only-tabs -t 8 {sortfile} {temp.name} --suppress-progress"
+                    )
+                    # self.log("Done processing bam file")
+                except Exception as e:
+                    print(e)
+                    # self.log(e)
+                    pass
 
                 if not_first_run:
                     self.nanodx_status_txt["message"] = (
@@ -231,31 +232,35 @@ class CrossNN_worker:
 
                     not_first_run = True
 
-
-                self.nanodx_status_txt["message"] = (
-                    "Prediction underway."
-                )
+                self.nanodx_status_txt["message"] = "Prediction underway."
 
                 ### Adding in NanoDX predict
-                test_df = pd.merge(self.merged_bed_file, self.cpgs, left_on=['chrom', 'start_pos'], right_on=[0, 1])
-                test_df.rename(columns={3:'probe_id', 'fraction':'methylation_call'}, inplace=True)
+                test_df = pd.merge(
+                    self.merged_bed_file,
+                    self.cpgs,
+                    left_on=["chrom", "start_pos"],
+                    right_on=[0, 1],
+                )
+                test_df.rename(
+                    columns={3: "probe_id", "fraction": "methylation_call"},
+                    inplace=True,
+                )
                 test_df.loc[test_df["methylation_call"] < 60, "methylation_call"] = -1
                 test_df.loc[test_df["methylation_call"] >= 60, "methylation_call"] = 1
-                #predictions, class_labels, n_features = self.NN.predict_from_bedMethyl("sorted.bam.CpG.450K.2.bed")
+                # predictions, class_labels, n_features = self.NN.predict_from_bedMethyl("sorted.bam.CpG.450K.2.bed")
 
                 predictions, class_labels, n_features = self.NN.predict(test_df)
 
+                nanoDX_df = pd.DataFrame({"class": class_labels, "score": predictions})
 
-                nanoDX_df = pd.DataFrame({'class': class_labels, 'score': predictions})
-
-                nanoDX_save = nanoDX_df.set_index('class').T
-                nanoDX_save['number_probes'] = n_features
+                nanoDX_save = nanoDX_df.set_index("class").T
+                nanoDX_save["number_probes"] = n_features
 
                 if self.offset:
                     self.offset = time.time() - start_time
-                    nanoDX_save['timestamp'] = (time.time() + self.offset) * 1000
+                    nanoDX_save["timestamp"] = (time.time() + self.offset) * 1000
                 else:
-                    nanoDX_save['timestamp'] = time.time() * 1000
+                    nanoDX_save["timestamp"] = time.time() * 1000
 
                 self.nanodx_df_store = pd.concat(
                     [self.nanodx_df_store, nanoDX_save.set_index("timestamp")]
@@ -266,20 +271,18 @@ class CrossNN_worker:
                 )
 
                 columns_greater_than_threshold = (
-                        self.nanodx_df_store > self.threshold
+                    self.nanodx_df_store > self.threshold
                 ).any()
                 columns_not_greater_than_threshold = ~columns_greater_than_threshold
                 result = self.nanodx_df_store.columns[
                     columns_not_greater_than_threshold
                 ].tolist()
 
-                self.update_nanodx_time_chart(
-                    self.nanodx_df_store.drop(columns=result)
-                )
+                self.update_nanodx_time_chart(self.nanodx_df_store.drop(columns=result))
 
                 self.update_nanodx_plot(
-                    nanoDX_df['class'].head(10).values,
-                    nanoDX_df['score'].head(10).values,
+                    nanoDX_df["class"].head(10).values,
+                    nanoDX_df["score"].head(10).values,
                     self.nanodx_bam_count,
                     n_features,
                 )
@@ -291,10 +294,8 @@ class CrossNN_worker:
 
             time.sleep(5)
 
-
             if self.bamqueue.qsize() == 0:
                 self.nanodxfinished = True
-
 
     def status_nanodx(self):
         ui.label().bind_text_from(
@@ -338,8 +339,6 @@ class CrossNN_worker:
             {"type": "bar", "name": "NanoDX", "data": y}
         ]
         self.nanodxchart.update()
-
-
 
     def create_nanodx_time_chart(self):
         self.nanodx_time_chart = (
@@ -392,12 +391,13 @@ class CrossNN_worker:
 
     def playback_thread(self, data: pd.DataFrame):
         self.data = data
-        nanodx_thread_processing = threading.Thread(target=self.playback_nanodx, args=())
+        nanodx_thread_processing = threading.Thread(
+            target=self.playback_nanodx, args=()
+        )
         nanodx_thread_processing.daemon = True
         nanodx_thread_processing.start()
 
     def playback_nanodx(self):
-        start_time = time.time()
         latest_timestamps = self.data
         self.offset = 0
         for index, row in latest_timestamps.iterrows():
@@ -415,12 +415,12 @@ class CrossNN_worker:
             while row["file_produced"] - current_time - self.offset > 0:
                 time.sleep(0.1)
                 if not self.running:
-                    self.offset+=2
+                    self.offset += 2
             self.bamqueue.put(row["full_path"])
-            #self.bam_count["counter"] += 1
-        #if "file" not in self.bam_count:
+            # self.bam_count["counter"] += 1
+        # if "file" not in self.bam_count:
         #    self.bam_count["file"] = {}
-        #self.bam_count["file"][row["full_path"]] = time.time()
+        # self.bam_count["file"][row["full_path"]] = time.time()
         ## Expect a pandas dataframe containing files and times
 
     """
@@ -527,20 +527,20 @@ def index_page() -> None:
         ui.label("Hello")
 
         bamfornanodx = Queue()
-        nanodx_worker = CrossNN_worker(
-            bamfornanodx, threads=4, output_folder="/tmp/"
-        )
+        nanodx_worker = CrossNN_worker(bamfornanodx, threads=4, output_folder="/tmp/")
         with ui.card().style("width: 100%"):
             nanodx_worker.status_nanodx()
-            nanodx_worker.create_nanodx_chart(
-                "NanoDX"
-            )
+            nanodx_worker.create_nanodx_chart("NanoDX")
         with ui.card().style("width: 100%"):
             nanodx_worker.create_nanodx_time_chart()
 
-        bamfornanodx.put("/Users/mattloose/GIT/niceGUI/cnsmeth/tests/static/bam/test_set.hg38.aa.sam.bam")
+        bamfornanodx.put(
+            "/Users/mattloose/GIT/niceGUI/cnsmeth/tests/static/bam/test_set.hg38.aa.sam.bam"
+        )
         time.sleep(5)
-        bamfornanodx.put("/Users/mattloose/GIT/niceGUI/cnsmeth/tests/static/bam/test_set.hg38.ab.sam.bam")
+        bamfornanodx.put(
+            "/Users/mattloose/GIT/niceGUI/cnsmeth/tests/static/bam/test_set.hg38.ab.sam.bam"
+        )
 
 
 def run_class(port: int, reload: bool):
