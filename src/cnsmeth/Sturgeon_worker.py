@@ -11,6 +11,8 @@ from sturgeon.callmapping import (
     merge_probes_methyl_calls,
     probes_methyl_calls_to_bed,
 )
+
+
 class Sturgeon_worker:
     def __init__(
         self,
@@ -168,10 +170,9 @@ class Sturgeon_worker:
 
                     if self.offset:
                         self.offset = time.time() - start_time
-                        mydf_to_save['timestamp'] = (time.time() + self.offset) * 1000
+                        mydf_to_save["timestamp"] = (time.time() + self.offset) * 1000
                     else:
-                        mydf_to_save['timestamp'] = time.time() * 1000
-
+                        mydf_to_save["timestamp"] = time.time() * 1000
 
                     self.sturgeon_df_store = pd.concat(
                         [self.sturgeon_df_store, mydf_to_save.set_index("timestamp")]
@@ -196,7 +197,7 @@ class Sturgeon_worker:
                         lastrow_plot.index.to_list(),
                         list(lastrow_plot.values),
                         self.st_bam_count,
-                        self.st_num_probes
+                        self.st_num_probes,
                     )
 
                     self.sturgeon_status_txt["message"] = (
@@ -392,13 +393,15 @@ class Sturgeon_worker:
 
     def playback_thread(self, data: pd.DataFrame):
         self.data = data
-        nanodx_thread_processing = threading.Thread(target=self.playback_sturgeon, args=())
+        nanodx_thread_processing = threading.Thread(
+            target=self.playback_sturgeon, args=()
+        )
         nanodx_thread_processing.daemon = True
         nanodx_thread_processing.start()
 
     def playback_sturgeon(self):
         latest_timestamps = self.data
-        start_time = time.time()
+        time.time()
         self.offset = 0
         for index, row in latest_timestamps.iterrows():
             current_time = time.time()
@@ -415,5 +418,5 @@ class Sturgeon_worker:
             while row["file_produced"] - current_time - self.offset > 0:
                 time.sleep(0.1)
                 if not self.running:
-                    self.offset+=2
+                    self.offset += 2
             self.bamqueue.put(row["full_path"])

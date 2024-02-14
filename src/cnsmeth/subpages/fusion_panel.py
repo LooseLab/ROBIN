@@ -566,9 +566,7 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         fusion = Fusion_Panel()
         fusion.setup_ui()
-        # fusion.parse_bams("tests/static/testRun/donebams")
-        # fusion.parse_bams("../../../datasets/cns_test_data/bams")
-        fusion.parse_bams("/Users/mattloose/datasets/cns_test_data/sort_bams")
+        fusion.parse_bams("tests/static/testRun/donebams")
 
 
 def run_class(port: int, reload: bool):

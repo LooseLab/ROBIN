@@ -150,11 +150,10 @@ class BrainMeth:
                                                 )
                                         with ui.column():
                                             with ui.card().style("width: 100%"):
-                                                #self.sturgeon_worker.status_sturgeon()
+                                                # self.sturgeon_worker.status_sturgeon()
                                                 self.sturgeon_worker.create_nanodx_chart(
                                                     "NanoDX"
                                                 )
-
 
                                 with ui.card().style("width: 100%"):
                                     self.rcns2_worker.create_rcns2_time_chart()
@@ -242,13 +241,13 @@ class BrainMeth:
                         with ui.column():
                             with ui.card().style("width: 100%"):
                                 self.nanodx_worker.status_nanodx()
-                                self.nanodx_worker.create_nanodx_chart(
-                                    "NanoDX"
-                                )
+                                self.nanodx_worker.create_nanodx_chart("NanoDX")
                         with ui.column():
                             with ui.card().style("width: 100%"):
                                 self.rcns2_worker.status_rcns2()
-                                self.rcns2_worker.create_rcns2_chart("RapidCNS2 (Random Forest)")
+                                self.rcns2_worker.create_rcns2_chart(
+                                    "RapidCNS2 (Random Forest)"
+                                )
 
                 with ui.card().style("width: 100%"):
                     self.sturgeon_worker.create_sturgeon_time_chart()
