@@ -39,6 +39,8 @@ dependencies = [
   "dna_features_viewer",
   "natsort",
   "pywebview",
+  "torch",
+  "scikit-learn",
 ]
 
 [project.scripts]
