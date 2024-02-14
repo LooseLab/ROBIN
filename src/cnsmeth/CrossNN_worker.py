@@ -3,7 +3,7 @@ from __future__ import annotations
 from nicegui import ui
 import threading
 import time
-import os
+import os, sys
 import pysam
 import pandas as pd
 import shutil
@@ -258,7 +258,13 @@ class CrossNN_worker:
                 test_df.loc[test_df["methylation_call"] >= 60, "methylation_call"] = 1
                 # predictions, class_labels, n_features = self.NN.predict_from_bedMethyl("sorted.bam.CpG.450K.2.bed")
 
-                predictions, class_labels, n_features = self.NN.predict(test_df)
+                try:
+                    predictions, class_labels, n_features = self.NN.predict(test_df)
+                except Exception as e:
+                    print(e)
+                    test_df.to_csv("errordf.csv", sep=',', index=False, encoding='utf-8')
+                    self.nanodx_status_txt["message"] = "Error generating predictions."
+                    sys.exit(1)
 
                 nanoDX_df = pd.DataFrame({"class": class_labels, "score": predictions})
 
