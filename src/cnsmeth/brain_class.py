@@ -139,7 +139,7 @@ class BrainMeth:
                                             with ui.card().style("width: 100%"):
                                                 self.rcns2_worker.status_rcns2()
                                                 self.rcns2_worker.create_rcns2_chart(
-                                                    "RapidCNS2"
+                                                    "RapidCNS2 (Random Forest)"
                                                 )
 
                                         with ui.column():
@@ -248,7 +248,7 @@ class BrainMeth:
                         with ui.column():
                             with ui.card().style("width: 100%"):
                                 self.rcns2_worker.status_rcns2()
-                                self.rcns2_worker.create_rcns2_chart("RapidCNS2")
+                                self.rcns2_worker.create_rcns2_chart("RapidCNS2 (Random Forest)")
 
                 with ui.card().style("width: 100%"):
                     self.sturgeon_worker.create_sturgeon_time_chart()
@@ -313,7 +313,8 @@ class BrainMeth:
                 usecols=["filename_bam", "template_start", "template_duration"],
             )
             df["template_end"] = df["template_start"] + df["template_duration"]
-
+            est_start_time = df["template_start"].min()
+            print(est_start_time)
             df.drop(columns=["template_start", "template_duration"], inplace=True)
             latest_timestamps = (
                 df.groupby("filename_bam")["template_end"]
@@ -331,6 +332,11 @@ class BrainMeth:
                             latest_timestamps["filename_bam"] == f, "full_path"
                         ] = os.path.join(path, f)
                         # latest_timestamps[latest_timestamps['filename_bam'] == f]['full_path'] = os.path.join(path, f)
+            print(latest_timestamps)
+            self.nanodx_worker.playback_thread(latest_timestamps)
+            self.sturgeon_worker.playback_thread(latest_timestamps)
+            self.rcns2_worker.playback_thread(latest_timestamps)
+            """
             for index, row in latest_timestamps.iterrows():
                 current_time = time.time()
                 time_diff = row["file_produced"] - current_time
@@ -341,6 +347,7 @@ class BrainMeth:
                 if "file" not in self.bam_count:
                     self.bam_count["file"] = {}
                 self.bam_count["file"][row["full_path"]] = time.time()
+            """
             self.runfinished = True
         else:
             for path, dirs, files in os.walk(self.watchfolder):

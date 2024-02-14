@@ -32,6 +32,7 @@ class Sturgeon_worker:
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
+        self.running = False
         self.showerrors = showerrors
         self.result = None
         self.sturgeon_df_store = pd.DataFrame()
@@ -60,10 +61,11 @@ class Sturgeon_worker:
         """
         first_run = True
         run_count = 0
-
+        start_time = time.time()
         # worker = get_current_worker()
         while True:
             if self.bamqueue.qsize() > 0:
+                self.running = True
                 self.stugeonfinished = False
                 bams = []
 
@@ -163,7 +165,14 @@ class Sturgeon_worker:
                     lastrow_plot = lastrow.sort_values(ascending=False).head(10)
 
                     mydf_to_save = mydf
-                    mydf_to_save["timestamp"] = time.time() * 1000
+
+                    if self.offset:
+                        self.offset = time.time() - start_time
+                        mydf_to_save['timestamp'] = (time.time() + self.offset) * 1000
+                    else:
+                        mydf_to_save['timestamp'] = time.time() * 1000
+
+
                     self.sturgeon_df_store = pd.concat(
                         [self.sturgeon_df_store, mydf_to_save.set_index("timestamp")]
                     )
@@ -193,7 +202,7 @@ class Sturgeon_worker:
                     self.sturgeon_status_txt["message"] = (
                         "Predictions generated. Waiting for data."
                     )
-
+            self.running = False
             time.sleep(5)
 
             if self.bamqueue.qsize() == 0:
@@ -380,3 +389,31 @@ class Sturgeon_worker:
                 "replay",
             )
         self.sturgeon_status_txt["message"] = "Viewing historical Sturgeon data."
+
+    def playback_thread(self, data: pd.DataFrame):
+        self.data = data
+        nanodx_thread_processing = threading.Thread(target=self.playback_sturgeon, args=())
+        nanodx_thread_processing.daemon = True
+        nanodx_thread_processing.start()
+
+    def playback_sturgeon(self):
+        latest_timestamps = self.data
+        start_time = time.time()
+        self.offset = 0
+        for index, row in latest_timestamps.iterrows():
+            current_time = time.time()
+            print(f"Current time: {current_time}")
+            print(f"Offset: {self.offset}")
+
+            time_diff = row["file_produced"] - current_time - self.offset
+            print(f"TimeDiff: {time_diff}")
+
+            if self.offset == 0:
+                self.offset = time_diff
+                time_diff = 0
+
+            while row["file_produced"] - current_time - self.offset > 0:
+                time.sleep(0.1)
+                if not self.running:
+                    self.offset+=2
+            self.bamqueue.put(row["full_path"])

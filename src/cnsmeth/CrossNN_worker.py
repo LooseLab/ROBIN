@@ -24,6 +24,7 @@ class CrossNN_worker:
         showerrors=False,
         browse=False,
     ):
+        self.offset = None
         self.browse = browse
         self.bamqueue = bamqueue
         self.threads = threads
@@ -33,6 +34,7 @@ class CrossNN_worker:
         self.bedfoldercount = os.path.join(self.outputfolder, "bedscount")
         self.nanodxfolder = os.path.join(self.outputfolder, "nanodx")
         self.resultfolder = os.path.join(self.outputfolder, "results")
+        self.running = False
         #ToDo: remove hard coded path
         self.cpgs = pd.read_csv("/Users/mattloose/GIT/niceGUI/hglft_genome_260e9_91a970_clean.bed", sep="\t",header=None)
 
@@ -74,10 +76,11 @@ class CrossNN_worker:
         self.nanodxfile = os.path.join(
             self.nanodxfolder, f"nanodx_{run_count}.bed"
         )
-
+        start_time = time.time()
         # worker = get_current_worker()
         while True:
             if self.bamqueue.qsize() > 0:
+                self.running = True
                 self.nanodxfinished = False
                 bams = []
 
@@ -116,7 +119,7 @@ class CrossNN_worker:
                         #    f"--force --suppress-progress >/dev/null 2>&1"
                         #)
                         os .system(
-                            f"modkit pileup --filter-threshold 0.73 --combine-mods --cpg --reference /Users/mattloose/references/hg38_simple.fa --combine-strands --only-tabs -t 8 {sortfile} {temp.name} --suppress-progress"
+                            f"modkit pileup --include-bed /Users/mattloose/GIT/niceGUI/hglft_genome_260e9_91a970_clean.bed --filter-threshold 0.73 --combine-mods --cpg --reference /Users/mattloose/references/hg38_simple.fa --combine-strands --only-tabs -t 8 {sortfile} {temp.name} --suppress-progress"
                         )
                         # self.log("Done processing bam file")
                     except Exception as e:
@@ -247,7 +250,12 @@ class CrossNN_worker:
 
                 nanoDX_save = nanoDX_df.set_index('class').T
                 nanoDX_save['number_probes'] = n_features
-                nanoDX_save['timestamp'] = time.time() * 1000
+
+                if self.offset:
+                    self.offset = time.time() - start_time
+                    nanoDX_save['timestamp'] = (time.time() + self.offset) * 1000
+                else:
+                    nanoDX_save['timestamp'] = time.time() * 1000
 
                 self.nanodx_df_store = pd.concat(
                     [self.nanodx_df_store, nanoDX_save.set_index("timestamp")]
@@ -279,8 +287,10 @@ class CrossNN_worker:
                 self.nanodx_status_txt["message"] = (
                     "Predictions generated. Waiting for data."
                 )
+            self.running = False
 
             time.sleep(5)
+
 
             if self.bamqueue.qsize() == 0:
                 self.nanodxfinished = True
@@ -380,8 +390,37 @@ class CrossNN_worker:
                 )
         self.nanodx_time_chart.update()
 
+    def playback_thread(self, data: pd.DataFrame):
+        self.data = data
+        nanodx_thread_processing = threading.Thread(target=self.playback_nanodx, args=())
+        nanodx_thread_processing.daemon = True
+        nanodx_thread_processing.start()
+
     def playback_nanodx(self):
-        print("Replaying prior NanoDX data")
+        start_time = time.time()
+        latest_timestamps = self.data
+        self.offset = 0
+        for index, row in latest_timestamps.iterrows():
+            current_time = time.time()
+            print(f"Current time: {current_time}")
+            print(f"Offset: {self.offset}")
+
+            time_diff = row["file_produced"] - current_time - self.offset
+            print(f"TimeDiff: {time_diff}")
+
+            if self.offset == 0:
+                self.offset = time_diff
+                time_diff = 0
+
+            while row["file_produced"] - current_time - self.offset > 0:
+                time.sleep(0.1)
+                if not self.running:
+                    self.offset+=2
+            self.bamqueue.put(row["full_path"])
+            #self.bam_count["counter"] += 1
+        #if "file" not in self.bam_count:
+        #    self.bam_count["file"] = {}
+        #self.bam_count["file"][row["full_path"]] = time.time()
         ## Expect a pandas dataframe containing files and times
 
     """
