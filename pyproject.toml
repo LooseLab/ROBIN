@@ -40,7 +40,7 @@ dependencies = [
   "natsort",
   "pywebview",
   "torch",
-  "scikit-learn",
+  "scikit-learn==1.0.2",
 ]
 
 [project.scripts]
