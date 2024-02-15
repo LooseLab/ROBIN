@@ -431,7 +431,7 @@ class RCNS2_worker:
                         f"{self.sortedbamfile}.csi",
                         os.path.join(self.donebamfolder, f"{batch}_sorted.bam.csi"),
                     )
-                    self.cnv.cnv_plotting(self.donebamfolder, folder=True)
+                    self.cnv.cnv_plotting(os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), folder=False)
 
                     self.keep_regions(
                         os.path.join(self.donebamfolder, f"{batch}_sorted.bam"), batch

@@ -152,10 +152,8 @@ class CNV_Plot:
                     self.progress = (
                         self.filecounter - self.cnv_queue.qsize()
                     ) / self.filecounter
-                    print(self.result)
                     self.cnv_dict["bin_width"] = self.result.bin_width
                     self.cnv_dict["variance"] = self.result.variance
-                    # print(self.result)
                     self._update_cnv_plot()
                 else:
                     self.progrock.visible = False
@@ -344,7 +342,15 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         CNV_PLOT = CNV_Plot()
         CNV_PLOT.create_cnv_scatter("CNV Scatter")
-        CNV_PLOT.cnv_plotting("tests/static/bam/", folder=True)
+        CNV_PLOT.cnv_plotting("tests/static/bam/test_set.hg38.aa.sam.bam", folder=False)
+        CNV_PLOT.cnv_plotting("tests/static/bam/test_set.hg38.ab.sam.bam", folder=False)
+        CNV_PLOT.cnv_plotting("tests/static/bam/test_set.hg38.ac.sam.bam", folder=False)
+        CNV_PLOT.cnv_plotting("tests/static/bam/test_set.hg38.ad.sam.bam", folder=False)
+        CNV_PLOT.cnv_plotting("tests/static/bam/test_set.hg38.ae.sam.bam", folder=False)
+        CNV_PLOT.cnv_plotting("tests/static/bam/test_set.hg38.af.sam.bam", folder=False)
+        CNV_PLOT.cnv_plotting("tests/static/bam/test_set.hg38.ag.sam.bam", folder=False)
+        CNV_PLOT.cnv_plotting("tests/static/bam/test_set.hg38.ah.sam.bam", folder=False)
+
         # CNV_PLOT.cnv_plotting(
         #    "/Users/mattloose/datasets/cns_test_data/bams", folder=True
         # )

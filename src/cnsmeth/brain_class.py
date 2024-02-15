@@ -330,8 +330,7 @@ class BrainMeth:
                         latest_timestamps.loc[
                             latest_timestamps["filename_bam"] == f, "full_path"
                         ] = os.path.join(path, f)
-                        # latest_timestamps[latest_timestamps['filename_bam'] == f]['full_path'] = os.path.join(path, f)
-            print(latest_timestamps)
+
             self.nanodx_worker.playback_thread(latest_timestamps)
             self.sturgeon_worker.playback_thread(latest_timestamps)
             self.rcns2_worker.playback_thread(latest_timestamps)
