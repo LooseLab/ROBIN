@@ -233,6 +233,7 @@ class Fusion_Panel:
                     subset_file = f"subset_{file}"
                     if not os.path.exists(os.path.join(bampath, subset_file)):
                         tempreadfile = tempfile.NamedTemporaryFile()
+                        # Get the subset of reads that map to the target gene panel and have supplementary alignments
                         os.system(
                             f"samtools view -L {self.gene_bed} -d SA {os.path.join(bampath, file)} | cut -f1 > {tempreadfile.name}"
                         )
