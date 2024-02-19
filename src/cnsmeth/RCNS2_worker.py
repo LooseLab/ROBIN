@@ -28,9 +28,8 @@ class RCNS2_worker:
         self,
         bamqueue,
         cnv,
-        target_coverage,
-        mgmt_panel,
-        fusion_panel,
+        #mgmt_panel,
+        #fusion_panel,
         threads=4,
         output_folder=None,
         threshold=0.05,
@@ -42,10 +41,9 @@ class RCNS2_worker:
         self.cnv = cnv
         self.threads = threads
         self.outputfolder = output_folder
-        self.target_coverage = target_coverage
         self.threshold = threshold
-        self.mgmt_panel = mgmt_panel
-        self.fusion_panel = fusion_panel
+        #self.mgmt_panel = mgmt_panel
+        #self.fusion_panel = fusion_panel
         self.nofiles = False
         self.browse = browse
         self.rcns2_bam_count = 0
@@ -328,71 +326,8 @@ class RCNS2_worker:
                         sep="\t",
                     )
                     not_first_run = True
-                self.target_coverage.update_coverage_plot(covdf)
-                self.target_coverage.update_coverage_plot_targets(covdf, bedcovdf)
-                self.target_coverage.update_coverage_time_plot(covdf)
-                self.target_coverage_df = bedcovdf
-                self.target_coverage_df["coverage"] = (
-                    self.target_coverage_df["bases"] / self.target_coverage_df["length"]
-                )
-                with self.target_coverage.targ_df:
-                    self.target_coverage.targ_df.clear()
-                    ui.aggrid.from_pandas(
-                        self.target_coverage_df,
-                        theme="material",
-                        options={
-                            "defaultColDef": {
-                                "sortable": True,
-                                "resizable": True,
-                            },
-                            "columnDefs": [
-                                {
-                                    "headerName": "Chromosome",
-                                    "field": "chrom",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "Start",
-                                    "field": "startpos",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "End",
-                                    "field": "endpos",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "Gene/s",
-                                    "field": "name",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "Bases",
-                                    "field": "bases",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "Length",
-                                    "field": "length",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "Coverage",
-                                    "field": "coverage",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                ],
-                            "pagination": True,
-                            },
 
-                    ).classes("w-full, h-80")
+
 
                 # self.log("Merged Bed File Info:")
                 # self.log(self.merged_bed_file.info())
@@ -438,7 +373,7 @@ class RCNS2_worker:
                     )
 
                     self.fusion_panel.parse_bams(self.donebamfolder)
-                    self.mgmtmethylpredict(self.rapidcnsbamfile)
+                    #self.mgmtmethylpredict(self.rapidcnsbamfile)
 
                     scores = pd.read_table(
                         f"{self.rcns2folder}/live_{batch}_votes.tsv",
@@ -503,64 +438,8 @@ class RCNS2_worker:
                     print("All done")
                     os.kill(os.getpid(), signal.SIGINT)
 
-    def mgmtmethylpredict(self, bamfile):
-        print("Running MGMT predictor")
-        self.rapidcns_status_txt["message"] = "Running MGMT predictor."
-        MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
-        os.system(
-            f"bedtools intersect -a {bamfile}.bed -b {MGMT_BED} > {self.resultfolder}/mgmt_result.bed"
-        )
-        print(
-            f"bedtools intersect -a {bamfile}.bed -b {MGMT_BED} > {self.resultfolder}/mgmt_result.bed"
-        )
 
-        if os.path.getsize(f"{self.resultfolder}/mgmt_result.bed") > 0:
-            cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={self.resultfolder}/mgmt_result.bed --out_dir={self.resultfolder} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
-            os.system(cmd)
-            results = pd.read_csv(
-                os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
-            )
-            self.mgmt_panel.mgmtable.clear()
-            with self.mgmt_panel.mgmtable:
-                ui.table.from_pandas(results)
-            print(cmd)
-            print("MGMT predictor done")
-            self.rapidcns_status_txt["message"] = "MGMT predictor done."
 
-        else:
-            print("No MGMT sites yet found.")
-            self.rapidcns_status_txt["message"] = "No MGMT sites yet found."
-
-    def keep_regions(self, bamtoextract, batch):
-        print("Keeping regions")
-        bam_out = os.path.join(self.targetsbamfolder, f"{batch}_sorted.bam")
-        plot_out = os.path.join(self.targetsbamfolder, f"{batch}_sorted.png")
-        bedfile = os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
-        )
-        os.system(
-            f"samtools view --write-index -L {bedfile} -@{self.threads} -o {bam_out} {bamtoextract} "
-            # f">/dev/null 2>&1"
-        )
-        merged_bam_out = os.path.join(self.targetsbamfolder, f"{batch}_merged.bam")
-        to_be_merged = os.path.join(self.targetsbamfolder, "*_sorted.bam")
-        os.system(
-            f"samtools merge --write-index -@{self.threads} -f {merged_bam_out} {to_be_merged}"
-            # f">/dev/null 2>&1"
-        )
-        os.system(f"rm {to_be_merged}")
-        os.system(f"mv {merged_bam_out} {bam_out}")
-        os.system(f"mv {merged_bam_out}.csi {bam_out}.csi")
-        print(
-            f"methylartist locus -i chr10:129466536-129467536 -b {bam_out} -o {plot_out}  --motif CG --mods m"
-        )
-        os.system(
-            f"methylartist locus -i chr10:129466536-129467536 -b {bam_out} -o {plot_out}  --motif CG --mods m"
-        )
-        if os.path.exists(plot_out):
-            self.mgmt_panel.mgmtplot.clear()
-            with self.mgmt_panel.mgmtplot.classes("w-full"):
-                ui.image(plot_out).props("fit=scale-down")
 
     def status_rcns2(self):
         ui.label().bind_text_from(
@@ -690,17 +569,17 @@ class RCNS2_worker:
         ##Here we have to pass a folder of files rather than an individual file.
         self.cnv.update_cnv_dict = {}
         self.cnv.cnv_plotting(self.donebamfolder, folder=True)
-        plot_out = os.path.join(self.targetsbamfolder, f"{batch}_sorted.png")
-        if os.path.exists(plot_out):
-            self.mgmt_panel.mgmtplot.clear()
-            with self.mgmt_panel.mgmtplot.classes("w-full"):
-                ui.image(plot_out).props("fit=scale-down")
-            results = pd.read_csv(
-                os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
-            )
-            self.mgmt_panel.mgmtable.clear()
-            with self.mgmt_panel.mgmtable:
-                ui.table.from_pandas(results)
+        #plot_out = os.path.join(self.targetsbamfolder, f"{batch}_sorted.png")
+        #if os.path.exists(plot_out):
+        #    self.mgmt_panel.mgmtplot.clear()
+        #    with self.mgmt_panel.mgmtplot.classes("w-full"):
+        #        ui.image(plot_out).props("fit=scale-down")
+        #    results = pd.read_csv(
+        #        os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
+        #    )
+        #    self.mgmt_panel.mgmtable.clear()
+        #    with self.mgmt_panel.mgmtable:
+        #        ui.table.from_pandas(results)
         print(self.donebamfolder)
         self.fusion_panel.parse_bams(self.donebamfolder)
 
@@ -770,26 +649,26 @@ class RCNS2_worker:
                 list(lastrow_plot.values / 100),
                 "replay",
             )
-            plot_out = os.path.join(self.targetsbamfolder, f"{counter}_sorted.png")
-            if os.path.exists(plot_out):
-                self.mgmt_panel.mgmtplot.clear()
-                with self.mgmt_panel.mgmtplot.classes("w-full"):
-                    print(plot_out)
-                    ui.image(plot_out).props("fit=scale-down")
-                results = pd.read_csv(
-                    os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
-                )
-                self.mgmt_panel.mgmtable.clear()
-                with self.mgmt_panel.mgmtable:
-                    ui.table.from_pandas(results)
-            else:
-                self.keep_regions(
-                    os.path.join(self.donebamfolder, f"{counter}_sorted.bam"), counter
-                )
+            #plot_out = os.path.join(self.targetsbamfolder, f"{counter}_sorted.png")
+            #if os.path.exists(plot_out):
+            #    self.mgmt_panel.mgmtplot.clear()
+            #    with self.mgmt_panel.mgmtplot.classes("w-full"):
+            #        print(plot_out)
+            #        ui.image(plot_out).props("fit=scale-down")
+            #    results = pd.read_csv(
+            #        os.path.join(self.resultfolder, "live_analysis_mgmt_status.csv")
+            #    )
+            #    self.mgmt_panel.mgmtable.clear()
+            #    with self.mgmt_panel.mgmtable:
+            #        ui.table.from_pandas(results)
+            #else:
+            #    self.keep_regions(
+            #        os.path.join(self.donebamfolder, f"{counter}_sorted.bam"), counter
+            #    )
 
-            self.fusion_panel.parse_bams(
-                self.donebamfolder, filter_bam_list=self.filter_bam_list
-            )
+            #self.fusion_panel.parse_bams(
+            #    self.donebamfolder, filter_bam_list=self.filter_bam_list
+            #)
             # self.mgmtmethylpredict(self.rapidcnsbamfile)
 
         self.rapidcns_status_txt["message"] = "Viewing historical RCNS2 data."
