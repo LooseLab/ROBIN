@@ -1,13 +1,17 @@
 from nicegui import ui
 
 from cnsmeth.utilities.bam_handler import BamEventHandler
-from cnsmeth.Sturgeon_worker import Sturgeon_worker
+#from cnsmeth.Sturgeon_worker import Sturgeon_worker
 from cnsmeth.RCNS2_worker import RCNS2_worker
-from cnsmeth.CrossNN_worker import CrossNN_worker
+#from cnsmeth.CrossNN_worker import CrossNN_worker
 from cnsmeth.subpages.copy_number_component import CNV_Plot
-from cnsmeth.subpages.target_coverage import TargetCoverage
-from cnsmeth.subpages.mgmt_panel import MGMT_Panel
-from cnsmeth.subpages.fusion_panel import Fusion_Panel
+from cnsmeth.subpages.MGMT_object import MGMT_Object
+from cnsmeth.subpages.Sturgeon_object import Sturgeon_object
+from cnsmeth.subpages.NanoDX_object import NanoDX_object
+#from cnsmeth.subpages.fusion_panel import Fusion_Panel
+from cnsmeth.subpages.CNV_object import CNVAnalysis
+from cnsmeth.subpages.TargetCoverage_object import TargetCoverage
+from cnsmeth.subpages.Fusion_object import Fusion_object
 from cnsmeth.utilities.local_file_picker import local_file_picker
 
 from watchdog.observers import Observer
@@ -44,11 +48,10 @@ class BrainMeth:
         self.bamforsturgeon = Queue()
         self.bamfornanodx = Queue()
 
-        print("BrainMeth Loaded")
-        self.cnv = CNV_Plot()
-        self.target_coverage = TargetCoverage()
-        self.mgmt_panel = MGMT_Panel()
-        self.fusion_panel = Fusion_Panel()
+
+        #self.cnv = CNV_Plot()
+        #self.mgmt_panel = MGMT_Panel()
+        #self.fusion_panel = Fusion_Panel()
 
         if not self.browse:
             self.event_handler = BamEventHandler(self.bam_count)
@@ -67,25 +70,24 @@ class BrainMeth:
             )
             self.check_for_existing_bams.daemon = True
             self.check_for_existing_bams.start()
-            self.sturgeon_worker = Sturgeon_worker(
-                self.bamforsturgeon, threads=self.threads, output_folder=self.output
-            )
+            #self.sturgeon_worker = Sturgeon_worker(
+            #    self.bamforsturgeon, threads=self.threads, output_folder=self.output
+            #)
 
-            self.nanodx_worker = CrossNN_worker(
-                self.bamfornanodx, threads=self.threads, output_folder=self.output
-            )
+            #self.nanodx_worker = CrossNN_worker(
+            #    self.bamfornanodx, threads=self.threads, output_folder=self.output
+            #)
 
-            self.rcns2_worker = RCNS2_worker(
-                self.bamforcns,
-                self.cnv,
-                self.target_coverage,
-                self.mgmt_panel,
-                self.fusion_panel,
-                threads=self.threads,
-                output_folder=self.output,
-                showerrors=self.showerrors,
-                browse=self.browse,
-            )
+            #self.rcns2_worker = RCNS2_worker(
+            #    self.bamforcns,
+            #    self.cnv,
+            #    #self.mgmt_panel,
+            #    #self.fusion_panel,
+            #    threads=self.threads,
+            #    output_folder=self.output,
+            #    showerrors=self.showerrors,
+            #    browse=self.browse,
+            #)
 
             self.information_panel()
         else:
@@ -163,12 +165,12 @@ class BrainMeth:
 
                     with ui.tab_panel(copy_numer).classes("w-full"):
                         with ui.card().style("width: 100%"):
-
                             self.cnv.create_cnv_scatter("CNV Scatter")
-                            pass
+
 
                     with ui.tab_panel(coverage).classes("w-full"):
-                        self.target_coverage.setup_ui()
+                        pass
+
 
                     with ui.tab_panel(mgmt).classes("w-full"):
                         self.mgmt_panel.setup_ui(mgmt)
@@ -231,45 +233,30 @@ class BrainMeth:
         with ui.tab_panels(tabs, value=methylation).classes("w-full"):
             with ui.tab_panel(methylation).classes("w-full"):
                 with ui.card().style("width: 100%"):
-                    with ui.grid(columns=3).classes("w-full h-auto"):
-                        with ui.column():
-                            with ui.card().style("width: 100%"):
-                                self.sturgeon_worker.status_sturgeon()
-                                self.sturgeon_worker.create_sturgeon_chart(
-                                    "Sturgeon Prediction"
-                                )
-                        with ui.column():
-                            with ui.card().style("width: 100%"):
-                                self.nanodx_worker.status_nanodx()
-                                self.nanodx_worker.create_nanodx_chart("NanoDX")
-                        with ui.column():
-                            with ui.card().style("width: 100%"):
-                                self.rcns2_worker.status_rcns2()
-                                self.rcns2_worker.create_rcns2_chart(
-                                    "RapidCNS2 (Random Forest)"
-                                )
+                    self.Sturgeon = Sturgeon_object(progress=True, batch=True)
+                    self.NanoDX = NanoDX_object(progress=True, batch=True)
 
-                with ui.card().style("width: 100%"):
-                    self.sturgeon_worker.create_sturgeon_time_chart()
 
-                with ui.card().style("width: 100%"):
-                    self.nanodx_worker.create_nanodx_time_chart()
-
-                with ui.card().style("width: 100%"):
-                    self.rcns2_worker.create_rcns2_time_chart()
 
             with ui.tab_panel(copy_numer).classes("w-full"):
                 with ui.card().style("width: 100%"):
-                    self.cnv.create_cnv_scatter("CNV Scatter")
+                    self.CNV = CNVAnalysis(progress=True,batch=False)
+                    pass
 
             with ui.tab_panel(coverage).classes("w-full"):
-                self.target_coverage.setup_ui()
+                with ui.card().style("width: 100%"):
+                    self.Target_Coverage = TargetCoverage(progress=True)
+                    pass
 
             with ui.tab_panel(mgmt).classes("w-full"):
-                self.mgmt_panel.setup_ui(mgmt)
+                with ui.card().style("width: 100%"):
+                    self.MGMT_panel = MGMT_Object(progress=True)
+                    pass
 
             with ui.tab_panel(fusions).classes("w-full"):
-                self.fusion_panel.setup_ui()
+                with ui.card().style("width: 100%"):
+                    self.Fusion_panel = Fusion_object(progress=True)
+                    pass
 
     def process_bams(self) -> None:
         """
@@ -313,7 +300,7 @@ class BrainMeth:
             )
             df["template_end"] = df["template_start"] + df["template_duration"]
             est_start_time = df["template_start"].min()
-            print(est_start_time)
+            #print(est_start_time)
             df.drop(columns=["template_start", "template_duration"], inplace=True)
             latest_timestamps = (
                 df.groupby("filename_bam")["template_end"]
@@ -323,7 +310,7 @@ class BrainMeth:
                 .reset_index(drop=True)
             )
             latest_timestamps["full_path"] = ""
-            latest_timestamps["file_produced"] = latest_timestamps["template_end"] + now
+            latest_timestamps["file_produced"] = latest_timestamps["template_end"] # + now
             for path, dirs, files in os.walk(self.watchfolder):
                 for f in files:
                     if "".join(Path(f).suffixes) in file_endings:
@@ -331,9 +318,17 @@ class BrainMeth:
                             latest_timestamps["filename_bam"] == f, "full_path"
                         ] = os.path.join(path, f)
 
-            self.nanodx_worker.playback_thread(latest_timestamps)
-            self.sturgeon_worker.playback_thread(latest_timestamps)
-            self.rcns2_worker.playback_thread(latest_timestamps)
+            #self.nanodx_worker.playback_thread(latest_timestamps)
+            #self.sturgeon_worker.playback_thread(latest_timestamps)
+            #self.rcns2_worker.playback_thread(latest_timestamps)
+            step_size = 20
+            #print (latest_timestamps)
+            self.Sturgeon.playback(latest_timestamps,step_size=step_size)
+            self.NanoDX.playback(latest_timestamps, step_size=step_size)
+            self.CNV.playback(latest_timestamps, step_size=step_size)
+            #self.Target_Coverage.playback(latest_timestamps, step_size=step_size)
+            #self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
+            #self.MGMT_panel.playback(latest_timestamps,step_size=step_size)
             """
             for index, row in latest_timestamps.iterrows():
                 current_time = time.time()
