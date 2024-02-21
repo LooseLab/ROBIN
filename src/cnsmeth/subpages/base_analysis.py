@@ -74,6 +74,7 @@ class BaseAnalysis:
         self.timer.active = False
         while self.bamqueue.qsize() > 0:
             self.bams.append((self.bamqueue.get()))
+            self.bam_count += 1
             self.bams_in_processing += 1
         if not self.running and len(self.bams) > 0:
             await self.process_bam(self.bams)
