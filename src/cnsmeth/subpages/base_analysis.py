@@ -24,7 +24,7 @@ class BaseAnalysis:
         self.bams_in_processing = 0
         self.running = False
         if threads >1:
-            self.threads = int(threads)/2
+            self.threads = int(threads/2)
         else:
             self.threads = threads
         if batch:
