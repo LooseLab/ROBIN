@@ -257,6 +257,7 @@ class RandomForest_object(BaseAnalysis):
                 scores = scores.sort_values(by=["cal_Freq"], ascending=False).head(10)
                 self.bam_processed += len(tomerge)
                 self.bams_in_processing -= len(tomerge)
+
                 self.update_rcns2_plot(
                     scores.index.to_list(),
                     list(scores["cal_Freq"].values / 100),
@@ -293,10 +294,10 @@ class RandomForest_object(BaseAnalysis):
         :param count: the number of bams used to generate the plot
         :return:
         """
-        self.echart.options["title"]["text"] = f"RapidCNS2 - processed {count} Bams"
+        self.echart.options["title"]["text"] = f"Random Forest - processed {count} Bams"
         self.echart.options["yAxis"]["data"] = x
         self.echart.options["series"] = [
-            {"type": "bar", "name": "RapidCNS2", "data": y}
+            {"type": "bar", "name": "Random Forest", "data": y}
         ]
         self.echart.update()
 
@@ -306,7 +307,7 @@ class RandomForest_object(BaseAnalysis):
                 {
                     "animation": False,
                     "grid": {"containLabel": True},
-                    "title": {"text": "RCNS2 Over Time"},
+                    "title": {"text": "Random Forest Over Time"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
