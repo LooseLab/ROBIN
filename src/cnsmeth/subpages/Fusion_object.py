@@ -139,6 +139,7 @@ class Fusion_object(BaseAnalysis):
         doubles_all = self.fusion_candidates_all[uniques_all]
         counts_all = doubles_all.groupby(7)[3].transform("nunique")
         result_all = doubles_all[counts_all > 1]
+        result_all.to_csv(os.path.join(self.output, "fusion_candidates_all.csv"))
         if not result_all.empty:
             self.fusiontable_all.clear()
             with self.fusiontable_all:
@@ -340,6 +341,7 @@ class Fusion_object(BaseAnalysis):
         doubles = self.fusion_candidates[uniques]
         counts = doubles.groupby(7)[3].transform("nunique")
         result = doubles[counts > 1]
+        result.to_csv(os.path.join(self.output, "fusion_candidates_master.csv"))
         self.fusiontable.clear()
         with self.fusiontable:
             ui.aggrid.from_pandas(

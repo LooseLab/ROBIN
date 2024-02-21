@@ -245,6 +245,10 @@ class RandomForest_object(BaseAnalysis):
                     [self.rcns2_df_store, scores_to_save.set_index("timestamp")]
                 )
 
+                self.rcns2_df_store.to_csv(
+                    os.path.join(self.output, "random_forest_scores.csv")
+                )
+
                 columns_greater_than_threshold = (
                     self.rcns2_df_store > self.threshold * 100
                 ).any()
