@@ -257,7 +257,7 @@ class NanoDX_object(BaseAnalysis):
 
             self.bam_processed += len(tomerge)
             self.bams_in_processing -= len(tomerge)
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
         self.running = False
 
     def create_nanodx_chart(self, title):
