@@ -50,6 +50,10 @@ class BrainMeth:
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
         self.bamfornanodx = Queue()
+        self.bamforcnv = Queue()
+        self.bamfortargetcoverage = Queue()
+        self.bamformgmt = Queue()
+        self.bamforfusions = Queue()
 
         # self.cnv = CNV_Plot()
         # self.mgmt_panel = MGMT_Panel()
@@ -235,27 +239,27 @@ class BrainMeth:
         #    with ui.tab_panel(methylation).classes("w-full"):
         with ui.card().style("width: 100%"):
             self.Sturgeon = Sturgeon_object(self.threads, progress=True, batch=True, bamqueue=self.bamforsturgeon)
-            #self.NanoDX = NanoDX_object(self.threads, progress=True, batch=True)
-            #self.RandomForest = RandomForest_object(self.threads, progress=True, batch=True)
+            self.NanoDX = NanoDX_object(self.threads, progress=True, batch=True, bamqueue=self.bamfornanodx)
+            self.RandomForest = RandomForest_object(self.threads, progress=True, batch=True, bamqueue=self.bamforcns)
 
         #    with ui.tab_panel(copy_numer).classes("w-full"):
         with ui.card().style("width: 100%"):
-            #self.CNV = CNVAnalysis(self.threads, progress=True, batch=False)
+            self.CNV = CNVAnalysis(self.threads, progress=True, batch=False, bamqueue=self.bamforcnv)
             pass
 
         #    with ui.tab_panel(coverage).classes("w-full"):
         with ui.card().style("width: 100%"):
-            #self.Target_Coverage = TargetCoverage(self.threads, progress=True)
+            self.Target_Coverage = TargetCoverage(self.threads, progress=True,bamqueue=self.bamfortargetcoverage)
             pass
 
         #    with ui.tab_panel(mgmt).classes("w-full"):
         with ui.card().style("width: 100%"):
-            #self.MGMT_panel = MGMT_Object(self.threads, progress=True)
+            self.MGMT_panel = MGMT_Object(self.threads, progress=True, bamqueue=self.bamformgmt)
             pass
 
         #    with ui.tab_panel(fusions).classes("w-full"):
         with ui.card().style("width: 100%"):
-            #self.Fusion_panel = Fusion_object(self.threads, progress=True)
+            self.Fusion_panel = Fusion_object(self.threads, progress=True, bamqueue=self.bamforfusions)
             pass
 
     def process_bams(self) -> None:
