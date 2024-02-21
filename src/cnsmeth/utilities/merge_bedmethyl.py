@@ -36,9 +36,9 @@ def save_bedmethyl(result_df, output_file):
 
 
 def collapse_bedmethyl(concat_df):
-    #ToDo: Don't hack strand
-    #Hack Strand
-    concat_df['strand'] = concat_df['strand'].replace({'+': '.', '-': '.'})
+    # ToDo: Don't hack strand
+    # Hack Strand
+    concat_df["strand"] = concat_df["strand"].replace({"+": ".", "-": "."})
     grouped = concat_df.groupby(
         [
             "chrom",
