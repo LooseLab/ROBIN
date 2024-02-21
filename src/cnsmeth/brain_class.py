@@ -234,29 +234,28 @@ class BrainMeth:
         # with ui.tab_panels(tabs, value=methylation).classes("w-full"):
         #    with ui.tab_panel(methylation).classes("w-full"):
         with ui.card().style("width: 100%"):
-            pass
-            self.Sturgeon = Sturgeon_object(self.threads, progress=True, batch=True)
-            self.NanoDX = NanoDX_object(self.threads, progress=True, batch=True)
-            self.RandomForest = RandomForest_object(self.threads, progress=True, batch=True)
+            self.Sturgeon = Sturgeon_object(self.threads, progress=True, batch=True, bamqueue=self.bamforsturgeon)
+            #self.NanoDX = NanoDX_object(self.threads, progress=True, batch=True)
+            #self.RandomForest = RandomForest_object(self.threads, progress=True, batch=True)
 
         #    with ui.tab_panel(copy_numer).classes("w-full"):
         with ui.card().style("width: 100%"):
-            self.CNV = CNVAnalysis(self.threads, progress=True, batch=False)
+            #self.CNV = CNVAnalysis(self.threads, progress=True, batch=False)
             pass
 
         #    with ui.tab_panel(coverage).classes("w-full"):
         with ui.card().style("width: 100%"):
-            self.Target_Coverage = TargetCoverage(self.threads, progress=True)
+            #self.Target_Coverage = TargetCoverage(self.threads, progress=True)
             pass
 
         #    with ui.tab_panel(mgmt).classes("w-full"):
         with ui.card().style("width: 100%"):
-            self.MGMT_panel = MGMT_Object(self.threads, progress=True)
+            #self.MGMT_panel = MGMT_Object(self.threads, progress=True)
             pass
 
         #    with ui.tab_panel(fusions).classes("w-full"):
         with ui.card().style("width: 100%"):
-            self.Fusion_panel = Fusion_object(self.threads, progress=True)
+            #self.Fusion_panel = Fusion_object(self.threads, progress=True)
             pass
 
     def process_bams(self) -> None:
@@ -267,23 +266,16 @@ class BrainMeth:
         :param self:
         :return:
         """
-
-        # First we look for existing files:
-        # self.check_existing_bams()
-
         while True:
-            # self.log("Processing bam files")
-            # self.log(self.bam_count)
-            # self.bam_count = self.bam_count
             if "file" in self.bam_count:
                 while len(self.bam_count["file"]) > 0:
                     self.nofiles = False
                     file = self.bam_count["file"].popitem()
                     if file[1] > time.time() - 5:
                         time.sleep(5)
-                    self.bamforcns.put(file[0])
-                    self.bamforsturgeon.put(file[0])
-                    self.bamfornanodx.put(file[0])
+                    self.bamforcns.put([file[0],file[1]])
+                    self.bamforsturgeon.put([file[0],file[1]])
+                    self.bamfornanodx.put([file[0],file[1]])
                 time.sleep(1)
                 self.nofiles = True
             time.sleep(1)
