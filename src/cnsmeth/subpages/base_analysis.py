@@ -47,7 +47,8 @@ class BaseAnalysis:
         if not self.bamqueue.empty() and not self.running:
             self.running = True
             bamfile, timestamp = self.bamqueue.get()
-            print (bamfile,timestamp)
+            self.bam_count += 1
+            #print (bamfile,timestamp)
             await self.process_bam(bamfile, timestamp)
             self.bam_processed += 1
         else:
@@ -61,7 +62,7 @@ class BaseAnalysis:
         :return:
         """
         self.bamqueue.put([bamfile, timestamp])
-        self.bam_count += 1
+        #self.bam_count += 1
 
     def batch_timer_run(self):
         self.timer = ui.timer(1, self._batch_worker)
@@ -70,8 +71,6 @@ class BaseAnalysis:
         """
         This function takes bam files from a queue in batches and adds them to a backround thread for processing.
         """
-        print(f"Running batch worker - {self.bamqueue.qsize()}")
-
         self.timer.active = False
         while self.bamqueue.qsize() > 0:
             self.bams.append((self.bamqueue.get()))
@@ -84,10 +83,13 @@ class BaseAnalysis:
 
     @property
     def _progress(self):
+        """
+        This property generates a progress bar indicating the number of files that have been successfully processed.
+        """
         if self.bam_count == 0:
             return 0
         return (
-            self.bam_count - self.bamqueue.qsize() - self.bams_in_processing
+            self.bam_count - self.bams_in_processing
         ) / self.bam_count
 
     @property
@@ -127,19 +129,21 @@ class BaseAnalysis:
                     backward=lambda n: f"Bam files processed: {n}",
                 )
 
-            ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
+
             progressbar3 = ui.linear_progress(
                 size="10px", show_value=False, value=0
             ).props("instant-feedback")
+            ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
             if self.batch:
-                ui.timer(1, callback=lambda: progressbar2.set_value(self._progress2))
                 progressbar2 = ui.linear_progress(
                     size="10px", show_value=False, value=0, color="orange"
                 ).props("instant-feedback")
-            ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
+                ui.timer(1, callback=lambda: progressbar2.set_value(self._progress2))
+
             progressbar = ui.linear_progress(
                 size="10px", show_value=False, value=0
             ).props("instant-feedback")
+            ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
 
     def playback(self, data: pd.DataFrame, step_size=2):
         self.data = data
