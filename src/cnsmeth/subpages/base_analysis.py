@@ -132,18 +132,18 @@ class BaseAnalysis:
 
 
             progressbar3 = ui.linear_progress(
-                size="10px", show_value=False, value=0, color="red", tooltip="Indicates read files not yet processed."
-            ).props("instant-feedback")
+                size="10px", show_value=False, value=0, color="red",
+            ).tooltip=("Indicates read files not yet processed.").props("instant-feedback")
             ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
             if self.batch:
                 progressbar2 = ui.linear_progress(
-                    size="10px", show_value=False, value=0, color="amber", tooltip="Indicates read files being processed."
-                ).props("instant-feedback")
+                    size="10px", show_value=False, value=0, color="amber",
+                ).tooltip=("Indicates read files being processed.").props("instant-feedback")
                 ui.timer(1, callback=lambda: progressbar2.set_value(self._progress2))
 
             progressbar = ui.linear_progress(
-                size="10px", show_value=False, value=0, color="green", tooltip="Indicates read files processed."
-            ).props("instant-feedback")
+                size="10px", show_value=False, value=0, color="green",
+            ).tooltip=("Indicates read files processed.").props("instant-feedback")
             ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
 
     def playback(self, data: pd.DataFrame, step_size=2):
