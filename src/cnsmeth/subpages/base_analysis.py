@@ -13,8 +13,11 @@ import threading
 
 
 class BaseAnalysis:
-    def __init__(self, threads, progress=False, batch=False, *args, **kwargs):
-        self.queue = queue.Queue()
+    def __init__(self, threads, bamqueue=None, progress=False, batch=False, *args, **kwargs):
+        if bamqueue:
+            self.bamqueue = bamqueue
+        else:
+            self.bamqueue = queue.Queue()
         self.batch = batch
         self.setup_ui()
         if progress:
@@ -41,9 +44,10 @@ class BaseAnalysis:
         This function takes reads from the queue and adds them to the background thread for processing.
         """
         self.timer.active = False
-        if not self.queue.empty() and not self.running:
+        if not self.bamqueue.empty() and not self.running:
             self.running = True
-            bamfile, timestamp = self.queue.get()
+            bamfile, timestamp = self.bamqueue.get()
+            print (bamfile,timestamp)
             await self.process_bam(bamfile, timestamp)
             self.bam_processed += 1
         else:
@@ -56,7 +60,7 @@ class BaseAnalysis:
         :param bamfile: The path to the bam file to process.
         :return:
         """
-        self.queue.put([bamfile, timestamp])
+        self.bamqueue.put([bamfile, timestamp])
         self.bam_count += 1
 
     def batch_timer_run(self):
@@ -66,10 +70,11 @@ class BaseAnalysis:
         """
         This function takes bam files from a queue in batches and adds them to a backround thread for processing.
         """
-        # print("Running batch worker")
+        print(f"Running batch worker - {self.bamqueue.qsize()}")
+
         self.timer.active = False
-        while self.queue.qsize() > 0:
-            self.bams.append((self.queue.get()))
+        while self.bamqueue.qsize() > 0:
+            self.bams.append((self.bamqueue.get()))
             self.bams_in_processing += 1
         if not self.running and len(self.bams) > 0:
             await self.process_bam(self.bams)
@@ -82,7 +87,7 @@ class BaseAnalysis:
         if self.bam_count == 0:
             return 0
         return (
-            self.bam_count - self.queue.qsize() - self.bams_in_processing
+            self.bam_count - self.bamqueue.qsize() - self.bams_in_processing
         ) / self.bam_count
 
     @property
