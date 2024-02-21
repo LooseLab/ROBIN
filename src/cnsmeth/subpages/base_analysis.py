@@ -2,13 +2,15 @@
 This file provides a base class for analysis of bam files output during a sequencing run.
 The base class provides a queue to receive bam files and a background thread to process the data.
 """
+
 import queue
-from nicegui import ui, run
+from nicegui import ui
 from typing import BinaryIO
 import pandas as pd
 import time
 import asyncio
 import threading
+
 
 class BaseAnalysis:
     def __init__(self, progress=False, batch=False, *args, **kwargs):
@@ -28,15 +30,14 @@ class BaseAnalysis:
         else:
             self.timer_run()
 
-
     def timer_run(self):
-        self.timer = ui.timer(0.1,self._worker)
+        self.timer = ui.timer(0.1, self._worker)
 
     async def _worker(self):
         """
         This function takes reads from the queue and adds them to the background thread for processing.
         """
-        self.timer.active=False
+        self.timer.active = False
         if not self.queue.empty() and not self.running:
             self.running = True
             bamfile, timestamp = self.queue.get()
@@ -56,46 +57,44 @@ class BaseAnalysis:
         self.bam_count += 1
 
     def batch_timer_run(self):
-        self.timer = ui.timer(1,self._batch_worker)
+        self.timer = ui.timer(1, self._batch_worker)
 
     async def _batch_worker(self):
         """
         This function takes bam files from a queue in batches and adds them to a backround thread for processing.
         """
-        #print("Running batch worker")
+        # print("Running batch worker")
         self.timer.active = False
         while self.queue.qsize() > 0:
             self.bams.append((self.queue.get()))
-            self.bams_in_processing+=1
+            self.bams_in_processing += 1
         if not self.running and len(self.bams) > 0:
             await self.process_bam(self.bams)
         else:
             await asyncio.sleep(1)
         self.timer.active = True
 
-
-
-
-
     @property
     def _progress(self):
         if self.bam_count == 0:
             return 0
-        return ((self.bam_count - self.queue.qsize()-self.bams_in_processing) / self.bam_count)
+        return (
+            self.bam_count - self.queue.qsize() - self.bams_in_processing
+        ) / self.bam_count
 
     @property
     def _progress2(self):
         if self.bam_count == 0:
             return 0
-        return ((self.bams_in_processing) / self.bam_count)
+        return (self.bams_in_processing) / self.bam_count
 
     @property
     def _not_analysed(self):
         if self.bam_count == 0:
             return 0
-        return (self.bam_count - self.bams_in_processing - self.bam_processed)/self.bam_count
-
-
+        return (
+            self.bam_count - self.bams_in_processing - self.bam_processed
+        ) / self.bam_count
 
     def progress(self):
         """
@@ -105,18 +104,34 @@ class BaseAnalysis:
         with ui.card().classes("w-full"):
             with ui.row():
                 ui.label("File Tracker").tailwind("drop-shadow", "font-bold")
-                ui.label().bind_text_from(self, 'bam_count', backward=lambda n: f'Bam files seen: {n}')
+                ui.label().bind_text_from(
+                    self, "bam_count", backward=lambda n: f"Bam files seen: {n}"
+                )
                 if self.batch:
-                    ui.label().bind_text_from(self, 'bams_in_processing', backward=lambda n: f'Bam files being processed: {n}')
-                ui.label().bind_text_from(self, 'bam_processed', backward=lambda n: f'Bam files processed: {n}')
+                    ui.label().bind_text_from(
+                        self,
+                        "bams_in_processing",
+                        backward=lambda n: f"Bam files being processed: {n}",
+                    )
+                ui.label().bind_text_from(
+                    self,
+                    "bam_processed",
+                    backward=lambda n: f"Bam files processed: {n}",
+                )
 
             ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
-            progressbar3 = ui.linear_progress(size="10px", show_value=False, value=0).props('instant-feedback')
+            progressbar3 = ui.linear_progress(
+                size="10px", show_value=False, value=0
+            ).props("instant-feedback")
             if self.batch:
                 ui.timer(1, callback=lambda: progressbar2.set_value(self._progress2))
-                progressbar2 = ui.linear_progress(size="10px", show_value=False, value=0, color="orange").props('instant-feedback')
+                progressbar2 = ui.linear_progress(
+                    size="10px", show_value=False, value=0, color="orange"
+                ).props("instant-feedback")
             ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
-            progressbar = ui.linear_progress(size="10px", show_value=False, value=0).props('instant-feedback')
+            progressbar = ui.linear_progress(
+                size="10px", show_value=False, value=0
+            ).props("instant-feedback")
 
     def playback(self, data: pd.DataFrame, step_size=2):
         self.data = data
@@ -158,7 +173,3 @@ class BaseAnalysis:
         :return:
         """
         raise NotImplementedError("Subclasses must implement this method.")
-
-
-
-

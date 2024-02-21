@@ -6,10 +6,11 @@ import pandas as pd
 import logging
 import numpy as np
 import os
-import time
 import asyncio
-from nicegui import ui, run
+from nicegui import ui
+
 os.environ["CI"] = "1"
+
 
 def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None):
     result = iterate_bam_file(
@@ -21,10 +22,12 @@ def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None):
     )
     return result, copy_numbers
 
+
 def reduce_list(lst, max_length=500):
     while len(lst) > max_length:
         lst = lst[::2]
     return lst
+
 
 class CNVAnalysis(BaseAnalysis):
     def __init__(self, *args, **kwargs):
@@ -45,22 +48,22 @@ class CNVAnalysis(BaseAnalysis):
         )
         super().__init__(*args, **kwargs)
 
-
     async def process_bam(self, bamfile, timestamp):
         self.file_list.append(bamfile)
-        #cnv_dict = self.update_cnv_dict.copy()
-        #self.result, self.update_cnv_dict = await run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=cnv_dict)
+        # cnv_dict = self.update_cnv_dict.copy()
+        # self.result, self.update_cnv_dict = await run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=cnv_dict)
         self.result = iterate_bam_file(
             bamfile,
             _threads=self.threads,
             mapq_filter=60,
-            copy_numbers=self.update_cnv_dict, log_level=int(logging.ERROR)
+            copy_numbers=self.update_cnv_dict,
+            log_level=int(logging.ERROR),
         )
 
         self.cnv_dict["bin_width"] = self.result.bin_width
         self.cnv_dict["variance"] = self.result.variance
         # Only update the plot if the queue is empty?
-        if self.queue.empty() or self.bam_processed%50 == 0:
+        if self.queue.empty() or self.bam_processed % 50 == 0:
             self._update_cnv_plot()
         else:
             await asyncio.sleep(0.05)
@@ -301,7 +304,7 @@ def test_me():
     my_connection = None
     with theme.frame("Copy Number Variation Interactive", my_connection):
         CNV_PLOT = CNVAnalysis(progress=True)
-        #path = "tests/static/bam"
+        # path = "tests/static/bam"
         path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
         directory = os.fsencode(path)
         for file in os.listdir(directory):
@@ -309,6 +312,7 @@ def test_me():
             if filename.endswith(".bam"):
                 CNV_PLOT.add_bam(os.path.join(path, filename))
     ui.run(port=12345)
+
 
 # Entrypoint for when GUI is launched by the CLI.
 # e.g.: python my_app/my_cli.py

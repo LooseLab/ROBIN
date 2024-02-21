@@ -2,9 +2,9 @@ from __future__ import annotations
 from cnsmeth.subpages.base_analysis import BaseAnalysis
 
 from nicegui import ui, run
-import threading
 import time
-import os, sys
+import os
+import sys
 import pysam
 import pandas as pd
 import shutil
@@ -30,12 +30,14 @@ def run_modkit(cpgs, sortfile, temp):
     except Exception as e:
         print(e)
 
+
 def run_samtools_sort(file, tomerge, sortfile):
     pysam.cat("-o", file, *tomerge)
     pysam.sort("--write-index", "-o", sortfile, file)
 
 
-from queue import Queue
+
+
 class NanoDX_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
         self.cpgs_file = os.path.join(
@@ -48,7 +50,7 @@ class NanoDX_object(BaseAnalysis):
             header=None,
         )
         self.threshold = 0.05
-        self.nanodx_bam_count=0
+        self.nanodx_bam_count = 0
         self.not_first_run = False
         self.nanodxfile = tempfile.NamedTemporaryFile()
         self.modelfile = os.path.join(
@@ -61,23 +63,23 @@ class NanoDX_object(BaseAnalysis):
     def setup_ui(self):
         with ui.card().style("width: 100%"):
             with ui.grid(columns=8).classes("w-full h-auto"):
-                with ui.card().classes('col-span-3'):
+                with ui.card().classes("col-span-3"):
                     self.create_nanodx_chart("NanoDX")
-                with ui.card().classes('col-span-5'):
+                with ui.card().classes("col-span-5"):
                     self.create_nanodx_time_chart()
 
     async def process_bam(self, bamfile):
-        tomerge=[]
-        timestamp=None
-        while len(bamfile)>0:
-            self.running=True
-            (file,filetime) = bamfile.pop()
+        tomerge = []
+        timestamp = None
+        while len(bamfile) > 0:
+            self.running = True
+            (file, filetime) = bamfile.pop()
             self.nanodx_bam_count += 1
             tomerge.append(file)
             timestamp = filetime
-            if len(tomerge)>50:
+            if len(tomerge) > 50:
                 break
-        if len(tomerge)>0:
+        if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile()
             sorttempbam = tempfile.NamedTemporaryFile()
             file = tempbam.name
@@ -214,8 +216,8 @@ class NanoDX_object(BaseAnalysis):
                 predictions, class_labels, n_features = self.NN.predict(test_df)
             except Exception as e:
                 print(e)
-                test_df.to_csv("errordf.csv", sep=',', index=False, encoding='utf-8')
-                #self.nanodx_status_txt["message"] = "Error generating predictions."
+                test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
+                # self.nanodx_status_txt["message"] = "Error generating predictions."
                 sys.exit(1)
 
             nanoDX_df = pd.DataFrame({"class": class_labels, "score": predictions})
@@ -232,12 +234,12 @@ class NanoDX_object(BaseAnalysis):
                 [self.nanodx_df_store, nanoDX_save.set_index("timestamp")]
             )
 
-            #self.nanodx_df_store.to_csv(
+            # self.nanodx_df_store.to_csv(
             #    os.path.join(self.resultfolder, "nanoDX_scores.csv")
-            #)
+            # )
 
             columns_greater_than_threshold = (
-                    self.nanodx_df_store > self.threshold
+                self.nanodx_df_store > self.threshold
             ).any()
             columns_not_greater_than_threshold = ~columns_greater_than_threshold
             result = self.nanodx_df_store.columns[
@@ -245,7 +247,6 @@ class NanoDX_object(BaseAnalysis):
             ].tolist()
 
             self.update_nanodx_time_chart(self.nanodx_df_store.drop(columns=result))
-
 
             self.update_nanodx_plot(
                 nanoDX_df["class"].head(10).values,
@@ -257,8 +258,7 @@ class NanoDX_object(BaseAnalysis):
             self.bam_processed += len(tomerge)
             self.bams_in_processing -= len(tomerge)
         await asyncio.sleep(5)
-        self.running=False
-
+        self.running = False
 
     def create_nanodx_chart(self, title):
         self.nanodxchart = (
@@ -351,7 +351,7 @@ def test_ui():
     with theme.frame("Copy Number Variation Interactive", my_connection):
         TestObject = NanoDX_object(progress=True, batch=True)
     path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
-    #path = "tests/static/bam"
+    # path = "tests/static/bam"
     directory = os.fsencode(path)
     for file in os.listdir(directory):
         filename = os.fsdecode(file)

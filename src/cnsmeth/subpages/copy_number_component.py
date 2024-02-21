@@ -170,11 +170,11 @@ class CNV_Plot:
             max = "dataMax"
 
             if gene_target:
-                #print("Gene Target")
+                # print("Gene Target")
                 start_pos = self.gene_bed.iloc[int(gene_target)].start_pos
                 end_pos = self.gene_bed.iloc[int(gene_target)].end_pos
                 chrom = self.gene_bed.iloc[int(gene_target)].chrom
-                #print(chrom)
+                # print(chrom)
                 for counter, contig in enumerate(
                     natsort.natsorted(self.result.cnv), start=1
                 ):
@@ -182,7 +182,7 @@ class CNV_Plot:
                     if contig == chrom:
                         break
                 self.chrom_filter = counter
-                #print(self.chrom_filter)
+                # print(self.chrom_filter)
                 min = start_pos - 10 * self.cnv_dict["bin_width"]
                 max = end_pos + 10 * self.cnv_dict["bin_width"]
             if self.chrom_filter == "All":
