@@ -8,6 +8,7 @@ import os, sys
 import pysam
 import pandas as pd
 import shutil
+import asyncio
 import tempfile
 from cnsmeth import models, theme, resources
 from cnsmeth.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
@@ -24,7 +25,7 @@ def run_modkit(cpgs, sortfile, temp):
     """
     try:
         os.system(
-            f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t 8 {sortfile} {temp} --suppress-progress"
+            f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t 4 {sortfile} {temp} --suppress-progress"
         )
     except Exception as e:
         print(e)
@@ -74,7 +75,7 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_bam_count += 1
             tomerge.append(file)
             timestamp = filetime
-            if len(tomerge)>25:
+            if len(tomerge)>50:
                 break
         if len(tomerge)>0:
             tempbam = tempfile.NamedTemporaryFile()
@@ -255,7 +256,7 @@ class NanoDX_object(BaseAnalysis):
 
             self.bam_processed += len(tomerge)
             self.bams_in_processing -= len(tomerge)
-
+        await asyncio.sleep(5)
         self.running=False
 
 
