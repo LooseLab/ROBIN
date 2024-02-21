@@ -19,21 +19,21 @@ from cnsmeth.utilities.merge_bedmethyl import (
 )
 
 
-def run_modkit(cpgs, sortfile, temp):
+def run_modkit(cpgs, sortfile, temp, threads):
     """
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
         os.system(
-            f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t 4 {sortfile} {temp} --suppress-progress"
+            f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp} --suppress-progress"
         )
     except Exception as e:
         print(e)
 
 
-def run_samtools_sort(file, tomerge, sortfile):
+def run_samtools_sort(file, tomerge, sortfile, threads):
     pysam.cat("-o", file, *tomerge)
-    pysam.sort("--write-index", "-o", sortfile, file)
+    pysam.sort("-@", threads, "--write-index", "-o", sortfile, file)
 
 
 
@@ -90,11 +90,11 @@ class NanoDX_object(BaseAnalysis):
 
             ui.notify("NanoDX: Merging bams")
 
-            await run.cpu_bound(run_samtools_sort, file, tomerge, sortfile)
+            await run.cpu_bound(run_samtools_sort, file, tomerge, sortfile, self.threads)
 
             ui.notify("NanoDX: Running modkit")
 
-            await run.cpu_bound(run_modkit, self.cpgs_file, sortfile, temp.name)
+            await run.cpu_bound(run_modkit, self.cpgs_file, sortfile, temp.name, self.threads)
 
             ui.notify("NanoDX: Merging bed files")
 

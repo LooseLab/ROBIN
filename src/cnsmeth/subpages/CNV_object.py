@@ -37,7 +37,6 @@ class CNVAnalysis(BaseAnalysis):
         self.cnv_dict["variance"] = 0
         self.update_cnv_dict = {}
         self.result = None
-        self.threads = 4
         self.gene_bed = pd.read_table(
             os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
