@@ -37,6 +37,7 @@ class BrainMeth:
         sequencing_summary=None,
         showerrors=False,
         browse=False,
+        exclude=[],
     ):
         self.threads = threads
         self.simtime = simtime
@@ -45,6 +46,7 @@ class BrainMeth:
         self.sequencing_summary = sequencing_summary
         self.showerrors = showerrors
         self.browse = browse
+        self.exclude = exclude
 
         self.bam_count = {"counter": 0}
         self.bamforcns = Queue()
@@ -214,52 +216,54 @@ class BrainMeth:
                 ui.label().bind_text_from(
                     self.bam_count, "counter", backward=lambda n: f"BAM files seen: {n}"
                 ).tailwind("drop-shadow")
-                ui.label().bind_text_from(
-                    self,
-                    "bamforcns",
-                    backward=lambda n: f"BAM files for CNS: {n.qsize()}",
-                ).tailwind("drop-shadow")
-                ui.label().bind_text_from(
-                    self,
-                    "bamforsturgeon",
-                    backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
-                ).tailwind("drop-shadow")
-                ui.label().bind_text_from(
-                    self,
-                    "bamfornanodx",
-                    backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
-                ).tailwind("drop-shadow")
-        # with ui.tabs().classes("w-full") as tabs:
-        #    methylation = ui.tab("Methylation Classification")
-        #    copy_numer = ui.tab("Copy Number Variation")
-        #    coverage = ui.tab("Target Coverage")
-        #    mgmt = ui.tab("MGMT")
-        #    fusions = ui.tab("Fusions")
-        # with ui.tab_panels(tabs, value=methylation).classes("w-full"):
-        #    with ui.tab_panel(methylation).classes("w-full"):
+                if "forest" not in self.exclude:
+                    ui.label().bind_text_from(
+                        self,
+                        "bamforcns",
+                        backward=lambda n: f"BAM files for CNS: {n.qsize()}",
+                    ).tailwind("drop-shadow")
+                if "sturgeon" not in self.exclude:
+                    ui.label().bind_text_from(
+                        self,
+                        "bamforsturgeon",
+                        backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
+                    ).tailwind("drop-shadow")
+                if "nanodx" not in self.exclude:
+                    ui.label().bind_text_from(
+                        self,
+                        "bamfornanodx",
+                        backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
+                    ).tailwind("drop-shadow")
         with ui.card().style("width: 100%"):
-            self.Sturgeon = Sturgeon_object(self.threads, progress=True, batch=True, bamqueue=self.bamforsturgeon)
-            self.NanoDX = NanoDX_object(self.threads, progress=True, batch=True, bamqueue=self.bamfornanodx)
-            self.RandomForest = RandomForest_object(self.threads, progress=True, batch=True, bamqueue=self.bamforcns)
+            if "sturgeon" not in self.exclude:
+                self.Sturgeon = Sturgeon_object(self.threads, progress=True, batch=True, bamqueue=self.bamforsturgeon)
+            if "nanodx" not in self.exclude:
+                self.NanoDX = NanoDX_object(self.threads, progress=True, batch=True, bamqueue=self.bamfornanodx)
+            if "forest" not in self.exclude:
+                self.RandomForest = RandomForest_object(self.threads, progress=True, batch=True, bamqueue=self.bamforcns)
             pass
         #    with ui.tab_panel(copy_numer).classes("w-full"):
         with ui.card().style("width: 100%"):
-            self.CNV = CNVAnalysis(self.threads, progress=True, bamqueue=self.bamforcnv)
+            if "cnv" not in self.exclude:
+                self.CNV = CNVAnalysis(self.threads, progress=True, bamqueue=self.bamforcnv)
             pass
 
         #    with ui.tab_panel(coverage).classes("w-full"):
         with ui.card().style("width: 100%"):
-            self.Target_Coverage = TargetCoverage(self.threads, progress=True,bamqueue=self.bamfortargetcoverage)
+            if "coverage" not in self.exclude:
+                self.Target_Coverage = TargetCoverage(self.threads, progress=True,bamqueue=self.bamfortargetcoverage)
             pass
 
         #    with ui.tab_panel(mgmt).classes("w-full"):
         with ui.card().style("width: 100%"):
-            self.MGMT_panel = MGMT_Object(self.threads, progress=True, bamqueue=self.bamformgmt)
+            if "mgmt" not in self.exclude:
+                self.MGMT_panel = MGMT_Object(self.threads, progress=True, bamqueue=self.bamformgmt)
             pass
 
         #    with ui.tab_panel(fusions).classes("w-full"):
         with ui.card().style("width: 100%"):
-            self.Fusion_panel = Fusion_object(self.threads, progress=True, bamqueue=self.bamforfusions)
+            if "fusion" not in self.exclude:
+                self.Fusion_panel = Fusion_object(self.threads, progress=True, bamqueue=self.bamforfusions)
             pass
 
     def process_bams(self) -> None:
