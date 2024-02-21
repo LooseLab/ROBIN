@@ -90,7 +90,7 @@ class BaseAnalysis:
         if self.bam_count == 0:
             return 0
         return (
-            self.bam_count - self.bams_in_processing
+            self.bam_processed
         ) / self.bam_count
 
     @property
