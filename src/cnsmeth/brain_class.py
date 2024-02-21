@@ -241,10 +241,10 @@ class BrainMeth:
             self.Sturgeon = Sturgeon_object(self.threads, progress=True, batch=True, bamqueue=self.bamforsturgeon)
             self.NanoDX = NanoDX_object(self.threads, progress=True, batch=True, bamqueue=self.bamfornanodx)
             self.RandomForest = RandomForest_object(self.threads, progress=True, batch=True, bamqueue=self.bamforcns)
-
+            pass
         #    with ui.tab_panel(copy_numer).classes("w-full"):
         with ui.card().style("width: 100%"):
-            self.CNV = CNVAnalysis(self.threads, progress=True, batch=False, bamqueue=self.bamforcnv)
+            self.CNV = CNVAnalysis(self.threads, progress=True, bamqueue=self.bamforcnv)
             pass
 
         #    with ui.tab_panel(coverage).classes("w-full"):
@@ -280,6 +280,11 @@ class BrainMeth:
                     self.bamforcns.put([file[0],file[1]])
                     self.bamforsturgeon.put([file[0],file[1]])
                     self.bamfornanodx.put([file[0],file[1]])
+                    self.bamforcnv.put([file[0],file[1]])
+                    self.bamfortargetcoverage.put([file[0],file[1]])
+                    self.bamformgmt.put([file[0],file[1]])
+                    self.bamforfusions.put([file[0],file[1]])
+
                 time.sleep(1)
                 self.nofiles = True
             time.sleep(1)

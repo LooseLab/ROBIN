@@ -62,7 +62,7 @@ class CNVAnalysis(BaseAnalysis):
         self.cnv_dict["bin_width"] = self.result.bin_width
         self.cnv_dict["variance"] = self.result.variance
         # Only update the plot if the queue is empty?
-        if self.queue.empty() or self.bam_processed % 50 == 0:
+        if self.bamqueue.empty() or self.bam_processed % 50 == 0:
             self._update_cnv_plot()
         else:
             await asyncio.sleep(0.05)

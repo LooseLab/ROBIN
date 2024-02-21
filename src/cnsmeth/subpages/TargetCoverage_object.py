@@ -340,7 +340,7 @@ class TargetCoverage(BaseAnalysis):
             self.cov_df_main, self.bedcov_df_main = await run.cpu_bound(
                 run_bedmerge, newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
             )
-        if self.queue.empty() or self.bam_processed % 25 == 0:
+        if self.bamqueue.empty() or self.bam_processed % 25 == 0:
             self.update_coverage_plot(self.cov_df_main)
             await asyncio.sleep(0.01)
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
