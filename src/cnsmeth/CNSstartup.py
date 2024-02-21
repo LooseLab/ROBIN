@@ -19,6 +19,7 @@ class Methnice:
         sequencing_summary: Path,
         showerrors: bool,
         browse: bool,
+        exclude: list
     ):
         self.threads = threads
         self.simtime = simtime
@@ -27,6 +28,7 @@ class Methnice:
         self.sequencing_summary = sequencing_summary
         self.showerrors = showerrors
         self.browse = browse
+        self.exclude = exclude
 
     @ui.page("/home")
     def index_page(self) -> None:
@@ -41,6 +43,7 @@ class Methnice:
                 sequencing_summary=self.sequencing_summary,
                 showerrors=self.showerrors,
                 browse=self.browse,
+                exclude=self.exclude
             )
 
 
@@ -54,6 +57,7 @@ def run_class(
     sequencing_summary: Path,
     showerrors: bool,
     browse: bool,
+    exclude: list
 ):
     """
     Helper function to run the app.
@@ -72,6 +76,7 @@ def run_class(
         sequencing_summary=sequencing_summary,
         showerrors=showerrors,
         browse=browse,
+        exclude=exclude
     )
     app.on_startup(mainpage.index_page)
     ui.run(
@@ -108,6 +113,13 @@ def run_class(
     default=False,
     help="Browse Historic Data.",
 )
+@click.option('--exclude',
+                '-e',
+              multiple=True,
+              help="Exclude analysis types with one or more of these options.",
+              type=click.Choice(['sturgeon', 'forest', 'nanodx', 'cnv', 'fusion', 'coverage', 'mgmt'], case_sensitive=False)
+              )
+
 @click.argument(
     "watchfolder",
     type=click.Path(
@@ -123,7 +135,7 @@ def run_class(
     required=False,
 )
 def package_run(
-    port, threads, simtime, showerrors, sequencing_summary, watchfolder, output, browse
+    port, threads, simtime, showerrors, sequencing_summary, watchfolder, output, browse, exclude
 ):  # , threads, simtime, watchfolder, output, sequencing_summary):
     """
     Entrypoint for when GUI is launched directly.
@@ -142,6 +154,7 @@ def package_run(
             sequencing_summary=sequencing_summary,
             showerrors=showerrors,
             browse=browse,
+            exclude=exclude,
         )
         # Your logic for browse mode
     else:
@@ -162,6 +175,7 @@ def package_run(
             sequencing_summary=sequencing_summary,
             showerrors=showerrors,
             browse=browse,
+            exclude=exclude,
         )
 
 
