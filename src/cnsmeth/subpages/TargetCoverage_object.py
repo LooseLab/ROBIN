@@ -5,11 +5,84 @@ import pandas as pd
 import numpy as np
 import os
 import time
-from nicegui import ui
+from nicegui import ui, run
 from io import StringIO
 import pysam
+import asyncio
 os.environ["CI"] = "1"
 
+
+def get_covdfs(bamfile):
+    """
+    This function runs modkit on a bam file and extracts the methylation data.
+    """
+    try:
+        pysam.index(f"{bamfile}")
+        newcovdf = pd.read_csv(
+            StringIO(pysam.coverage(f"{bamfile}")), sep="\t"
+        )
+        newcovdf.drop(
+            columns=["coverage", "meanbaseq", "meanmapq"],
+            inplace=True,
+        )
+        bedcovdf = pd.read_csv(
+            StringIO(
+                pysam.bedcov(
+                    os.path.join(
+                        os.path.dirname(
+                            os.path.abspath(resources.__file__)
+                        ),
+                        "unique_genes.bed",
+                    ),
+                    f"{bamfile}",
+                )
+            ),
+            names=["chrom", "startpos", "endpos", "name", "bases"],
+            sep="\t",
+        )
+        return newcovdf, bedcovdf
+    except Exception as e:
+        print(e)
+
+def run_bedmerge(newcovdf,cov_df_main,bedcovdf,bedcov_df_main):
+    merged_df = pd.merge(
+        newcovdf,
+        cov_df_main,
+        on=["#rname", "startpos", "endpos"],
+        suffixes=("_df1", "_df2"),
+    )
+    merged_df["numreads"] = (
+            merged_df["numreads_df1"] + merged_df["numreads_df2"]
+    )
+    merged_df["covbases"] = (
+            merged_df["covbases_df1"] + merged_df["covbases_df2"]
+    )
+    merged_df["meandepth"] = (
+            merged_df["meandepth_df1"] + merged_df["meandepth_df2"]
+    )
+
+    merged_df.drop(
+        columns=[
+            "numreads_df1",
+            "numreads_df2",
+            "meandepth_df1",
+            "meandepth_df2",
+            "covbases_df1",
+            "covbases_df2",
+        ],
+        inplace=True,
+    )
+
+
+    merged_bed_df = pd.merge(
+        bedcovdf,
+        bedcov_df_main,
+        on=["chrom", "startpos", "endpos", "name"],
+        suffixes=("_df1", "_df2"),
+    )
+    merged_bed_df["bases"] = merged_bed_df["bases_df1"] + merged_bed_df["bases_df2"]
+    merged_bed_df.drop(columns=["bases_df1", "bases_df2"], inplace=True)
+    return merged_df,  merged_bed_df
 
 class TargetCoverage(BaseAnalysis):
     def __init__(self, *args, **kwargs):
@@ -268,84 +341,27 @@ class TargetCoverage(BaseAnalysis):
             ).classes("w-full").style("height: 900px")
 
 
-    def process_bam(self, bamfile, timestamp):
-        pysam.index(f"{bamfile}")
-        newcovdf = pd.read_csv(
-            StringIO(pysam.coverage(f"{bamfile}")), sep="\t"
-        )
-        newcovdf.drop(
-            columns=["coverage", "meanbaseq", "meanmapq"],
-            inplace=True,
-        )
-        bedcovdf = pd.read_csv(
-            StringIO(
-                pysam.bedcov(
-                    os.path.join(
-                        os.path.dirname(
-                            os.path.abspath(resources.__file__)
-                        ),
-                        "unique_genes.bed",
-                    ),
-                    f"{bamfile}",
-                )
-            ),
-            names=["chrom", "startpos", "endpos", "name", "bases"],
-            sep="\t",
-        )
-
+    async def process_bam(self, bamfile, timestamp):
+        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
         if self.cov_df_main.empty:
             self.cov_df_main = newcovdf
             self.bedcov_df_main = bedcovdf
         else:
-            merged_df = pd.merge(
-                newcovdf,
-                self.cov_df_main,
-                on=["#rname", "startpos", "endpos"],
-                suffixes=("_df1", "_df2"),
-            )
-            merged_df["numreads"] = (
-                    merged_df["numreads_df1"] + merged_df["numreads_df2"]
-            )
-            merged_df["covbases"] = (
-                    merged_df["covbases_df1"] + merged_df["covbases_df2"]
-            )
-            merged_df["meandepth"] = (
-                    merged_df["meandepth_df1"] + merged_df["meandepth_df2"]
-            )
-
-            merged_df.drop(
-                columns=[
-                    "numreads_df1",
-                    "numreads_df2",
-                    "meandepth_df1",
-                    "meandepth_df2",
-                    "covbases_df1",
-                    "covbases_df2",
-                ],
-                inplace=True,
-            )
-            self.cov_df_main = merged_df
-
-            merged_bed_df = pd.merge(
-                bedcovdf,
-                self.bedcov_df_main,
-                on=["chrom", "startpos", "endpos", "name"],
-                suffixes=("_df1", "_df2"),
-            )
-            merged_bed_df["bases"] = merged_bed_df["bases_df1"] + merged_bed_df["bases_df2"]
-            merged_bed_df.drop(columns=["bases_df1", "bases_df2"], inplace=True)
-            self.bedcov_df_main = merged_bed_df
-
+            self.cov_df_main, self.bedcov_df_main = await run.cpu_bound(run_bedmerge, newcovdf,self.cov_df_main,bedcovdf,self.bedcov_df_main)
         if self.queue.empty() or self.bam_processed % 25 == 0:
             self.update_coverage_plot(self.cov_df_main)
+            await asyncio.sleep(0.01)
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
+            await asyncio.sleep(0.01)
             self.update_coverage_time_plot(self.cov_df_main, timestamp)
-
+            await asyncio.sleep(0.01)
             self.target_coverage_df = self.bedcov_df_main
             self.target_coverage_df["coverage"] = (
                     self.target_coverage_df["bases"] / self.target_coverage_df["length"]
             )
+            await asyncio.sleep(0.01)
             self.update_target_coverage_table()
+        await asyncio.sleep(0.05)
         self.running = False
 
 

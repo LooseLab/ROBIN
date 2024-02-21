@@ -3,7 +3,7 @@ import os
 import gff3_parser
 import tempfile
 import random
-
+import asyncio
 import pandas as pd
 
 
@@ -515,11 +515,12 @@ class Fusion_object(BaseAnalysis):
                 )
                 record.plot(ax=ax, with_ruler=False, draw_line=True)
 
-    def process_bam(self, bamfile, timestamp):
+    async def process_bam(self, bamfile, timestamp):
         """
         Function to process a bam file and identify fusion candidates.
         :param bamfile: The path to the bam file to process.
         """
+
         tempreadfile = tempfile.NamedTemporaryFile(suffix=".txt")
         tempbamfile = tempfile.NamedTemporaryFile(suffix=".bam")
         tempmappings = tempfile.NamedTemporaryFile(suffix=".txt")
@@ -591,6 +592,7 @@ class Fusion_object(BaseAnalysis):
                     self.fusion_table_all()
                 except Exception as e:
                     print(f"Error 526: {e}")
+        await asyncio.sleep(0.1)
         self.running = False
 
     def _generate_random_color(self):

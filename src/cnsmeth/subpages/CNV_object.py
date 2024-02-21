@@ -7,7 +7,8 @@ import logging
 import numpy as np
 import os
 import time
-from nicegui import ui
+import asyncio
+from nicegui import ui, run
 os.environ["CI"] = "1"
 
 def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None):
@@ -20,6 +21,10 @@ def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None):
     )
     return result, copy_numbers
 
+def reduce_list(lst, max_length=500):
+    while len(lst) > max_length:
+        lst = lst[::2]
+    return lst
 
 class CNVAnalysis(BaseAnalysis):
     def __init__(self, *args, **kwargs):
@@ -29,7 +34,7 @@ class CNVAnalysis(BaseAnalysis):
         self.cnv_dict["variance"] = 0
         self.update_cnv_dict = {}
         self.result = None
-        self.threads = 2
+        self.threads = 4
         self.gene_bed = pd.read_table(
             os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
@@ -41,25 +46,25 @@ class CNVAnalysis(BaseAnalysis):
         super().__init__(*args, **kwargs)
 
 
-    def process_bam(self, bamfile, timestamp):
+    async def process_bam(self, bamfile, timestamp):
         self.file_list.append(bamfile)
-        #print(f"Processing {bamfile}")
-
+        #cnv_dict = self.update_cnv_dict.copy()
+        #self.result, self.update_cnv_dict = await run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=cnv_dict)
         self.result = iterate_bam_file(
             bamfile,
             _threads=self.threads,
             mapq_filter=60,
             copy_numbers=self.update_cnv_dict, log_level=int(logging.ERROR)
         )
+
         self.cnv_dict["bin_width"] = self.result.bin_width
         self.cnv_dict["variance"] = self.result.variance
         # Only update the plot if the queue is empty?
         if self.queue.empty() or self.bam_processed%50 == 0:
-            #print("Updating plot")
             self._update_cnv_plot()
+        else:
+            await asyncio.sleep(0.05)
         self.running = False
-        #print(f"Processed {self.bam_processed} of {self.bam_count}")
-
 
     def setup_ui(self):
         self.display_row = ui.row()
@@ -172,6 +177,8 @@ class CNVAnalysis(BaseAnalysis):
                         )
                     )
 
+                    data = reduce_list(data)
+
                     total += len(cnv)
                     self.scatter_echart.options["xAxis"]["max"] = max
                     self.scatter_echart.options["xAxis"]["min"] = min
@@ -214,6 +221,7 @@ class CNVAnalysis(BaseAnalysis):
                 data = list(
                     zip((np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"], cnv)
                 )
+
                 if not gene_target:
                     min = 0
                     max = "dataMax"

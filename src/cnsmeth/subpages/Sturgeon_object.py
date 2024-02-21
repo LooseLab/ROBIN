@@ -14,13 +14,24 @@ from sturgeon.callmapping import (
 )
 import asyncio
 
+def run_probes_methyl_calls(merged_output_file, bed_output_file):
+    probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
+def run_sturgeon_merge_probes(calls_per_probe_file,merged_output_file):
+    merge_probes_methyl_calls(
+        [calls_per_probe_file, merged_output_file],
+        merged_output_file,
+    )
+
+def pysam_cat(tempbam, tomerge):
+    pysam.cat("-o", tempbam, *tomerge)
+
 def run_modkit(file, temp):
     """
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
         os.system(
-            f"modkit extract --ignore h -t {8} {file} {temp} "
+            f"modkit extract --ignore h -t {4} {file} {temp} "
             f"--force --suppress-progress >/dev/null 2>&1"
         )
         # self.log("Done processing bam file")
@@ -68,7 +79,8 @@ class Sturgeon_object(BaseAnalysis):
 
 
     def setup_ui(self):
-        with ui.card().style("width: 100%"):
+        self.card =  ui.card().style("width: 100%")
+        with self.card:
             with ui.grid(columns=8).classes("w-full h-auto"):
                 with ui.card().classes('col-span-3'):
                     self.create_sturgeon_chart("Sturgeon")
@@ -91,8 +103,10 @@ class Sturgeon_object(BaseAnalysis):
 
         if len(tomerge)>0:
             tempbam = tempfile.NamedTemporaryFile()
-            ui.notify("Sturgeon: Merging bams")
-            pysam.cat("-o", tempbam.name, *tomerge)
+            with self.card:
+                ui.notify("Sturgeon: Merging bams")
+            await run.cpu_bound(pysam_cat, tempbam.name, tomerge)
+
             file = tempbam.name
 
             temp = tempfile.NamedTemporaryFile()
@@ -101,7 +115,7 @@ class Sturgeon_object(BaseAnalysis):
                 await run.cpu_bound(run_modkit, file, temp.name)
                 ui.notify("Sturgeon: Modkit Complete")
                 await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
-                ui.notify("Sturgeon: Inputtobed Complete")
+                #ui.notify("Sturgeon: Inputtobed Complete")
 
                 calls_per_probe_file = os.path.join(
                     temp2, "merged_probes_methyl_calls.txt"
@@ -116,14 +130,17 @@ class Sturgeon_object(BaseAnalysis):
 
                     self.first_run = False
                 else:
-                    merge_probes_methyl_calls(
-                        [calls_per_probe_file, merged_output_file],
-                        merged_output_file,
-                    )
+                    await run.cpu_bound(run_sturgeon_merge_probes, calls_per_probe_file, merged_output_file)
+                    #merge_probes_methyl_calls(
+                    #    [calls_per_probe_file, merged_output_file],
+                    #    merged_output_file,
+                    #)
                 bed_output_file = os.path.join(
                     self.bedDir.name, "final_merged_probes_methyl_calls.bed"
                 )
-                probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
+
+                await run.cpu_bound(run_probes_methyl_calls, merged_output_file, bed_output_file)
+                #probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
 
                 await run.cpu_bound(run_sturgeon_predict, self.bedDir.name, self.dataDir.name, self.modelfile)
 
@@ -172,6 +189,7 @@ class Sturgeon_object(BaseAnalysis):
                     self.st_num_probes,
                 )
 
+        await asyncio.sleep(5)
         self.running=False
 
 

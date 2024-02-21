@@ -398,7 +398,7 @@ def test_ui():
         if filename.endswith(".bam"):
             TestObject.add_bam(os.path.join(path, filename))
             time.sleep(0.001)
-    ui.run(port=8082)
+    ui.run(port=8082, reload=False)
 def start() -> None:
     yappi.clear_stats()
     yappi.start()

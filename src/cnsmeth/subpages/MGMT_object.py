@@ -6,7 +6,8 @@ import pandas as pd
 import numpy as np
 import os,sys
 import time
-from nicegui import ui
+import asyncio
+from nicegui import ui, run
 from io import StringIO
 import pysam
 import shutil
@@ -15,6 +16,29 @@ import tempfile
 HVPATH = os.path.join(
     os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
 )
+
+
+def run_bedtools(bamfile, MGMT_BED, tempbamfile):
+    """
+    This function runs modkit on a bam file and extracts the methylation data.
+    """
+    try:
+        os.system(
+            f"bedtools intersect -a {bamfile} -b {MGMT_BED} > {tempbamfile}"
+        )
+        pysam.index(tempbamfile)
+    except Exception as e:
+        print(e)
+
+def run_modkit(tempmgmtdir, MGMTbamfile):
+    pysam.sort("-o", os.path.join(tempmgmtdir, 'mgmt.bam'), MGMTbamfile)
+    pysam.index(os.path.join(tempmgmtdir, 'mgmt.bam'))
+    os.system(
+        f"modkit pileup -t 4 --filter-threshold 0.73 --combine-mods {os.path.join(tempmgmtdir, 'mgmt.bam')} "
+        f"{os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress  >/dev/null 2>&1 "
+    )
+    cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir, 'mgmt.bed')} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
+    os.system(cmd)
 
 class MGMT_Object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
@@ -32,16 +56,14 @@ class MGMT_Object(BaseAnalysis):
             with self.mgmtable:
                 ui.label("Table not yet available.")
 
-    def process_bam(self, bamfile, timestamp):
+    async def process_bam(self, bamfile, timestamp):
         MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
         tempbamfile = tempfile.NamedTemporaryFile(suffix=".bam")
-        os.system(
-            f"bedtools intersect -a {bamfile} -b {MGMT_BED} > {tempbamfile.name}"
-        )
-        pysam.index(tempbamfile.name)
+
+        await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
+        #ui.notify("hello")
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
-            with self.mgmtplot:
-                ui.notify("Running MGMT predictor - MGMT sites found.")
+            ui.notify("Running MGMT predictor - MGMT sites found.")
             if not self.MGMTbamfile:
                 self.MGMTbamfile = tempfile.NamedTemporaryFile(suffix=".bam")
                 shutil.copy2(tempbamfile.name, self.MGMTbamfile.name)
@@ -50,14 +72,9 @@ class MGMT_Object(BaseAnalysis):
                 pysam.cat("-o",tempbamholder.name, self.MGMTbamfile.name, tempbamfile.name)
                 shutil.copy2(tempbamholder.name, self.MGMTbamfile.name)
             tempmgmtdir = tempfile.TemporaryDirectory()
-            pysam.sort("-o", os.path.join(tempmgmtdir.name, 'mgmt.bam'), self.MGMTbamfile.name)
-            pysam.index(os.path.join(tempmgmtdir.name, 'mgmt.bam'))
-            os.system(
-                f"modkit pileup -t 4 --filter-threshold 0.73 --combine-mods {os.path.join(tempmgmtdir.name, 'mgmt.bam')} "
-                f"{os.path.join(tempmgmtdir.name, 'mgmt.bed')} --suppress-progress  >/dev/null 2>&1 "
-            )
-            cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir.name, 'mgmt.bed')} --out_dir={tempmgmtdir.name} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
-            os.system(cmd)
+
+            await run.cpu_bound(run_modkit, tempmgmtdir.name, self.MGMTbamfile.name)
+            ui.notify("MGMT predictor done.")
             results = pd.read_csv(
                 os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
             )
@@ -75,8 +92,9 @@ class MGMT_Object(BaseAnalysis):
                 with self.mgmtplot.classes("w-full"):
                     ui.image(plot_out).props("fit=scale-down")
             tempmgmtdir.cleanup()
-            with self.mgmtplot:
-                ui.notify("MGMT predictor done.")
+
+            ui.notify("MGMT predictor done.")
+        await asyncio.sleep(0.1)
         self.running=False
 
 
