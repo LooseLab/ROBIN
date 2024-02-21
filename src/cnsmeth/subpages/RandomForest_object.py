@@ -57,7 +57,7 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
 
 def run_samtools_sort(file, tomerge, sortfile, threads):
     pysam.cat("-o", file, *tomerge)
-    pysam.sort("-@", threads, "--write-index", "-o", sortfile, file)
+    pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
 
 
 def run_modkit(bamfile, outbed, cpgs, threads):
