@@ -77,6 +77,7 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_bam_count += 1
             tomerge.append(file)
             timestamp = filetime
+            self.bams_in_processing += 1
             if len(tomerge) > 200:
                 break
         if len(tomerge) > 0:
