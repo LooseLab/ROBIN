@@ -55,18 +55,18 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
     os.system(command)
 
 
-def run_samtools_sort(file, tomerge, sortfile):
+def run_samtools_sort(file, tomerge, sortfile, threads):
     pysam.cat("-o", file, *tomerge)
-    pysam.sort("-@", "8", "--write-index", "-o", sortfile, file)
+    pysam.sort("-@", threads, "--write-index", "-o", sortfile, file)
 
 
-def run_modkit(bamfile, outbed, cpgs):
+def run_modkit(bamfile, outbed, cpgs, threads):
     """
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
         os.system(
-            f"modkit pileup -t {8} --include-bed {cpgs} --filter-threshold 0.73 --combine-mods {bamfile} "
+            f"modkit pileup -t {threads} --include-bed {cpgs} --filter-threshold 0.73 --combine-mods {bamfile} "
             f"{outbed} --suppress-progress  >/dev/null 2>&1 "
         )
         # self.log("Done processing bam file")
@@ -74,27 +74,6 @@ def run_modkit(bamfile, outbed, cpgs):
         print(e)
         # self.log(e)
         pass
-
-
-def run_sturgeon_predict(bedDir, dataDir, modelfile):
-    os.system(
-        f"sturgeon predict -i {bedDir} -o {dataDir} "
-        f"--model-files {modelfile} >/dev/null 2>&1"
-    )
-
-
-def run_sturgeon_inputtobed(temp, temp2):
-    try:
-        os.system(
-            f"sturgeon inputtobed -i {temp} -o {temp2} -s modkit "
-            f"--reference-genome hg38 >/dev/null 2>&1"
-        )
-        # self.log(temp2)
-    except Exception as e:
-        print(e)
-        # self.log(e)
-        pass
-
 
 class RandomForest_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
@@ -141,9 +120,9 @@ class RandomForest_object(BaseAnalysis):
             sortbam = tempfile.NamedTemporaryFile(suffix=".bam")
             tempbed = tempfile.NamedTemporaryFile(suffix=".bed")
             self.batch += 1
-            await run.cpu_bound(run_samtools_sort, tempbam.name, tomerge, sortbam.name)
+            await run.cpu_bound(run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads)
 
-            await run.cpu_bound(run_modkit, sortbam.name, tempbed.name, self.cpgs_file)
+            await run.cpu_bound(run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads)
 
             if not self.first_run:
                 bed_a = pd.read_table(
@@ -246,7 +225,7 @@ class RandomForest_object(BaseAnalysis):
             tempDir = tempfile.TemporaryDirectory()
 
             await run.cpu_bound(
-                run_rcns2, tempDir.name, self.batch, tempbed.name, 8, self.showerrors
+                run_rcns2, tempDir.name, self.batch, tempbed.name, self.threads, self.showerrors
             )
 
             if os.path.isfile(f"{tempDir.name}/live_{self.batch}_votes.tsv"):

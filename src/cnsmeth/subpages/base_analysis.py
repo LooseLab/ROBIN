@@ -13,7 +13,7 @@ import threading
 
 
 class BaseAnalysis:
-    def __init__(self, progress=False, batch=False, *args, **kwargs):
+    def __init__(self, threads, progress=False, batch=False, *args, **kwargs):
         self.queue = queue.Queue()
         self.batch = batch
         self.setup_ui()
@@ -23,7 +23,7 @@ class BaseAnalysis:
         self.bam_processed = 0
         self.bams_in_processing = 0
         self.running = False
-
+        self.threads = threads
         if batch:
             self.bams = []
             self.batch_timer_run()

@@ -30,13 +30,13 @@ def pysam_cat(tempbam, tomerge):
     pysam.cat("-o", tempbam, *tomerge)
 
 
-def run_modkit(file, temp):
+def run_modkit(file, temp, threads):
     """
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
         os.system(
-            f"modkit extract --ignore h -t {4} {file} {temp} "
+            f"modkit extract --ignore h -t {threads} {file} {temp} "
             f"--force --suppress-progress >/dev/null 2>&1"
         )
         # self.log("Done processing bam file")
@@ -64,12 +64,6 @@ def run_sturgeon_inputtobed(temp, temp2):
         print(e)
         # self.log(e)
         pass
-
-
-async def test_hello(file, temp):
-    await run.cpu_bound(run_modkit, file, temp.name)
-    ui.notify("hello")
-    # await handle_click()
 
 
 class Sturgeon_object(BaseAnalysis):
@@ -117,7 +111,7 @@ class Sturgeon_object(BaseAnalysis):
             temp = tempfile.NamedTemporaryFile()
 
             with tempfile.TemporaryDirectory() as temp2:
-                await run.cpu_bound(run_modkit, file, temp.name)
+                await run.cpu_bound(run_modkit, file, temp.name, self.threads)
                 ui.notify("Sturgeon: Modkit Complete")
                 await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
                 # ui.notify("Sturgeon: Inputtobed Complete")
