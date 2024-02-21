@@ -97,6 +97,7 @@ class Sturgeon_object(BaseAnalysis):
             (file, filetime) = bamfile.pop()
             tomerge.append(file)
             timestamp = filetime
+            self.bams_in_processing += 1
             if len(tomerge) > 200:
                 break
 
