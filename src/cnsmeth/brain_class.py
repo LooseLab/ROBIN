@@ -236,34 +236,34 @@ class BrainMeth:
                     ).tailwind("drop-shadow")
         with ui.card().style("width: 100%"):
             if "sturgeon" not in self.exclude:
-                self.Sturgeon = Sturgeon_object(self.threads, progress=True, batch=True, bamqueue=self.bamforsturgeon)
+                self.Sturgeon = Sturgeon_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamforsturgeon)
             if "nanodx" not in self.exclude:
-                self.NanoDX = NanoDX_object(self.threads, progress=True, batch=True, bamqueue=self.bamfornanodx)
+                self.NanoDX = NanoDX_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamfornanodx)
             if "forest" not in self.exclude:
-                self.RandomForest = RandomForest_object(self.threads, progress=True, batch=True, bamqueue=self.bamforcns)
+                self.RandomForest = RandomForest_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamforcns)
             pass
         #    with ui.tab_panel(copy_numer).classes("w-full"):
         with ui.card().style("width: 100%"):
             if "cnv" not in self.exclude:
-                self.CNV = CNVAnalysis(self.threads, progress=True, bamqueue=self.bamforcnv)
+                self.CNV = CNVAnalysis(self.threads, self.output, progress=True, bamqueue=self.bamforcnv)
             pass
 
         #    with ui.tab_panel(coverage).classes("w-full"):
         with ui.card().style("width: 100%"):
             if "coverage" not in self.exclude:
-                self.Target_Coverage = TargetCoverage(self.threads, progress=True,bamqueue=self.bamfortargetcoverage)
+                self.Target_Coverage = TargetCoverage(self.threads, self.output, progress=True,bamqueue=self.bamfortargetcoverage)
             pass
 
         #    with ui.tab_panel(mgmt).classes("w-full"):
         with ui.card().style("width: 100%"):
             if "mgmt" not in self.exclude:
-                self.MGMT_panel = MGMT_Object(self.threads, progress=True, bamqueue=self.bamformgmt)
+                self.MGMT_panel = MGMT_Object(self.threads, self.output, progress=True, bamqueue=self.bamformgmt)
             pass
 
         #    with ui.tab_panel(fusions).classes("w-full"):
         with ui.card().style("width: 100%"):
             if "fusion" not in self.exclude:
-                self.Fusion_panel = Fusion_object(self.threads, progress=True, bamqueue=self.bamforfusions)
+                self.Fusion_panel = Fusion_object(self.threads, self.output, progress=True, bamqueue=self.bamforfusions)
             pass
 
     def process_bams(self) -> None:

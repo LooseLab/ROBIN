@@ -89,15 +89,15 @@ class NanoDX_object(BaseAnalysis):
 
             sortfile = sorttempbam.name
 
-            ui.notify("NanoDX: Merging bams")
+            ui.notify("NanoDX: Merging bams",type="info",position="top-right")
 
             await run.cpu_bound(run_samtools_sort, file, tomerge, sortfile, self.threads)
 
-            ui.notify("NanoDX: Running modkit")
+            ui.notify("NanoDX: Running modkit",type="info",position="top-right")
 
             await run.cpu_bound(run_modkit, self.cpgs_file, sortfile, temp.name, self.threads)
 
-            ui.notify("NanoDX: Merging bed files")
+            ui.notify("NanoDX: Merging bed files",type="info",position="top-right")
 
             if self.not_first_run:
                 bed_a = pd.read_table(
@@ -235,9 +235,9 @@ class NanoDX_object(BaseAnalysis):
                 [self.nanodx_df_store, nanoDX_save.set_index("timestamp")]
             )
 
-            # self.nanodx_df_store.to_csv(
-            #    os.path.join(self.resultfolder, "nanoDX_scores.csv")
-            # )
+            self.nanodx_df_store.to_csv(
+                os.path.join(self.output, "nanoDX_scores.csv")
+            )
 
             columns_greater_than_threshold = (
                 self.nanodx_df_store > self.threshold
@@ -255,6 +255,7 @@ class NanoDX_object(BaseAnalysis):
                 self.nanodx_bam_count,
                 n_features,
             )
+            ui.notify(f"NanoDX: Done - {nanoDX_df['class'].head(1).values}",type="success",position="top-right")
 
             self.bam_processed += len(tomerge)
             self.bams_in_processing -= len(tomerge)

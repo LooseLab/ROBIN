@@ -135,10 +135,7 @@ class Sturgeon_object(BaseAnalysis):
                         calls_per_probe_file,
                         merged_output_file,
                     )
-                    # merge_probes_methyl_calls(
-                    #    [calls_per_probe_file, merged_output_file],
-                    #    merged_output_file,
-                    # )
+
                 bed_output_file = os.path.join(
                     self.bedDir.name, "final_merged_probes_methyl_calls.bed"
                 )
@@ -146,7 +143,6 @@ class Sturgeon_object(BaseAnalysis):
                 await run.cpu_bound(
                     run_probes_methyl_calls, merged_output_file, bed_output_file
                 )
-                # probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
 
                 await run.cpu_bound(
                     run_sturgeon_predict,
@@ -179,6 +175,10 @@ class Sturgeon_object(BaseAnalysis):
 
                 self.sturgeon_df_store = pd.concat(
                     [self.sturgeon_df_store, mydf_to_save.set_index("timestamp")]
+                )
+
+                self.sturgeon_df_store.to_csv(
+                    os.path.join(self.output, "sturgeon_scores.csv")
                 )
 
                 columns_greater_than_threshold = (

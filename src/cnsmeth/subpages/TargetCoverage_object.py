@@ -342,14 +342,23 @@ class TargetCoverage(BaseAnalysis):
             )
         if self.bamqueue.empty() or self.bam_processed % 25 == 0:
             self.update_coverage_plot(self.cov_df_main)
+            self.cov_df_main.to_csv(
+                os.path.join(self.output, "coverage_main.csv")
+            )
             await asyncio.sleep(0.01)
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
+            self.bedcov_df_main.to_csv(
+                os.path.join(self.output, "bed_coverage_main.csv")
+            )
             await asyncio.sleep(0.01)
             self.update_coverage_time_plot(self.cov_df_main, timestamp)
             await asyncio.sleep(0.01)
             self.target_coverage_df = self.bedcov_df_main
             self.target_coverage_df["coverage"] = (
                 self.target_coverage_df["bases"] / self.target_coverage_df["length"]
+            )
+            self.target_coverage_df.to_csv(
+                os.path.join(self.output, "target_coverage.csv")
             )
             await asyncio.sleep(0.01)
             self.update_target_coverage_table()

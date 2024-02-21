@@ -59,9 +59,9 @@ class MGMT_Object(BaseAnalysis):
         tempbamfile = tempfile.NamedTemporaryFile(suffix=".bam")
 
         await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
-        # ui.notify("hello")
+
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
-            ui.notify("Running MGMT predictor - MGMT sites found.")
+            ui.notify("Running MGMT predictor - MGMT sites found.", type="success", position="top-right")
             if not self.MGMTbamfile:
                 self.MGMTbamfile = tempfile.NamedTemporaryFile(suffix=".bam")
                 shutil.copy2(tempbamfile.name, self.MGMTbamfile.name)
@@ -74,12 +74,12 @@ class MGMT_Object(BaseAnalysis):
             tempmgmtdir = tempfile.TemporaryDirectory()
 
             await run.cpu_bound(run_modkit, tempmgmtdir.name, self.MGMTbamfile.name)
-            ui.notify("MGMT predictor done.")
+            ui.notify("MGMT predictor done.", type="indfo", position="top-right")
             results = pd.read_csv(
                 os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
             )
             self.counter += 1
-            plot_out = f"{self.counter}_mgmt.png"
+            plot_out = os.path.join(self.output, f"{self.counter}_mgmt.png")
             os.system(
                 f"methylartist locus -i chr10:129466536-129467536 -b {os.path.join(tempmgmtdir.name, 'mgmt.bam')} -o {plot_out}  --motif CG --mods m "
             )
@@ -87,13 +87,15 @@ class MGMT_Object(BaseAnalysis):
             with self.mgmtable:
                 ui.table.from_pandas(results)
 
+            results.to_csv(os.path.join(self.output, f"{self.counter}_mgmt.csv"))
+
             if os.path.exists(plot_out):
                 self.mgmtplot.clear()
                 with self.mgmtplot.classes("w-full"):
                     ui.image(plot_out).props("fit=scale-down")
             tempmgmtdir.cleanup()
 
-            ui.notify("MGMT predictor done.")
+            ui.notify("MGMT predictor complete.", type="success", position="top-right")
         await asyncio.sleep(0.1)
         self.running = False
 
