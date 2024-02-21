@@ -132,17 +132,17 @@ class BaseAnalysis:
 
 
             progressbar3 = ui.linear_progress(
-                size="10px", show_value=False, value=0
+                size="10px", show_value=False, value=0, color="red"
             ).props("instant-feedback")
             ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
             if self.batch:
                 progressbar2 = ui.linear_progress(
-                    size="10px", show_value=False, value=0, color="orange"
+                    size="10px", show_value=False, value=0, color="amber"
                 ).props("instant-feedback")
                 ui.timer(1, callback=lambda: progressbar2.set_value(self._progress2))
 
             progressbar = ui.linear_progress(
-                size="10px", show_value=False, value=0
+                size="10px", show_value=False, value=0, color="green"
             ).props("instant-feedback")
             ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
 
