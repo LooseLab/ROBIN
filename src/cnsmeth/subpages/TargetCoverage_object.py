@@ -9,6 +9,7 @@ from nicegui import ui, run
 from io import StringIO
 import pysam
 import asyncio
+
 os.environ["CI"] = "1"
 
 
@@ -18,9 +19,7 @@ def get_covdfs(bamfile):
     """
     try:
         pysam.index(f"{bamfile}")
-        newcovdf = pd.read_csv(
-            StringIO(pysam.coverage(f"{bamfile}")), sep="\t"
-        )
+        newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{bamfile}")), sep="\t")
         newcovdf.drop(
             columns=["coverage", "meanbaseq", "meanmapq"],
             inplace=True,
@@ -29,9 +28,7 @@ def get_covdfs(bamfile):
             StringIO(
                 pysam.bedcov(
                     os.path.join(
-                        os.path.dirname(
-                            os.path.abspath(resources.__file__)
-                        ),
+                        os.path.dirname(os.path.abspath(resources.__file__)),
                         "unique_genes.bed",
                     ),
                     f"{bamfile}",
@@ -44,22 +41,17 @@ def get_covdfs(bamfile):
     except Exception as e:
         print(e)
 
-def run_bedmerge(newcovdf,cov_df_main,bedcovdf,bedcov_df_main):
+
+def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
     merged_df = pd.merge(
         newcovdf,
         cov_df_main,
         on=["#rname", "startpos", "endpos"],
         suffixes=("_df1", "_df2"),
     )
-    merged_df["numreads"] = (
-            merged_df["numreads_df1"] + merged_df["numreads_df2"]
-    )
-    merged_df["covbases"] = (
-            merged_df["covbases_df1"] + merged_df["covbases_df2"]
-    )
-    merged_df["meandepth"] = (
-            merged_df["meandepth_df1"] + merged_df["meandepth_df2"]
-    )
+    merged_df["numreads"] = merged_df["numreads_df1"] + merged_df["numreads_df2"]
+    merged_df["covbases"] = merged_df["covbases_df1"] + merged_df["covbases_df2"]
+    merged_df["meandepth"] = merged_df["meandepth_df1"] + merged_df["meandepth_df2"]
 
     merged_df.drop(
         columns=[
@@ -73,7 +65,6 @@ def run_bedmerge(newcovdf,cov_df_main,bedcovdf,bedcov_df_main):
         inplace=True,
     )
 
-
     merged_bed_df = pd.merge(
         bedcovdf,
         bedcov_df_main,
@@ -82,7 +73,8 @@ def run_bedmerge(newcovdf,cov_df_main,bedcovdf,bedcov_df_main):
     )
     merged_bed_df["bases"] = merged_bed_df["bases_df1"] + merged_bed_df["bases_df2"]
     merged_bed_df.drop(columns=["bases_df1", "bases_df2"], inplace=True)
-    return merged_df,  merged_bed_df
+    return merged_df, merged_bed_df
+
 
 class TargetCoverage(BaseAnalysis):
     def __init__(self, *args, **kwargs):
@@ -337,9 +329,7 @@ class TargetCoverage(BaseAnalysis):
                     "pagination": True,
                     "paginationAutoPageSize": True,
                 },
-
             ).classes("w-full").style("height: 900px")
-
 
     async def process_bam(self, bamfile, timestamp):
         newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
@@ -347,7 +337,9 @@ class TargetCoverage(BaseAnalysis):
             self.cov_df_main = newcovdf
             self.bedcov_df_main = bedcovdf
         else:
-            self.cov_df_main, self.bedcov_df_main = await run.cpu_bound(run_bedmerge, newcovdf,self.cov_df_main,bedcovdf,self.bedcov_df_main)
+            self.cov_df_main, self.bedcov_df_main = await run.cpu_bound(
+                run_bedmerge, newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
+            )
         if self.queue.empty() or self.bam_processed % 25 == 0:
             self.update_coverage_plot(self.cov_df_main)
             await asyncio.sleep(0.01)
@@ -357,7 +349,7 @@ class TargetCoverage(BaseAnalysis):
             await asyncio.sleep(0.01)
             self.target_coverage_df = self.bedcov_df_main
             self.target_coverage_df["coverage"] = (
-                    self.target_coverage_df["bases"] / self.target_coverage_df["length"]
+                self.target_coverage_df["bases"] / self.target_coverage_df["length"]
             )
             await asyncio.sleep(0.01)
             self.update_target_coverage_table()
@@ -365,12 +357,11 @@ class TargetCoverage(BaseAnalysis):
         self.running = False
 
 
-
 def test_me():
     my_connection = None
     with theme.frame("Copy Number Variation Interactive", my_connection):
         TestObject = TargetCoverage(progress=True)
-        #path = "tests/static/bam"
+        # path = "tests/static/bam"
         path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
         directory = os.fsencode(path)
         for file in os.listdir(directory):

@@ -37,9 +37,9 @@ class Fusion_object(BaseAnalysis):
         )
 
         if os.path.isfile(
-                os.path.join(
-                    os.path.dirname(os.path.abspath(resources.__file__)), "data.csv.gz"
-                )
+            os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "data.csv.gz"
+            )
         ):
             self.gene_table = pd.read_csv(
                 os.path.join(
@@ -133,7 +133,6 @@ class Fusion_object(BaseAnalysis):
                         self.fusiontable_all = ui.row().classes("w-full")
                         with self.fusiontable_all:
                             ui.label("Table not yet available.")
-
 
     def fusion_table_all(self):
         uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)
@@ -240,7 +239,7 @@ class Fusion_object(BaseAnalysis):
         if not result_all.empty:
             with self.fusionplot_all.classes("w-full"):
                 for gene_pair in (
-                        result_all[goodpairs].sort_values(by=7)["tag"].unique()
+                    result_all[goodpairs].sort_values(by=7)["tag"].unique()
                 ):
                     with ui.card():
                         with ui.row():
@@ -251,20 +250,18 @@ class Fusion_object(BaseAnalysis):
                             for gene in result_all[
                                 goodpairs & result_all[goodpairs]["tag"].eq(gene_pair)
                             ][3].unique():
-                                #self.create_fusion_plot(
+                                # self.create_fusion_plot(
                                 #    gene,
                                 #    result_all[goodpairs].sort_values(by=7)[
                                 #        result_all[goodpairs]
                                 #        .sort_values(by=7)[3]
                                 #        .eq(gene)
                                 #    ],
-                                #)
+                                # )
                                 title = gene
                                 reads = result_all[goodpairs].sort_values(by=7)[
-                                        result_all[goodpairs]
-                                        .sort_values(by=7)[3]
-                                        .eq(gene)
-                                    ]
+                                    result_all[goodpairs].sort_values(by=7)[3].eq(gene)
+                                ]
                                 with ui.card().classes("no-shadow border-[2px]"):
                                     with ui.pyplot(figsize=(16, 2)):
                                         ax1 = plt.gca()
@@ -273,7 +270,9 @@ class Fusion_object(BaseAnalysis):
                                         sequence_length = 100
                                         x_label = ""
                                         for index, row in self.gene_table[
-                                            self.gene_table["gene_name"].eq(title.strip())
+                                            self.gene_table["gene_name"].eq(
+                                                title.strip()
+                                            )
                                         ].iterrows():
                                             if row["Type"] == "gene":
                                                 x_label = row["Seqid"]
@@ -287,10 +286,15 @@ class Fusion_object(BaseAnalysis):
                                                     )
                                                 )
                                                 first_index = int(row["Start"]) - 1000
-                                                sequence_length = int(row["End"]) - int(row["Start"]) + 2000
+                                                sequence_length = (
+                                                    int(row["End"])
+                                                    - int(row["Start"])
+                                                    + 2000
+                                                )
                                             if (
-                                                    row["Type"] == "CDS"
-                                                    and row["transcript_type"] == "protein_coding"
+                                                row["Type"] == "CDS"
+                                                and row["transcript_type"]
+                                                == "protein_coding"
                                             ):
                                                 features.append(
                                                     GraphicFeature(
@@ -311,7 +315,9 @@ class Fusion_object(BaseAnalysis):
                                     with ui.pyplot(figsize=(16, 1)):
                                         ax = plt.gca()
                                         features = []
-                                        for index, row in reads.sort_values(by=7).iterrows():
+                                        for index, row in reads.sort_values(
+                                            by=7
+                                        ).iterrows():
                                             features.append(
                                                 GraphicFeature(
                                                     start=int(row[5]),
@@ -325,7 +331,9 @@ class Fusion_object(BaseAnalysis):
                                             first_index=first_index,
                                             features=features,
                                         )
-                                        record.plot(ax=ax, with_ruler=False, draw_line=True)
+                                        record.plot(
+                                            ax=ax, with_ruler=False, draw_line=True
+                                        )
 
     def fusion_table(self):
         uniques = self.fusion_candidates[7].duplicated(keep=False)
@@ -430,9 +438,7 @@ class Fusion_object(BaseAnalysis):
             for gene_pair in result[goodpairs].sort_values(by=7)["tag"].unique():
                 with ui.card():
                     with ui.row():
-                        ui.label(f"{gene_pair}").tailwind(
-                            "drop-shadow", "font-bold"
-                        )
+                        ui.label(f"{gene_pair}").tailwind("drop-shadow", "font-bold")
                     with ui.row():
                         for gene in result[
                             goodpairs & result[goodpairs]["tag"].eq(gene_pair)
@@ -546,12 +552,10 @@ class Fusion_object(BaseAnalysis):
                         tempmappings.name, sep="\t", header=None
                     )
                     # Filter to only include good mappings
-                    fusion_candidates = fusion_candidates[
-                        fusion_candidates[8].gt(50)
-                    ]
+                    fusion_candidates = fusion_candidates[fusion_candidates[8].gt(50)]
                     # Filter to only keep reads that map to 1 kb or more of the reference.
                     fusion_candidates["diff"] = (
-                            fusion_candidates[6] - fusion_candidates[5]
+                        fusion_candidates[6] - fusion_candidates[5]
                     )
                     fusion_candidates = fusion_candidates[
                         fusion_candidates["diff"].gt(1000)
@@ -559,7 +563,9 @@ class Fusion_object(BaseAnalysis):
                     if self.fusion_candidates.empty:
                         self.fusion_candidates = fusion_candidates
                     else:
-                        self.fusion_candidates = pd.concat([self.fusion_candidates,fusion_candidates]).reset_index(drop=True)
+                        self.fusion_candidates = pd.concat(
+                            [self.fusion_candidates, fusion_candidates]
+                        ).reset_index(drop=True)
 
                 if os.path.getsize(tempallmappings.name) > 0:
                     fusion_candidates_all = pd.read_csv(
@@ -571,7 +577,7 @@ class Fusion_object(BaseAnalysis):
                     ]
 
                     fusion_candidates_all["diff"] = (
-                            fusion_candidates_all[6] - fusion_candidates_all[5]
+                        fusion_candidates_all[6] - fusion_candidates_all[5]
                     )
 
                     fusion_candidates_all = fusion_candidates_all[
@@ -581,8 +587,9 @@ class Fusion_object(BaseAnalysis):
                     if self.fusion_candidates_all.empty:
                         self.fusion_candidates_all = fusion_candidates_all
                     else:
-                        self.fusion_candidates_all = pd.concat([self.fusion_candidates_all,fusion_candidates_all]).reset_index(drop=True)
-
+                        self.fusion_candidates_all = pd.concat(
+                            [self.fusion_candidates_all, fusion_candidates_all]
+                        ).reset_index(drop=True)
 
                 try:
                     self.fusion_table()
@@ -616,12 +623,11 @@ class Fusion_object(BaseAnalysis):
         return group[7].nunique()
 
 
-
 def test_me():
     my_connection = None
     with theme.frame("Copy Number Variation Interactive", my_connection):
         TestObject = Fusion_object(progress=True)
-        #path = "tests/static/bam"
+        # path = "tests/static/bam"
         path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
         directory = os.fsencode(path)
         for file in os.listdir(directory):
@@ -629,6 +635,7 @@ def test_me():
             if filename.endswith(".bam"):
                 TestObject.add_bam(os.path.join(path, filename))
     ui.run(port=12345)
+
 
 # Entrypoint for when GUI is launched by the CLI.
 # e.g.: python my_app/my_cli.py
