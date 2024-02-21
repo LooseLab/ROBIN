@@ -265,7 +265,7 @@ class RandomForest_object(BaseAnalysis):
             else:
                 ui.notify("Random Forest Complete by no data.")
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
         self.running = False
 
     def create_rcns2_chart(self, title):

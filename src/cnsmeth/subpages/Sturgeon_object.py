@@ -97,7 +97,7 @@ class Sturgeon_object(BaseAnalysis):
             (file, filetime) = bamfile.pop()
             tomerge.append(file)
             timestamp = filetime
-            if len(tomerge) > 25:
+            if len(tomerge) > 50:
                 break
 
         if len(tomerge) > 0:
@@ -199,7 +199,7 @@ class Sturgeon_object(BaseAnalysis):
                     self.st_num_probes,
                 )
 
-        await asyncio.sleep(5)
+        await asyncio.sleep(30)
         self.running = False
 
     def create_sturgeon_chart(self, title):
