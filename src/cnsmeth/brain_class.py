@@ -1,14 +1,17 @@
 from nicegui import ui
 
 from cnsmeth.utilities.bam_handler import BamEventHandler
-#from cnsmeth.Sturgeon_worker import Sturgeon_worker
+
+# from cnsmeth.Sturgeon_worker import Sturgeon_worker
 from cnsmeth.RCNS2_worker import RCNS2_worker
-#from cnsmeth.CrossNN_worker import CrossNN_worker
-from cnsmeth.subpages.copy_number_component import CNV_Plot
+
+# from cnsmeth.CrossNN_worker import CrossNN_worker
 from cnsmeth.subpages.MGMT_object import MGMT_Object
 from cnsmeth.subpages.Sturgeon_object import Sturgeon_object
 from cnsmeth.subpages.NanoDX_object import NanoDX_object
-#from cnsmeth.subpages.fusion_panel import Fusion_Panel
+from cnsmeth.subpages.RandomForest_object import RandomForest_object
+
+# from cnsmeth.subpages.fusion_panel import Fusion_Panel
 from cnsmeth.subpages.CNV_object import CNVAnalysis
 from cnsmeth.subpages.TargetCoverage_object import TargetCoverage
 from cnsmeth.subpages.Fusion_object import Fusion_object
@@ -48,12 +51,12 @@ class BrainMeth:
         self.bamforsturgeon = Queue()
         self.bamfornanodx = Queue()
 
-
-        #self.cnv = CNV_Plot()
-        #self.mgmt_panel = MGMT_Panel()
-        #self.fusion_panel = Fusion_Panel()
+        # self.cnv = CNV_Plot()
+        # self.mgmt_panel = MGMT_Panel()
+        # self.fusion_panel = Fusion_Panel()
 
         if not self.browse:
+            self.information_panel()
             self.event_handler = BamEventHandler(self.bam_count)
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
@@ -70,15 +73,15 @@ class BrainMeth:
             )
             self.check_for_existing_bams.daemon = True
             self.check_for_existing_bams.start()
-            #self.sturgeon_worker = Sturgeon_worker(
+            # self.sturgeon_worker = Sturgeon_worker(
             #    self.bamforsturgeon, threads=self.threads, output_folder=self.output
-            #)
+            # )
 
-            #self.nanodx_worker = CrossNN_worker(
+            # self.nanodx_worker = CrossNN_worker(
             #    self.bamfornanodx, threads=self.threads, output_folder=self.output
-            #)
+            # )
 
-            #self.rcns2_worker = RCNS2_worker(
+            # self.rcns2_worker = RCNS2_worker(
             #    self.bamforcns,
             #    self.cnv,
             #    #self.mgmt_panel,
@@ -87,9 +90,8 @@ class BrainMeth:
             #    output_folder=self.output,
             #    showerrors=self.showerrors,
             #    browse=self.browse,
-            #)
+            # )
 
-            self.information_panel()
         else:
             ui.label("Browse mode enabled. Please choose a folder to see data from.")
             ui.button("Choose file", on_click=self.pick_file, icon="folder")
@@ -167,10 +169,8 @@ class BrainMeth:
                         with ui.card().style("width: 100%"):
                             self.cnv.create_cnv_scatter("CNV Scatter")
 
-
                     with ui.tab_panel(coverage).classes("w-full"):
                         pass
-
 
                     with ui.tab_panel(mgmt).classes("w-full"):
                         self.mgmt_panel.setup_ui(mgmt)
@@ -197,7 +197,8 @@ class BrainMeth:
         ui.notify("Replaying CNV data")
 
     def information_panel(self):
-        with ui.card().style("width: 100%"):
+        self.frontpage = ui.card().style("width: 100%")
+        with self.frontpage:
             ui.label(
                 "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
             ).tailwind("drop-shadow", "font-bold")
@@ -224,39 +225,39 @@ class BrainMeth:
                     "bamfornanodx",
                     backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
                 ).tailwind("drop-shadow")
-        with ui.tabs().classes("w-full") as tabs:
-            methylation = ui.tab("Methylation Classification")
-            copy_numer = ui.tab("Copy Number Variation")
-            coverage = ui.tab("Target Coverage")
-            mgmt = ui.tab("MGMT")
-            fusions = ui.tab("Fusions")
-        with ui.tab_panels(tabs, value=methylation).classes("w-full"):
-            with ui.tab_panel(methylation).classes("w-full"):
-                with ui.card().style("width: 100%"):
-                    self.Sturgeon = Sturgeon_object(progress=True, batch=True)
-                    self.NanoDX = NanoDX_object(progress=True, batch=True)
+        # with ui.tabs().classes("w-full") as tabs:
+        #    methylation = ui.tab("Methylation Classification")
+        #    copy_numer = ui.tab("Copy Number Variation")
+        #    coverage = ui.tab("Target Coverage")
+        #    mgmt = ui.tab("MGMT")
+        #    fusions = ui.tab("Fusions")
+        # with ui.tab_panels(tabs, value=methylation).classes("w-full"):
+        #    with ui.tab_panel(methylation).classes("w-full"):
+        with ui.card().style("width: 100%"):
+            pass
+            self.Sturgeon = Sturgeon_object(self.threads, progress=True, batch=True)
+            self.NanoDX = NanoDX_object(self.threads, progress=True, batch=True)
+            self.RandomForest = RandomForest_object(self.threads, progress=True, batch=True)
 
+        #    with ui.tab_panel(copy_numer).classes("w-full"):
+        with ui.card().style("width: 100%"):
+            self.CNV = CNVAnalysis(self.threads, progress=True, batch=False)
+            pass
 
+        #    with ui.tab_panel(coverage).classes("w-full"):
+        with ui.card().style("width: 100%"):
+            self.Target_Coverage = TargetCoverage(self.threads, progress=True)
+            pass
 
-            with ui.tab_panel(copy_numer).classes("w-full"):
-                with ui.card().style("width: 100%"):
-                    self.CNV = CNVAnalysis(progress=True,batch=False)
-                    pass
+        #    with ui.tab_panel(mgmt).classes("w-full"):
+        with ui.card().style("width: 100%"):
+            self.MGMT_panel = MGMT_Object(self.threads, progress=True)
+            pass
 
-            with ui.tab_panel(coverage).classes("w-full"):
-                with ui.card().style("width: 100%"):
-                    self.Target_Coverage = TargetCoverage(progress=True)
-                    pass
-
-            with ui.tab_panel(mgmt).classes("w-full"):
-                with ui.card().style("width: 100%"):
-                    self.MGMT_panel = MGMT_Object(progress=True)
-                    pass
-
-            with ui.tab_panel(fusions).classes("w-full"):
-                with ui.card().style("width: 100%"):
-                    self.Fusion_panel = Fusion_object(progress=True)
-                    pass
+        #    with ui.tab_panel(fusions).classes("w-full"):
+        with ui.card().style("width: 100%"):
+            self.Fusion_panel = Fusion_object(self.threads, progress=True)
+            pass
 
     def process_bams(self) -> None:
         """
@@ -290,17 +291,16 @@ class BrainMeth:
     def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
         if sequencing_summary:
-            # get the current time
-            now = time.time()
-            print("Checking for existing bams against sequencing summary")
+
+            with self.frontpage:
+                ui.notify("Checking for existing bams against sequencing summary")
             df = pd.read_csv(
                 sequencing_summary,
                 delimiter="\t",
                 usecols=["filename_bam", "template_start", "template_duration"],
             )
             df["template_end"] = df["template_start"] + df["template_duration"]
-            est_start_time = df["template_start"].min()
-            #print(est_start_time)
+
             df.drop(columns=["template_start", "template_duration"], inplace=True)
             latest_timestamps = (
                 df.groupby("filename_bam")["template_end"]
@@ -309,38 +309,33 @@ class BrainMeth:
                 .sort_values(by="template_end")
                 .reset_index(drop=True)
             )
+
             latest_timestamps["full_path"] = ""
-            latest_timestamps["file_produced"] = latest_timestamps["template_end"] # + now
+            latest_timestamps["file_produced"] = latest_timestamps[
+                "template_end"
+            ]  # + now
             for path, dirs, files in os.walk(self.watchfolder):
                 for f in files:
                     if "".join(Path(f).suffixes) in file_endings:
                         latest_timestamps.loc[
                             latest_timestamps["filename_bam"] == f, "full_path"
                         ] = os.path.join(path, f)
+            with self.frontpage:
+                ui.notify("Bams Checked")
 
-            #self.nanodx_worker.playback_thread(latest_timestamps)
-            #self.sturgeon_worker.playback_thread(latest_timestamps)
-            #self.rcns2_worker.playback_thread(latest_timestamps)
             step_size = 20
-            #print (latest_timestamps)
+
+            with self.frontpage:
+                ui.notify("Target Playback Started")
+
             self.Sturgeon.playback(latest_timestamps,step_size=step_size)
             self.NanoDX.playback(latest_timestamps, step_size=step_size)
+            self.RandomForest.playback(latest_timestamps, step_size=step_size)
             self.CNV.playback(latest_timestamps, step_size=step_size)
-            #self.Target_Coverage.playback(latest_timestamps, step_size=step_size)
-            #self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
-            #self.MGMT_panel.playback(latest_timestamps,step_size=step_size)
-            """
-            for index, row in latest_timestamps.iterrows():
-                current_time = time.time()
-                time_diff = row["file_produced"] - current_time
-                print(f"Sleeping for {time_diff} seconds.")
-                if time_diff > 0:
-                    time.sleep(time_diff)
-                self.bam_count["counter"] += 1
-                if "file" not in self.bam_count:
-                    self.bam_count["file"] = {}
-                self.bam_count["file"][row["full_path"]] = time.time()
-            """
+            self.Target_Coverage.playback(latest_timestamps, step_size=step_size)
+            self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
+            self.MGMT_panel.playback(latest_timestamps,step_size=step_size)
+
             self.runfinished = True
         else:
             for path, dirs, files in os.walk(self.watchfolder):
