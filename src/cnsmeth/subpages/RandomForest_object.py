@@ -112,7 +112,7 @@ class RandomForest_object(BaseAnalysis):
             (file, filetime) = bamfile.pop()
             tomerge.append(file)
             timestamp = filetime
-            if len(tomerge) > 100:
+            if len(tomerge) > 500:
                 break
 
         if len(tomerge) > 0:
