@@ -77,8 +77,6 @@ def run_modkit(bamfile, outbed, cpgs, threads):
 
 class RandomForest_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
-        self.dataDir = tempfile.TemporaryDirectory(dir=self.output)
-        self.bedDir = tempfile.TemporaryDirectory(dir=self.output)
         self.rcns2_df_store = pd.DataFrame()
         self.threshold = 0.05
         self.batch = 0
@@ -93,6 +91,8 @@ class RandomForest_object(BaseAnalysis):
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
         super().__init__(*args, **kwargs)
+        self.dataDir = tempfile.TemporaryDirectory(dir=self.output)
+        self.bedDir = tempfile.TemporaryDirectory(dir=self.output)
 
     def setup_ui(self):
         self.card = ui.card().style("width: 100%")
