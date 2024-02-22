@@ -52,13 +52,13 @@ class NanoDX_object(BaseAnalysis):
         self.threshold = 0.05
         self.nanodx_bam_count = 0
         self.not_first_run = False
-        self.nanodxfile = tempfile.NamedTemporaryFile()
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
         )
         self.nanodx_df_store = pd.DataFrame()
         self.NN = NN_classifier(self.modelfile)
         super().__init__(*args, **kwargs)
+        self.nanodxfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".nanodx")
 
     def setup_ui(self):
         with ui.card().style("width: 100%"):
@@ -81,11 +81,11 @@ class NanoDX_object(BaseAnalysis):
             if len(tomerge) > 200:
                 break
         if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile()
-            sorttempbam = tempfile.NamedTemporaryFile()
+            tempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+            sorttempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
             file = tempbam.name
 
-            temp = tempfile.NamedTemporaryFile()
+            temp = tempfile.NamedTemporaryFile(dir=self.output)
 
             sortfile = sorttempbam.name
 

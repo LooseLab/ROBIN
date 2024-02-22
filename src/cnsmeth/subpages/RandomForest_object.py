@@ -77,8 +77,8 @@ def run_modkit(bamfile, outbed, cpgs, threads):
 
 class RandomForest_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
-        self.dataDir = tempfile.TemporaryDirectory()
-        self.bedDir = tempfile.TemporaryDirectory()
+        self.dataDir = tempfile.TemporaryDirectory(dir=self.output)
+        self.bedDir = tempfile.TemporaryDirectory(dir=self.output)
         self.rcns2_df_store = pd.DataFrame()
         self.threshold = 0.05
         self.batch = 0
@@ -117,9 +117,9 @@ class RandomForest_object(BaseAnalysis):
                 break
 
         if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(suffix=".bam")
-            sortbam = tempfile.NamedTemporaryFile(suffix=".bam")
-            tempbed = tempfile.NamedTemporaryFile(suffix=".bed")
+            tempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+            sortbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+            tempbed = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bed")
             self.batch += 1
             await run.cpu_bound(run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads)
 
@@ -223,7 +223,7 @@ class RandomForest_object(BaseAnalysis):
                 )
                 self.first_run = False
 
-            tempDir = tempfile.TemporaryDirectory()
+            tempDir = tempfile.TemporaryDirectory(dir=self.output)
 
             await run.cpu_bound(
                 run_rcns2, tempDir.name, self.batch, tempbed.name, self.threads, self.showerrors
