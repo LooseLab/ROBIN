@@ -56,22 +56,22 @@ class MGMT_Object(BaseAnalysis):
 
     async def process_bam(self, bamfile, timestamp):
         MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
-        tempbamfile = tempfile.NamedTemporaryFile(suffix=".bam")
+        tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
 
         await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             ui.notify("Running MGMT predictor - MGMT sites found.", type="success", position="top-right")
             if not self.MGMTbamfile:
-                self.MGMTbamfile = tempfile.NamedTemporaryFile(suffix=".bam")
+                self.MGMTbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
                 shutil.copy2(tempbamfile.name, self.MGMTbamfile.name)
             else:
-                tempbamholder = tempfile.NamedTemporaryFile(suffix=".bam")
+                tempbamholder = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
                 pysam.cat(
                     "-o", tempbamholder.name, self.MGMTbamfile.name, tempbamfile.name
                 )
                 shutil.copy2(tempbamholder.name, self.MGMTbamfile.name)
-            tempmgmtdir = tempfile.TemporaryDirectory()
+            tempmgmtdir = tempfile.TemporaryDirectory(dir=self.output)
 
             await run.cpu_bound(run_modkit, tempmgmtdir.name, self.MGMTbamfile.name)
             ui.notify("MGMT predictor done.", type="indfo", position="top-right")

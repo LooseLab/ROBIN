@@ -57,10 +57,6 @@ class BrainMeth:
         self.bamformgmt = Queue()
         self.bamforfusions = Queue()
 
-        # self.cnv = CNV_Plot()
-        # self.mgmt_panel = MGMT_Panel()
-        # self.fusion_panel = Fusion_Panel()
-
         if not self.browse:
             self.information_panel()
             self.event_handler = BamEventHandler(self.bam_count)
@@ -79,24 +75,6 @@ class BrainMeth:
             )
             self.check_for_existing_bams.daemon = True
             self.check_for_existing_bams.start()
-            # self.sturgeon_worker = Sturgeon_worker(
-            #    self.bamforsturgeon, threads=self.threads, output_folder=self.output
-            # )
-
-            # self.nanodx_worker = CrossNN_worker(
-            #    self.bamfornanodx, threads=self.threads, output_folder=self.output
-            # )
-
-            # self.rcns2_worker = RCNS2_worker(
-            #    self.bamforcns,
-            #    self.cnv,
-            #    #self.mgmt_panel,
-            #    #self.fusion_panel,
-            #    threads=self.threads,
-            #    output_folder=self.output,
-            #    showerrors=self.showerrors,
-            #    browse=self.browse,
-            # )
 
         else:
             ui.label("Browse mode enabled. Please choose a folder to see data from.")

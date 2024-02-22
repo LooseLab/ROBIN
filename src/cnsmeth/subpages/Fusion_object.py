@@ -529,10 +529,10 @@ class Fusion_object(BaseAnalysis):
         :param bamfile: The path to the bam file to process.
         """
 
-        tempreadfile = tempfile.NamedTemporaryFile(suffix=".txt")
-        tempbamfile = tempfile.NamedTemporaryFile(suffix=".bam")
-        tempmappings = tempfile.NamedTemporaryFile(suffix=".txt")
-        tempallmappings = tempfile.NamedTemporaryFile(suffix=".txt")
+        tempreadfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
+        tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+        tempmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
+        tempallmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
 
         # Get the subset of reads that map to the target gene panel and have supplementary alignments
         os.system(
