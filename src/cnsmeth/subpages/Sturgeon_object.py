@@ -68,8 +68,7 @@ def run_sturgeon_inputtobed(temp, temp2):
 
 class Sturgeon_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
-        self.dataDir = tempfile.TemporaryDirectory()
-        self.bedDir = tempfile.TemporaryDirectory()
+
         self.sturgeon_df_store = pd.DataFrame()
         self.threshold = 0.05
         self.first_run = True
@@ -78,6 +77,8 @@ class Sturgeon_object(BaseAnalysis):
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
         super().__init__(*args, **kwargs)
+        self.dataDir = tempfile.TemporaryDirectory(dir=self.output)
+        self.bedDir = tempfile.TemporaryDirectory(dir=self.output)
 
     def setup_ui(self):
         self.card = ui.card().style("width: 100%")
@@ -102,16 +103,16 @@ class Sturgeon_object(BaseAnalysis):
                 break
 
         if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile()
+            tempbam = tempfile.NamedTemporaryFile(dir=self.output)
             with self.card:
                 ui.notify("Sturgeon: Merging bams")
             await run.cpu_bound(pysam_cat, tempbam.name, tomerge)
 
             file = tempbam.name
 
-            temp = tempfile.NamedTemporaryFile()
+            temp = tempfile.NamedTemporaryFile(dir=self.output)
 
-            with tempfile.TemporaryDirectory() as temp2:
+            with tempfile.TemporaryDirectory(dir=self.output) as temp2:
                 await run.cpu_bound(run_modkit, file, temp.name, self.threads)
                 ui.notify("Sturgeon: Modkit Complete")
                 await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
