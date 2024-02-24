@@ -8,8 +8,15 @@ import numpy as np
 import os
 import asyncio
 from nicegui import ui
+import click
+from pathlib import Path
 
 os.environ["CI"] = "1"
+
+
+class Result:
+    def __init__(self, cnv_dict):
+        self.cnv = cnv_dict
 
 
 def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None):
@@ -61,6 +68,9 @@ class CNVAnalysis(BaseAnalysis):
 
         self.cnv_dict["bin_width"] = self.result.bin_width
         self.cnv_dict["variance"] = self.result.variance
+        np.save(os.path.join(self.output, 'CNV.npy'), self.result.cnv)
+        np.save(os.path.join(self.output, 'CNV_dict.npy'), self.cnv_dict)
+
         # Only update the plot if the queue is empty?
         if self.bamqueue.empty() or self.bam_processed % 50 == 0:
             self._update_cnv_plot()
@@ -72,7 +82,7 @@ class CNVAnalysis(BaseAnalysis):
         self.display_row = ui.row()
         with self.display_row:
             # self.progrock.visible = False
-            ui.label("Copy Number Variation").tailwind("drop-shadow", "font-bold")
+            ui.label("Copy Number Variation").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
@@ -203,6 +213,9 @@ class CNVAnalysis(BaseAnalysis):
                             },
                         }
                     )
+                    if contig in ["chr7","chr10"]:
+                        #print (self.scatter_echart.options["series"][-1])
+                        pass
                     for index, gene in self.gene_bed[
                         self.gene_bed["chrom"] == contig
                     ].iterrows():
@@ -298,27 +311,109 @@ class CNVAnalysis(BaseAnalysis):
             self.gene_select.set_options(genevalueslist)
             self.scatter_echart.update()
 
+    def show_previous_data(self, output):
+        result = np.load(os.path.join(output, 'CNV.npy'), allow_pickle='TRUE').item()
+        self.result = Result(result)
+        cnv_dict = np.load(os.path.join(output, 'CNV_dict.npy'), allow_pickle=True).item()
+        self.cnv_dict["bin_width"] = cnv_dict["bin_width"]
+        self.cnv_dict["variance"] = cnv_dict["variance"]
+        self._update_cnv_plot()
 
-def test_me():
+
+def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
     my_connection = None
-    with theme.frame("Copy Number Variation Interactive", my_connection):
-        CNV_PLOT = CNVAnalysis(progress=True)
-        # path = "tests/static/bam"
-        path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
-        directory = os.fsencode(path)
-        for file in os.listdir(directory):
-            filename = os.fsdecode(file)
-            if filename.endswith(".bam"):
-                CNV_PLOT.add_bam(os.path.join(path, filename))
-    ui.run(port=12345)
+    with theme.frame("Copy Number Variation Testing.", my_connection):
+        TestObject = CNVAnalysis(threads, output, progress=True)
+    if not browse:
+        path = watchfolder
+        searchdirectory = os.fsencode(path)
+        for root, d_names, f_names in os.walk(searchdirectory):
+            directory = os.fsdecode(root)
+            for f in f_names:
+                filename = os.fsdecode(f)
+                if filename.endswith(".bam"):
+                    TestObject.add_bam(os.path.join(directory, filename))
+    else:
+        #print("Browse mode not implemented.")
+        TestObject.progress_trackers.visible=False
+        TestObject.show_previous_data(output)
+    ui.run(port=port,reload=reload)
 
+@click.command()
+@click.option(
+    "--port",
+    default=12345,
+    help="Port for GUI",
+)
+@click.option(
+    "--threads",
+    default=4,
+    help="Number of threads available."
+)
+@click.argument(
+    "watchfolder",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.argument(
+    "output",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.option(
+    "--browse",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Browse Historic Data.",
+)
+def main(port, threads, watchfolder, output, browse):
+    """
+    Helper function to run the app.
+    :param port: The port to serve the app on.
+    :param reload: Should we reload the app on changes.
+    :return:
+    """
+    if browse:
+        # Handle the case when --browse is set
+        click.echo("Browse mode is enabled. Only the output folder is required.")
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=None,
+            output=watchfolder,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
+        # Your logic for browse mode
+    else:
+        # Handle the case when --browse is not set
+        click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
+        if watchfolder is None or output is None:
+            click.echo("Watchfolder and output are required when --browse is not set.")
+            sys.exit(1)
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=watchfolder,
+            output=output,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
+    test_me(port, threads, watchfolder, browse)
 
-# Entrypoint for when GUI is launched by the CLI.
-# e.g.: python my_app/my_cli.py
 if __name__ in {"__main__", "__mp_main__"}:
-    """
-    Entrypoint for when GUI is launched by the CLI
-    :return: None
-    """
-    print("GUI launched by auto-reload")
-    test_me()
+    print("GUI launched by auto-reload function.")
+    main()

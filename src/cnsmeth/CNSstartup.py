@@ -80,7 +80,7 @@ def run_class(
     )
     app.on_startup(mainpage.index_page)
     ui.run(
-        port=port, reload=reload, title="RCBTC", favicon=iconfile
+        port=port, reload=reload, title="RBTD", favicon=iconfile
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
 
 

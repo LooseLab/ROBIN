@@ -113,7 +113,8 @@ class BaseAnalysis:
         Show a progress bar for the number of bam files processed.
         :return:
         """
-        with ui.card().classes("w-full"):
+        self.progress_trackers = ui.card().classes("w-full")
+        with self.progress_trackers:
             with ui.row():
                 ui.label("File Tracker").tailwind("drop-shadow", "font-bold")
                 ui.label().bind_text_from(
