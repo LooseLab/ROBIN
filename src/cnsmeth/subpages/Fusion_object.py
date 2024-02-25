@@ -1,15 +1,17 @@
 from cnsmeth.subpages.base_analysis import BaseAnalysis
-import os
+import os, sys
 import gff3_parser
 import tempfile
 import random
 import asyncio
 import pandas as pd
+import click
 
 
 from nicegui import ui
 from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
+from pathlib import Path
 
 import matplotlib
 
@@ -94,13 +96,19 @@ class Fusion_object(BaseAnalysis):
         Function to setup the UI for the Fusion Panel. This function creates the UI elements for the Fusion Panel.
         """
         with ui.card().style("width: 100%"):
+            ui.label("Gene Fusion Candidates").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
+            ui.label("This panel identifies gene fusion candidates from the input bam files. "
+                    "The panel is split into two tabs, one for gene fusions between genes within the target panel and one for genome wide fusions. "
+                    "Fusions are identified on a streaming basis derived from reads with supplementary alignments. "
+                    "The plots are indicative of the presence of a fusion and should be interpreted with care. "
+                    "The tables show the reads that are indicative of a fusion.").style('color: #000000; font-size: 125%; font-weight: 300')
             with ui.tabs().classes("w-full") as tabs:
-                one = ui.tab("Within Target Fusions")
-                two = ui.tab("Genome Wide Fusions")
+                one = ui.tab("Within Target Fusions").style('color: #000000; font-size: 125%; font-weight: 300')
+                two = ui.tab("Genome Wide Fusions").style('color: #000000; font-size: 125%; font-weight: 300')
             with ui.tab_panels(tabs, value=one).classes("w-full"):
                 with ui.tab_panel(one):
                     with ui.card().style("width: 100%"):
-                        ui.label("Fusion Candidates (within targets)").tailwind(
+                        ui.label("Fusion Candidates (within targets)").style('color: #000000; font-size: 125%; font-weight: 300').tailwind(
                             "drop-shadow", "font-bold"
                         )
                         ui.separator()
@@ -108,17 +116,17 @@ class Fusion_object(BaseAnalysis):
                             "Fusion Candidates are identified by looking for reads that map to two different genes from within the target panel. "
                             "Plots illustrate the alignments of reads to each region of the genome and individual reads are identified by colour. "
                             "These plots should be interpreted with care and are only indicative of the presence of a fusion."
-                        )
+                        ).style('color: #000000; font-size: 125%; font-weight: 300')
                         self.fusionplot = ui.row()
                         with self.fusionplot.classes("w-full"):
-                            ui.label("Plot not yet available.")
+                            ui.label("Plot not yet available.").style('color: #000000; font-size: 125%; font-weight: 300')
                         self.fusiontable = ui.row().classes("w-full")
                         with self.fusiontable:
-                            ui.label("Table not yet available.")
+                            ui.label("Table not yet available.").style('color: #000000; font-size: 125%; font-weight: 300')
 
                 with ui.tab_panel(two):
                     with ui.card().style("width: 100%"):
-                        ui.label("Fusion Candidates (genome wide)").tailwind(
+                        ui.label("Fusion Candidates (genome wide)").style('color: #000000; font-size: 125%; font-weight: 300').tailwind(
                             "drop-shadow", "font-bold"
                         )
                         ui.separator()
@@ -126,13 +134,13 @@ class Fusion_object(BaseAnalysis):
                             "Fusion Candidates are identified by looking for reads that map to at least one gene from within the target panel. "
                             "Plots illustrate the alignments of reads to each region of the genome and individual reads are identified by colour. "
                             "These plots should be interpreted with care and are only indicative of the presence of a fusion."
-                        )
+                        ).style('color: #000000; font-size: 125%; font-weight: 300')
                         self.fusionplot_all = ui.row()
                         with self.fusionplot_all.classes("w-full"):
-                            ui.label("Plot not yet available.")
+                            ui.label("Plot not yet available.").style('color: #000000; font-size: 125%; font-weight: 300')
                         self.fusiontable_all = ui.row().classes("w-full")
                         with self.fusiontable_all:
-                            ui.label("Table not yet available.")
+                            ui.label("Table not yet available.").style('color: #000000; font-size: 125%; font-weight: 300')
 
     def fusion_table_all(self):
         uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)
@@ -140,6 +148,9 @@ class Fusion_object(BaseAnalysis):
         counts_all = doubles_all.groupby(7)[3].transform("nunique")
         result_all = doubles_all[counts_all > 1]
         result_all.to_csv(os.path.join(self.output, "fusion_candidates_all.csv"))
+        self.update_fusion_table_all(result_all)
+
+    def update_fusion_table_all(self,result_all):
         if not result_all.empty:
             self.fusiontable_all.clear()
             with self.fusiontable_all:
@@ -232,7 +243,7 @@ class Fusion_object(BaseAnalysis):
                         "paginationAutoPageSize": True,
                     },
                     auto_size_columns=True,
-                ).classes("max-h-100 min-w-full").style("height: 900px")
+                ).classes("max-h-100 min-w-full").style('color: #000000; font-size: 100%; font-weight: 300; height: 900px')
             self.fusionplot_all.clear()
 
         result_all, goodpairs = self._annotate_results(result_all)
@@ -342,6 +353,9 @@ class Fusion_object(BaseAnalysis):
         counts = doubles.groupby(7)[3].transform("nunique")
         result = doubles[counts > 1]
         result.to_csv(os.path.join(self.output, "fusion_candidates_master.csv"))
+        self.update_fusion_table(result)
+
+    def update_fusion_table(self,result):
         self.fusiontable.clear()
         with self.fusiontable:
             ui.aggrid.from_pandas(
@@ -431,7 +445,7 @@ class Fusion_object(BaseAnalysis):
                     "paginationAutoPageSize": True,
                 },
                 auto_size_columns=False,
-            ).classes("max-h-100 min-w-full").style("height: 900px")
+            ).classes("max-h-100 min-w-full").style('color: #000000; font-size: 100%; font-weight: 300; height: 900px')
         self.fusionplot.clear()
 
         result, goodpairs = self._annotate_results(result)
@@ -536,11 +550,11 @@ class Fusion_object(BaseAnalysis):
 
         # Get the subset of reads that map to the target gene panel and have supplementary alignments
         os.system(
-            f"samtools view -L {self.gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile.name}"
+            f"samtools view -@{self.threads} -L {self.gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile.name}"
         )
         if os.path.getsize(tempreadfile.name) > 0:
             os.system(
-                f"samtools view -N {tempreadfile.name} -o {tempbamfile.name} {bamfile}"
+                f"samtools view -@{self.threads} -N {tempreadfile.name} -o {tempbamfile.name} {bamfile}"
             )
             if os.path.getsize(tempbamfile.name) > 0:
                 os.system(
@@ -624,27 +638,107 @@ class Fusion_object(BaseAnalysis):
     def count_shared_values(self, group):
         return group[7].nunique()
 
+    def show_previous_data(self, output):
+        fusion_candidates = pd.read_csv(os.path.join(output, "fusion_candidates_master.csv"), dtype=str, names=['index', 0,1,2,3,4,5,6,7,8,9,'diff'], header=None, skiprows=1)
+        self.update_fusion_table(fusion_candidates)
+        fusion_candidates_all = pd.read_csv(os.path.join(output, "fusion_candidates_all.csv"), dtype=str, names=['index', 0,1,2,3,4,5,6,7,8,9,'diff'], header=None, skiprows=1)
+        self.update_fusion_table_all(fusion_candidates_all)
 
-def test_me():
+
+def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
     my_connection = None
-    with theme.frame("Copy Number Variation Interactive", my_connection):
-        TestObject = Fusion_object(progress=True)
-        # path = "tests/static/bam"
-        path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
-        directory = os.fsencode(path)
-        for file in os.listdir(directory):
-            filename = os.fsdecode(file)
-            if filename.endswith(".bam"):
-                TestObject.add_bam(os.path.join(path, filename))
-    ui.run(port=12345)
+    with theme.frame("Fusion Gene Identification.", my_connection):
+        TestObject = Fusion_object(threads, output, progress=True)
+    if not browse:
+        path = watchfolder
+        searchdirectory = os.fsencode(path)
+        for root, d_names, f_names in os.walk(searchdirectory):
+            directory = os.fsdecode(root)
+            for f in f_names:
+                filename = os.fsdecode(f)
+                if filename.endswith(".bam"):
+                    TestObject.add_bam(os.path.join(directory, filename))
+    else:
+        print("Browse mode not implemented.")
+        TestObject.progress_trackers.visible=False
+        TestObject.show_previous_data(output)
+    ui.run(port=port,reload=reload)
+
+@click.command()
+@click.option(
+    "--port",
+    default=12345,
+    help="Port for GUI",
+)
+@click.option(
+    "--threads",
+    default=4,
+    help="Number of threads available."
+)
+@click.argument(
+    "watchfolder",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.argument(
+    "output",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.option(
+    "--browse",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Browse Historic Data.",
+)
+def main(port, threads, watchfolder, output, browse):
+    """
+    Helper function to run the app.
+    :param port: The port to serve the app on.
+    :param reload: Should we reload the app on changes.
+    :return:
+    """
+    if browse:
+        # Handle the case when --browse is set
+        click.echo("Browse mode is enabled. Only the output folder is required.")
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=None,
+            output=watchfolder,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
+        # Your logic for browse mode
+    else:
+        # Handle the case when --browse is not set
+        click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
+        if watchfolder is None or output is None:
+            click.echo("Watchfolder and output are required when --browse is not set.")
+            sys.exit(1)
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=watchfolder,
+            output=output,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
 
 
-# Entrypoint for when GUI is launched by the CLI.
-# e.g.: python my_app/my_cli.py
 if __name__ in {"__main__", "__mp_main__"}:
-    """
-    Entrypoint for when GUI is launched by the CLI
-    :return: None
-    """
-    print("GUI launched by auto-reload")
-    test_me()
+    print("GUI launched by auto-reload function.")
+    main()

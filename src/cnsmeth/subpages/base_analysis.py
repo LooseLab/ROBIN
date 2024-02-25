@@ -49,6 +49,8 @@ class BaseAnalysis:
             self.running = True
             bamfile, timestamp = self.bamqueue.get()
             self.bam_count += 1
+            if not timestamp:
+                timestamp = time.time()
             #print (bamfile,timestamp)
             await self.process_bam(bamfile, timestamp)
             self.bam_processed += 1
@@ -70,7 +72,7 @@ class BaseAnalysis:
 
     async def _batch_worker(self):
         """
-        This function takes bam files from a queue in batches and adds them to a backround thread for processing.
+        This function takes bam files from a queue in batches and adds them to a background thread for processing.
         """
         self.timer.active = False
         while self.bamqueue.qsize() > 0:
@@ -78,6 +80,7 @@ class BaseAnalysis:
             self.bam_count += 1
             #self.bams_in_processing += 1
         if not self.running and len(self.bams) > 0:
+            self.running = True
             await self.process_bam(self.bams)
         else:
             await asyncio.sleep(1)

@@ -3,8 +3,10 @@ import natsort
 from cnsmeth import theme, resources
 import pandas as pd
 import numpy as np
-import os
+import os, sys
+import click
 import time
+from pathlib import Path
 from nicegui import ui, run
 from io import StringIO
 import pysam
@@ -84,7 +86,7 @@ class TargetCoverage(BaseAnalysis):
 
     def setup_ui(self):
         with ui.card().style("width: 100%"):
-            ui.label("Coverage Data").tailwind("drop-shadow", "font-bold")
+            ui.label("Coverage Data").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
             with ui.grid(columns=2).classes("w-full h-auto"):
                 with ui.column():
                     with ui.card().style("width: 100%"):
@@ -95,7 +97,7 @@ class TargetCoverage(BaseAnalysis):
         with ui.card().style("width: 100%"):
             self.create_coverage_time_chart()
         with ui.card().style("width: 100%"):
-            ui.label("Coverage over targets").tailwind("drop-shadow", "font-bold")
+            ui.label("Coverage over targets").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
             self.targ_df = ui.row().classes("w-full").style("height: 900px")
 
     def create_coverage_plot(self, title):
@@ -333,6 +335,8 @@ class TargetCoverage(BaseAnalysis):
 
     async def process_bam(self, bamfile, timestamp):
         newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
+        #newcovdf, bedcovdf = get_covdfs(bamfile)
+
         if self.cov_df_main.empty:
             self.cov_df_main = newcovdf
             self.bedcov_df_main = bedcovdf
@@ -340,19 +344,20 @@ class TargetCoverage(BaseAnalysis):
             self.cov_df_main, self.bedcov_df_main = await run.cpu_bound(
                 run_bedmerge, newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
             )
-        if self.bamqueue.empty() or self.bam_processed % 25 == 0:
+            #self.cov_df_main, self.bedcov_df_main = run_bedmerge(newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main)
+        if self.bamqueue.empty() or self.bam_processed % 5 == 0:
             self.update_coverage_plot(self.cov_df_main)
             self.cov_df_main.to_csv(
                 os.path.join(self.output, "coverage_main.csv")
             )
-            await asyncio.sleep(0.01)
+            #await asyncio.sleep(0.01)
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
             self.bedcov_df_main.to_csv(
                 os.path.join(self.output, "bed_coverage_main.csv")
             )
-            await asyncio.sleep(0.01)
+            #await asyncio.sleep(0.01)
             self.update_coverage_time_plot(self.cov_df_main, timestamp)
-            await asyncio.sleep(0.01)
+            #await asyncio.sleep(0.01)
             self.target_coverage_df = self.bedcov_df_main
             self.target_coverage_df["coverage"] = (
                 self.target_coverage_df["bases"] / self.target_coverage_df["length"]
@@ -360,32 +365,118 @@ class TargetCoverage(BaseAnalysis):
             self.target_coverage_df.to_csv(
                 os.path.join(self.output, "target_coverage.csv")
             )
-            await asyncio.sleep(0.01)
+            #await asyncio.sleep(0.01)
             self.update_target_coverage_table()
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.5)
         self.running = False
 
+    def show_previous_data(self, watchfolder):
+        self.cov_df_main = pd.read_csv(os.path.join(watchfolder, 'coverage_main.csv'))
+        self.update_coverage_plot(self.cov_df_main)
+        self.bedcov_df_main = pd.read_csv(os.path.join(watchfolder, 'bed_coverage_main.csv'))
+        self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
+        self.target_coverage_df = pd.read_csv(os.path.join(watchfolder, 'target_coverage.csv'))
+        self.update_target_coverage_table()
+            #if file.endswith("coverage_time_chart.csv"):
+            #    self.coverage_time_chart = pd.read_csv(os.path.join(watchfolder, file))
+            #    self.update_coverage_time_plot(self.cov_df_main, None)
+        #self.running = False
 
-def test_me():
+def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
     my_connection = None
-    with theme.frame("Copy Number Variation Interactive", my_connection):
-        TestObject = TargetCoverage(progress=True)
-        # path = "tests/static/bam"
-        path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
-        directory = os.fsencode(path)
-        for file in os.listdir(directory):
-            filename = os.fsdecode(file)
-            if filename.endswith(".bam"):
-                TestObject.add_bam(os.path.join(path, filename))
+    with theme.frame("Target Coverage Data", my_connection):
+        TestObject = TargetCoverage(threads, output, progress=True)
+        #TestObject = MGMT_Object(threads, output, progress=True)
+    if not browse:
+        path = watchfolder
+        searchdirectory = os.fsencode(path)
+        for root, d_names, f_names in os.walk(searchdirectory):
+            directory = os.fsdecode(root)
+            for f in f_names:
+                filename = os.fsdecode(f)
+                if filename.endswith(".bam"):
+                    TestObject.add_bam(os.path.join(directory, filename))
+                    #break
+    else:
+        TestObject.progress_trackers.visible=False
+        TestObject.show_previous_data(output)
+    ui.run(port=port, reload=False)
+
+@click.command()
+@click.option(
+    "--port",
+    default=12345,
+    help="Port for GUI",
+)
+@click.option(
+    "--threads",
+    default=4,
+    help="Number of threads available."
+)
+@click.argument(
+    "watchfolder",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.argument(
+    "output",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.option(
+    "--browse",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Browse Historic Data.",
+)
+def run_main(port, threads, watchfolder, output, browse):
+    """
+    Helper function to run the app.
+    :param port: The port to serve the app on.
+    :param reload: Should we reload the app on changes.
+    :return:
+    """
+    if browse:
+        # Handle the case when --browse is set
+        click.echo("Browse mode is enabled. Only the output folder is required.")
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=None,
+            output=watchfolder,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
+        # Your logic for browse mode
+    else:
+        # Handle the case when --browse is not set
+        click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
+        if watchfolder is None or output is None:
+            click.echo("Watchfolder and output are required when --browse is not set.")
+            sys.exit(1)
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=watchfolder,
+            output=output,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
 
 
-# Entrypoint for when GUI is launched by the CLI.
-# e.g.: python my_app/my_cli.py
 if __name__ in {"__main__", "__mp_main__"}:
-    """
-    Entrypoint for when GUI is launched by the CLI
-    :return: None
-    """
-    print("GUI launched by auto-reload")
-    test_me()
-    ui.run(port=12345)
+    print("GUI launched by auto-reload function.")
+    run_main()

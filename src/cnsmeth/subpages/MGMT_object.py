@@ -102,7 +102,7 @@ class MGMT_Object(BaseAnalysis):
             tempmgmtdir.cleanup()
             ui.notify("MGMT predictor complete.", type="positive", position="top")
         else:
-            ui.notify("No new MGMT sites found.", type="warning", position="top")
+            ui.notify("No new MGMT sites found.", type="warning", position="bottom")
         await asyncio.sleep(0.1)
         self.running = False
 
@@ -244,7 +244,6 @@ def main(port, threads, watchfolder, output, browse):
             browse=browse,
             #exclude=exclude,
         )
-    test_me(port, threads, watchfolder, browse)
 
 if __name__ in {"__main__", "__mp_main__"}:
     print("GUI launched by auto-reload function.")

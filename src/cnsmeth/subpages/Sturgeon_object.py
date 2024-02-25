@@ -1,5 +1,5 @@
 from cnsmeth.subpages.base_analysis import BaseAnalysis
-import os
+import os, sys
 import tempfile
 import time
 import shutil
@@ -12,6 +12,8 @@ from sturgeon.callmapping import (
     merge_probes_methyl_calls,
     probes_methyl_calls_to_bed,
 )
+import click
+from pathlib import Path
 import asyncio
 
 
@@ -92,7 +94,6 @@ class Sturgeon_object(BaseAnalysis):
     async def process_bam(self, bamfile):
         tomerge = []
         timestamp = None
-
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop()
@@ -101,23 +102,18 @@ class Sturgeon_object(BaseAnalysis):
             self.bams_in_processing += 1
             if len(tomerge) > 200:
                 break
-
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(dir=self.output)
             with self.card:
                 ui.notify("Sturgeon: Merging bams")
             await run.cpu_bound(pysam_cat, tempbam.name, tomerge)
-
             file = tempbam.name
-
             temp = tempfile.NamedTemporaryFile(dir=self.output)
-
             with tempfile.TemporaryDirectory(dir=self.output) as temp2:
                 await run.cpu_bound(run_modkit, file, temp.name, self.threads)
                 ui.notify("Sturgeon: Modkit Complete")
                 await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
                 # ui.notify("Sturgeon: Inputtobed Complete")
-
                 calls_per_probe_file = os.path.join(
                     temp2, "merged_probes_methyl_calls.txt"
                 )
@@ -125,10 +121,8 @@ class Sturgeon_object(BaseAnalysis):
                     self.dataDir.name,
                     "_merged_probes_methyl_calls.txt",
                 )
-
                 if self.first_run:
                     shutil.copyfile(calls_per_probe_file, merged_output_file)
-
                     self.first_run = False
                 else:
                     await run.cpu_bound(
@@ -136,24 +130,19 @@ class Sturgeon_object(BaseAnalysis):
                         calls_per_probe_file,
                         merged_output_file,
                     )
-
                 bed_output_file = os.path.join(
                     self.bedDir.name, "final_merged_probes_methyl_calls.bed"
                 )
-
                 await run.cpu_bound(
                     run_probes_methyl_calls, merged_output_file, bed_output_file
                 )
-
                 await run.cpu_bound(
                     run_sturgeon_predict,
                     self.bedDir.name,
                     self.dataDir.name,
                     self.modelfile,
                 )
-
                 ui.notify("Sturgeon: Prediction Complete")
-
                 mydf = pd.read_csv(
                     os.path.join(
                         self.dataDir.name,
@@ -163,25 +152,19 @@ class Sturgeon_object(BaseAnalysis):
                 self.st_num_probes = mydf.iloc[-1]["number_probes"]
                 lastrow = mydf.iloc[-1].drop("number_probes")
                 lastrow_plot = lastrow.sort_values(ascending=False).head(10)
-
                 mydf_to_save = mydf
-
                 if timestamp:
                     mydf_to_save["timestamp"] = timestamp * 1000
                 else:
                     mydf_to_save["timestamp"] = time.time() * 1000
-
                 self.bam_processed += len(tomerge)
                 self.bams_in_processing -= len(tomerge)
-
                 self.sturgeon_df_store = pd.concat(
                     [self.sturgeon_df_store, mydf_to_save.set_index("timestamp")]
                 )
-
                 self.sturgeon_df_store.to_csv(
                     os.path.join(self.output, "sturgeon_scores.csv")
                 )
-
                 columns_greater_than_threshold = (
                     self.sturgeon_df_store > self.threshold
                 ).any()
@@ -189,18 +172,15 @@ class Sturgeon_object(BaseAnalysis):
                 result = self.sturgeon_df_store.columns[
                     columns_not_greater_than_threshold
                 ].tolist()
-
                 self.update_sturgeon_time_chart(
                     self.sturgeon_df_store.drop(columns=result)
                 )
-
                 self.update_sturgeon_plot(
                     lastrow_plot.index.to_list(),
                     list(lastrow_plot.values),
                     self.bam_processed,
                     self.st_num_probes,
                 )
-
         await asyncio.sleep(30)
         self.running = False
 
@@ -289,24 +269,100 @@ class Sturgeon_object(BaseAnalysis):
         self.sturgeon_time_chart.update()
 
 
-def test_ui():
+def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
     my_connection = None
-    with theme.frame("Copy Number Variation Interactive", my_connection):
-        TestObject = Sturgeon_object(progress=True, batch=True)
-    path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
-    # path = "tests/static/bam"
-    directory = os.fsencode(path)
-    for file in os.listdir(directory):
-        filename = os.fsdecode(file)
-        if filename.endswith(".bam"):
-            TestObject.add_bam(os.path.join(path, filename))
-            time.sleep(0.001)
-    ui.run(port=8082)
+    with theme.frame("Sturgeon Rapid CNS Diagnostic.", my_connection):
+        TestObject = Sturgeon_object(threads, output, progress=True, batch=True)
+    if not browse:
+        path = watchfolder
+        searchdirectory = os.fsencode(path)
+        for root, d_names, f_names in os.walk(searchdirectory):
+            directory = os.fsdecode(root)
+            for f in f_names:
+                filename = os.fsdecode(f)
+                if filename.endswith(".bam"):
+                    TestObject.add_bam(os.path.join(directory, filename))
+    else:
+        print("Browse mode not implemented.")
+        TestObject.progress_trackers.visible=False
+        #TestObject.show_previous_data(output)
+    ui.run(port=port,reload=False)
+
+@click.command()
+@click.option(
+    "--port",
+    default=12345,
+    help="Port for GUI",
+)
+@click.option(
+    "--threads",
+    default=4,
+    help="Number of threads available."
+)
+@click.argument(
+    "watchfolder",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.argument(
+    "output",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.option(
+    "--browse",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Browse Historic Data.",
+)
+def mainrun(port, threads, watchfolder, output, browse):
+    """
+    Helper function to run the app.
+    :param port: The port to serve the app on.
+    :param reload: Should we reload the app on changes.
+    :return:
+    """
+    if browse:
+        # Handle the case when --browse is set
+        click.echo("Browse mode is enabled. Only the output folder is required.")
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=None,
+            output=watchfolder,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
+        # Your logic for browse mode
+    else:
+        # Handle the case when --browse is not set
+        click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
+        if watchfolder is None or output is None:
+            click.echo("Watchfolder and output are required when --browse is not set.")
+            sys.exit(1)
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=watchfolder,
+            output=output,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
 
 
-def start():
-    test_ui()
-
-
-if __name__ in ("__main__", "__mp_main__"):
-    start()
+if __name__ in {"__main__", "__mp_main__"}:
+    print("GUI launched by auto-reload function.")
+    mainrun()

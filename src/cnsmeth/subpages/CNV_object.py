@@ -72,7 +72,7 @@ class CNVAnalysis(BaseAnalysis):
         np.save(os.path.join(self.output, 'CNV_dict.npy'), self.cnv_dict)
 
         # Only update the plot if the queue is empty?
-        if self.bamqueue.empty() or self.bam_processed % 50 == 0:
+        if self.bamqueue.empty() or self.bam_processed % 5 == 0:
             self._update_cnv_plot()
         else:
             await asyncio.sleep(0.05)
@@ -412,7 +412,7 @@ def main(port, threads, watchfolder, output, browse):
             browse=browse,
             #exclude=exclude,
         )
-    test_me(port, threads, watchfolder, browse)
+
 
 if __name__ in {"__main__", "__mp_main__"}:
     print("GUI launched by auto-reload function.")
