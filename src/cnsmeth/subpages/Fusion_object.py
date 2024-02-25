@@ -49,6 +49,8 @@ class Fusion_object(BaseAnalysis):
                 )
             )
         else:
+            print ("This looks like the first time you have run cnsmeth.")
+            print ("Parsing GFF3")
             self.gene_table = gff3_parser.parse_gff3(
                 self.gene_gff3_2, verbose=False, parse_attributes=True
             )
