@@ -262,7 +262,7 @@ class BrainMeth:
                     "sample_ids",
                     backward=lambda n: f"Sample ID: {str(n)}",
                 ).style('color: #000000; font-size: 100%; font-weight: 300')
-                
+
         with ui.card().style("width: 100%"):
             ui.label("Methylation Classifications").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
             if "sturgeon" not in self.exclude:
