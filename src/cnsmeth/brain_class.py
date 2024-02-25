@@ -311,16 +311,7 @@ class BrainMeth:
                     file = self.bam_count["file"].popitem()
                     if file[1] > time.time() - 5:
                         time.sleep(5)
-                    baminfo = ReadBam(file[0]).process_reads()
-                    if baminfo["state"]=="pass":
-                        self.bam_passed["counter"] += 1
-                    else:
-                        self.bam_failed["counter"] += 1
-                    self.basecall_models.add(baminfo["basecall_model"])
-                    self.devices.add(baminfo["device_position"])
-                    self.sample_ids.add(baminfo["sample_id"])
-                    self.flowcell_ids.add(baminfo["flow_cell_id"])
-                    self.run_time.add(baminfo["time_of_run"])
+                    self.check_bam(file[0])
                     self.bamforcns.put([file[0],file[1]])
                     self.bamforsturgeon.put([file[0],file[1]])
                     self.bamfornanodx.put([file[0],file[1]])
@@ -332,6 +323,23 @@ class BrainMeth:
                 time.sleep(1)
                 self.nofiles = True
             time.sleep(1)
+
+    def check_bam(self, bamfile):
+        """
+        This function checks a bam file and returns a dictionary of its attributes.
+        :param bamfile:
+        :return:
+        """
+        baminfo = ReadBam(bamfile).process_reads()
+        if baminfo["state"] == "pass":
+            self.bam_passed["counter"] += 1
+        else:
+            self.bam_failed["counter"] += 1
+        self.basecall_models.add(baminfo["basecall_model"])
+        self.devices.add(baminfo["device_position"])
+        self.sample_ids.add(baminfo["sample_id"])
+        self.flowcell_ids.add(baminfo["flow_cell_id"])
+        self.run_time.add(baminfo["time_of_run"])
 
     def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
@@ -390,5 +398,6 @@ class BrainMeth:
                         if "file" not in self.bam_count:
                             self.bam_count["file"] = {}
                         self.bam_count["file"][os.path.join(path, f)] = time.time()
+                        self.check_bam(os.path.join(path, f))
                         if self.simtime:
                             time.sleep(30)
