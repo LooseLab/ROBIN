@@ -41,7 +41,7 @@ def run_samtools_sort(file, tomerge, sortfile, threads):
 
 
 class NanoDX_object(BaseAnalysis):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, model="Capper_et_al_NN.pkl", **kwargs):
         self.cpgs_file = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "hglft_genome_260e9_91a970_clean.bed",
@@ -51,11 +51,12 @@ class NanoDX_object(BaseAnalysis):
             sep="\t",
             header=None,
         )
+        self.model=model
         self.threshold = 0.05
         self.nanodx_bam_count = 0
         self.not_first_run = False
         self.modelfile = os.path.join(
-            os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
+            os.path.dirname(os.path.abspath(models.__file__)), self.model
         )
         self.nanodx_df_store = pd.DataFrame()
         self.NN = NN_classifier(self.modelfile)
