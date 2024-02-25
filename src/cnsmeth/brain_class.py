@@ -373,6 +373,7 @@ class BrainMeth:
                         latest_timestamps.loc[
                             latest_timestamps["filename_bam"] == f, "full_path"
                         ] = os.path.join(path, f)
+                        self.check_bam(os.path.join(path, f))
             with self.frontpage:
                 ui.notify("Bams Checked")
 
@@ -398,6 +399,5 @@ class BrainMeth:
                         if "file" not in self.bam_count:
                             self.bam_count["file"] = {}
                         self.bam_count["file"][os.path.join(path, f)] = time.time()
-                        self.check_bam(os.path.join(path, f))
                         if self.simtime:
                             time.sleep(30)
