@@ -6,6 +6,7 @@ from watchdog.events import FileSystemEventHandler
 import time
 
 
+
 class BamEventHandler(FileSystemEventHandler):
     def __init__(self, bam_count):
         """This class handles events from the file system watcher."""
@@ -18,3 +19,5 @@ class BamEventHandler(FileSystemEventHandler):
             if "file" not in self.bam_count:
                 self.bam_count["file"] = {}
             self.bam_count["file"][event.src_path] = time.time()
+
+

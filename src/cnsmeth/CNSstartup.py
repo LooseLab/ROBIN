@@ -4,6 +4,7 @@ from pathlib import Path
 from nicegui import ui, app
 import os
 import sys
+import asyncio
 from cnsmeth import images
 
 from cnsmeth import theme
@@ -79,6 +80,7 @@ def run_class(
         exclude=exclude
     )
     app.on_startup(mainpage.index_page)
+    #app.on_startup(startup)
     ui.run(
         port=port, reload=reload, title="RBTD", favicon=iconfile
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
@@ -177,6 +179,12 @@ def package_run(
             browse=browse,
             exclude=exclude,
         )
+
+def startup():
+    loop = asyncio.get_running_loop()
+    loop.set_debug(True)
+    loop.slow_callback_duration = 0.2
+
 
 
 if __name__ in {"__main__", "__mp_main__"}:

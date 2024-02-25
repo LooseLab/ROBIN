@@ -5,6 +5,8 @@ from nicegui import ui, run
 import time
 import os
 import sys
+import click
+from pathlib import Path
 import pysam
 import pandas as pd
 import shutil
@@ -78,7 +80,7 @@ class NanoDX_object(BaseAnalysis):
             tomerge.append(file)
             timestamp = filetime
             self.bams_in_processing += 1
-            if len(tomerge) > 200:
+            if len(tomerge) > 20:
                 break
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
@@ -276,7 +278,7 @@ class NanoDX_object(BaseAnalysis):
                     "series": [],
                 }
             )
-            .style("height: 350px")
+            .style('color: #6E93D6; font-size: 150%; font-weight: 300; height: 350px')
             .classes("border-double")
         )
 
@@ -348,24 +350,105 @@ class NanoDX_object(BaseAnalysis):
         self.nanodx_time_chart.update()
 
 
-def test_ui():
+
+
+def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
+    #if __name__ == '__mp_main__':
     my_connection = None
-    with theme.frame("Copy Number Variation Interactive", my_connection):
-        TestObject = NanoDX_object(progress=True, batch=True)
-    path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
-    # path = "tests/static/bam"
-    directory = os.fsencode(path)
-    for file in os.listdir(directory):
-        filename = os.fsdecode(file)
-        if filename.endswith(".bam"):
-            TestObject.add_bam(os.path.join(path, filename))
-            time.sleep(0.001)
+    with theme.frame("Target Coverage Data", my_connection):
+        TestObject = NanoDX_object(threads, output, progress=True, batch=True)
+        #TestObject = MGMT_Object(threads, output, progress=True)
+    if not browse:
+        path = watchfolder
+        searchdirectory = os.fsencode(path)
+        for root, d_names, f_names in os.walk(searchdirectory):
+            directory = os.fsdecode(root)
+            for f in f_names:
+                filename = os.fsdecode(f)
+                if filename.endswith(".bam"):
+                    TestObject.add_bam(os.path.join(directory, filename))
+                    #break
+    else:
+        TestObject.progress_trackers.visible=False
+        TestObject.show_previous_data(output)
+    ui.run(port=port, reload=False)
+
+@click.command()
+@click.option(
+    "--port",
+    default=12345,
+    help="Port for GUI",
+)
+@click.option(
+    "--threads",
+    default=4,
+    help="Number of threads available."
+)
+@click.argument(
+    "watchfolder",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.argument(
+    "output",
+    type=click.Path(
+        exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
+    ),
+    required=False,
+)
+@click.option(
+    "--browse",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Browse Historic Data.",
+)
+def run_main(port, threads, watchfolder, output, browse):
+    """
+    Helper function to run the app.
+    :param port: The port to serve the app on.
+    :param reload: Should we reload the app on changes.
+    :return:
+    """
+    if browse:
+        # Handle the case when --browse is set
+        click.echo("Browse mode is enabled. Only the output folder is required.")
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=None,
+            output=watchfolder,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
+        # Your logic for browse mode
+    else:
+        # Handle the case when --browse is not set
+        click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
+        if watchfolder is None or output is None:
+            click.echo("Watchfolder and output are required when --browse is not set.")
+            sys.exit(1)
+        test_me(
+            port=port,
+            reload=False,
+            threads=threads,
+            #simtime=simtime,
+            watchfolder=watchfolder,
+            output=output,
+            #sequencing_summary=sequencing_summary,
+            #showerrors=showerrors,
+            browse=browse,
+            #exclude=exclude,
+        )
 
 
-def start():
-    test_ui()
-    ui.run(port=8082)
+if __name__ in {"__main__", "__mp_main__"}:
+    print("GUI launched by auto-reload function.")
+    run_main()
 
-
-if __name__ in ("__main__", "__mp_main__"):
-    start()
