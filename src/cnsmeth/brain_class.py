@@ -312,13 +312,20 @@ class BrainMeth:
                     if file[1] > time.time() - 5:
                         time.sleep(5)
                     self.check_bam(file[0])
-                    self.bamforcns.put([file[0],file[1]])
-                    self.bamforsturgeon.put([file[0],file[1]])
-                    self.bamfornanodx.put([file[0],file[1]])
-                    self.bamforcnv.put([file[0],file[1]])
-                    self.bamfortargetcoverage.put([file[0],file[1]])
-                    self.bamformgmt.put([file[0],file[1]])
-                    self.bamforfusions.put([file[0],file[1]])
+                    if "forest" not in self.exclude:
+                        self.bamforcns.put([file[0],file[1]])
+                    if "sturgeon" not in self.exclude:
+                        self.bamforsturgeon.put([file[0],file[1]])
+                    if "nanodx" not in self.exclude:
+                        self.bamfornanodx.put([file[0],file[1]])
+                    if "cnv" not in self.exclude:
+                        self.bamforcnv.put([file[0],file[1]])
+                    if "coverage" not in self.exclude:
+                        self.bamfortargetcoverage.put([file[0],file[1]])
+                    if "mgmt" not in self.exclude:
+                        self.bamformgmt.put([file[0],file[1]])
+                    if "fusion" not in self.exclude:
+                        self.bamforfusions.put([file[0],file[1]])
 
                 time.sleep(1)
                 self.nofiles = True
@@ -382,13 +389,20 @@ class BrainMeth:
             with self.frontpage:
                 ui.notify("Target Playback Started")
 
-            self.Sturgeon.playback(latest_timestamps,step_size=step_size)
-            self.NanoDX.playback(latest_timestamps, step_size=step_size)
-            self.RandomForest.playback(latest_timestamps, step_size=step_size)
-            self.CNV.playback(latest_timestamps, step_size=step_size)
-            self.Target_Coverage.playback(latest_timestamps, step_size=step_size)
-            self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
-            self.MGMT_panel.playback(latest_timestamps,step_size=step_size)
+            if "sturgeon" not in self.exclude:
+                self.Sturgeon.playback(latest_timestamps,step_size=step_size)
+            if "nanodx" not in self.exclude:
+                self.NanoDX.playback(latest_timestamps, step_size=step_size)
+            if "forest" not in self.exclude:
+                self.RandomForest.playback(latest_timestamps, step_size=step_size)
+            if "cnv" not in self.exclude:
+                self.CNV.playback(latest_timestamps, step_size=step_size)
+            if "coverage" not in self.exclude:
+                self.Target_Coverage.playback(latest_timestamps, step_size=step_size)
+            if "fusion" not in self.exclude:
+                self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
+            if "mgmt" not in self.exclude:
+                self.MGMT_panel.playback(latest_timestamps, step_size=step_size)
 
             self.runfinished = True
         else:
