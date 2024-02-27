@@ -58,6 +58,7 @@ class CNVAnalysis(BaseAnalysis):
         self.file_list.append(bamfile)
         # cnv_dict = self.update_cnv_dict.copy()
         # self.result, self.update_cnv_dict = await run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=cnv_dict)
+        print (f"Processing {bamfile}, {timestamp}")
         self.result = iterate_bam_file(
             bamfile,
             _threads=self.threads,

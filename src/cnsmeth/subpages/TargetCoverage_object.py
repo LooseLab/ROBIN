@@ -11,6 +11,8 @@ from nicegui import ui, run
 from io import StringIO
 import pysam
 import asyncio
+import tempfile
+import shutil
 
 os.environ["CI"] = "1"
 
@@ -78,10 +80,25 @@ def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
     return merged_df, merged_bed_df
 
 
+def run_bedtools(bamfile, bedfile, tempbamfile):
+    """
+    This function extracts the MGMT sites from the bamfile.
+    """
+    try:
+        os.system(f"bedtools intersect -a {bamfile} -b {bedfile} > {tempbamfile}")
+        pysam.index(tempbamfile)
+    except Exception as e:
+        print(e)
+
 class TargetCoverage(BaseAnalysis):
     def __init__(self, *args, **kwargs):
+        self.targetbamfile = None
         self.cov_df_main = pd.DataFrame()
         self.bedcov_df_main = pd.DataFrame()
+        self.bedfile = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "unique_genes.bed",
+        )
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
@@ -335,7 +352,22 @@ class TargetCoverage(BaseAnalysis):
 
     async def process_bam(self, bamfile, timestamp):
         newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
-        #newcovdf, bedcovdf = get_covdfs(bamfile)
+
+        tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+
+        await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
+
+        if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
+            if not self.targetbamfile:
+                self.targetbamfile = os.path.join(self.output, "target.bam")
+                shutil.copy2(tempbamfile.name, self.targetbamfile)
+            else:
+                tempbamholder = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+                pysam.cat(
+                    "-o", tempbamholder.name, self.targetbamfile, tempbamfile.name
+                )
+                shutil.copy2(tempbamholder.name, self.targetbamfile)
+
 
         if self.cov_df_main.empty:
             self.cov_df_main = newcovdf

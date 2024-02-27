@@ -26,7 +26,7 @@ def run_methylartist(tempmgmtdir, plot_out):
 
 def run_bedtools(bamfile, MGMT_BED, tempbamfile):
     """
-    This function runs modkit on a bam file and extracts the methylation data.
+    This function extracts the MGMT sites from the bamfile.
     """
     try:
         os.system(f"bedtools intersect -a {bamfile} -b {MGMT_BED} > {tempbamfile}")
