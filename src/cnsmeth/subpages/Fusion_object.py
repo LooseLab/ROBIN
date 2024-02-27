@@ -33,6 +33,12 @@ class Fusion_object(BaseAnalysis):
         )
         self.fusion_candidates = pd.DataFrame()
         self.fusion_candidates_all = pd.DataFrame()
+        self.fstable_all = None
+        self.fstable = None
+        self.fstable_all_row_count = 0
+        self.all_candidates = 0
+        self.fstable_row_count = 0
+        self.candidates = 0
         self.gene_gff3_2 = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "gencode.v45.basic.annotation.gff3",
@@ -106,7 +112,13 @@ class Fusion_object(BaseAnalysis):
                     "The tables show the reads that are indicative of a fusion.").style('color: #000000; font-size: 125%; font-weight: 300')
             with ui.tabs().classes("w-full") as tabs:
                 one = ui.tab("Within Target Fusions").style('color: #000000; font-size: 125%; font-weight: 300')
+                with one:
+                    self.badge_one = ui.badge('0', color='red').bind_text_from(
+                    self, "candidates", backward=lambda n: f"{n}").props('floating rounded outline')
                 two = ui.tab("Genome Wide Fusions").style('color: #000000; font-size: 125%; font-weight: 300')
+                with two:
+                    self.badge_two = ui.badge('0', color='red').bind_text_from(
+                    self, "all_candidates", backward=lambda n: f"{n}").props('floating rounded outline')
             with ui.tab_panels(tabs, value=one).classes("w-full"):
                 with ui.tab_panel(one):
                     with ui.card().style("width: 100%"):
@@ -153,215 +165,105 @@ class Fusion_object(BaseAnalysis):
         self.update_fusion_table_all(result_all)
 
     def update_fusion_table_all(self,result_all):
-        if not result_all.empty:
-            self.fusiontable_all.clear()
-            with self.fusiontable_all:
-                ui.aggrid.from_pandas(
-                    result_all.sort_values(by=7).rename(
-                        columns={
-                            0: "chromBED",
-                            1: "BS",
-                            2: "BE",
-                            3: "Gene",
-                            4: "chrom",
-                            5: "mS",
-                            6: "mE",
-                            7: "readID",
-                            8: "mapQ",
-                            9: "strand",
-                        }
-                    ),
-                    theme="material",
-                    options={
-                        "defaultColDef": {
-                            "flex": 1,
-                            "minWidth": 150,
-                            "sortable": True,
-                            "resizable": True,
+        if result_all.shape[0] > self.fstable_all_row_count:
+            self.fstable_all_row_count = result_all.shape[0]
+            #self.fusiontable_all.clear()
+            if not self.fstable_all:
+                self.fusiontable_all.clear()
+                with self.fusiontable_all:
+                    self.fstable_all = ui.aggrid.from_pandas(
+                        result_all.sort_values(by=7).rename(
+                            columns={
+                                0: "chromBED",
+                                1: "BS",
+                                2: "BE",
+                                3: "Gene",
+                                4: "chrom",
+                                5: "mS",
+                                6: "mE",
+                                7: "readID",
+                                8: "mapQ",
+                                9: "strand",
+                            }
+                        ),
+                        theme="material",
+                        options={
+                            "defaultColDef": {
+                                "flex": 1,
+                                "minWidth": 150,
+                                "sortable": True,
+                                "resizable": True,
+                            },
+                            "columnDefs": [
+                                {
+                                    "headerName": "Chromosome",
+                                    "field": "chromBED",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "BS",
+                                    "field": "BS",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "BE",
+                                    "field": "BE",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "Gene",
+                                    "field": "Gene",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "chrom",
+                                    "field": "chrom",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "mS",
+                                    "field": "mS",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "mE",
+                                    "field": "mE",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "readID",
+                                    "field": "readID",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "mapQ",
+                                    "field": "mapQ",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "strand",
+                                    "field": "strand",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                            ],
+                            "pagination": True,
+                            "paginationAutoPageSize": True,
                         },
-                        "columnDefs": [
-                            {
-                                "headerName": "Chromosome",
-                                "field": "chromBED",
-                                "filter": "agTextColumnFilter",
-                                "floatingFilter": False,
-                            },
-                            {
-                                "headerName": "BS",
-                                "field": "BS",
-                                "filter": "agNumberColumnFilter",
-                                "floatingFilter": False,
-                            },
-                            {
-                                "headerName": "BE",
-                                "field": "BE",
-                                "filter": "agNumberColumnFilter",
-                                "floatingFilter": False,
-                            },
-                            {
-                                "headerName": "Gene",
-                                "field": "Gene",
-                                "filter": "agTextColumnFilter",
-                                "floatingFilter": False,
-                            },
-                            {
-                                "headerName": "chrom",
-                                "field": "chrom",
-                                "filter": "agTextColumnFilter",
-                                "floatingFilter": False,
-                            },
-                            {
-                                "headerName": "mS",
-                                "field": "mS",
-                                "filter": "agNumberColumnFilter",
-                                "floatingFilter": False,
-                            },
-                            {
-                                "headerName": "mE",
-                                "field": "mE",
-                                "filter": "agNumberColumnFilter",
-                                "floatingFilter": False,
-                            },
-                            {
-                                "headerName": "readID",
-                                "field": "readID",
-                                "filter": "agTextColumnFilter",
-                                "floatingFilter": False,
-                            },
-                            {
-                                "headerName": "mapQ",
-                                "field": "mapQ",
-                                "filter": "agNumberColumnFilter",
-                                "floatingFilter": False,
-                            },
-                            {
-                                "headerName": "strand",
-                                "field": "strand",
-                                "filter": "agTextColumnFilter",
-                                "floatingFilter": False,
-                            },
-                        ],
-                        "pagination": True,
-                        "paginationAutoPageSize": True,
-                    },
-                    auto_size_columns=True,
-                ).classes("max-h-100 min-w-full").style('color: #000000; font-size: 100%; font-weight: 300; height: 900px')
-            self.fusionplot_all.clear()
-
-        result_all, goodpairs = self._annotate_results(result_all)
-
-        if not result_all.empty:
-            with self.fusionplot_all.classes("w-full"):
-                for gene_pair in (
-                    result_all[goodpairs].sort_values(by=7)["tag"].unique()
-                ):
-                    with ui.card():
-                        with ui.row():
-                            ui.label(f"{gene_pair}").tailwind(
-                                "drop-shadow", "font-bold"
-                            )
-                        with ui.row():
-                            for gene in result_all[
-                                goodpairs & result_all[goodpairs]["tag"].eq(gene_pair)
-                            ][3].unique():
-                                # self.create_fusion_plot(
-                                #    gene,
-                                #    result_all[goodpairs].sort_values(by=7)[
-                                #        result_all[goodpairs]
-                                #        .sort_values(by=7)[3]
-                                #        .eq(gene)
-                                #    ],
-                                # )
-                                title = gene
-                                reads = result_all[goodpairs].sort_values(by=7)[
-                                    result_all[goodpairs].sort_values(by=7)[3].eq(gene)
-                                ]
-                                with ui.card().classes("no-shadow border-[2px]"):
-                                    with ui.pyplot(figsize=(16, 2)):
-                                        ax1 = plt.gca()
-                                        features = []
-                                        first_index = 0
-                                        sequence_length = 100
-                                        x_label = ""
-                                        for index, row in self.gene_table[
-                                            self.gene_table["gene_name"].eq(
-                                                title.strip()
-                                            )
-                                        ].iterrows():
-                                            if row["Type"] == "gene":
-                                                x_label = row["Seqid"]
-                                                features.append(
-                                                    GraphicFeature(
-                                                        start=int(row["Start"]),
-                                                        end=int(row["End"]),
-                                                        strand=STRAND[row["Strand"]],
-                                                        thickness=4,
-                                                        color="#ffd700",
-                                                    )
-                                                )
-                                                first_index = int(row["Start"]) - 1000
-                                                sequence_length = (
-                                                    int(row["End"])
-                                                    - int(row["Start"])
-                                                    + 2000
-                                                )
-                                            if (
-                                                row["Type"] == "CDS"
-                                                and row["transcript_type"]
-                                                == "protein_coding"
-                                            ):
-                                                features.append(
-                                                    GraphicFeature(
-                                                        start=int(row["Start"]),
-                                                        end=int(row["End"]),
-                                                        strand=STRAND[row["Strand"]],
-                                                        color="#ffcccc",
-                                                    )
-                                                )
-                                        record = GraphicRecord(
-                                            sequence_length=sequence_length,
-                                            first_index=first_index,
-                                            features=features,
-                                        )
-                                        ax1.set_title(f"{title} - {x_label}")
-                                        record.plot(ax=ax1)
-
-                                    with ui.pyplot(figsize=(16, 1)):
-                                        ax = plt.gca()
-                                        features = []
-                                        for index, row in reads.sort_values(
-                                            by=7
-                                        ).iterrows():
-                                            features.append(
-                                                GraphicFeature(
-                                                    start=int(row[5]),
-                                                    end=int(row[6]),
-                                                    strand=STRAND[row[9]],
-                                                    color=row["Color"],
-                                                )
-                                            )
-                                        record = GraphicRecord(
-                                            sequence_length=sequence_length,
-                                            first_index=first_index,
-                                            features=features,
-                                        )
-                                        record.plot(
-                                            ax=ax, with_ruler=False, draw_line=True
-                                        )
-
-    def fusion_table(self):
-        uniques = self.fusion_candidates[7].duplicated(keep=False)
-        doubles = self.fusion_candidates[uniques]
-        counts = doubles.groupby(7)[3].transform("nunique")
-        result = doubles[counts > 1]
-        result.to_csv(os.path.join(self.output, "fusion_candidates_master.csv"))
-        self.update_fusion_table(result)
-
-    def update_fusion_table(self,result):
-        self.fusiontable.clear()
-        with self.fusiontable:
-            ui.aggrid.from_pandas(
-                result.sort_values(by=7).rename(
+                        auto_size_columns=True,
+                    ).classes("max-h-100 min-w-full").style('color: #000000; font-size: 100%; font-weight: 300; height: 900px')
+                self.fusionplot_all.clear()
+            else:
+                self.fstable_all.options['rowData'] = result_all.sort_values(by=7).rename(
                     columns={
                         0: "chromBED",
                         1: "BS",
@@ -374,102 +276,253 @@ class Fusion_object(BaseAnalysis):
                         8: "mapQ",
                         9: "strand",
                     }
-                ),
-                theme="material",
-                options={
-                    "defaultColDef": {
-                        "sortable": True,
-                        "resizable": True,
-                    },
-                    "columnDefs": [
-                        {
-                            "headerName": "Chromosome",
-                            "field": "chromBED",
-                            "filter": "agTextColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "BS",
-                            "field": "BS",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "BE",
-                            "field": "BE",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "Gene",
-                            "field": "Gene",
-                            "filter": "agTextColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "chrom",
-                            "field": "chrom",
-                            "filter": "agTextColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "mS",
-                            "field": "mS",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "mE",
-                            "field": "mE",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "readID",
-                            "field": "readID",
-                            "filter": "agTextColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "mapQ",
-                            "field": "mapQ",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "strand",
-                            "field": "strand",
-                            "filter": "agTextColumnFilter",
-                            "floatingFilter": False,
-                        },
-                    ],
-                    "pagination": True,
-                    "paginationAutoPageSize": True,
-                },
-                auto_size_columns=False,
-            ).classes("max-h-100 min-w-full").style('color: #000000; font-size: 100%; font-weight: 300; height: 900px')
-        self.fusionplot.clear()
+                ).to_dict('records')
+                self.fstable_all.update()
+                self.fusionplot_all.clear()
 
-        result, goodpairs = self._annotate_results(result)
+            result_all, goodpairs = self._annotate_results(result_all)
+            self.all_candidates = result_all[goodpairs].sort_values(by=7)["tag"].nunique()
 
-        with self.fusionplot.classes("w-full"):
-            for gene_pair in result[goodpairs].sort_values(by=7)["tag"].unique():
-                with ui.card():
-                    with ui.row():
-                        ui.label(f"{gene_pair}").tailwind("drop-shadow", "font-bold")
-                    with ui.row():
-                        for gene in result[
-                            goodpairs & result[goodpairs]["tag"].eq(gene_pair)
-                        ][3].unique():
-                            # for gene in result_all[goodpairs].sort_values(by=7)[3].unique():
-                            # if len(result[goodpairs].sort_values(by=7)[
-                            #           result[goodpairs].sort_values(by=7)[3].eq(gene)]) > 2:
-                            self.create_fusion_plot(
-                                gene,
-                                result[goodpairs].sort_values(by=7)[
-                                    result[goodpairs].sort_values(by=7)[3].eq(gene)
-                                ],
-                            )
+            if not result_all.empty:
+                with self.fusionplot_all.classes("w-full"):
+                    for gene_pair in (
+                        result_all[goodpairs].sort_values(by=7)["tag"].unique()
+                    ):
+                        with ui.card():
+                            with ui.row():
+                                ui.label(f"{gene_pair}").tailwind(
+                                    "drop-shadow", "font-bold"
+                                )
+                            with ui.row():
+                                for gene in result_all[
+                                    goodpairs & result_all[goodpairs]["tag"].eq(gene_pair)
+                                ][3].unique():
+                                    # self.create_fusion_plot(
+                                    #    gene,
+                                    #    result_all[goodpairs].sort_values(by=7)[
+                                    #        result_all[goodpairs]
+                                    #        .sort_values(by=7)[3]
+                                    #        .eq(gene)
+                                    #    ],
+                                    # )
+                                    title = gene
+                                    reads = result_all[goodpairs].sort_values(by=7)[
+                                        result_all[goodpairs].sort_values(by=7)[3].eq(gene)
+                                    ]
+                                    with ui.card().classes("no-shadow border-[2px]"):
+                                        with ui.pyplot(figsize=(16, 2)):
+                                            ax1 = plt.gca()
+                                            features = []
+                                            first_index = 0
+                                            sequence_length = 100
+                                            x_label = ""
+                                            for index, row in self.gene_table[
+                                                self.gene_table["gene_name"].eq(
+                                                    title.strip()
+                                                )
+                                            ].iterrows():
+                                                if row["Type"] == "gene":
+                                                    x_label = row["Seqid"]
+                                                    features.append(
+                                                        GraphicFeature(
+                                                            start=int(row["Start"]),
+                                                            end=int(row["End"]),
+                                                            strand=STRAND[row["Strand"]],
+                                                            thickness=4,
+                                                            color="#ffd700",
+                                                        )
+                                                    )
+                                                    first_index = int(row["Start"]) - 1000
+                                                    sequence_length = (
+                                                        int(row["End"])
+                                                        - int(row["Start"])
+                                                        + 2000
+                                                    )
+                                                if (
+                                                    row["Type"] == "CDS"
+                                                    and row["transcript_type"]
+                                                    == "protein_coding"
+                                                ):
+                                                    features.append(
+                                                        GraphicFeature(
+                                                            start=int(row["Start"]),
+                                                            end=int(row["End"]),
+                                                            strand=STRAND[row["Strand"]],
+                                                            color="#ffcccc",
+                                                        )
+                                                    )
+                                            record = GraphicRecord(
+                                                sequence_length=sequence_length,
+                                                first_index=first_index,
+                                                features=features,
+                                            )
+                                            ax1.set_title(f"{title} - {x_label}")
+                                            record.plot(ax=ax1)
+
+                                        with ui.pyplot(figsize=(16, 1)):
+                                            ax = plt.gca()
+                                            features = []
+                                            for index, row in reads.sort_values(
+                                                by=7
+                                            ).iterrows():
+                                                features.append(
+                                                    GraphicFeature(
+                                                        start=int(row[5]),
+                                                        end=int(row[6]),
+                                                        strand=STRAND[row[9]],
+                                                        color=row["Color"],
+                                                    )
+                                                )
+                                            record = GraphicRecord(
+                                                sequence_length=sequence_length,
+                                                first_index=first_index,
+                                                features=features,
+                                            )
+                                            record.plot(
+                                                ax=ax, with_ruler=False, draw_line=True
+                                            )
+
+    def fusion_table(self):
+        uniques = self.fusion_candidates[7].duplicated(keep=False)
+        doubles = self.fusion_candidates[uniques]
+        counts = doubles.groupby(7)[3].transform("nunique")
+        result = doubles[counts > 1]
+        result.to_csv(os.path.join(self.output, "fusion_candidates_master.csv"))
+        self.update_fusion_table(result)
+
+    def update_fusion_table(self,result):
+        if result.shape[0] > self.fstable_row_count:
+            self.fstable_row_count = result.shape[0]
+            if not self.fstable:
+                self.fusiontable.clear()
+                with self.fusiontable:
+                    self.fstable = ui.aggrid.from_pandas(
+                        result.sort_values(by=7).rename(
+                            columns={
+                                0: "chromBED",
+                                1: "BS",
+                                2: "BE",
+                                3: "Gene",
+                                4: "chrom",
+                                5: "mS",
+                                6: "mE",
+                                7: "readID",
+                                8: "mapQ",
+                                9: "strand",
+                            }
+                        ),
+                        theme="material",
+                        options={
+                            "defaultColDef": {
+                                "flex": 1,
+                                "minWidth": 150,
+                                "sortable": True,
+                                "resizable": True,
+                            },
+                            "columnDefs": [
+                                {
+                                    "headerName": "Chromosome",
+                                    "field": "chromBED",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "BS",
+                                    "field": "BS",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "BE",
+                                    "field": "BE",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "Gene",
+                                    "field": "Gene",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "chrom",
+                                    "field": "chrom",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "mS",
+                                    "field": "mS",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "mE",
+                                    "field": "mE",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "readID",
+                                    "field": "readID",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "mapQ",
+                                    "field": "mapQ",
+                                    "filter": "agNumberColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                                {
+                                    "headerName": "strand",
+                                    "field": "strand",
+                                    "filter": "agTextColumnFilter",
+                                    "floatingFilter": False,
+                                },
+                            ],
+                            "pagination": True,
+                            "paginationAutoPageSize": True,
+                        },
+                        auto_size_columns=True,
+                    ).classes("max-h-100 min-w-full").style(
+                        'color: #000000; font-size: 100%; font-weight: 300; height: 900px')
+                self.fusionplot.clear()
+            else:
+                self.fstable.options['rowData'] = result.sort_values(by=7).rename(
+                    columns={
+                        0: "chromBED",
+                        1: "BS",
+                        2: "BE",
+                        3: "Gene",
+                        4: "chrom",
+                        5: "mS",
+                        6: "mE",
+                        7: "readID",
+                        8: "mapQ",
+                        9: "strand",
+                    }
+                ).to_dict('records')
+                self.fstable.update()
+                self.fusionplot.clear()
+
+            result, goodpairs = self._annotate_results(result)
+            self.candidates = result[goodpairs].sort_values(by=7)["tag"].nunique()
+            with self.fusionplot.classes("w-full"):
+                for gene_pair in result[goodpairs].sort_values(by=7)["tag"].unique():
+                    with ui.card():
+                        with ui.row():
+                            ui.label(f"{gene_pair}").tailwind("drop-shadow", "font-bold")
+                        with ui.row():
+                            for gene in result[
+                                goodpairs & result[goodpairs]["tag"].eq(gene_pair)
+                            ][3].unique():
+                                self.create_fusion_plot(
+                                    gene,
+                                    result[goodpairs].sort_values(by=7)[
+                                        result[goodpairs].sort_values(by=7)[3].eq(gene)
+                                    ],
+                                )
 
     def create_fusion_plot(self, title, reads):
         """
