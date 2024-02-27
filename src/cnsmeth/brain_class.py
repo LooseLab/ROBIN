@@ -273,26 +273,23 @@ class BrainMeth:
                 self.RandomForest = RandomForest_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamforcns)
             pass
         #    with ui.tab_panel(copy_numer).classes("w-full"):
-        with ui.card().style("width: 100%"):
-            if "cnv" not in self.exclude:
+        if "cnv" not in self.exclude:
+            with ui.card().style("width: 100%"):
                 self.CNV = CNVAnalysis(self.threads, self.output, progress=True, bamqueue=self.bamforcnv)
             pass
-
         #    with ui.tab_panel(coverage).classes("w-full"):
-        with ui.card().style("width: 100%"):
-            if "coverage" not in self.exclude:
+        if "coverage" not in self.exclude:
+            with ui.card().style("width: 100%"):
                 self.Target_Coverage = TargetCoverage(self.threads, self.output, progress=True,bamqueue=self.bamfortargetcoverage)
             pass
-
         #    with ui.tab_panel(mgmt).classes("w-full"):
-        with ui.card().style("width: 100%"):
-            if "mgmt" not in self.exclude:
+        if "mgmt" not in self.exclude:
+            with ui.card().style("width: 100%"):
                 self.MGMT_panel = MGMT_Object(self.threads, self.output, progress=True, bamqueue=self.bamformgmt)
             pass
-
         #    with ui.tab_panel(fusions).classes("w-full"):
-        with ui.card().style("width: 100%"):
-            if "fusion" not in self.exclude:
+        if "fusion" not in self.exclude:
+            with ui.card().style("width: 100%"):
                 self.Fusion_panel = Fusion_object(self.threads, self.output, progress=True, bamqueue=self.bamforfusions)
             pass
 
