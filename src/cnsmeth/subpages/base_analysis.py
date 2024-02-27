@@ -170,7 +170,10 @@ class BaseAnalysis:
                 time.sleep(0.1)
                 if not self.running:
                     self.offset += step_size
-            self.add_bam(row["full_path"], row["file_produced"])
+            if len(row["full_path"]) > 0:
+                # Here we check that the path to the bam file absolutely exists.
+                self.add_bam(row["full_path"], row["file_produced"])
+
 
     def process_bam(self, bamfile, timestamp):
         """
