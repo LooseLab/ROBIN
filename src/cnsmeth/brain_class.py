@@ -1,13 +1,22 @@
 from nicegui import ui
 
 from cnsmeth.utilities.bam_handler import BamEventHandler
-from cnsmeth.Sturgeon_worker import Sturgeon_worker
-from cnsmeth.RCNS2_worker import RCNS2_worker
-from cnsmeth.subpages.copy_number_component import CNV_Plot
-from cnsmeth.subpages.target_coverage import TargetCoverage
-from cnsmeth.subpages.mgmt_panel import MGMT_Panel
-from cnsmeth.subpages.fusion_panel import Fusion_Panel
+
+# from cnsmeth.Sturgeon_worker import Sturgeon_worker
+# from cnsmeth.RCNS2_worker import RCNS2_worker
+
+# from cnsmeth.CrossNN_worker import CrossNN_worker
+from cnsmeth.subpages.MGMT_object import MGMT_Object
+from cnsmeth.subpages.Sturgeon_object import Sturgeon_object
+from cnsmeth.subpages.NanoDX_object import NanoDX_object
+from cnsmeth.subpages.RandomForest_object import RandomForest_object
+
+# from cnsmeth.subpages.fusion_panel import Fusion_Panel
+from cnsmeth.subpages.CNV_object import CNVAnalysis
+from cnsmeth.subpages.TargetCoverage_object import TargetCoverage
+from cnsmeth.subpages.Fusion_object import Fusion_object
 from cnsmeth.utilities.local_file_picker import local_file_picker
+from cnsmeth.utilities.ReadBam import ReadBam
 
 from watchdog.observers import Observer
 from pathlib import Path
@@ -16,6 +25,7 @@ import pandas as pd
 
 import threading
 import time
+from datetime import datetime
 import os
 
 
@@ -29,6 +39,7 @@ class BrainMeth:
         sequencing_summary=None,
         showerrors=False,
         browse=False,
+        exclude=[],
     ):
         self.threads = threads
         self.simtime = simtime
@@ -37,18 +48,26 @@ class BrainMeth:
         self.sequencing_summary = sequencing_summary
         self.showerrors = showerrors
         self.browse = browse
+        self.exclude = exclude
 
         self.bam_count = {"counter": 0}
+        self.bam_passed = {"counter": 0}
+        self.bam_failed = {"counter": 0}
+        self.devices = set()
+        self.basecall_models = set()
+        self.run_time = set()
+        self.flowcell_ids = set()
+        self.sample_ids = set()
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
-
-        print("BrainMeth Loaded")
-        self.cnv = CNV_Plot()
-        self.target_coverage = TargetCoverage()
-        self.mgmt_panel = MGMT_Panel()
-        self.fusion_panel = Fusion_Panel()
+        self.bamfornanodx = Queue()
+        self.bamforcnv = Queue()
+        self.bamfortargetcoverage = Queue()
+        self.bamformgmt = Queue()
+        self.bamforfusions = Queue()
 
         if not self.browse:
+            self.information_panel()
             self.event_handler = BamEventHandler(self.bam_count)
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
@@ -65,23 +84,7 @@ class BrainMeth:
             )
             self.check_for_existing_bams.daemon = True
             self.check_for_existing_bams.start()
-            self.sturgeon_worker = Sturgeon_worker(
-                self.bamforsturgeon, threads=self.threads, output_folder=self.output
-            )
 
-            self.rcns2_worker = RCNS2_worker(
-                self.bamforcns,
-                self.cnv,
-                self.target_coverage,
-                self.mgmt_panel,
-                self.fusion_panel,
-                threads=self.threads,
-                output_folder=self.output,
-                showerrors=self.showerrors,
-                browse=self.browse,
-            )
-
-            self.information_panel()
         else:
             ui.label("Browse mode enabled. Please choose a folder to see data from.")
             ui.button("Choose file", on_click=self.pick_file, icon="folder")
@@ -98,6 +101,8 @@ class BrainMeth:
                 ui.label(f"Monitoring the path:{result}").tailwind(
                     "drop-shadow", "font-bold"
                 )
+                ui.label("Not yet implemented.")
+                """
                 with ui.tabs().classes("w-full") as tabs:
                     methylation = ui.tab("Methylation Classification")
                     copy_numer = ui.tab("Copy Number Variation")
@@ -128,12 +133,12 @@ class BrainMeth:
                                 )
 
                                 with ui.card().classes("w-full h-auto"):
-                                    with ui.grid(columns=2).classes("w-full h-auto"):
+                                    with ui.grid(columns=3).classes("w-full h-auto"):
                                         with ui.column():
                                             with ui.card().style("width: 100%"):
                                                 self.rcns2_worker.status_rcns2()
                                                 self.rcns2_worker.create_rcns2_chart(
-                                                    "RapidCNS2"
+                                                    "RapidCNS2 (Random Forest)"
                                                 )
 
                                         with ui.column():
@@ -141,6 +146,12 @@ class BrainMeth:
                                                 self.sturgeon_worker.status_sturgeon()
                                                 self.sturgeon_worker.create_sturgeon_chart(
                                                     "Sturgeon"
+                                                )
+                                        with ui.column():
+                                            with ui.card().style("width: 100%"):
+                                                # self.sturgeon_worker.status_sturgeon()
+                                                self.sturgeon_worker.create_nanodx_chart(
+                                                    "NanoDX"
                                                 )
 
                                 with ui.card().style("width: 100%"):
@@ -151,12 +162,10 @@ class BrainMeth:
 
                     with ui.tab_panel(copy_numer).classes("w-full"):
                         with ui.card().style("width: 100%"):
-
                             self.cnv.create_cnv_scatter("CNV Scatter")
-                            pass
 
                     with ui.tab_panel(coverage).classes("w-full"):
-                        self.target_coverage.setup_ui()
+                        pass
 
                     with ui.tab_panel(mgmt).classes("w-full"):
                         self.mgmt_panel.setup_ui(mgmt)
@@ -170,7 +179,7 @@ class BrainMeth:
                 self.replaycontrol = ui.button(
                     "replay data", on_click=self.replay, icon="replay"
                 )
-
+                """
             # self.rcns2_worker.replay_prior_data()
 
     def replay(self):
@@ -182,69 +191,190 @@ class BrainMeth:
     def replay_cnv(self):
         ui.notify("Replaying CNV data")
 
+    @property
+    def min_start_time(self):
+        if len(self.run_time) > 0:
+            dt = datetime.fromisoformat(min(self.run_time))
+            formatted_string = dt.strftime("%Y-%m-%d %H:%M")
+            return formatted_string
+        else:
+            return 0
+
     def information_panel(self):
-        with ui.card().style("width: 100%"):
+        self.frontpage = ui.card().style("width: 100%")
+        with self.frontpage:
+            ui.label("CNS Tumour Methylation Classification").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
             ui.label(
                 "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
-            ).tailwind("drop-shadow", "font-bold")
+            ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
+                "drop-shadow", "font-bold"
+            )
             with ui.row():
-                ui.label(f"Monitoring the path:{self.watchfolder}").tailwind(
-                    "drop-shadow"
+                ui.label(f"Monitoring the path:{self.watchfolder}").style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
                 )
-                ui.label(f"Outputting to:{self.output}").tailwind("drop-shadow")
+                ui.label(f"Outputting to:{self.output}").style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                )
                 ui.label().bind_text_from(
                     self.bam_count, "counter", backward=lambda n: f"BAM files seen: {n}"
-                ).tailwind("drop-shadow")
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.bam_failed, "counter", backward=lambda n: f"BAM fail: {n}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+
+                if "forest" not in self.exclude:
+                    ui.label().bind_text_from(
+                        self,
+                        "bamforcns",
+                        backward=lambda n: f"BAM files for CNS: {n.qsize()}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                if "sturgeon" not in self.exclude:
+                    ui.label().bind_text_from(
+                        self,
+                        "bamforsturgeon",
+                        backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                if "nanodx" not in self.exclude:
+                    ui.label().bind_text_from(
+                        self,
+                        "bamfornanodx",
+                        backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+            with ui.row():
                 ui.label().bind_text_from(
                     self,
-                    "bamforcns",
-                    backward=lambda n: f"BAM files for CNS: {n.qsize()}",
-                ).tailwind("drop-shadow")
+                    "devices",
+                    backward=lambda n: f"Devices: {str(n)}",
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
                     self,
-                    "bamforsturgeon",
-                    backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
-                ).tailwind("drop-shadow")
-        with ui.tabs().classes("w-full") as tabs:
-            methylation = ui.tab("Methylation Classification")
-            copy_numer = ui.tab("Copy Number Variation")
-            coverage = ui.tab("Target Coverage")
-            mgmt = ui.tab("MGMT")
-            fusions = ui.tab("Fusions")
-        with ui.tab_panels(tabs, value=methylation).classes("w-full"):
-            with ui.tab_panel(methylation).classes("w-full"):
-                with ui.card().style("width: 100%"):
-                    with ui.grid(columns=2).classes("w-full h-auto"):
-                        with ui.column():
-                            with ui.card().style("width: 100%"):
-                                self.rcns2_worker.status_rcns2()
-                                self.rcns2_worker.create_rcns2_chart("RapidCNS2")
+                    "basecall_models",
+                    backward=lambda n: f"Basecall Models: {str(n)}",
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self,
+                    "flowcell_ids",
+                    backward=lambda n: f"Flowcell IDs: {str(n)}",
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self,
+                    "min_start_time",
+                    backward=lambda n: f"Run Start Time: {n}",
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self,
+                    "sample_ids",
+                    backward=lambda n: f"Sample ID: {str(n)}",
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
 
-                        with ui.column():
-                            with ui.card().style("width: 100%"):
-                                self.sturgeon_worker.status_sturgeon()
-                                self.sturgeon_worker.create_sturgeon_chart(
-                                    "Sturgeon Prediction"
-                                )
+            with ui.row():
+                ui.label("Results Summary")
+            with ui.row():
+                if "sturgeon" not in self.exclude:
+                    sturgeonsummary = ui.column()
+                if "nanodx" not in self.exclude:
+                    nanodxsummary = ui.column()
+                if "forest" not in self.exclude:
+                    forestsummary = ui.column()
+            if "mgmt" not in self.exclude:
+                with ui.row():
+                    if "mgmt" not in self.exclude:
+                        mgmt = ui.column()
+            if "cnv" not in self.exclude:
+                with ui.row():
+                    if "cnv" not in self.exclude:
+                        cnvsummary = ui.column()
+            if "fusion" not in self.exclude:
+                with ui.row():
+                    if "fusion" not in self.exclude:
+                        fusions = ui.column()
+            if "coverage" not in self.exclude:
+                with ui.row():
+                    if "coverage" not in self.exclude:
+                        coverage = ui.column()
 
-                with ui.card().style("width: 100%"):
-                    self.sturgeon_worker.create_sturgeon_time_chart()
-
-                with ui.card().style("width: 100%"):
-                    self.rcns2_worker.create_rcns2_time_chart()
-
-            with ui.tab_panel(copy_numer).classes("w-full"):
-                with ui.card().style("width: 100%"):
-                    self.cnv.create_cnv_scatter("CNV Scatter")
-
-            with ui.tab_panel(coverage).classes("w-full"):
-                self.target_coverage.setup_ui()
-
-            with ui.tab_panel(mgmt).classes("w-full"):
-                self.mgmt_panel.setup_ui(mgmt)
-
-            with ui.tab_panel(fusions).classes("w-full"):
-                self.fusion_panel.setup_ui()
+        with ui.card().style("width: 100%"):
+            ui.label("Methylation Classifications").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
+            if "sturgeon" not in self.exclude:
+                self.Sturgeon = Sturgeon_object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    batch=True,
+                    bamqueue=self.bamforsturgeon,
+                    summary=sturgeonsummary,
+                )
+            if "nanodx" not in self.exclude:
+                self.NanoDX = NanoDX_object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    batch=True,
+                    bamqueue=self.bamfornanodx,
+                    summary=nanodxsummary,
+                )
+            if "forest" not in self.exclude:
+                self.RandomForest = RandomForest_object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    batch=True,
+                    bamqueue=self.bamforcns,
+                    summary=forestsummary,
+                )
+            pass
+        #    with ui.tab_panel(copy_numer).classes("w-full"):
+        if "cnv" not in self.exclude:
+            with ui.card().style("width: 100%"):
+                self.CNV = CNVAnalysis(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    bamqueue=self.bamforcnv,
+                    summary=cnvsummary,
+                )
+            pass
+        #    with ui.tab_panel(coverage).classes("w-full"):
+        if "coverage" not in self.exclude:
+            with ui.card().style("width: 100%"):
+                self.Target_Coverage = TargetCoverage(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    bamqueue=self.bamfortargetcoverage,
+                    summary=coverage,
+                )
+            pass
+        #    with ui.tab_panel(mgmt).classes("w-full"):
+        if "mgmt" not in self.exclude:
+            with ui.card().style("width: 100%"):
+                self.MGMT_panel = MGMT_Object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    bamqueue=self.bamformgmt,
+                    summary=mgmt,
+                )
+            pass
+        #    with ui.tab_panel(fusions).classes("w-full"):
+        if "fusion" not in self.exclude:
+            with ui.card().style("width: 100%"):
+                self.Fusion_panel = Fusion_object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    bamqueue=self.bamforfusions,
+                    summary=fusions,
+                )
+            pass
 
     def process_bams(self) -> None:
         """
@@ -254,32 +384,56 @@ class BrainMeth:
         :param self:
         :return:
         """
-
-        # First we look for existing files:
-        # self.check_existing_bams()
-
         while True:
-            # self.log("Processing bam files")
-            # self.log(self.bam_count)
-            # self.bam_count = self.bam_count
             if "file" in self.bam_count:
                 while len(self.bam_count["file"]) > 0:
                     self.nofiles = False
                     file = self.bam_count["file"].popitem()
                     if file[1] > time.time() - 5:
                         time.sleep(5)
-                    self.bamforcns.put(file[0])
-                    self.bamforsturgeon.put(file[0])
+                    self.check_bam(file[0])
+                    if "forest" not in self.exclude:
+                        self.bamforcns.put([file[0], file[1]])
+                    if "sturgeon" not in self.exclude:
+                        self.bamforsturgeon.put([file[0], file[1]])
+                    if "nanodx" not in self.exclude:
+                        self.bamfornanodx.put([file[0], file[1]])
+                    if "cnv" not in self.exclude:
+                        self.bamforcnv.put([file[0], file[1]])
+                    if "coverage" not in self.exclude:
+                        self.bamfortargetcoverage.put([file[0], file[1]])
+                    if "mgmt" not in self.exclude:
+                        self.bamformgmt.put([file[0], file[1]])
+                    if "fusion" not in self.exclude:
+                        self.bamforfusions.put([file[0], file[1]])
+
                 time.sleep(1)
                 self.nofiles = True
             time.sleep(1)
 
+    def check_bam(self, bamfile):
+        """
+        This function checks a bam file and returns a dictionary of its attributes.
+        :param bamfile:
+        :return:
+        """
+        baminfo = ReadBam(bamfile).process_reads()
+        if baminfo["state"] == "pass":
+            self.bam_passed["counter"] += 1
+        else:
+            self.bam_failed["counter"] += 1
+        self.basecall_models.add(baminfo["basecall_model"])
+        self.devices.add(baminfo["device_position"])
+        self.sample_ids.add(baminfo["sample_id"])
+        self.flowcell_ids.add(baminfo["flow_cell_id"])
+        self.run_time.add(baminfo["time_of_run"])
+
     def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
         if sequencing_summary:
-            # get the current time
-            now = time.time()
-            print("Checking for existing bams against sequencing summary")
+
+            with self.frontpage:
+                ui.notify("Checking for existing bams against sequencing summary")
             df = pd.read_csv(
                 sequencing_summary,
                 delimiter="\t",
@@ -295,30 +449,42 @@ class BrainMeth:
                 .sort_values(by="template_end")
                 .reset_index(drop=True)
             )
+
             latest_timestamps["full_path"] = ""
-            latest_timestamps["file_produced"] = latest_timestamps["template_end"] + now
-            print(latest_timestamps)
+            latest_timestamps["file_produced"] = latest_timestamps[
+                "template_end"
+            ]  # + now
             for path, dirs, files in os.walk(self.watchfolder):
                 for f in files:
                     if "".join(Path(f).suffixes) in file_endings:
                         latest_timestamps.loc[
                             latest_timestamps["filename_bam"] == f, "full_path"
                         ] = os.path.join(path, f)
-                        # latest_timestamps[latest_timestamps['filename_bam'] == f]['full_path'] = os.path.join(path, f)
-            print(latest_timestamps)
-            for index, row in latest_timestamps.iterrows():
-                current_time = time.time()
-                time_diff = row["file_produced"] - current_time
-                print(f"Sleeping for {time_diff} seconds.")
-                if time_diff > 0:
-                    time.sleep(time_diff)
-                self.bam_count["counter"] += 1
-                if "file" not in self.bam_count:
-                    self.bam_count["file"] = {}
-                self.bam_count["file"][row["full_path"]] = time.time()
-                # print (index,row)
+                        self.check_bam(os.path.join(path, f))
+            with self.frontpage:
+                ui.notify("Bams Checked")
+
+            step_size = 20
+
+            with self.frontpage:
+                ui.notify("Target Playback Started")
+
+            if "sturgeon" not in self.exclude:
+                self.Sturgeon.playback(latest_timestamps, step_size=step_size)
+            if "nanodx" not in self.exclude:
+                self.NanoDX.playback(latest_timestamps, step_size=step_size)
+            if "forest" not in self.exclude:
+                self.RandomForest.playback(latest_timestamps, step_size=step_size)
+            if "cnv" not in self.exclude:
+                self.CNV.playback(latest_timestamps, step_size=step_size)
+            if "coverage" not in self.exclude:
+                self.Target_Coverage.playback(latest_timestamps, step_size=step_size)
+            if "fusion" not in self.exclude:
+                self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
+            if "mgmt" not in self.exclude:
+                self.MGMT_panel.playback(latest_timestamps, step_size=step_size)
+
             self.runfinished = True
-            # os.kill(os.getpid(), signal.SIGINT)
         else:
             for path, dirs, files in os.walk(self.watchfolder):
                 for f in files:

@@ -35,14 +35,10 @@ def save_bedmethyl(result_df, output_file):
     os.system(f"sed -i.bak 's/    /\t/g' {file_path}")
 
 
-def merge_bedmethyl(dfA, dfB):
-    """
-    Merge bedmethyl files into a single dataframe.
-    Given one or more bedmethyl files, merge them into a single dataframe.
-    """
-
-    concat_df = pd.concat([dfA, dfB])
-
+def collapse_bedmethyl(concat_df):
+    # ToDo: Don't hack strand
+    # Hack Strand
+    concat_df["strand"] = concat_df["strand"].replace({"+": ".", "-": "."})
     grouped = concat_df.groupby(
         [
             "chrom",
@@ -96,4 +92,17 @@ def merge_bedmethyl(dfA, dfB):
     merged_df = result_df[column_order]
     # merged_df[['start_pos2', 'end_pos2','score','Nvalid','Nmod', 'Ncanon', 'Nother', 'Ndel', 'Nfail', 'Ndiff', 'Nnocall']] = merged_df[['start_pos2', 'end_pos2','score','Nvalid','Nmod', 'Ncanon', 'Nother', 'Ndel', 'Nfail', 'Ndiff', 'Nnocall']].astype(int)
     merged_df.sort_values(by=["chrom", "start_pos"], inplace=True)
+    return merged_df
+
+
+def merge_bedmethyl(dfA, dfB):
+    """
+    Merge bedmethyl files into a single dataframe.
+    Given one or more bedmethyl files, merge them into a single dataframe.
+    """
+
+    concat_df = pd.concat([dfA, dfB])
+
+    merged_df = collapse_bedmethyl(concat_df)
+
     return merged_df
