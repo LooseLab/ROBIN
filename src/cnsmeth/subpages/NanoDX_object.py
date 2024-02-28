@@ -261,11 +261,10 @@ class NanoDX_object(BaseAnalysis):
                 self.nanodx_bam_count,
                 n_features,
             )
-            print (nanoDX_df)
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    ui.label(f"NanoDX classification: {nanoDX_df['class'].head(1).index[0]} - {nanoDX_df['class'].head(1).values[0]}")
+                    ui.label(f"NanoDX classification: {nanoDX_df['class'].head(1).values[0]} - {nanoDX_df['score'].head(1).values[0]:.2f}")
             ui.notify(f"NanoDX: Done - {nanoDX_df['class'].head(1).values}",type="success",position="top-right")
 
             self.bam_processed += len(tomerge)

@@ -15,7 +15,13 @@
 
 ## Installation
 
-Currently we recommend installing 'CNSmeth' using the following conda yml file.
+We recommend installing 'CNSmeth' using the following conda yml file included in the repository: [cnsmeth.yml](cnsmeth.yml)
+
+This will install all the required dependencies including R and Python packages as well as readfish and ont-pyguppy-client-lib.
+
+However, in this version of cnsmeth, you will need to install the tool from source. See below for installation details.
+
+The contents of this file are:
 
 ```console
 name: cnsmeth
@@ -24,6 +30,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  - git-lfs
   - r-base
   - bioconda::bioconductor-genomicranges
   - r-optparse
@@ -39,83 +46,111 @@ dependencies:
     #- git+https://github.com/LooseLab/cnsmeth
 
 ```
-then to install:
+then to create the environment:
 
 ```console
 conda env create -f cnsmeth.yml
 ```
 
+To activate the environment:
+
+```console
+conda activate cnsmeth
+```
+
+To install the tool from source:
+
+```console
+git clone https://github.com/LooseLab/cnsmeth/
+cd cnsmeth
+git lfs install
+git lfs pull
+git submodule update --init --recursive
+pip install .
+```
+
+
 ## Usage
 
 ```console
-cnsmeth --help
-python3.8/site-packages/sturgeon/callmapping.py:14: UserWarning: Error loading modbampy, bam functionalities will not work
-  warnings.warn('Error loading modbampy, bam functionalities will not work')
-Usage: cnsmeth [OPTIONS] WATCHFOLDER OUTPUT
+❯ cnsmeth --help
+Usage: cnsmeth [OPTIONS] [WATCHFOLDER] [OUTPUT]
 
   Entrypoint for when GUI is launched directly. :return: None
 
 Options:
-  --port INTEGER             Port for GUI
-  --threads INTEGER          Number of threads available.
-  --simtime BOOLEAN          If set, will simulate the addition of existing
-                             files to the pipeline based on read data.
-  --showerrors BOOLEAN       If set, will display all errors in running R.
-  --sequencing_summary TEXT  Path to sequencing summary file. If provided,
-                             timestamps will be taken from this file.
-  --help                     Show this message and exit.
+  --port INTEGER                  Port for GUI
+  --threads INTEGER               Number of threads available.
+  --simtime BOOLEAN               If set, will simulate the addition of
+                                  existing files to the pipeline based on read
+                                  data.
+  --showerrors BOOLEAN            If set, will display all errors in running
+                                  R.
+  --sequencing_summary TEXT       Path to sequencing summary file. If
+                                  provided, timestamps will be taken from this
+                                  file.
+  --browse                        Browse Historic Data.
+  -e, --exclude [sturgeon|forest|nanodx|cnv|fusion|coverage|mgmt]
+                                  Exclude analysis types with one or more of
+                                  these options.
+  --help                          Show this message and exit.
 ```
-
-You may see a warning about modbampy, this is not an issue and can be ignored at this time.
 
 To run the tool, you will need to provide a watchfolder and an output folder. 
 
-The watchfolder is where the minKNOW will be writing the aligned BAM files for the run you wish to analyse.
+The watchfolder is where minKNOW will be writing the aligned BAM files for the run you wish to analyse.
 
 The output folder is where results will be written too. This folder must exist and should be empty.
 
-For good performance you should set the highest number of threads you can. Be aware that MinKNOW requires at least 8 cores. So if you are on a 16 core system you should not use more than 8 threads.
+Optional flags include:
 
-If you wish to analyse data after sequencing is complete you can simulate the addition of files to the pipeline by setting the simtime flag OR providing a path to a sequencing summary file. If you provide the simtime flag (--simtime True) then the tool will add one new bam file every 5 seconds. If you provide a sequencing summary file then the tool will use that file to calculate approximately when each BAM file was created by MinKNOW and add the file at that point.
+- --port: The port to run the GUI on.
+- --threads: The number of threads to use for analysis. This will be the number of threads used by each tool. You should set this with care. On a system with a limited number of cores you should set this to 1. On systems with more CPU cores available you can use more cores. #ToDo: Sensibly manage cores between processes.
+- --simtime: This introduces a delay in the adding of bam files to the pipeline and can be used if pointing cnsmeth at historic data.
+- --showerrors: This will display all errors in R. This is useful for debugging. it should be explicitly set - i.e --showerros True
+- --sequencing_summary: This is the path to a sequencing summary file. If provided, timestamps will be taken from this file and data will be loaded based on this file. 
+- --browse: This will allow you to browse historic data. This feature is currently incomplete. #ToDo: Complete this feature!
+- -e, --exclude: This will allow you to exclude certain analysis types. For example, if you do not wish to run any specific classifier just exclude it. the -e flag can be used multiple times.
 
-The --showerrors flag will help trouble shoot problems in R.
 
 A typical command line would look like this:
 
 ```console
-cnsmeth --threads 8  /path/to/watchfolder /path/to/output
+cnsmeth --threads 4  /path/to/watchfolder /path/to/output
 ```
 
 Upon launch, the GUI will open in your default browser. It should look something like this:
 
 ![img.png](images/img.png)
 
-The interface will automatically update as new files are generated by MinKNOW. The first page shows methylation classifications from Rapid-CNS2 and Sturgeon. The current top 10 classifications are shown for each tool. Below these you can see charts showing how these classifications have changed over time.
+The interface will automatically update as new files are generated by MinKNOW.
 
-Sturgeon tends to run very quickly and so results will update more frequently. Rapid-CNS2 accumulates data and runs more periodically.
+The top panel provides information summarising general features of the run:
+
+![img_1.png](images/img_1.png)
+
+The next panel provides a summary of classification results. This will update as the run progresses and will be summarised in the top panel.
 
 ![img_2.png](images/img_2.png)
-![img_3.png](images/img_3.png)
 
-The upper panel indicates the number of BAM files seen from the run, and the number of files in the queues for RapidCNS2 and Sturgeon respectively.
+The next panel shows information on copy number changes - again this will update during the run, but is also interactive. Individual chromosomes can be inspected in more detail and specific genes highlighted.
+
+![img_3.png](images/img_3.png)
 
 ![img_4.png](images/img_4.png)
 
-You can close this window and the tool will continue to run in the background. Quitting the tool using the Quit button will cancel the tool. 
 
-The Copy Number Variation panel shows a real time estimate of copy number assuming the sample is diploid. This is an interactive chart and users can highlight regions of interest. The chart updates after each round of the RAPID CNS2 pipeline and so will take some time to accumulate information.
+The coverage panel shows per chromosome coverage and coverage for the targets and off target regions during sequencing. You can also visualise the change in coverage over time as well as the coverage for specific targets.
 
 ![img_5.png](images/img_5.png)
 
-The coverage panel shows per chromosome coverage and coverage for the targets and off target regions during sequencing. You can also visualise the change in coverage over time.
+The next panel shows the methylation status across the MGMT promoter region. This plot will take considerable time to generate sufficient coverage to be meaningful.
 
-![img.png](images/img6.png)
+![img_6.png](images/img_6.png)
 
-This panel also provides a filterable table of targets.
+The final panel shows the fusion gene status. This will update as the run progresses and will be summarised in the top panel. High confident fusions occur between two genes in the target panel whereas low confidence fusions occur between a gene in the target panel and a gene elsewhere in the genome. Candidate fusions are identified on the basis of scanning data for reads with supplementary alignments.
 
-![img_1.png](images/img_7.png)
-
-The final tab (currently) shows the methylation status across the MGMT promoter region. This plot will take considerable time to generate sufficient coverage to be meaningful.
+![img_7.png](images/img_7.png)
 
 
 

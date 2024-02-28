@@ -400,7 +400,13 @@ class TargetCoverage(BaseAnalysis):
             self.target_coverage_df.to_csv(
                 os.path.join(self.output, "target_coverage.csv")
             )
-            #await asyncio.sleep(0.01)
+            if self.summary:
+                with self.summary:
+                    self.summary.clear()
+                    with ui.row():
+                        ui.label("Coverage Depths - ")
+                        ui.label(f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x")
+                        ui.label(f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x")
             self.update_target_coverage_table()
         await asyncio.sleep(0.5)
         self.running = False

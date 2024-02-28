@@ -4,6 +4,7 @@ channels:
   - conda-forge
   - defaults
 dependencies:
+  - git-lfs
   - bioconda::samtools>=1.19
   - r-essentials
   - bioconda::bioconductor-genomicranges
@@ -14,7 +15,7 @@ dependencies:
   - r-glmnet
   - python=3.8
   - pip
-  #- pip:
-  #  - readfish
-  #  - ont-pyguppy-client-lib
+  - pip:
+    - readfish
+    - ont-pyguppy-client-lib
     #- git+https://github.com/LooseLab/cnsmeth
