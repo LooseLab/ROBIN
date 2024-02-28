@@ -33,7 +33,7 @@ def frame(navtitle: str, myconnection):
         "box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)"
     ):
         with ui.grid(columns=2).style("width: 100%"):
-            ui.label(navtitle).tailwind("text-2xl font-bold font-italic drop-shadow")
+            ui.label(navtitle).style('color: #FFFFFF; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")  #.tailwind("text-2xl font-bold font-italic drop-shadow")
             with ui.row().classes("ml-auto"):
                 ui.switch("Dark Mode", on_change=dark_mode).classes(
                     "ml-4 bg-transparent"

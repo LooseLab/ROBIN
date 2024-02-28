@@ -103,6 +103,9 @@ class Fusion_object(BaseAnalysis):
         """
         Function to setup the UI for the Fusion Panel. This function creates the UI elements for the Fusion Panel.
         """
+        if self.summary:
+            with self.summary:
+                ui.label("No Fusion Candidates Identified.")
         with ui.card().style("width: 100%"):
             ui.label("Gene Fusion Candidates").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
             ui.label("This panel identifies gene fusion candidates from the input bam files. "
@@ -662,14 +665,11 @@ class Fusion_object(BaseAnalysis):
                             [self.fusion_candidates_all, fusion_candidates_all]
                         ).reset_index(drop=True)
 
-                try:
-                    self.fusion_table()
-                except Exception as e:
-                    print(f"Error 522: {e}")
-                try:
-                    self.fusion_table_all()
-                except Exception as e:
-                    print(f"Error 526: {e}")
+
+                self.fusion_table()
+
+                self.fusion_table_all()
+
         await asyncio.sleep(0.1)
         self.running = False
 

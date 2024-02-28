@@ -61,6 +61,9 @@ class MGMT_Object(BaseAnalysis):
             self.mgmtplot = ui.row().style("width: 100%")
             with self.mgmtplot:  # "size-full"):
                 ui.label("Plot not yet available.")
+        if self.summary:
+            with self.summary:
+                ui.label(f"Current MGMT status: Unknown")
 
     async def process_bam(self, bamfile, timestamp):
         MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
@@ -100,6 +103,10 @@ class MGMT_Object(BaseAnalysis):
                 with self.mgmtplot.classes("w-full"):
                     ui.image(plot_out).props("fit=scale-up")
             tempmgmtdir.cleanup()
+            if self.summary:
+                with self.summary:
+                    self.summary.clear()
+                    ui.label(f"Current MGMT status: {results['status'].values[0]}")
             ui.notify("MGMT predictor complete.", type="positive", position="top")
         else:
             ui.notify("No new MGMT sites found.", type="warning", position="bottom")

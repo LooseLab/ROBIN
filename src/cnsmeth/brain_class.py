@@ -263,34 +263,60 @@ class BrainMeth:
                     backward=lambda n: f"Sample ID: {str(n)}",
                 ).style('color: #000000; font-size: 100%; font-weight: 300')
 
+            with ui.row():
+                ui.label("Results Summary")
+            with ui.row():
+                if "sturgeon" not in self.exclude:
+                    sturgeonsummary=ui.column()
+                if "nanodx" not in self.exclude:
+                    nanodxsummary=ui.column()
+                if "forest" not in self.exclude:
+                    forestsummary=ui.column()
+            if "mgmt" not in self.exclude:
+                with ui.row():
+                    if "mgmt" not in self.exclude:
+                        mgmt = ui.column()
+            if "cnv" not in self.exclude:
+                with ui.row():
+                    if "cnv" not in self.exclude:
+                        cnvsummary=ui.column()
+            if "fusion" not in self.exclude:
+                with ui.row():
+                    if "fusion" not in self.exclude:
+                        fusions=ui.column()
+            if "coverage" not in self.exclude:
+                with ui.row():
+                    if "coverage" not in self.exclude:
+                        coverage = ui.column()
+
         with ui.card().style("width: 100%"):
             ui.label("Methylation Classifications").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
             if "sturgeon" not in self.exclude:
-                self.Sturgeon = Sturgeon_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamforsturgeon)
+                self.Sturgeon = Sturgeon_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamforsturgeon, summary=sturgeonsummary)
             if "nanodx" not in self.exclude:
-                self.NanoDX = NanoDX_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamfornanodx)
+                self.NanoDX = NanoDX_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamfornanodx, summary=nanodxsummary)
             if "forest" not in self.exclude:
-                self.RandomForest = RandomForest_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamforcns)
+                self.RandomForest = RandomForest_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamforcns, summary=forestsummary)
             pass
         #    with ui.tab_panel(copy_numer).classes("w-full"):
         if "cnv" not in self.exclude:
             with ui.card().style("width: 100%"):
-                self.CNV = CNVAnalysis(self.threads, self.output, progress=True, bamqueue=self.bamforcnv)
+                self.CNV = CNVAnalysis(self.threads, self.output, progress=True, bamqueue=self.bamforcnv, summary=cnvsummary)
             pass
         #    with ui.tab_panel(coverage).classes("w-full"):
         if "coverage" not in self.exclude:
             with ui.card().style("width: 100%"):
-                self.Target_Coverage = TargetCoverage(self.threads, self.output, progress=True,bamqueue=self.bamfortargetcoverage)
+                self.Target_Coverage = TargetCoverage(self.threads, self.output, progress=True,bamqueue=self.bamfortargetcoverage, summary=coverage)
             pass
         #    with ui.tab_panel(mgmt).classes("w-full"):
         if "mgmt" not in self.exclude:
             with ui.card().style("width: 100%"):
-                self.MGMT_panel = MGMT_Object(self.threads, self.output, progress=True, bamqueue=self.bamformgmt)
+                self.MGMT_panel = MGMT_Object(self.threads, self.output, progress=True, bamqueue=self.bamformgmt, summary=mgmt)
             pass
         #    with ui.tab_panel(fusions).classes("w-full"):
         if "fusion" not in self.exclude:
             with ui.card().style("width: 100%"):
-                self.Fusion_panel = Fusion_object(self.threads, self.output, progress=True, bamqueue=self.bamforfusions)
+                self.Fusion_panel = Fusion_object(self.threads, self.output, progress=True, bamqueue=self.bamforfusions, summary=fusions)
             pass
 
     def process_bams(self) -> None:

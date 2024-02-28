@@ -70,6 +70,9 @@ class NanoDX_object(BaseAnalysis):
                     self.create_nanodx_chart("NanoDX")
                 with ui.card().classes("col-span-5"):
                     self.create_nanodx_time_chart()
+        if self.summary:
+            with self.summary:
+                ui.label(f"NanoDX classification: Unknown")
 
     async def process_bam(self, bamfile):
         tomerge = []
@@ -258,6 +261,11 @@ class NanoDX_object(BaseAnalysis):
                 self.nanodx_bam_count,
                 n_features,
             )
+            print(n)
+            if self.summary:
+                with self.summary:
+                    self.summary.clear()
+                    ui.label(f"NanoDX classification: {nanoDX_df['class'].head(1).index[0]} - {nanoDX_df['class'].head(1).values[0]}")
             ui.notify(f"NanoDX: Done - {nanoDX_df['class'].head(1).values}",type="success",position="top-right")
 
             self.bam_processed += len(tomerge)

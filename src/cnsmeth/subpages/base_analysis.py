@@ -13,13 +13,14 @@ import threading
 
 
 class BaseAnalysis:
-    def __init__(self, threads, outputfolder, bamqueue=None, progress=False, batch=False, *args, **kwargs):
+    def __init__(self, threads, outputfolder, summary=None, bamqueue=None, progress=False, batch=False, *args, **kwargs):
         if bamqueue:
             self.bamqueue = bamqueue
         else:
             self.bamqueue = queue.Queue()
         self.batch = batch
         self.output = outputfolder
+        self.summary = summary
         self.setup_ui()
         if progress:
             self.progress()
