@@ -1,5 +1,6 @@
 from cnsmeth.subpages.base_analysis import BaseAnalysis
-import os, sys
+import os
+import sys
 import gff3_parser
 import tempfile
 import random
@@ -55,8 +56,8 @@ class Fusion_object(BaseAnalysis):
                 )
             )
         else:
-            print ("This looks like the first time you have run cnsmeth.")
-            print ("Parsing GFF3")
+            print("This looks like the first time you have run cnsmeth.")
+            print("Parsing GFF3")
             self.gene_table = gff3_parser.parse_gff3(
                 self.gene_gff3_2, verbose=False, parse_attributes=True
             )
@@ -107,61 +108,92 @@ class Fusion_object(BaseAnalysis):
             with self.summary:
                 ui.label("Fusion Candidates.")
                 with ui.row():
-                    ui.label("0").bind_text_from(self, "candidates", backward = lambda n: f"{n} high confidence fusions observed.")
-                    ui.label("0").bind_text_from(self, "all_candidates",
-                                                 backward=lambda n: f" {n} low confidence fusions observed.")
+                    ui.label("0").bind_text_from(
+                        self,
+                        "candidates",
+                        backward=lambda n: f"{n} high confidence fusions observed.",
+                    )
+                    ui.label("0").bind_text_from(
+                        self,
+                        "all_candidates",
+                        backward=lambda n: f" {n} low confidence fusions observed.",
+                    )
         with ui.card().style("width: 100%"):
-            ui.label("Gene Fusion Candidates").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
-            ui.label("This panel identifies gene fusion candidates from the input bam files. "
-                    "The panel is split into two tabs, one for gene fusions between genes within the target panel and one for genome wide fusions. "
-                    "Fusions are identified on a streaming basis derived from reads with supplementary alignments. "
-                    "The plots are indicative of the presence of a fusion and should be interpreted with care. "
-                    "The tables show the reads that are indicative of a fusion.").style('color: #000000; font-size: 125%; font-weight: 300')
+            ui.label("Gene Fusion Candidates").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
+            ui.label(
+                "This panel identifies gene fusion candidates from the input bam files. "
+                "The panel is split into two tabs, one for gene fusions between genes within the target panel and one for genome wide fusions. "
+                "Fusions are identified on a streaming basis derived from reads with supplementary alignments. "
+                "The plots are indicative of the presence of a fusion and should be interpreted with care. "
+                "The tables show the reads that are indicative of a fusion."
+            ).style("color: #000000; font-size: 125%; font-weight: 300")
             with ui.tabs().classes("w-full") as tabs:
-                one = ui.tab("Within Target Fusions").style('color: #000000; font-size: 125%; font-weight: 300')
+                one = ui.tab("Within Target Fusions").style(
+                    "color: #000000; font-size: 125%; font-weight: 300"
+                )
                 with one:
-                    self.badge_one = ui.badge('0', color='red').bind_text_from(
-                    self, "candidates", backward=lambda n: f"{n}").props('floating rounded outline')
-                two = ui.tab("Genome Wide Fusions").style('color: #000000; font-size: 125%; font-weight: 300')
+                    self.badge_one = (
+                        ui.badge("0", color="red")
+                        .bind_text_from(self, "candidates", backward=lambda n: f"{n}")
+                        .props("floating rounded outline")
+                    )
+                two = ui.tab("Genome Wide Fusions").style(
+                    "color: #000000; font-size: 125%; font-weight: 300"
+                )
                 with two:
-                    self.badge_two = ui.badge('0', color='red').bind_text_from(
-                    self, "all_candidates", backward=lambda n: f"{n}").props('floating rounded outline')
+                    self.badge_two = (
+                        ui.badge("0", color="red")
+                        .bind_text_from(
+                            self, "all_candidates", backward=lambda n: f"{n}"
+                        )
+                        .props("floating rounded outline")
+                    )
             with ui.tab_panels(tabs, value=one).classes("w-full"):
                 with ui.tab_panel(one):
                     with ui.card().style("width: 100%"):
-                        ui.label("Fusion Candidates (within targets)").style('color: #000000; font-size: 125%; font-weight: 300').tailwind(
-                            "drop-shadow", "font-bold"
-                        )
+                        ui.label("Fusion Candidates (within targets)").style(
+                            "color: #000000; font-size: 125%; font-weight: 300"
+                        ).tailwind("drop-shadow", "font-bold")
                         ui.separator()
                         ui.label(
                             "Fusion Candidates are identified by looking for reads that map to two different genes from within the target panel. "
                             "Plots illustrate the alignments of reads to each region of the genome and individual reads are identified by colour. "
                             "These plots should be interpreted with care and are only indicative of the presence of a fusion."
-                        ).style('color: #000000; font-size: 125%; font-weight: 300')
+                        ).style("color: #000000; font-size: 125%; font-weight: 300")
                         self.fusionplot = ui.row()
                         with self.fusionplot.classes("w-full"):
-                            ui.label("Plot not yet available.").style('color: #000000; font-size: 125%; font-weight: 300')
+                            ui.label("Plot not yet available.").style(
+                                "color: #000000; font-size: 125%; font-weight: 300"
+                            )
                         self.fusiontable = ui.row().classes("w-full")
                         with self.fusiontable:
-                            ui.label("Table not yet available.").style('color: #000000; font-size: 125%; font-weight: 300')
+                            ui.label("Table not yet available.").style(
+                                "color: #000000; font-size: 125%; font-weight: 300"
+                            )
 
                 with ui.tab_panel(two):
                     with ui.card().style("width: 100%"):
-                        ui.label("Fusion Candidates (genome wide)").style('color: #000000; font-size: 125%; font-weight: 300').tailwind(
-                            "drop-shadow", "font-bold"
-                        )
+                        ui.label("Fusion Candidates (genome wide)").style(
+                            "color: #000000; font-size: 125%; font-weight: 300"
+                        ).tailwind("drop-shadow", "font-bold")
                         ui.separator()
                         ui.label(
                             "Fusion Candidates are identified by looking for reads that map to at least one gene from within the target panel. "
                             "Plots illustrate the alignments of reads to each region of the genome and individual reads are identified by colour. "
                             "These plots should be interpreted with care and are only indicative of the presence of a fusion."
-                        ).style('color: #000000; font-size: 125%; font-weight: 300')
+                        ).style("color: #000000; font-size: 125%; font-weight: 300")
                         self.fusionplot_all = ui.row()
                         with self.fusionplot_all.classes("w-full"):
-                            ui.label("Plot not yet available.").style('color: #000000; font-size: 125%; font-weight: 300')
+                            ui.label("Plot not yet available.").style(
+                                "color: #000000; font-size: 125%; font-weight: 300"
+                            )
                         self.fusiontable_all = ui.row().classes("w-full")
                         with self.fusiontable_all:
-                            ui.label("Table not yet available.").style('color: #000000; font-size: 125%; font-weight: 300')
+                            ui.label("Table not yet available.").style(
+                                "color: #000000; font-size: 125%; font-weight: 300"
+                            )
 
     def fusion_table_all(self):
         uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)
@@ -171,124 +203,136 @@ class Fusion_object(BaseAnalysis):
         result_all.to_csv(os.path.join(self.output, "fusion_candidates_all.csv"))
         self.update_fusion_table_all(result_all)
 
-    def update_fusion_table_all(self,result_all):
+    def update_fusion_table_all(self, result_all):
         if result_all.shape[0] > self.fstable_all_row_count:
             self.fstable_all_row_count = result_all.shape[0]
-            #self.fusiontable_all.clear()
+            # self.fusiontable_all.clear()
             if not self.fstable_all:
                 self.fusiontable_all.clear()
                 with self.fusiontable_all:
-                    self.fstable_all = ui.aggrid.from_pandas(
-                        result_all.sort_values(by=7).rename(
-                            columns={
-                                0: "chromBED",
-                                1: "BS",
-                                2: "BE",
-                                3: "Gene",
-                                4: "chrom",
-                                5: "mS",
-                                6: "mE",
-                                7: "readID",
-                                8: "mapQ",
-                                9: "strand",
-                            }
-                        ),
-                        theme="material",
-                        options={
-                            "defaultColDef": {
-                                "flex": 1,
-                                "minWidth": 150,
-                                "sortable": True,
-                                "resizable": True,
+                    self.fstable_all = (
+                        ui.aggrid.from_pandas(
+                            result_all.sort_values(by=7).rename(
+                                columns={
+                                    0: "chromBED",
+                                    1: "BS",
+                                    2: "BE",
+                                    3: "Gene",
+                                    4: "chrom",
+                                    5: "mS",
+                                    6: "mE",
+                                    7: "readID",
+                                    8: "mapQ",
+                                    9: "strand",
+                                }
+                            ),
+                            theme="material",
+                            options={
+                                "defaultColDef": {
+                                    "flex": 1,
+                                    "minWidth": 150,
+                                    "sortable": True,
+                                    "resizable": True,
+                                },
+                                "columnDefs": [
+                                    {
+                                        "headerName": "Chromosome",
+                                        "field": "chromBED",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "BS",
+                                        "field": "BS",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "BE",
+                                        "field": "BE",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "Gene",
+                                        "field": "Gene",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "chrom",
+                                        "field": "chrom",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "mS",
+                                        "field": "mS",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "mE",
+                                        "field": "mE",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "readID",
+                                        "field": "readID",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "mapQ",
+                                        "field": "mapQ",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "strand",
+                                        "field": "strand",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                ],
+                                "pagination": True,
+                                "paginationAutoPageSize": True,
                             },
-                            "columnDefs": [
-                                {
-                                    "headerName": "Chromosome",
-                                    "field": "chromBED",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "BS",
-                                    "field": "BS",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "BE",
-                                    "field": "BE",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "Gene",
-                                    "field": "Gene",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "chrom",
-                                    "field": "chrom",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "mS",
-                                    "field": "mS",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "mE",
-                                    "field": "mE",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "readID",
-                                    "field": "readID",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "mapQ",
-                                    "field": "mapQ",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "strand",
-                                    "field": "strand",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                            ],
-                            "pagination": True,
-                            "paginationAutoPageSize": True,
-                        },
-                        auto_size_columns=True,
-                    ).classes("max-h-100 min-w-full").style('color: #000000; font-size: 100%; font-weight: 300; height: 900px')
+                            auto_size_columns=True,
+                        )
+                        .classes("max-h-100 min-w-full")
+                        .style(
+                            "color: #000000; font-size: 100%; font-weight: 300; height: 900px"
+                        )
+                    )
                 self.fusionplot_all.clear()
             else:
-                self.fstable_all.options['rowData'] = result_all.sort_values(by=7).rename(
-                    columns={
-                        0: "chromBED",
-                        1: "BS",
-                        2: "BE",
-                        3: "Gene",
-                        4: "chrom",
-                        5: "mS",
-                        6: "mE",
-                        7: "readID",
-                        8: "mapQ",
-                        9: "strand",
-                    }
-                ).to_dict('records')
+                self.fstable_all.options["rowData"] = (
+                    result_all.sort_values(by=7)
+                    .rename(
+                        columns={
+                            0: "chromBED",
+                            1: "BS",
+                            2: "BE",
+                            3: "Gene",
+                            4: "chrom",
+                            5: "mS",
+                            6: "mE",
+                            7: "readID",
+                            8: "mapQ",
+                            9: "strand",
+                        }
+                    )
+                    .to_dict("records")
+                )
                 self.fstable_all.update()
                 self.fusionplot_all.clear()
 
             result_all, goodpairs = self._annotate_results(result_all)
-            self.all_candidates = result_all[goodpairs].sort_values(by=7)["tag"].nunique()
+            self.all_candidates = (
+                result_all[goodpairs].sort_values(by=7)["tag"].nunique()
+            )
 
             if not result_all.empty:
                 with self.fusionplot_all.classes("w-full"):
@@ -302,7 +346,8 @@ class Fusion_object(BaseAnalysis):
                                 )
                             with ui.row():
                                 for gene in result_all[
-                                    goodpairs & result_all[goodpairs]["tag"].eq(gene_pair)
+                                    goodpairs
+                                    & result_all[goodpairs]["tag"].eq(gene_pair)
                                 ][3].unique():
                                     # self.create_fusion_plot(
                                     #    gene,
@@ -314,7 +359,9 @@ class Fusion_object(BaseAnalysis):
                                     # )
                                     title = gene
                                     reads = result_all[goodpairs].sort_values(by=7)[
-                                        result_all[goodpairs].sort_values(by=7)[3].eq(gene)
+                                        result_all[goodpairs]
+                                        .sort_values(by=7)[3]
+                                        .eq(gene)
                                     ]
                                     with ui.card().classes("no-shadow border-[2px]"):
                                         with ui.pyplot(figsize=(16, 2)):
@@ -334,12 +381,16 @@ class Fusion_object(BaseAnalysis):
                                                         GraphicFeature(
                                                             start=int(row["Start"]),
                                                             end=int(row["End"]),
-                                                            strand=STRAND[row["Strand"]],
+                                                            strand=STRAND[
+                                                                row["Strand"]
+                                                            ],
                                                             thickness=4,
                                                             color="#ffd700",
                                                         )
                                                     )
-                                                    first_index = int(row["Start"]) - 1000
+                                                    first_index = (
+                                                        int(row["Start"]) - 1000
+                                                    )
                                                     sequence_length = (
                                                         int(row["End"])
                                                         - int(row["Start"])
@@ -354,7 +405,9 @@ class Fusion_object(BaseAnalysis):
                                                         GraphicFeature(
                                                             start=int(row["Start"]),
                                                             end=int(row["End"]),
-                                                            strand=STRAND[row["Strand"]],
+                                                            strand=STRAND[
+                                                                row["Strand"]
+                                                            ],
                                                             color="#ffcccc",
                                                         )
                                                     )
@@ -397,119 +450,128 @@ class Fusion_object(BaseAnalysis):
         result.to_csv(os.path.join(self.output, "fusion_candidates_master.csv"))
         self.update_fusion_table(result)
 
-    def update_fusion_table(self,result):
+    def update_fusion_table(self, result):
         if result.shape[0] > self.fstable_row_count:
             self.fstable_row_count = result.shape[0]
             if not self.fstable:
                 self.fusiontable.clear()
                 with self.fusiontable:
-                    self.fstable = ui.aggrid.from_pandas(
-                        result.sort_values(by=7).rename(
-                            columns={
-                                0: "chromBED",
-                                1: "BS",
-                                2: "BE",
-                                3: "Gene",
-                                4: "chrom",
-                                5: "mS",
-                                6: "mE",
-                                7: "readID",
-                                8: "mapQ",
-                                9: "strand",
-                            }
-                        ),
-                        theme="material",
-                        options={
-                            "defaultColDef": {
-                                "flex": 1,
-                                "minWidth": 150,
-                                "sortable": True,
-                                "resizable": True,
+                    self.fstable = (
+                        ui.aggrid.from_pandas(
+                            result.sort_values(by=7).rename(
+                                columns={
+                                    0: "chromBED",
+                                    1: "BS",
+                                    2: "BE",
+                                    3: "Gene",
+                                    4: "chrom",
+                                    5: "mS",
+                                    6: "mE",
+                                    7: "readID",
+                                    8: "mapQ",
+                                    9: "strand",
+                                }
+                            ),
+                            theme="material",
+                            options={
+                                "defaultColDef": {
+                                    "flex": 1,
+                                    "minWidth": 150,
+                                    "sortable": True,
+                                    "resizable": True,
+                                },
+                                "columnDefs": [
+                                    {
+                                        "headerName": "Chromosome",
+                                        "field": "chromBED",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "BS",
+                                        "field": "BS",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "BE",
+                                        "field": "BE",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "Gene",
+                                        "field": "Gene",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "chrom",
+                                        "field": "chrom",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "mS",
+                                        "field": "mS",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "mE",
+                                        "field": "mE",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "readID",
+                                        "field": "readID",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "mapQ",
+                                        "field": "mapQ",
+                                        "filter": "agNumberColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                    {
+                                        "headerName": "strand",
+                                        "field": "strand",
+                                        "filter": "agTextColumnFilter",
+                                        "floatingFilter": False,
+                                    },
+                                ],
+                                "pagination": True,
+                                "paginationAutoPageSize": True,
                             },
-                            "columnDefs": [
-                                {
-                                    "headerName": "Chromosome",
-                                    "field": "chromBED",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "BS",
-                                    "field": "BS",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "BE",
-                                    "field": "BE",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "Gene",
-                                    "field": "Gene",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "chrom",
-                                    "field": "chrom",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "mS",
-                                    "field": "mS",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "mE",
-                                    "field": "mE",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "readID",
-                                    "field": "readID",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "mapQ",
-                                    "field": "mapQ",
-                                    "filter": "agNumberColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                                {
-                                    "headerName": "strand",
-                                    "field": "strand",
-                                    "filter": "agTextColumnFilter",
-                                    "floatingFilter": False,
-                                },
-                            ],
-                            "pagination": True,
-                            "paginationAutoPageSize": True,
-                        },
-                        auto_size_columns=True,
-                    ).classes("max-h-100 min-w-full").style(
-                        'color: #000000; font-size: 100%; font-weight: 300; height: 900px')
+                            auto_size_columns=True,
+                        )
+                        .classes("max-h-100 min-w-full")
+                        .style(
+                            "color: #000000; font-size: 100%; font-weight: 300; height: 900px"
+                        )
+                    )
                 self.fusionplot.clear()
             else:
-                self.fstable.options['rowData'] = result.sort_values(by=7).rename(
-                    columns={
-                        0: "chromBED",
-                        1: "BS",
-                        2: "BE",
-                        3: "Gene",
-                        4: "chrom",
-                        5: "mS",
-                        6: "mE",
-                        7: "readID",
-                        8: "mapQ",
-                        9: "strand",
-                    }
-                ).to_dict('records')
+                self.fstable.options["rowData"] = (
+                    result.sort_values(by=7)
+                    .rename(
+                        columns={
+                            0: "chromBED",
+                            1: "BS",
+                            2: "BE",
+                            3: "Gene",
+                            4: "chrom",
+                            5: "mS",
+                            6: "mE",
+                            7: "readID",
+                            8: "mapQ",
+                            9: "strand",
+                        }
+                    )
+                    .to_dict("records")
+                )
                 self.fstable.update()
                 self.fusionplot.clear()
 
@@ -519,7 +581,9 @@ class Fusion_object(BaseAnalysis):
                 for gene_pair in result[goodpairs].sort_values(by=7)["tag"].unique():
                     with ui.card():
                         with ui.row():
-                            ui.label(f"{gene_pair}").tailwind("drop-shadow", "font-bold")
+                            ui.label(f"{gene_pair}").tailwind(
+                                "drop-shadow", "font-bold"
+                            )
                         with ui.row():
                             for gene in result[
                                 goodpairs & result[goodpairs]["tag"].eq(gene_pair)
@@ -669,7 +733,6 @@ class Fusion_object(BaseAnalysis):
                             [self.fusion_candidates_all, fusion_candidates_all]
                         ).reset_index(drop=True)
 
-
                 self.fusion_table()
 
                 self.fusion_table_all()
@@ -698,13 +761,32 @@ class Fusion_object(BaseAnalysis):
         return group[7].nunique()
 
     def show_previous_data(self, output):
-        fusion_candidates = pd.read_csv(os.path.join(output, "fusion_candidates_master.csv"), dtype=str, names=['index', 0,1,2,3,4,5,6,7,8,9,'diff'], header=None, skiprows=1)
+        fusion_candidates = pd.read_csv(
+            os.path.join(output, "fusion_candidates_master.csv"),
+            dtype=str,
+            names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+            header=None,
+            skiprows=1,
+        )
         self.update_fusion_table(fusion_candidates)
-        fusion_candidates_all = pd.read_csv(os.path.join(output, "fusion_candidates_all.csv"), dtype=str, names=['index', 0,1,2,3,4,5,6,7,8,9,'diff'], header=None, skiprows=1)
+        fusion_candidates_all = pd.read_csv(
+            os.path.join(output, "fusion_candidates_all.csv"),
+            dtype=str,
+            names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+            header=None,
+            skiprows=1,
+        )
         self.update_fusion_table_all(fusion_candidates_all)
 
 
-def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
+def test_me(
+    port: int,
+    threads: int,
+    watchfolder: str,
+    output: str,
+    reload: bool = False,
+    browse: bool = False,
+):
     my_connection = None
     with theme.frame("Fusion Gene Identification.", my_connection):
         TestObject = Fusion_object(threads, output, progress=True)
@@ -718,10 +800,11 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
     else:
-        #print("Browse mode not implemented.")
-        TestObject.progress_trackers.visible=False
+        # print("Browse mode not implemented.")
+        TestObject.progress_trackers.visible = False
         TestObject.show_previous_data(output)
-    ui.run(port=port,reload=reload)
+    ui.run(port=port, reload=reload)
+
 
 @click.command()
 @click.option(
@@ -729,11 +812,7 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
     default=12345,
     help="Port for GUI",
 )
-@click.option(
-    "--threads",
-    default=4,
-    help="Number of threads available."
-)
+@click.option("--threads", default=4, help="Number of threads available.")
 @click.argument(
     "watchfolder",
     type=click.Path(
@@ -769,13 +848,13 @@ def main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=None,
             output=watchfolder,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
         # Your logic for browse mode
     else:
@@ -788,13 +867,13 @@ def main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=watchfolder,
             output=output,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
 
 

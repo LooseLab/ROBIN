@@ -1,4 +1,4 @@
-#Original code written by: Thomas Murray and taken from https://github.com/tom-murray98/minFQ_BAM/blob/master/BAM_RG_tag_extractor.py
+# Original code written by: Thomas Murray and taken from https://github.com/tom-murray98/minFQ_BAM/blob/master/BAM_RG_tag_extractor.py
 
 import pysam
 
@@ -73,7 +73,6 @@ class ReadBam:
                 al_tag,
             ) = self.get_rg_tags()
 
-
             yield (
                 # name,
                 # seq,
@@ -134,5 +133,3 @@ class ReadBam:
             }
 
             return bam_read
-
-
