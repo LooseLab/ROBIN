@@ -13,7 +13,17 @@ import threading
 
 
 class BaseAnalysis:
-    def __init__(self, threads, outputfolder, summary=None, bamqueue=None, progress=False, batch=False, *args, **kwargs):
+    def __init__(
+        self,
+        threads,
+        outputfolder,
+        summary=None,
+        bamqueue=None,
+        progress=False,
+        batch=False,
+        *args,
+        **kwargs,
+    ):
         if bamqueue:
             self.bamqueue = bamqueue
         else:
@@ -28,8 +38,8 @@ class BaseAnalysis:
         self.bam_processed = 0
         self.bams_in_processing = 0
         self.running = False
-        if threads >1:
-            self.threads = int(threads/2)
+        if threads > 1:
+            self.threads = int(threads / 2)
         else:
             self.threads = threads
         if batch:
@@ -52,7 +62,7 @@ class BaseAnalysis:
             self.bam_count += 1
             if not timestamp:
                 timestamp = time.time()
-            #print (bamfile,timestamp)
+            # print (bamfile,timestamp)
             await self.process_bam(bamfile, timestamp)
             self.bam_processed += 1
         else:
@@ -66,7 +76,7 @@ class BaseAnalysis:
         :return:
         """
         self.bamqueue.put([bamfile, timestamp])
-        #self.bam_count += 1
+        # self.bam_count += 1
 
     def batch_timer_run(self):
         self.timer = ui.timer(1, self._batch_worker)
@@ -79,7 +89,7 @@ class BaseAnalysis:
         while self.bamqueue.qsize() > 0:
             self.bams.append((self.bamqueue.get()))
             self.bam_count += 1
-            #self.bams_in_processing += 1
+            # self.bams_in_processing += 1
         if not self.running and len(self.bams) > 0:
             self.running = True
             await self.process_bam(self.bams)
@@ -94,9 +104,7 @@ class BaseAnalysis:
         """
         if self.bam_count == 0:
             return 0
-        return (
-            self.bam_processed
-        ) / self.bam_count
+        return (self.bam_processed) / self.bam_count
 
     @property
     def _progress2(self):
@@ -136,20 +144,40 @@ class BaseAnalysis:
                     backward=lambda n: f"Bam files processed: {n}",
                 )
 
-
-            progressbar3 = ui.linear_progress(
-                size="10px", show_value=False, value=0, color="red",
-            ).tooltip("Indicates read files not yet processed.").props("instant-feedback")
+            progressbar3 = (
+                ui.linear_progress(
+                    size="10px",
+                    show_value=False,
+                    value=0,
+                    color="red",
+                )
+                .tooltip("Indicates read files not yet processed.")
+                .props("instant-feedback")
+            )
             ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
             if self.batch:
-                progressbar2 = ui.linear_progress(
-                    size="10px", show_value=False, value=0, color="amber",
-                ).tooltip("Indicates read files being processed.").props("instant-feedback")
+                progressbar2 = (
+                    ui.linear_progress(
+                        size="10px",
+                        show_value=False,
+                        value=0,
+                        color="amber",
+                    )
+                    .tooltip("Indicates read files being processed.")
+                    .props("instant-feedback")
+                )
                 ui.timer(1, callback=lambda: progressbar2.set_value(self._progress2))
 
-            progressbar = ui.linear_progress(
-                size="10px", show_value=False, value=0, color="green",
-            ).tooltip("Indicates read files processed.").props("instant-feedback")
+            progressbar = (
+                ui.linear_progress(
+                    size="10px",
+                    show_value=False,
+                    value=0,
+                    color="green",
+                )
+                .tooltip("Indicates read files processed.")
+                .props("instant-feedback")
+            )
             ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
 
     def playback(self, data: pd.DataFrame, step_size=2):
@@ -174,7 +202,6 @@ class BaseAnalysis:
             if len(row["full_path"]) > 0:
                 # Here we check that the path to the bam file absolutely exists.
                 self.add_bam(row["full_path"], row["file_produced"])
-
 
     def process_bam(self, bamfile, timestamp):
         """

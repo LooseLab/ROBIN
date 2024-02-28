@@ -19,21 +19,29 @@ IMAGEFILE = os.path.join(
 @contextmanager
 def frame(navtitle: str, myconnection):
     """Custom page frame to share the same styling and behavior across all pages"""
-    with ui.dialog().props('persistent') as quitdialog, ui.card():
-        ui.label("Quitting the app will stop running methylation analysis. Are you sure?")
+    with ui.dialog().props("persistent") as quitdialog, ui.card():
+        ui.label(
+            "Quitting the app will stop running methylation analysis. Are you sure?"
+        )
         ui.label("If you want to keep analysis running, click Cancel.")
-        ui.label("You can safely close this window and analysis will keep running in the background.")
+        ui.label(
+            "You can safely close this window and analysis will keep running in the background."
+        )
         ui.button("Cancel", on_click=quitdialog.close).props("outline").classes(
             "shadow-lg"
         )
-        ui.button(
-            "Really Quit", icon="logout", on_click=cleanup_and_exit
-        ).props("outline").classes("shadow-lg")
+        ui.button("Really Quit", icon="logout", on_click=cleanup_and_exit).props(
+            "outline"
+        ).classes("shadow-lg")
     with ui.header(fixed=True).classes(replace="row items-center p-2").style(
         "box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)"
     ):
         with ui.grid(columns=2).style("width: 100%"):
-            ui.label(navtitle).style('color: #FFFFFF; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")  #.tailwind("text-2xl font-bold font-italic drop-shadow")
+            ui.label(navtitle).style(
+                "color: #FFFFFF; font-size: 150%; font-weight: 300"
+            ).tailwind(
+                "drop-shadow", "font-bold"
+            )  # .tailwind("text-2xl font-bold font-italic drop-shadow")
             with ui.row().classes("ml-auto"):
                 ui.switch("Dark Mode", on_change=dark_mode).classes(
                     "ml-4 bg-transparent"

@@ -38,8 +38,6 @@ def run_samtools_sort(file, tomerge, sortfile, threads):
     pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
 
 
-
-
 class NanoDX_object(BaseAnalysis):
     def __init__(self, *args, model="Capper_et_al_NN.pkl", **kwargs):
         self.cpgs_file = os.path.join(
@@ -51,7 +49,7 @@ class NanoDX_object(BaseAnalysis):
             sep="\t",
             header=None,
         )
-        self.model=model
+        self.model = model
         self.threshold = 0.05
         self.nanodx_bam_count = 0
         self.not_first_run = False
@@ -72,7 +70,7 @@ class NanoDX_object(BaseAnalysis):
                     self.create_nanodx_time_chart()
         if self.summary:
             with self.summary:
-                ui.label(f"NanoDX classification: Unknown")
+                ui.label("NanoDX classification: Unknown")
 
     async def process_bam(self, bamfile):
         tomerge = []
@@ -95,15 +93,19 @@ class NanoDX_object(BaseAnalysis):
 
             sortfile = sorttempbam.name
 
-            ui.notify("NanoDX: Merging bams",type="info",position="top-right")
+            ui.notify("NanoDX: Merging bams", type="info", position="top-right")
 
-            await run.cpu_bound(run_samtools_sort, file, tomerge, sortfile, self.threads)
+            await run.cpu_bound(
+                run_samtools_sort, file, tomerge, sortfile, self.threads
+            )
 
-            ui.notify("NanoDX: Running modkit",type="info",position="top-right")
+            ui.notify("NanoDX: Running modkit", type="info", position="top-right")
 
-            await run.cpu_bound(run_modkit, self.cpgs_file, sortfile, temp.name, self.threads)
+            await run.cpu_bound(
+                run_modkit, self.cpgs_file, sortfile, temp.name, self.threads
+            )
 
-            ui.notify("NanoDX: Merging bed files",type="info",position="top-right")
+            ui.notify("NanoDX: Merging bed files", type="info", position="top-right")
 
             if self.not_first_run:
                 bed_a = pd.read_table(
@@ -241,9 +243,7 @@ class NanoDX_object(BaseAnalysis):
                 [self.nanodx_df_store, nanoDX_save.set_index("timestamp")]
             )
 
-            self.nanodx_df_store.to_csv(
-                os.path.join(self.output, "nanoDX_scores.csv")
-            )
+            self.nanodx_df_store.to_csv(os.path.join(self.output, "nanoDX_scores.csv"))
 
             columns_greater_than_threshold = (
                 self.nanodx_df_store > self.threshold
@@ -264,8 +264,14 @@ class NanoDX_object(BaseAnalysis):
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    ui.label(f"NanoDX classification: {nanoDX_df['class'].head(1).values[0]} - {nanoDX_df['score'].head(1).values[0]:.2f}")
-            ui.notify(f"NanoDX: Done - {nanoDX_df['class'].head(1).values}",type="success",position="top-right")
+                    ui.label(
+                        f"NanoDX classification: {nanoDX_df['class'].head(1).values[0]} - {nanoDX_df['score'].head(1).values[0]:.2f}"
+                    )
+            ui.notify(
+                f"NanoDX: Done - {nanoDX_df['class'].head(1).values}",
+                type="success",
+                position="top-right",
+            )
 
             self.bam_processed += len(tomerge)
             self.bams_in_processing -= len(tomerge)
@@ -286,7 +292,7 @@ class NanoDX_object(BaseAnalysis):
                     "series": [],
                 }
             )
-            .style('color: #6E93D6; font-size: 150%; font-weight: 300; height: 350px')
+            .style("color: #6E93D6; font-size: 150%; font-weight: 300; height: 350px")
             .classes("border-double")
         )
 
@@ -358,14 +364,19 @@ class NanoDX_object(BaseAnalysis):
         self.nanodx_time_chart.update()
 
 
-
-
-def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
-    #if __name__ == '__mp_main__':
+def test_me(
+    port: int,
+    threads: int,
+    watchfolder: str,
+    output: str,
+    reload: bool = False,
+    browse: bool = False,
+):
+    # if __name__ == '__mp_main__':
     my_connection = None
     with theme.frame("Target Coverage Data", my_connection):
         TestObject = NanoDX_object(threads, output, progress=True, batch=True)
-        #TestObject = MGMT_Object(threads, output, progress=True)
+        # TestObject = MGMT_Object(threads, output, progress=True)
     if not browse:
         path = watchfolder
         searchdirectory = os.fsencode(path)
@@ -375,11 +386,12 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
                 filename = os.fsdecode(f)
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
-                    #break
+                    # break
     else:
-        TestObject.progress_trackers.visible=False
+        TestObject.progress_trackers.visible = False
         TestObject.show_previous_data(output)
     ui.run(port=port, reload=False)
+
 
 @click.command()
 @click.option(
@@ -387,11 +399,7 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
     default=12345,
     help="Port for GUI",
 )
-@click.option(
-    "--threads",
-    default=4,
-    help="Number of threads available."
-)
+@click.option("--threads", default=4, help="Number of threads available.")
 @click.argument(
     "watchfolder",
     type=click.Path(
@@ -427,13 +435,13 @@ def run_main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=None,
             output=watchfolder,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
         # Your logic for browse mode
     else:
@@ -446,17 +454,16 @@ def run_main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=watchfolder,
             output=output,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
 
 
 if __name__ in {"__main__", "__mp_main__"}:
     print("GUI launched by auto-reload function.")
     run_main()
-

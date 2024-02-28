@@ -1,5 +1,6 @@
 from cnsmeth.subpages.base_analysis import BaseAnalysis
-import os, sys
+import os
+import sys
 import tempfile
 import time
 import shutil
@@ -92,7 +93,7 @@ class Sturgeon_object(BaseAnalysis):
                     self.create_sturgeon_time_chart()
         if self.summary:
             with self.summary:
-                ui.label(f"Sturgeon classification: Unknown")
+                ui.label("Sturgeon classification: Unknown")
 
     async def process_bam(self, bamfile):
         tomerge = []
@@ -159,7 +160,9 @@ class Sturgeon_object(BaseAnalysis):
                 if self.summary:
                     with self.summary:
                         self.summary.clear()
-                        ui.label(f"Sturgeon classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}")
+                        ui.label(
+                            f"Sturgeon classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                        )
                 mydf_to_save = mydf
                 if timestamp:
                     mydf_to_save["timestamp"] = timestamp * 1000
@@ -277,7 +280,14 @@ class Sturgeon_object(BaseAnalysis):
         self.sturgeon_time_chart.update()
 
 
-def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
+def test_me(
+    port: int,
+    threads: int,
+    watchfolder: str,
+    output: str,
+    reload: bool = False,
+    browse: bool = False,
+):
     my_connection = None
     with theme.frame("Sturgeon Rapid CNS Diagnostic.", my_connection):
         TestObject = Sturgeon_object(threads, output, progress=True, batch=True)
@@ -292,9 +302,10 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
                     TestObject.add_bam(os.path.join(directory, filename))
     else:
         print("Browse mode not implemented.")
-        TestObject.progress_trackers.visible=False
-        #TestObject.show_previous_data(output)
-    ui.run(port=port,reload=False)
+        TestObject.progress_trackers.visible = False
+        # TestObject.show_previous_data(output)
+    ui.run(port=port, reload=False)
+
 
 @click.command()
 @click.option(
@@ -302,11 +313,7 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
     default=12345,
     help="Port for GUI",
 )
-@click.option(
-    "--threads",
-    default=4,
-    help="Number of threads available."
-)
+@click.option("--threads", default=4, help="Number of threads available.")
 @click.argument(
     "watchfolder",
     type=click.Path(
@@ -342,13 +349,13 @@ def mainrun(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=None,
             output=watchfolder,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
         # Your logic for browse mode
     else:
@@ -361,13 +368,13 @@ def mainrun(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=watchfolder,
             output=output,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
 
 

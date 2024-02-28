@@ -6,6 +6,7 @@ import pandas as pd
 import logging
 import numpy as np
 import os
+import sys
 import asyncio
 from nicegui import ui
 import click
@@ -58,7 +59,7 @@ class CNVAnalysis(BaseAnalysis):
         self.file_list.append(bamfile)
         # cnv_dict = self.update_cnv_dict.copy()
         # self.result, self.update_cnv_dict = await run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=cnv_dict)
-        #print (f"Processing {bamfile}, {timestamp}")
+        # print (f"Processing {bamfile}, {timestamp}")
         self.result = iterate_bam_file(
             bamfile,
             _threads=self.threads,
@@ -75,8 +76,8 @@ class CNVAnalysis(BaseAnalysis):
                 with ui.row():
                     ui.label(f"Current Bin Width: {self.result.bin_width}")
                     ui.label(f"Current Variance: {round(self.result.variance,3)}")
-        np.save(os.path.join(self.output, 'CNV.npy'), self.result.cnv)
-        np.save(os.path.join(self.output, 'CNV_dict.npy'), self.cnv_dict)
+        np.save(os.path.join(self.output, "CNV.npy"), self.result.cnv)
+        np.save(os.path.join(self.output, "CNV_dict.npy"), self.cnv_dict)
 
         # Only update the plot if the queue is empty?
         if self.bamqueue.empty() or self.bam_processed % 5 == 0:
@@ -92,7 +93,9 @@ class CNVAnalysis(BaseAnalysis):
                 ui.label("No CNV data available.")
         with self.display_row:
             # self.progrock.visible = False
-            ui.label("Copy Number Variation").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
+            ui.label("Copy Number Variation").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
@@ -223,8 +226,8 @@ class CNVAnalysis(BaseAnalysis):
                             },
                         }
                     )
-                    if contig in ["chr7","chr10"]:
-                        #print (self.scatter_echart.options["series"][-1])
+                    if contig in ["chr7", "chr10"]:
+                        # print (self.scatter_echart.options["series"][-1])
                         pass
                     for index, gene in self.gene_bed[
                         self.gene_bed["chrom"] == contig
@@ -322,15 +325,24 @@ class CNVAnalysis(BaseAnalysis):
             self.scatter_echart.update()
 
     def show_previous_data(self, output):
-        result = np.load(os.path.join(output, 'CNV.npy'), allow_pickle='TRUE').item()
+        result = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
         self.result = Result(result)
-        cnv_dict = np.load(os.path.join(output, 'CNV_dict.npy'), allow_pickle=True).item()
+        cnv_dict = np.load(
+            os.path.join(output, "CNV_dict.npy"), allow_pickle=True
+        ).item()
         self.cnv_dict["bin_width"] = cnv_dict["bin_width"]
         self.cnv_dict["variance"] = cnv_dict["variance"]
         self._update_cnv_plot()
 
 
-def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
+def test_me(
+    port: int,
+    threads: int,
+    watchfolder: str,
+    output: str,
+    reload: bool = False,
+    browse: bool = False,
+):
     my_connection = None
     with theme.frame("Copy Number Variation Testing.", my_connection):
         TestObject = CNVAnalysis(threads, output, progress=True)
@@ -344,10 +356,11 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
     else:
-        #print("Browse mode not implemented.")
-        TestObject.progress_trackers.visible=False
+        # print("Browse mode not implemented.")
+        TestObject.progress_trackers.visible = False
         TestObject.show_previous_data(output)
-    ui.run(port=port,reload=reload)
+    ui.run(port=port, reload=reload)
+
 
 @click.command()
 @click.option(
@@ -355,11 +368,7 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
     default=12345,
     help="Port for GUI",
 )
-@click.option(
-    "--threads",
-    default=4,
-    help="Number of threads available."
-)
+@click.option("--threads", default=4, help="Number of threads available.")
 @click.argument(
     "watchfolder",
     type=click.Path(
@@ -395,13 +404,13 @@ def main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=None,
             output=watchfolder,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
         # Your logic for browse mode
     else:
@@ -414,13 +423,13 @@ def main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=watchfolder,
             output=output,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
 
 

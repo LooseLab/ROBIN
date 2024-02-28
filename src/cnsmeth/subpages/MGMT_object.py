@@ -2,7 +2,8 @@ from cnsmeth.subpages.base_analysis import BaseAnalysis
 from cnsmeth import theme
 from cnsmeth import submodules
 import pandas as pd
-import os, sys
+import os
+import sys
 import asyncio
 from nicegui import ui, run
 import pysam
@@ -10,9 +11,10 @@ import shutil
 import click
 from pathlib import Path
 import natsort
+import tempfile
 
 os.environ["CI"] = "1"
-import tempfile
+
 
 HVPATH = os.path.join(
     os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
@@ -23,6 +25,7 @@ def run_methylartist(tempmgmtdir, plot_out):
     os.system(
         f"methylartist locus -i chr10:129466536-129467536 -b {os.path.join(tempmgmtdir, 'mgmt.bam')} -o {plot_out}  --motif CG --mods m > /dev/null 2>&1"
     )
+
 
 def run_bedtools(bamfile, MGMT_BED, tempbamfile):
     """
@@ -54,7 +57,9 @@ class MGMT_Object(BaseAnalysis):
 
     def setup_ui(self):
         with ui.card().style("width: 100%"):
-            ui.label("MGMT Methylation").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
+            ui.label("MGMT Methylation").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
             self.mgmtable = ui.row().classes("w-full")
             with self.mgmtable:
                 ui.label("Table not yet available.")
@@ -63,7 +68,7 @@ class MGMT_Object(BaseAnalysis):
                 ui.label("Plot not yet available.")
         if self.summary:
             with self.summary:
-                ui.label(f"Current MGMT status: Unknown")
+                ui.label("Current MGMT status: Unknown")
 
     async def process_bam(self, bamfile, timestamp):
         MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
@@ -72,20 +77,26 @@ class MGMT_Object(BaseAnalysis):
         await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
-            ui.notify("Running MGMT predictor - MGMT sites found.", type="positive", position="top")
+            ui.notify(
+                "Running MGMT predictor - MGMT sites found.",
+                type="positive",
+                position="top",
+            )
             if not self.MGMTbamfile:
-                #self.MGMTbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+                # self.MGMTbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
                 self.MGMTbamfile = os.path.join(self.output, "mgmt.bam")
                 shutil.copy2(tempbamfile.name, self.MGMTbamfile)
             else:
-                tempbamholder = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
-                pysam.cat(
-                    "-o", tempbamholder.name, self.MGMTbamfile, tempbamfile.name
+                tempbamholder = tempfile.NamedTemporaryFile(
+                    dir=self.output, suffix=".bam"
                 )
+                pysam.cat("-o", tempbamholder.name, self.MGMTbamfile, tempbamfile.name)
                 shutil.copy2(tempbamholder.name, self.MGMTbamfile)
             tempmgmtdir = tempfile.TemporaryDirectory(dir=self.output)
 
-            await run.cpu_bound(run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads)
+            await run.cpu_bound(
+                run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
+            )
             ui.notify("MGMT predictor done.", type="positive", position="top")
             results = pd.read_csv(
                 os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
@@ -146,6 +157,7 @@ class MGMT_Object(BaseAnalysis):
                 # "paginationAutoPageSize": True,
             },
         ).classes("w-full").style("height: 200px")
+
     def show_previous_data(self, watchfolder):
         for file in natsort.natsorted(os.listdir(watchfolder)):
             if file.endswith("_mgmt.csv"):
@@ -157,10 +169,17 @@ class MGMT_Object(BaseAnalysis):
                 if os.path.exists(plot_out):
                     self.mgmtplot.clear()
                     with self.mgmtplot.classes("w-full"):
-                        ui.image(plot_out).props('fit=scale-up')
+                        ui.image(plot_out).props("fit=scale-up")
 
 
-def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool = False, browse: bool = False):
+def test_me(
+    port: int,
+    threads: int,
+    watchfolder: str,
+    output: str,
+    reload: bool = False,
+    browse: bool = False,
+):
     my_connection = None
     with theme.frame("MGMT Data", my_connection):
         TestObject = MGMT_Object(threads, output, progress=True)
@@ -174,9 +193,10 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
     else:
-        TestObject.progress_trackers.visible=False
+        TestObject.progress_trackers.visible = False
         TestObject.show_previous_data(output)
-    ui.run(port=port,reload=reload)
+    ui.run(port=port, reload=reload)
+
 
 @click.command()
 @click.option(
@@ -184,11 +204,7 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
     default=12345,
     help="Port for GUI",
 )
-@click.option(
-    "--threads",
-    default=4,
-    help="Number of threads available."
-)
+@click.option("--threads", default=4, help="Number of threads available.")
 @click.argument(
     "watchfolder",
     type=click.Path(
@@ -224,13 +240,13 @@ def main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=None,
             output=output,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
         # Your logic for browse mode
     else:
@@ -243,17 +259,16 @@ def main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            #simtime=simtime,
+            # simtime=simtime,
             watchfolder=watchfolder,
             output=output,
-            #sequencing_summary=sequencing_summary,
-            #showerrors=showerrors,
+            # sequencing_summary=sequencing_summary,
+            # showerrors=showerrors,
             browse=browse,
-            #exclude=exclude,
+            # exclude=exclude,
         )
+
 
 if __name__ in {"__main__", "__mp_main__"}:
     print("GUI launched by auto-reload function.")
     main()
-
-

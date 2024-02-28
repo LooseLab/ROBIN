@@ -75,6 +75,7 @@ def run_modkit(bamfile, outbed, cpgs, threads):
         # self.log(e)
         pass
 
+
 class RandomForest_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
         self.rcns2_df_store = pd.DataFrame()
@@ -104,7 +105,7 @@ class RandomForest_object(BaseAnalysis):
                     self.create_rcns2_time_chart()
         if self.summary:
             with self.summary:
-                ui.label(f"Forest classification: Unknown")
+                ui.label("Forest classification: Unknown")
 
     async def process_bam(self, bamfile):
         tomerge = []
@@ -124,9 +125,13 @@ class RandomForest_object(BaseAnalysis):
             sortbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
             tempbed = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bed")
             self.batch += 1
-            await run.cpu_bound(run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads)
+            await run.cpu_bound(
+                run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads
+            )
 
-            await run.cpu_bound(run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads)
+            await run.cpu_bound(
+                run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads
+            )
 
             if not self.first_run:
                 bed_a = pd.read_table(
@@ -229,7 +234,12 @@ class RandomForest_object(BaseAnalysis):
             tempDir = tempfile.TemporaryDirectory(dir=self.output)
 
             await run.cpu_bound(
-                run_rcns2, tempDir.name, self.batch, tempbed.name, self.threads, self.showerrors
+                run_rcns2,
+                tempDir.name,
+                self.batch,
+                tempbed.name,
+                self.threads,
+                self.showerrors,
             )
 
             if os.path.isfile(f"{tempDir.name}/live_{self.batch}_votes.tsv"):
@@ -263,7 +273,9 @@ class RandomForest_object(BaseAnalysis):
                 self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
 
                 scores = scores.sort_values(by=["cal_Freq"], ascending=False).head(10)
-                scores_top = scores.sort_values(by=["cal_Freq"], ascending=False).head(1)
+                scores_top = scores.sort_values(by=["cal_Freq"], ascending=False).head(
+                    1
+                )
                 self.bam_processed += len(tomerge)
                 self.bams_in_processing -= len(tomerge)
 
@@ -272,11 +284,13 @@ class RandomForest_object(BaseAnalysis):
                     list(scores["cal_Freq"].values / 100),
                     self.bam_processed,
                 )
-                print (scores_top)
+                print(scores_top)
                 if self.summary:
                     with self.summary:
                         self.summary.clear()
-                        ui.label(f"Forest classification: {scores_top.head(1).index[0]} - {scores_top['cal_Freq'].head(1).values[0]:.2f} ")
+                        ui.label(
+                            f"Forest classification: {scores_top.head(1).index[0]} - {scores_top['cal_Freq'].head(1).values[0]:.2f} "
+                        )
             else:
                 ui.notify("Random Forest Complete by no data.")
 

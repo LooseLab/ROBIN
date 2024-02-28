@@ -101,6 +101,8 @@ class BrainMeth:
                 ui.label(f"Monitoring the path:{result}").tailwind(
                     "drop-shadow", "font-bold"
                 )
+                ui.label("Not yet implemented.")
+                """
                 with ui.tabs().classes("w-full") as tabs:
                     methylation = ui.tab("Methylation Classification")
                     copy_numer = ui.tab("Copy Number Variation")
@@ -177,7 +179,7 @@ class BrainMeth:
                 self.replaycontrol = ui.button(
                     "replay data", on_click=self.replay, icon="replay"
                 )
-
+                """
             # self.rcns2_worker.replay_prior_data()
 
     def replay(self):
@@ -193,7 +195,7 @@ class BrainMeth:
     def min_start_time(self):
         if len(self.run_time) > 0:
             dt = datetime.fromisoformat(min(self.run_time))
-            formatted_string = dt.strftime('%Y-%m-%d %H:%M')
+            formatted_string = dt.strftime("%Y-%m-%d %H:%M")
             return formatted_string
         else:
             return 0
@@ -201,77 +203,85 @@ class BrainMeth:
     def information_panel(self):
         self.frontpage = ui.card().style("width: 100%")
         with self.frontpage:
-            ui.label("CNS Tumour Methylation Classification").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
+            ui.label("CNS Tumour Methylation Classification").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
             ui.label(
                 "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
-            ).style('color: #000000; font-size: 100%; font-weight: 300').tailwind("drop-shadow", "font-bold")
+            ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
+                "drop-shadow", "font-bold"
+            )
             with ui.row():
-                ui.label(f"Monitoring the path:{self.watchfolder}").style('color: #000000; font-size: 100%; font-weight: 300')
-                ui.label(f"Outputting to:{self.output}").style('color: #000000; font-size: 100%; font-weight: 300')
+                ui.label(f"Monitoring the path:{self.watchfolder}").style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                )
+                ui.label(f"Outputting to:{self.output}").style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                )
                 ui.label().bind_text_from(
                     self.bam_count, "counter", backward=lambda n: f"BAM files seen: {n}"
-                ).style('color: #000000; font-size: 100%; font-weight: 300')
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
                     self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n}"
-                ).style('color: #000000; font-size: 100%; font-weight: 300')
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
                     self.bam_failed, "counter", backward=lambda n: f"BAM fail: {n}"
-                ).style('color: #000000; font-size: 100%; font-weight: 300')
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
 
                 if "forest" not in self.exclude:
                     ui.label().bind_text_from(
                         self,
                         "bamforcns",
                         backward=lambda n: f"BAM files for CNS: {n.qsize()}",
-                    ).style('color: #000000; font-size: 100%; font-weight: 300')
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
                 if "sturgeon" not in self.exclude:
                     ui.label().bind_text_from(
                         self,
                         "bamforsturgeon",
                         backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
-                    ).style('color: #000000; font-size: 100%; font-weight: 300')
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
                 if "nanodx" not in self.exclude:
                     ui.label().bind_text_from(
                         self,
                         "bamfornanodx",
                         backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
-                    ).style('color: #000000; font-size: 100%; font-weight: 300')
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
             with ui.row():
                 ui.label().bind_text_from(
                     self,
                     "devices",
                     backward=lambda n: f"Devices: {str(n)}",
-                ).style('color: #000000; font-size: 100%; font-weight: 300')
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
                     self,
                     "basecall_models",
                     backward=lambda n: f"Basecall Models: {str(n)}",
-                ).style('color: #000000; font-size: 100%; font-weight: 300')
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
                     self,
                     "flowcell_ids",
                     backward=lambda n: f"Flowcell IDs: {str(n)}",
-                ).style('color: #000000; font-size: 100%; font-weight: 300')
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
                     self,
                     "min_start_time",
                     backward=lambda n: f"Run Start Time: {n}",
-                ).style('color: #000000; font-size: 100%; font-weight: 300')
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
                     self,
                     "sample_ids",
                     backward=lambda n: f"Sample ID: {str(n)}",
-                ).style('color: #000000; font-size: 100%; font-weight: 300')
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
 
             with ui.row():
                 ui.label("Results Summary")
             with ui.row():
                 if "sturgeon" not in self.exclude:
-                    sturgeonsummary=ui.column()
+                    sturgeonsummary = ui.column()
                 if "nanodx" not in self.exclude:
-                    nanodxsummary=ui.column()
+                    nanodxsummary = ui.column()
                 if "forest" not in self.exclude:
-                    forestsummary=ui.column()
+                    forestsummary = ui.column()
             if "mgmt" not in self.exclude:
                 with ui.row():
                     if "mgmt" not in self.exclude:
@@ -279,44 +289,91 @@ class BrainMeth:
             if "cnv" not in self.exclude:
                 with ui.row():
                     if "cnv" not in self.exclude:
-                        cnvsummary=ui.column()
+                        cnvsummary = ui.column()
             if "fusion" not in self.exclude:
                 with ui.row():
                     if "fusion" not in self.exclude:
-                        fusions=ui.column()
+                        fusions = ui.column()
             if "coverage" not in self.exclude:
                 with ui.row():
                     if "coverage" not in self.exclude:
                         coverage = ui.column()
 
         with ui.card().style("width: 100%"):
-            ui.label("Methylation Classifications").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
+            ui.label("Methylation Classifications").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
             if "sturgeon" not in self.exclude:
-                self.Sturgeon = Sturgeon_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamforsturgeon, summary=sturgeonsummary)
+                self.Sturgeon = Sturgeon_object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    batch=True,
+                    bamqueue=self.bamforsturgeon,
+                    summary=sturgeonsummary,
+                )
             if "nanodx" not in self.exclude:
-                self.NanoDX = NanoDX_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamfornanodx, summary=nanodxsummary)
+                self.NanoDX = NanoDX_object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    batch=True,
+                    bamqueue=self.bamfornanodx,
+                    summary=nanodxsummary,
+                )
             if "forest" not in self.exclude:
-                self.RandomForest = RandomForest_object(self.threads, self.output, progress=True, batch=True, bamqueue=self.bamforcns, summary=forestsummary)
+                self.RandomForest = RandomForest_object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    batch=True,
+                    bamqueue=self.bamforcns,
+                    summary=forestsummary,
+                )
             pass
         #    with ui.tab_panel(copy_numer).classes("w-full"):
         if "cnv" not in self.exclude:
             with ui.card().style("width: 100%"):
-                self.CNV = CNVAnalysis(self.threads, self.output, progress=True, bamqueue=self.bamforcnv, summary=cnvsummary)
+                self.CNV = CNVAnalysis(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    bamqueue=self.bamforcnv,
+                    summary=cnvsummary,
+                )
             pass
         #    with ui.tab_panel(coverage).classes("w-full"):
         if "coverage" not in self.exclude:
             with ui.card().style("width: 100%"):
-                self.Target_Coverage = TargetCoverage(self.threads, self.output, progress=True,bamqueue=self.bamfortargetcoverage, summary=coverage)
+                self.Target_Coverage = TargetCoverage(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    bamqueue=self.bamfortargetcoverage,
+                    summary=coverage,
+                )
             pass
         #    with ui.tab_panel(mgmt).classes("w-full"):
         if "mgmt" not in self.exclude:
             with ui.card().style("width: 100%"):
-                self.MGMT_panel = MGMT_Object(self.threads, self.output, progress=True, bamqueue=self.bamformgmt, summary=mgmt)
+                self.MGMT_panel = MGMT_Object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    bamqueue=self.bamformgmt,
+                    summary=mgmt,
+                )
             pass
         #    with ui.tab_panel(fusions).classes("w-full"):
         if "fusion" not in self.exclude:
             with ui.card().style("width: 100%"):
-                self.Fusion_panel = Fusion_object(self.threads, self.output, progress=True, bamqueue=self.bamforfusions, summary=fusions)
+                self.Fusion_panel = Fusion_object(
+                    self.threads,
+                    self.output,
+                    progress=True,
+                    bamqueue=self.bamforfusions,
+                    summary=fusions,
+                )
             pass
 
     def process_bams(self) -> None:
@@ -336,19 +393,19 @@ class BrainMeth:
                         time.sleep(5)
                     self.check_bam(file[0])
                     if "forest" not in self.exclude:
-                        self.bamforcns.put([file[0],file[1]])
+                        self.bamforcns.put([file[0], file[1]])
                     if "sturgeon" not in self.exclude:
-                        self.bamforsturgeon.put([file[0],file[1]])
+                        self.bamforsturgeon.put([file[0], file[1]])
                     if "nanodx" not in self.exclude:
-                        self.bamfornanodx.put([file[0],file[1]])
+                        self.bamfornanodx.put([file[0], file[1]])
                     if "cnv" not in self.exclude:
-                        self.bamforcnv.put([file[0],file[1]])
+                        self.bamforcnv.put([file[0], file[1]])
                     if "coverage" not in self.exclude:
-                        self.bamfortargetcoverage.put([file[0],file[1]])
+                        self.bamfortargetcoverage.put([file[0], file[1]])
                     if "mgmt" not in self.exclude:
-                        self.bamformgmt.put([file[0],file[1]])
+                        self.bamformgmt.put([file[0], file[1]])
                     if "fusion" not in self.exclude:
-                        self.bamforfusions.put([file[0],file[1]])
+                        self.bamforfusions.put([file[0], file[1]])
 
                 time.sleep(1)
                 self.nofiles = True
@@ -413,7 +470,7 @@ class BrainMeth:
                 ui.notify("Target Playback Started")
 
             if "sturgeon" not in self.exclude:
-                self.Sturgeon.playback(latest_timestamps,step_size=step_size)
+                self.Sturgeon.playback(latest_timestamps, step_size=step_size)
             if "nanodx" not in self.exclude:
                 self.NanoDX.playback(latest_timestamps, step_size=step_size)
             if "forest" not in self.exclude:
