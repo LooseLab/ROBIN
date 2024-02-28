@@ -261,7 +261,7 @@ class NanoDX_object(BaseAnalysis):
                 self.nanodx_bam_count,
                 n_features,
             )
-            print(n)
+            print (nanoDX_df)
             if self.summary:
                 with self.summary:
                     self.summary.clear()
