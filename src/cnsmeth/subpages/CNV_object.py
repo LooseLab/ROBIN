@@ -58,7 +58,7 @@ class CNVAnalysis(BaseAnalysis):
         self.file_list.append(bamfile)
         # cnv_dict = self.update_cnv_dict.copy()
         # self.result, self.update_cnv_dict = await run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=cnv_dict)
-        print (f"Processing {bamfile}, {timestamp}")
+        #print (f"Processing {bamfile}, {timestamp}")
         self.result = iterate_bam_file(
             bamfile,
             _threads=self.threads,
@@ -69,6 +69,12 @@ class CNVAnalysis(BaseAnalysis):
 
         self.cnv_dict["bin_width"] = self.result.bin_width
         self.cnv_dict["variance"] = self.result.variance
+        if self.summary:
+            with self.summary:
+                self.summary.clear()
+                with ui.row():
+                    ui.label(f"Current Bin Width: {self.result.bin_width}")
+                    ui.label(f"Current Variance: {round(self.result.variance,3)}")
         np.save(os.path.join(self.output, 'CNV.npy'), self.result.cnv)
         np.save(os.path.join(self.output, 'CNV_dict.npy'), self.cnv_dict)
 
@@ -81,6 +87,9 @@ class CNVAnalysis(BaseAnalysis):
 
     def setup_ui(self):
         self.display_row = ui.row()
+        if self.summary:
+            with self.summary:
+                ui.label("No CNV data available.")
         with self.display_row:
             # self.progrock.visible = False
             ui.label("Copy Number Variation").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")

@@ -102,6 +102,9 @@ class TargetCoverage(BaseAnalysis):
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
+        if self.summary:
+            with self.summary:
+                ui.label(f"Current coverage estimates: Unknown")
         with ui.card().style("width: 100%"):
             ui.label("Coverage Data").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
             with ui.grid(columns=2).classes("w-full h-auto"):

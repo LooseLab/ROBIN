@@ -102,6 +102,9 @@ class RandomForest_object(BaseAnalysis):
                     self.create_rcns2_chart("Random Forest")
                 with ui.card().classes("col-span-5"):
                     self.create_rcns2_time_chart()
+        if self.summary:
+            with self.summary:
+                ui.label(f"Forest classification: Unknown")
 
     async def process_bam(self, bamfile):
         tomerge = []
@@ -260,6 +263,7 @@ class RandomForest_object(BaseAnalysis):
                 self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
 
                 scores = scores.sort_values(by=["cal_Freq"], ascending=False).head(10)
+                scores_top = scores.sort_values(by=["cal_Freq"], ascending=False).head(1)
                 self.bam_processed += len(tomerge)
                 self.bams_in_processing -= len(tomerge)
 
@@ -268,6 +272,10 @@ class RandomForest_object(BaseAnalysis):
                     list(scores["cal_Freq"].values / 100),
                     self.bam_processed,
                 )
+                if self.summary:
+                    with self.summary:
+                        self.summary.clear()
+                        ui.label(f"Forest classification: {scores.sort_values(by=['cal_Freq'], ascending=False).head(1)}")
             else:
                 ui.notify("Random Forest Complete by no data.")
 

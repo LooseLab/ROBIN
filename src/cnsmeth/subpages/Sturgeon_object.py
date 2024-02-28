@@ -90,6 +90,9 @@ class Sturgeon_object(BaseAnalysis):
                     self.create_sturgeon_chart("Sturgeon")
                 with ui.card().classes("col-span-5"):
                     self.create_sturgeon_time_chart()
+        if self.summary:
+            with self.summary:
+                ui.label(f"Sturgeon classification: Unknown")
 
     async def process_bam(self, bamfile):
         tomerge = []
@@ -152,6 +155,11 @@ class Sturgeon_object(BaseAnalysis):
                 self.st_num_probes = mydf.iloc[-1]["number_probes"]
                 lastrow = mydf.iloc[-1].drop("number_probes")
                 lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+                lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+                if self.summary:
+                    with self.summary:
+                        self.summary.clear()
+                        ui.label(f"Sturgeon classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}")
                 mydf_to_save = mydf
                 if timestamp:
                     mydf_to_save["timestamp"] = timestamp * 1000
