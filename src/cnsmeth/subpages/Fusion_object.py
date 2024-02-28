@@ -105,7 +105,11 @@ class Fusion_object(BaseAnalysis):
         """
         if self.summary:
             with self.summary:
-                ui.label("No Fusion Candidates Identified.")
+                ui.label("Fusion Candidates.")
+                with ui.row():
+                    ui.label("0").bind_text_from(self, "candidates", backward = lambda n: f"{n} high confidence fusions observed.")
+                    ui.label("0").bind_text_from(self, "all_candidates",
+                                                 backward=lambda n: f" {n} low confidence fusions observed.")
         with ui.card().style("width: 100%"):
             ui.label("Gene Fusion Candidates").style('color: #6E93D6; font-size: 150%; font-weight: 300').tailwind("drop-shadow", "font-bold")
             ui.label("This panel identifies gene fusion candidates from the input bam files. "
@@ -714,7 +718,7 @@ def test_me(port: int, threads: int, watchfolder: str, output:str, reload: bool 
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
     else:
-        print("Browse mode not implemented.")
+        #print("Browse mode not implemented.")
         TestObject.progress_trackers.visible=False
         TestObject.show_previous_data(output)
     ui.run(port=port,reload=reload)

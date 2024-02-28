@@ -272,10 +272,11 @@ class RandomForest_object(BaseAnalysis):
                     list(scores["cal_Freq"].values / 100),
                     self.bam_processed,
                 )
+                print (scores_top)
                 if self.summary:
                     with self.summary:
                         self.summary.clear()
-                        ui.label(f"Forest classification: {scores.sort_values(by=['cal_Freq'], ascending=False).head(1)}")
+                        ui.label(f"Forest classification: {scores_top.head(1).index[0]} - {scores_top['cal_Freq'].head(1).values[0]:.2f} ")
             else:
                 ui.notify("Random Forest Complete by no data.")
 
