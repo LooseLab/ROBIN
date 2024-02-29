@@ -82,8 +82,8 @@ class CNVAnalysis(BaseAnalysis):
         # Only update the plot if the queue is empty?
         if self.bamqueue.empty() or self.bam_processed % 5 == 0:
             self._update_cnv_plot()
-        else:
-            await asyncio.sleep(0.05)
+        #else:
+        await asyncio.sleep(0.05)
         self.running = False
 
     def setup_ui(self):

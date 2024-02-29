@@ -417,7 +417,7 @@ class TargetCoverage(BaseAnalysis):
                             f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
                         )
             self.update_target_coverage_table()
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.05)
         self.running = False
 
     def show_previous_data(self, watchfolder):

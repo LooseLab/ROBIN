@@ -82,7 +82,7 @@ def run_class(
     app.on_startup(mainpage.index_page)
     # app.on_startup(startup)
     ui.run(
-        port=port, reload=reload, title="RBTD", favicon=iconfile
+        port=port, reload=reload, title="RBTD", favicon=iconfile, on_air=False
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
 
 

@@ -41,9 +41,9 @@ def run_bedtools(bamfile, MGMT_BED, tempbamfile):
 def run_modkit(tempmgmtdir, MGMTbamfile, threads):
     pysam.sort("-o", os.path.join(tempmgmtdir, "mgmt.bam"), MGMTbamfile)
     pysam.index(os.path.join(tempmgmtdir, "mgmt.bam"))
+    cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress  >/dev/null 2>&1 "
     os.system(
-        f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods {os.path.join(tempmgmtdir, 'mgmt.bam')} "
-        f"{os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress  >/dev/null 2>&1 "
+        cmd
     )
     cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir, 'mgmt.bed')} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
     os.system(cmd)
@@ -98,27 +98,30 @@ class MGMT_Object(BaseAnalysis):
                 run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
             )
             ui.notify("MGMT predictor done.", type="positive", position="top")
-            results = pd.read_csv(
-                os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
-            )
-            self.counter += 1
-            plot_out = os.path.join(self.output, f"{self.counter}_mgmt.png")
-            await run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
+            try:
+                results = pd.read_csv(
+                    os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
+                )
+                self.counter += 1
+                plot_out = os.path.join(self.output, f"{self.counter}_mgmt.png")
+                await run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
 
-            self.mgmtable.clear()
-            with self.mgmtable:
-                self.tabulate(results)
-            results.to_csv(os.path.join(self.output, f"{self.counter}_mgmt.csv"))
-            if os.path.exists(plot_out):
-                self.mgmtplot.clear()
-                with self.mgmtplot.classes("w-full"):
-                    ui.image(plot_out).props("fit=scale-up")
-            tempmgmtdir.cleanup()
-            if self.summary:
-                with self.summary:
-                    self.summary.clear()
-                    ui.label(f"Current MGMT status: {results['status'].values[0]}")
-            ui.notify("MGMT predictor complete.", type="positive", position="top")
+                self.mgmtable.clear()
+                with self.mgmtable:
+                    self.tabulate(results)
+                results.to_csv(os.path.join(self.output, f"{self.counter}_mgmt.csv"))
+                if os.path.exists(plot_out):
+                    self.mgmtplot.clear()
+                    with self.mgmtplot.classes("w-full"):
+                        ui.image(plot_out).props("fit=scale-up")
+                tempmgmtdir.cleanup()
+                if self.summary:
+                    with self.summary:
+                        self.summary.clear()
+                        ui.label(f"Current MGMT status: {results['status'].values[0]}")
+                ui.notify("MGMT predictor complete.", type="positive", position="top")
+            except:
+                ui.notify("MGMT prediction failed.", type="negative", position="top")
         else:
             ui.notify("No new MGMT sites found.", type="warning", position="bottom")
         await asyncio.sleep(0.1)
