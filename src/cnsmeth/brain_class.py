@@ -274,8 +274,10 @@ class BrainMeth:
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
 
             with ui.row():
-                ui.label("Results Summary")
-            with ui.row():
+                ui.label("Results Summary").style(
+                "color: #6E93D6; font-size: 125%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
+            with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                 if "sturgeon" not in self.exclude:
                     sturgeonsummary = ui.column()
                 if "nanodx" not in self.exclude:
@@ -283,19 +285,19 @@ class BrainMeth:
                 if "forest" not in self.exclude:
                     forestsummary = ui.column()
             if "mgmt" not in self.exclude:
-                with ui.row():
+                with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                     if "mgmt" not in self.exclude:
                         mgmt = ui.column()
             if "cnv" not in self.exclude:
-                with ui.row():
+                with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                     if "cnv" not in self.exclude:
                         cnvsummary = ui.column()
             if "fusion" not in self.exclude:
-                with ui.row():
+                with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                     if "fusion" not in self.exclude:
                         fusions = ui.column()
             if "coverage" not in self.exclude:
-                with ui.row():
+                with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                     if "coverage" not in self.exclude:
                         coverage = ui.column()
 
