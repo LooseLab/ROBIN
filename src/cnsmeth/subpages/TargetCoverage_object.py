@@ -95,6 +95,8 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
 class TargetCoverage(BaseAnalysis):
     def __init__(self, *args, **kwargs):
         self.targetbamfile = None
+        self.covtable = None
+        self.covtable_row_count = 0
         self.cov_df_main = pd.DataFrame()
         self.bedcov_df_main = pd.DataFrame()
         self.bedfile = os.path.join(
@@ -300,64 +302,33 @@ class TargetCoverage(BaseAnalysis):
         self.coverage_time_chart.update()
 
     def update_target_coverage_table(self):
-        with self.targ_df:
-            self.targ_df.clear()
-            ui.aggrid.from_pandas(
-                self.target_coverage_df,
-                theme="material",
-                options={
-                    "defaultColDef": {
-                        "sortable": True,
-                        "resizable": True,
-                    },
-                    "columnDefs": [
-                        {
-                            "headerName": "Chromosome",
-                            "field": "chrom",
-                            "filter": "agTextColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "Start",
-                            "field": "startpos",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "End",
-                            "field": "endpos",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "Gene/s",
-                            "field": "name",
-                            "filter": "agTextColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "Bases",
-                            "field": "bases",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "Length",
-                            "field": "length",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                        {
-                            "headerName": "Coverage",
-                            "field": "coverage",
-                            "filter": "agNumberColumnFilter",
-                            "floatingFilter": False,
-                        },
-                    ],
-                    "pagination": True,
-                    "paginationAutoPageSize": True,
-                },
-            ).classes("w-full").style("height: 900px")
+        if not self.covtable:
+            self.target_coverage_df["coverage"] = self.target_coverage_df["coverage"].round(2)
+            with self.targ_df:
+                self.targ_df.clear()
+                self.covtable = ui.table.from_pandas(
+                    self.target_coverage_df,
+                    pagination=15
+                ).classes("w-full").style("height: 900px").style(
+                "font-size: 100%; font-weight: 300"
+                )
+                for col in self.covtable.columns:
+                    col['sortable'] = True
+                    if col['name'] == 'coverage':
+                        col[':format']='value => value.toFixed(2)'
+                self.covtable.add_slot('body-cell-coverage', '''
+                    <q-td key="coverage" :props="props">
+                        <q-badge :color="props.value < 10 ? 'red' : 'green'">
+                            {{ props.value }}
+                        </q-badge>
+                    </q-td>
+                ''')
+                with self.covtable.add_slot('top-right'):
+                    with ui.input(placeholder='Search').props('type=search').bind_value(self.covtable, 'filter').add_slot(
+                            'append'):
+                        ui.icon('search')
+        else:
+            self.covtable.update_rows(self.target_coverage_df.to_dict(orient='records'))
 
     async def process_bam(self, bamfile, timestamp):
         newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
