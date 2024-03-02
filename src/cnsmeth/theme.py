@@ -4,8 +4,9 @@ This module contains the theme for the whole application.
 
 from contextlib import contextmanager
 
-from nicegui import ui, app
-from nicegui.events import ValueChangeEventArguments
+from nicegui import ui, app, events, core
+import nicegui.air
+
 
 from cnsmeth import images
 
@@ -43,6 +44,9 @@ def frame(navtitle: str, myconnection):
                 "drop-shadow", "font-bold"
             )  # .tailwind("text-2xl font-bold font-italic drop-shadow")
             with ui.row().classes("ml-auto"):
+                ui.switch('allow remote access', value=False, on_change=use_on_air).classes(
+                    "ml-4 bg-transparent"
+                ).props('color="black"')
                 ui.switch("Dark Mode", on_change=dark_mode).classes(
                     "ml-4 bg-transparent"
                 ).props('color="black"')
@@ -90,7 +94,7 @@ def cleanup_and_exit():
     app.shutdown()
 
 
-def dark_mode(event: ValueChangeEventArguments):
+def dark_mode(event: events.ValueChangeEventArguments):
     """
     This function handles toggling dark mode for the interface.
     :param event:
@@ -100,3 +104,11 @@ def dark_mode(event: ValueChangeEventArguments):
         ui.dark_mode().enable()
     else:
         ui.dark_mode().disable()
+
+def use_on_air(args: events.ValueChangeEventArguments):
+    if args.value:
+        if core.air is None:
+            core.air = nicegui.air.Air('')
+        nicegui.air.connect()
+    else:
+        nicegui.air.disconnect()
