@@ -33,8 +33,8 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads):
                     f"--platform ont_r10_guppy_hac_5khz "\
                     f"--output_dir {workdirout} -b {bedfile}"
         os.system(runcommand)
-        os.system(f"snpeff hg38 {workdirout}/output.vcf.gz > {workdirout}/snpeff_output.vcf")
-        os.system(f"snpsift annotate /Users/mattloose/GIT/niceGUI/cnsmeth/clinvar.vcf {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf")
+        os.system(f"snpEff hg38 {workdirout}/output.vcf.gz > {workdirout}/snpeff_output.vcf")
+        os.system(f"SnpSift annotate /Users/mattloose/GIT/niceGUI/cnsmeth/clinvar.vcf {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf")
 
 def get_covdfs(bamfile):
     """

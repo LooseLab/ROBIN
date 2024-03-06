@@ -87,7 +87,7 @@ class RandomForest_object(BaseAnalysis):
         )
         self.offset = False
         self.first_run = True
-        self.showerrors = False
+        self.showerrors = showerrors
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
