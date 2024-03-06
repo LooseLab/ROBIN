@@ -98,11 +98,12 @@ def run_class(
     default=False,
     help="If set, will simulate the addition of existing files to the pipeline based on read data.",
 )
-@click.option(
-    "--showerrors",
-    default=False,
-    help="If set, will display all errors in running R.",
-)
+#@click.option(
+#    "--showerrors",
+#    default=False,
+#    help="If set, will display all errors in running R.",
+#)
+@click.option('--showerrors/--noerrors', default=False, help="If set, will display all errors in running R.")
 @click.option(
     "--sequencing_summary",
     default=None,
