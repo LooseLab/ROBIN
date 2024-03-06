@@ -34,8 +34,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads):
                     f"--output_dir {workdirout} -b {bedfile}"
         os.system(runcommand)
         os.system(f"snpEff hg38 {workdirout}/output.vcf.gz > {workdirout}/snpeff_output.vcf")
-        os.system(f"SnpSift annotate {os.path.join(
-                        os.path.dirname(os.path.abspath(resources.__file__)),
+        os.system(f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),
                         "clinvar.vcf")} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf")
 
 def get_covdfs(bamfile):
