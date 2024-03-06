@@ -22,7 +22,7 @@ os.environ["CI"] = "1"
 
 
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads):
-    if sys.platform=="darwin":
+    if sys.platform in ['darwin','linux']:
         runcommand = f"docker run -it -v {workdir}:{workdir} " \
                      f"-v {workdirout}:{workdirout} "\
                     f"hkubal/clairs-to:latest "\
