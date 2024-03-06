@@ -12,6 +12,7 @@ class SNPview:
     def __init__(self):
         super().__init__()
         self.snptable = None
+        self.pathogenictable = None
 
 
     def renderme(self):
@@ -143,14 +144,17 @@ class SNPview:
                     column['headerClasses'] = '' if visible else 'hidden'
                     self.snptable.update()
 
+                def set_pathogenic(value: bool) -> None:
+                    self.snptable.filter = "pathogenic" if value else None
+
                 with self.snptable.add_slot('top-left'):
                     with ui.button(icon='menu'):
                         with ui.menu(), ui.column().classes('gap-0 p-2'):
                             for column in self.snptable.columns:
-                                ui.switch(column['label'], value=True, on_change=lambda e,
+                                ui.switch(column['label'], value=False, on_change=lambda e,
                                                 column=column: toggle(column, e.value))
 
-                    ##ui.switch('Show potentially pathogenic SNPs only', value=True, on_change=lambda e:
+                    ui.switch('Show potentially pathogenic SNPs only', value=True, on_change=lambda e: set_pathogenic(e.value))
 
 
                 with self.snptable.add_slot('top-right'):
