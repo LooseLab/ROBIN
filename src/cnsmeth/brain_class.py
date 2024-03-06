@@ -331,6 +331,7 @@ class BrainMeth:
                     batch=True,
                     bamqueue=self.bamforcns,
                     summary=forestsummary,
+                    showerrors=self.showerrors,
                 )
             pass
         #    with ui.tab_panel(copy_numer).classes("w-full"):
