@@ -77,7 +77,7 @@ def run_modkit(bamfile, outbed, cpgs, threads):
 
 
 class RandomForest_object(BaseAnalysis):
-    def __init__(self, *args, showerrors=False**kwargs):
+    def __init__(self, *args, showerrors=False, **kwargs):
         self.rcns2_df_store = pd.DataFrame()
         self.threshold = 0.05
         self.batch = 0
