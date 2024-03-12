@@ -53,6 +53,15 @@ class BrainMeth:
         self.bam_count = {"counter": 0}
         self.bam_passed = {"counter": 0}
         self.bam_failed = {"counter": 0}
+        self.mapped_count = {"counter": 0}
+        self.pass_mapped_count = {"counter": 0}
+        self.fail_mapped_count = {"counter": 0}
+        self.unmapped_count = {"counter": 0}
+        self.pass_unmapped_count = {"counter": 0}
+        self.fail_unmapped_count = {"counter": 0}
+        self.pass_bases_count = {"counter": 0}
+        self.fail_bases_count = {"counter": 0}
+        self.bases_count = {"counter": 0}
         self.devices = set()
         self.basecall_models = set()
         self.run_time = set()
@@ -219,15 +228,38 @@ class BrainMeth:
                     "color: #000000; font-size: 100%; font-weight: 300"
                 )
                 ui.label().bind_text_from(
-                    self.bam_count, "counter", backward=lambda n: f"BAM files seen: {n}"
+                    self.bam_count, "counter", backward=lambda n: f"BAM files seen: {n:,}"
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
-                    self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n}"
+                    self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n:,}"
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
-                    self.bam_failed, "counter", backward=lambda n: f"BAM fail: {n}"
+                    self.bam_failed, "counter", backward=lambda n: f"BAM fail: {n:,}"
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
-
+            with ui.row():
+                ui.label().bind_text_from(
+                    self.mapped_count, "counter", backward=lambda n: f"Mapped Read Count: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.unmapped_count, "counter", backward=lambda n: f"Unmapped Read Count: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.pass_mapped_count, "counter", backward=lambda n: f"Pass Mapped Read Count: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.fail_mapped_count, "counter", backward=lambda n: f"Fail Mapped Read Count: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+            with ui.row():
+                ui.label().bind_text_from(
+                    self.bases_count, "counter", backward=lambda n: f"Total Mapped Bases: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.pass_bases_count, "counter", backward=lambda n: f"Total Mapped Pass Bases: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.fail_bases_count, "counter", backward=lambda n: f"Total Mapped Fail Bases: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+            with ui.row():
                 if "forest" not in self.exclude:
                     ui.label().bind_text_from(
                         self,
@@ -420,16 +452,26 @@ class BrainMeth:
         :param bamfile:
         :return:
         """
-        baminfo = ReadBam(bamfile).process_reads()
+        bamdata = ReadBam(bamfile)
+        baminfo = bamdata.process_reads()
         if baminfo["state"] == "pass":
             self.bam_passed["counter"] += 1
+            self.pass_mapped_count["counter"] += bamdata.mapped_reads
+            self.pass_unmapped_count["counter"] += bamdata.unmapped_reads
+            self.pass_bases_count["counter"] += bamdata.yield_tracking
         else:
             self.bam_failed["counter"] += 1
+            self.fail_mapped_count["counter"] += bamdata.mapped_reads
+            self.fail_unmapped_count["counter"] += bamdata.unmapped_reads
+            self.fail_bases_count["counter"] += bamdata.yield_tracking
         self.basecall_models.add(baminfo["basecall_model"])
         self.devices.add(baminfo["device_position"])
         self.sample_ids.add(baminfo["sample_id"])
         self.flowcell_ids.add(baminfo["flow_cell_id"])
         self.run_time.add(baminfo["time_of_run"])
+        self.mapped_count["counter"] +=bamdata.mapped_reads
+        self.unmapped_count["counter"] +=bamdata.unmapped_reads
+        self.bases_count["counter"] +=bamdata.yield_tracking
 
     def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
