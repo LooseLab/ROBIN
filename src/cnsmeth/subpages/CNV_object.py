@@ -36,6 +36,11 @@ def reduce_list(lst, max_length=500):
         lst = lst[::2]
     return lst
 
+def moving_average(a, n=3):
+    ret = np.cumsum(a, dtype=float)
+    ret[n:] = ret[n:] - ret[:-n]
+    return ret[n - 1:] / n  
+
 
 class CNVAnalysis(BaseAnalysis):
     def __init__(self, *args, **kwargs):
@@ -220,7 +225,7 @@ class CNVAnalysis(BaseAnalysis):
                                 "data": [
                                     {
                                         "name": contig,
-                                        "xAxis": (total * self.cnv_dict["bin_width"]),
+                                        "xAxis": ((total-len(cnv)/2) * self.cnv_dict["bin_width"]),
                                     }
                                 ],
                             },

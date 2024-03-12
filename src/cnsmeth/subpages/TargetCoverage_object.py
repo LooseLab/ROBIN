@@ -128,7 +128,10 @@ class TargetCoverage(BaseAnalysis):
         self.cov_df_main = pd.DataFrame()
         self.bedcov_df_main = pd.DataFrame()
         self.SNPqueue = queue.Queue()
-        self.SNP_timer_run()
+        self.snp_calling = True
+        if self.snp_calling:
+            self.SNP_timer_run()
+
         self.bedfile = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "unique_genes.bed",
@@ -460,7 +463,8 @@ class TargetCoverage(BaseAnalysis):
                 #await run.cpu_bound(subset_bam, self.targetbamfile, os.path.join(self.output, "targets_exceeding_threshold.bed"), os.path.join(self.output, "targets_exceeding.bam"))
                 await run.cpu_bound(sort_bam, self.targetbamfile, os.path.join(clair3workdir, "sorted_targets_exceeding.bam"), self.threads)
                 print ("File sorted.")
-                self.SNPqueue.put([run_list,os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),os.path.join(self.output, "targets_exceeding_threshold.bed")])
+                if self.snp_calling:
+                    self.SNPqueue.put([run_list,os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),os.path.join(self.output, "targets_exceeding_threshold.bed")])
 
             self.update_target_coverage_table()
 
