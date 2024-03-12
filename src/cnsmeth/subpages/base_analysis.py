@@ -14,15 +14,15 @@ import threading
 
 class BaseAnalysis:
     def __init__(
-        self,
-        threads,
-        outputfolder,
-        summary=None,
-        bamqueue=None,
-        progress=False,
-        batch=False,
-        *args,
-        **kwargs,
+            self,
+            threads,
+            outputfolder,
+            summary=None,
+            bamqueue=None,
+            progress=False,
+            batch=False,
+            *args,
+            **kwargs,
     ):
         if bamqueue:
             self.bamqueue = bamqueue
@@ -117,7 +117,7 @@ class BaseAnalysis:
         if self.bam_count == 0:
             return 0
         return (
-            self.bam_count - self.bams_in_processing - self.bam_processed
+                self.bam_count - self.bams_in_processing - self.bam_processed
         ) / self.bam_count
 
     def progress(self):
@@ -222,3 +222,20 @@ class BaseAnalysis:
         :return:
         """
         raise NotImplementedError("Subclasses must implement this method.")
+
+
+    def cleanup(self):
+        """
+        This function is called when the app is closed.
+        It should be overridden by subclasses to clean up any resources used by the analysis.
+        :return:
+        """
+        pass
+
+    def check_resources(self):
+        """
+        This function is called to check the resources required for the analysis are present.
+        It should be overridden by subclasses to check the resources required for the analysis are present.
+        :return:
+        """
+        pass

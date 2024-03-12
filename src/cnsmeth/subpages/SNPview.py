@@ -127,6 +127,7 @@ class SNPview:
                 else:
                     self.vcf = self.vcf.drop_duplicates()
 
+                #print(self.vcf[self.vcf['CLNSIG].notnull() and self.vcf['CLNSIG'].str.contains("pathogenic")])
 
                 #if not self.snptable:
                 self.placeholder.clear()

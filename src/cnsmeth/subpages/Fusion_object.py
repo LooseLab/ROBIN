@@ -260,6 +260,8 @@ class Fusion_object(BaseAnalysis):
                 self.fstable_all.update()
                 self.fusionplot_all.clear()
 
+            print (result_all)
+
             result_all, goodpairs = self._annotate_results(result_all)
             self.all_candidates = (
                 result_all[goodpairs].sort_values(by=7)["tag"].nunique()
