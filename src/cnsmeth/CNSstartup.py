@@ -34,7 +34,7 @@ class Methnice:
     @ui.page("/home")
     def index_page(self) -> None:
         my_connection = None
-        with theme.frame("Real Time Brain Tumour Classification", my_connection):
+        with theme.frame("Rapid nanopOre Brain intraoperatIve classificatioN", my_connection):
             # my_connection.connect_to_minknow()
             BrainMeth(
                 threads=self.threads,
