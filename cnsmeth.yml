@@ -1,11 +1,13 @@
-name: cnsmeth
+name: cnsmeth_clair3
 channels:
+  - defaults
   - bioconda
   - conda-forge
-  - defaults
 dependencies:
   - git-lfs
   - bioconda::samtools>=1.19
+  - python=3.9.0
+  - clair3
   - r-essentials
   - bioconda::bioconductor-genomicranges
   - r-optparse
@@ -13,7 +15,6 @@ dependencies:
   - conda-forge::r-ranger
   - r-matrixStats
   - r-glmnet
-  - python=3.8
   - pip
   - pip:
     - readfish
