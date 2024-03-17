@@ -25,13 +25,9 @@ STRAND = {"+": 1, "-": -1}
 
 
 class Fusion_object(BaseAnalysis):
-    def __init__(self, *args, **kwargs):
-        self.gene_bed = os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
-        )
-        self.all_gene_bed = os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)), "all_genes2.bed"
-        )
+    def __init__(self, *args, target_panel=None, **kwargs):
+        self.target_panel = target_panel
+
         self.fusion_candidates = pd.DataFrame()
         self.fusion_candidates_all = pd.DataFrame()
         self.fstable_all = None
@@ -45,18 +41,34 @@ class Fusion_object(BaseAnalysis):
             "gencode.v45.basic.annotation.gff3",
         )
 
+        if self.target_panel=="rCNS2":
+            self.gene_bed = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "rCNS2_panel_name_uniq.bed"
+            )
+        elif self.target_panel=="AML":
+            self.gene_bed = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "AML_panel_name_uniq.bed"
+            )
+
+
+        self.all_gene_bed = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)), "all_genes2.bed"
+        )
+
+        datafile = f"{self.target_panel}_data.csv.gz"
+
         if os.path.isfile(
             os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "data.csv.gz"
+                os.path.dirname(os.path.abspath(resources.__file__)), datafile
             )
         ):
             self.gene_table = pd.read_csv(
                 os.path.join(
-                    os.path.dirname(os.path.abspath(resources.__file__)), "data.csv.gz"
+                    os.path.dirname(os.path.abspath(resources.__file__)), datafile
                 )
             )
         else:
-            print("This looks like the first time you have run cnsmeth.")
+            print(f"This looks like the first time you have run the {self.target_panel} panel.")
             print("Parsing GFF3")
             self.gene_table = gff3_parser.parse_gff3(
                 self.gene_gff3_2, verbose=False, parse_attributes=True
@@ -92,7 +104,7 @@ class Fusion_object(BaseAnalysis):
             )
             self.gene_table_small.to_csv(
                 os.path.join(
-                    os.path.dirname(os.path.abspath(resources.__file__)), "data.csv.gz"
+                    os.path.dirname(os.path.abspath(resources.__file__)), datafile
                 ),
                 index=False,
                 compression="gzip",
@@ -106,7 +118,7 @@ class Fusion_object(BaseAnalysis):
         """
         if self.summary:
             with self.summary:
-                ui.label("Fusion Candidates.")
+                ui.label(f"Fusion Candidates - using panel {self.target_panel}")
                 with ui.row():
                     ui.label("0").bind_text_from(
                         self,
@@ -259,8 +271,6 @@ class Fusion_object(BaseAnalysis):
                 )
                 self.fstable_all.update()
                 self.fusionplot_all.clear()
-
-            print (result_all)
 
             result_all, goodpairs = self._annotate_results(result_all)
             self.all_candidates = (

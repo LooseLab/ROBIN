@@ -34,11 +34,11 @@ def frame(navtitle: str, myconnection):
         ui.button("Really Quit", icon="logout", on_click=cleanup_and_exit).props(
             "outline"
         ).classes("shadow-lg")
-    with ui.header(fixed=True).classes(replace="row items-center p-2").style(
+    with ui.header(fixed=True).style('background-color: #4F9153').classes(replace="row items-center p-2").style(
         "box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)"
     ):
         with ui.grid(columns=2).style("width: 100%"):
-            ui.label(navtitle).style(
+            ui.html(navtitle).style(
                 "color: #FFFFFF; font-size: 150%; font-weight: 300"
             ).tailwind(
                 "drop-shadow", "font-bold"
@@ -53,7 +53,7 @@ def frame(navtitle: str, myconnection):
                 ui.image(IMAGEFILE).style("width: 50px")
     with ui.column().classes("w-full"):
         yield
-    with ui.footer():
+    with ui.footer().style('background-color: #4F9153'):
         with ui.dialog() as dialog, ui.card():
             ui.label("Useful Information.").tailwind(
                 "text-2xl font-bold font-italic drop-shadow"
@@ -77,6 +77,7 @@ def frame(navtitle: str, myconnection):
             ui.link("Looselab", "https://looselab.github.io/")
             ui.button("Close", on_click=dialog.close)
         ui.image(IMAGEFILE).style("width: 30px")
+        ui.colors(primary='#555')
         ui.button("More Information", on_click=dialog.open)
         ui.button(
             "Quit", icon="logout", on_click=quitdialog.open
