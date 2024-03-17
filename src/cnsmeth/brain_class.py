@@ -11,7 +11,6 @@ from cnsmeth.subpages.Sturgeon_object import Sturgeon_object
 from cnsmeth.subpages.NanoDX_object import NanoDX_object
 from cnsmeth.subpages.RandomForest_object import RandomForest_object
 
-# from cnsmeth.subpages.fusion_panel import Fusion_Panel
 from cnsmeth.subpages.CNV_object import CNVAnalysis
 from cnsmeth.subpages.TargetCoverage_object import TargetCoverage
 from cnsmeth.subpages.Fusion_object import Fusion_object
@@ -37,6 +36,7 @@ class BrainMeth:
         watchfolder=None,
         output=None,
         sequencing_summary=None,
+        target_panel=None,
         showerrors=False,
         browse=False,
         exclude=[],
@@ -46,6 +46,7 @@ class BrainMeth:
         self.watchfolder = watchfolder
         self.output = output
         self.sequencing_summary = sequencing_summary
+        self.target_panel = target_panel
         self.showerrors = showerrors
         self.browse = browse
         self.exclude = exclude
@@ -375,6 +376,7 @@ class BrainMeth:
                     progress=True,
                     bamqueue=self.bamforcnv,
                     summary=cnvsummary,
+                    target_panel=self.target_panel,
                 )
             pass
         #    with ui.tab_panel(coverage).classes("w-full"):
@@ -386,6 +388,7 @@ class BrainMeth:
                     progress=True,
                     bamqueue=self.bamfortargetcoverage,
                     summary=coverage,
+                    target_panel=self.target_panel,
                 )
             pass
         #    with ui.tab_panel(mgmt).classes("w-full"):
@@ -408,6 +411,7 @@ class BrainMeth:
                     progress=True,
                     bamqueue=self.bamforfusions,
                     summary=fusions,
+                    target_panel=self.target_panel,
                 )
             pass
 

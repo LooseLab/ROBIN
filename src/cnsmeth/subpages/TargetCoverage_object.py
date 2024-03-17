@@ -118,7 +118,7 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
 
 
 class TargetCoverage(BaseAnalysis):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, target_panel=None, **kwargs):
         self.callthreshold = 10
         self.clair3running = False
         self.targets_exceeding_threshold = 0
@@ -131,11 +131,16 @@ class TargetCoverage(BaseAnalysis):
         self.snp_calling = True
         if self.snp_calling:
             self.SNP_timer_run()
+        self.target_panel = target_panel
 
-        self.bedfile = os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)),
-            "unique_genes.bed",
-        )
+        if self.target_panel=="rCNS2":
+            self.bedfile = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "rCNS2_panel_name_uniq.bed"
+            )
+        elif self.target_panel=="AML":
+            self.bedfile = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "AML_panel_name_uniq.bed"
+            )
         super().__init__(*args, **kwargs)
 
     def SNP_timer_run(self):

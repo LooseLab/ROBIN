@@ -18,6 +18,7 @@ class Methnice:
         watchfolder: Path,
         output: Path,
         sequencing_summary: Path,
+        target_panel: str,
         showerrors: bool,
         browse: bool,
         exclude: list,
@@ -27,6 +28,7 @@ class Methnice:
         self.watchfolder = watchfolder
         self.output = output
         self.sequencing_summary = sequencing_summary
+        self.target_panel = target_panel
         self.showerrors = showerrors
         self.browse = browse
         self.exclude = exclude
@@ -34,7 +36,7 @@ class Methnice:
     @ui.page("/home")
     def index_page(self) -> None:
         my_connection = None
-        with theme.frame("Rapid nanopOre Brain intraoperatIve classificatioN", my_connection):
+        with theme.frame("<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>", my_connection):
             # my_connection.connect_to_minknow()
             BrainMeth(
                 threads=self.threads,
@@ -42,6 +44,7 @@ class Methnice:
                 watchfolder=self.watchfolder,
                 output=self.output,
                 sequencing_summary=self.sequencing_summary,
+                target_panel=self.target_panel,
                 showerrors=self.showerrors,
                 browse=self.browse,
                 exclude=self.exclude,
@@ -56,6 +59,7 @@ def run_class(
     watchfolder: Path,
     output: Path,
     sequencing_summary: Path,
+    target_panel: str,
     showerrors: bool,
     browse: bool,
     exclude: list,
@@ -75,6 +79,7 @@ def run_class(
         watchfolder=watchfolder,
         output=output,
         sequencing_summary=sequencing_summary,
+        target_panel=target_panel,
         showerrors=showerrors,
         browse=browse,
         exclude=exclude,
@@ -82,7 +87,7 @@ def run_class(
     app.on_startup(mainpage.index_page)
     # app.on_startup(startup)
     ui.run(
-        port=port, reload=reload, title="RBTD", favicon=iconfile, on_air=False
+        port=port, reload=reload, title="ROBIN", favicon=iconfile, on_air=False
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
 
 
@@ -108,6 +113,16 @@ def run_class(
     "--sequencing_summary",
     default=None,
     help="Path to sequencing summary file. If provided, timestamps will be taken from this file.",
+)
+@click.option(
+    "--target_panel",
+    "-t",
+    default="rCNS2",
+    help="Select analysis gene panel from one of these options. Default is rCNS2",
+    type=click.Choice(
+        ["rCNS2", "AML"],
+        case_sensitive=True,
+    ),
 )
 @click.option(
     "--browse",
@@ -146,6 +161,7 @@ def package_run(
     simtime,
     showerrors,
     sequencing_summary,
+    target_panel,
     watchfolder,
     output,
     browse,
@@ -166,6 +182,7 @@ def package_run(
             watchfolder=None,
             output=None,
             sequencing_summary=sequencing_summary,
+            target_panel=target_panel,
             showerrors=showerrors,
             browse=browse,
             exclude=exclude,
@@ -187,6 +204,7 @@ def package_run(
             watchfolder=watchfolder,
             output=output,
             sequencing_summary=sequencing_summary,
+            target_panel=target_panel,
             showerrors=showerrors,
             browse=browse,
             exclude=exclude,

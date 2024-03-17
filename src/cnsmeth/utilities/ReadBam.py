@@ -144,7 +144,10 @@ class ReadBam:
                     filtered_reads_count += 1
                     if read.query_name not in readset:
                         readset.add(read.query_name)
-                        yield_tracking += read.infer_query_length()
+                        #ToDo: Should this only happen for each read once? Or should it happen every time an alignment is seen?
+                        #ToDo: Strictly this is aligned length and not total length??
+                        if read.infer_query_length() and read.infer_query_length()>0:
+                            yield_tracking += read.infer_query_length()
                     #print(f"Read name: {read.query_name}")
             self.mapped_reads=len(readset)
             self.yield_tracking = yield_tracking
