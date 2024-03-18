@@ -89,7 +89,7 @@ class CNVAnalysis(BaseAnalysis):
             ),
             names=["chrom", "start_pos", "end_pos", "gene"],
             header=None,
-            delim_whitespace=True,
+            sep='\s+',
         )
         super().__init__(*args, **kwargs)
 
