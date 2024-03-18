@@ -1,13 +1,14 @@
 import click
 from cnsmeth.brain_class import BrainMeth
 from pathlib import Path
-from nicegui import ui, app
+from nicegui import ui, app, run
 import os
 import sys
 import asyncio
 from cnsmeth import images
 
 from cnsmeth import theme
+#from cnsmeth.minknow_info.minknow_panel import MinKNOWFish
 
 
 class Methnice:
@@ -35,9 +36,10 @@ class Methnice:
 
     @ui.page("/home")
     def index_page(self) -> None:
-        my_connection = None
-        with theme.frame("<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>", my_connection):
-            # my_connection.connect_to_minknow()
+        my_connection = None #MinKNOWFish()
+        with theme.frame(
+                "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>",
+                my_connection):
             BrainMeth(
                 threads=self.threads,
                 simtime=self.simtime,
@@ -48,6 +50,7 @@ class Methnice:
                 showerrors=self.showerrors,
                 browse=self.browse,
                 exclude=self.exclude,
+                minknow_connection=my_connection,
             )
 
 
