@@ -2,10 +2,6 @@ from nicegui import ui
 
 from cnsmeth.utilities.bam_handler import BamEventHandler
 
-# from cnsmeth.Sturgeon_worker import Sturgeon_worker
-# from cnsmeth.RCNS2_worker import RCNS2_worker
-
-# from cnsmeth.CrossNN_worker import CrossNN_worker
 from cnsmeth.subpages.MGMT_object import MGMT_Object
 from cnsmeth.subpages.Sturgeon_object import Sturgeon_object
 from cnsmeth.subpages.NanoDX_object import NanoDX_object
@@ -16,6 +12,7 @@ from cnsmeth.subpages.TargetCoverage_object import TargetCoverage
 from cnsmeth.subpages.Fusion_object import Fusion_object
 from cnsmeth.utilities.local_file_picker import local_file_picker
 from cnsmeth.utilities.ReadBam import ReadBam
+
 
 from watchdog.observers import Observer
 from pathlib import Path
@@ -40,6 +37,7 @@ class BrainMeth:
         showerrors=False,
         browse=False,
         exclude=[],
+        minknow_connection=None,
     ):
         self.threads = threads
         self.simtime = simtime
@@ -50,6 +48,7 @@ class BrainMeth:
         self.showerrors = showerrors
         self.browse = browse
         self.exclude = exclude
+        self.minknow_connection = minknow_connection
 
         self.bam_count = {"counter": 0}
         self.bam_passed = {"counter": 0}
@@ -75,6 +74,9 @@ class BrainMeth:
         self.bamfortargetcoverage = Queue()
         self.bamformgmt = Queue()
         self.bamforfusions = Queue()
+
+        if self.minknow_connection:
+            self.minknow_connection.check_connection()
 
         if not self.browse:
             self.information_panel()
@@ -310,6 +312,7 @@ class BrainMeth:
                 ui.label("Results Summary").style(
                 "color: #6E93D6; font-size: 125%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
+
             with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                 if "sturgeon" not in self.exclude:
                     sturgeonsummary = ui.column()
@@ -333,6 +336,13 @@ class BrainMeth:
                 with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                     if "coverage" not in self.exclude:
                         coverage = ui.column()
+
+        if self.minknow_connection:
+            with ui.card().style("width: 100%"):
+                ui.label("MinKNOW Information").style(
+                    "color: #6E93D6; font-size: 150%; font-weight: 300"
+                ).tailwind("drop-shadow", "font-bold")
+                self.minknow_connection.setup_ui()
 
         with ui.card().style("width: 100%"):
             ui.label("Methylation Classifications").style(
@@ -477,12 +487,13 @@ class BrainMeth:
         self.unmapped_count["counter"] +=bamdata.unmapped_reads
         self.bases_count["counter"] +=bamdata.yield_tracking
 
+
     def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
         if sequencing_summary:
-
+            print("Using sequencing summary")
             with self.frontpage:
-                ui.notify("Checking for existing bams against sequencing summary")
+                ui.notify("Checking for existing bams against sequencing summary", type="info", position="top-right")
             df = pd.read_csv(
                 sequencing_summary,
                 delimiter="\t",
@@ -509,14 +520,11 @@ class BrainMeth:
                         latest_timestamps.loc[
                             latest_timestamps["filename_bam"] == f, "full_path"
                         ] = os.path.join(path, f)
-                        self.check_bam(os.path.join(path, f))
-            with self.frontpage:
-                ui.notify("Bams Checked")
 
             step_size = 20
 
             with self.frontpage:
-                ui.notify("Target Playback Started")
+                ui.notify("Target Playback Started", type="info", position="top-right")
 
             if "sturgeon" not in self.exclude:
                 self.Sturgeon.playback(latest_timestamps, step_size=step_size)
@@ -527,11 +535,15 @@ class BrainMeth:
             if "cnv" not in self.exclude:
                 self.CNV.playback(latest_timestamps, step_size=step_size)
             if "coverage" not in self.exclude:
-                self.Target_Coverage.playback(latest_timestamps, step_size=step_size)
+                self.Target_Coverage.playback(latest_timestamps, step_size=step_size, start_time=self.run_time)
             if "fusion" not in self.exclude:
                 self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
             if "mgmt" not in self.exclude:
                 self.MGMT_panel.playback(latest_timestamps, step_size=step_size)
+
+            for index, row in latest_timestamps.iterrows():
+                if len(row["full_path"]) > 0:
+                    self.check_bam(row["full_path"])
 
             self.runfinished = True
         else:
