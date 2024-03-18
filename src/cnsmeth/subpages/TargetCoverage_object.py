@@ -133,6 +133,7 @@ class TargetCoverage(BaseAnalysis):
             self.SNP_timer_run()
         self.target_panel = target_panel
 
+
         if self.target_panel=="rCNS2":
             self.bedfile = os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)), "rCNS2_panel_name_uniq.bed"
