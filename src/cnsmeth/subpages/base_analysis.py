@@ -209,9 +209,10 @@ class BaseAnalysis:
                 self.offset = time_diff
                 time_diff = 0
             while elapsed_time < time_diff:
-                time.sleep(0.1)
-                #print("waiting")
-                if not self.running:
+                if self.running:
+                    time.sleep(1)
+                    elapsed_time = (time.time() - playback_start_time) + self.offset
+                else:
                     self.offset += step_size
                     elapsed_time += self.offset
             #print("out the loop")
