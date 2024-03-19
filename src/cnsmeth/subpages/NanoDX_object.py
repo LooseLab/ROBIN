@@ -82,7 +82,7 @@ class NanoDX_object(BaseAnalysis):
             tomerge.append(file)
             timestamp = filetime
             self.bams_in_processing += 1
-            if len(tomerge) > 50:
+            if len(tomerge) > 150:
                 break
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
