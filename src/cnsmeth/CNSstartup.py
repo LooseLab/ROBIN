@@ -8,7 +8,7 @@ import asyncio
 from cnsmeth import images
 
 from cnsmeth import theme
-#from cnsmeth.minknow_info.minknow_panel import MinKNOWFish
+from cnsmeth.minknow_info.minknow_panel import MinKNOWFish
 
 
 class Methnice:
@@ -40,6 +40,7 @@ class Methnice:
         with theme.frame(
                 "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>",
                 my_connection):
+
             BrainMeth(
                 threads=self.threads,
                 simtime=self.simtime,
@@ -50,8 +51,9 @@ class Methnice:
                 showerrors=self.showerrors,
                 browse=self.browse,
                 exclude=self.exclude,
-                minknow_connection=my_connection,
+                minknow_connection=None,
             )
+
 
 
 def run_class(
