@@ -8,7 +8,7 @@ import numpy as np
 import os
 import sys
 import asyncio
-from nicegui import ui
+from nicegui import ui, background_tasks, run
 import click
 from pathlib import Path
 import pickle
@@ -23,13 +23,13 @@ class Result:
         self.cnv = cnv_dict
 
 
-def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None):
+def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None, log_level=int(logging.ERROR)):
     result = iterate_bam_file(
         bamfile,
         _threads=_threads,
         mapq_filter=mapq_filter,
         copy_numbers=copy_numbers,
-        log_level=int(logging.ERROR),
+        log_level=log_level,
     )
     return result, copy_numbers
 
@@ -97,9 +97,10 @@ class CNVAnalysis(BaseAnalysis):
         # We remove zero points as they are likely centromeric.
         X=round(np.average([i for i in self.result3.cnv["chrX"] if i !=0]),2)
         Y=round(np.average([i for i in self.result3.cnv["chrY"] if i !=0]),2)
-        if X>=-0.1 and Y<=0.1:
+        #print (f"X={X},Y={Y}")
+        if X>=0.1 and Y<=0.1:
             self.XYestimate="XX"
-        elif X<=-0.4 and Y>=0.3:
+        elif X<=0.1 and Y>=-0.2:
             self.XYestimate="XY"
         else:
             self.XYestimate="Unknown"
@@ -110,6 +111,12 @@ class CNVAnalysis(BaseAnalysis):
         # cnv_dict = self.update_cnv_dict.copy()
         # self.result, self.update_cnv_dict = await run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=cnv_dict)
         # print (f"Processing {bamfile}, {timestamp}")
+        await self.do_cnv_work(bamfile)
+
+    async def do_cnv_work(self, bamfile):
+
+        #self.result, self.update_cnv_dict = background_tasks.create(run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=self.update_cnv_dict))
+
         self.result = iterate_bam_file(
             bamfile,
             _threads=self.threads,
@@ -193,7 +200,7 @@ class CNVAnalysis(BaseAnalysis):
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
-                on_change=self._update_cnv_plot,
+                on_change=self.update_plots,
                 label="Select Chromosome",
                 value="All",
             ).style("width: 150px")
@@ -265,7 +272,7 @@ class CNVAnalysis(BaseAnalysis):
             .classes("border-double")
         )
     def _update_cnv_plot(self, plot_to_update=None, result=None, gene_target=None, title=None, min=0):
-        if result:
+        if result or self.result:
             total = 0
             valueslist = {"All": "All"}
             genevalueslist = {"All": "All"}
