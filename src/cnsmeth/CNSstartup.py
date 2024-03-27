@@ -1,4 +1,6 @@
 import click
+from configparser import ConfigParser
+import json
 from cnsmeth.brain_class import BrainMeth
 from pathlib import Path
 from nicegui import ui, app, run
@@ -10,6 +12,17 @@ from cnsmeth import images
 from cnsmeth import theme
 from cnsmeth.minknow_info.minknow_panel import MinKNOWFish
 
+DEFAULT_CFG = 'config.ini'
+
+def configure(ctx, param, filename):
+    cfg = ConfigParser()
+    cfg.read(filename)
+    try:
+        options = dict(cfg['options'])
+    except KeyError:
+        options = {}
+    print(options)
+    ctx.default_map = options
 
 class Methnice:
     def __init__(
@@ -23,6 +36,7 @@ class Methnice:
         showerrors: bool,
         browse: bool,
         exclude: list,
+        reference: Path
     ):
         self.threads = threads
         self.simtime = simtime
@@ -33,6 +47,7 @@ class Methnice:
         self.showerrors = showerrors
         self.browse = browse
         self.exclude = exclude
+        self.reference = reference
 
     @ui.page("/home")
     def index_page(self) -> None:
@@ -52,6 +67,7 @@ class Methnice:
                 browse=self.browse,
                 exclude=self.exclude,
                 minknow_connection=None,
+                reference=self.reference
             )
 
 
@@ -68,6 +84,7 @@ def run_class(
     showerrors: bool,
     browse: bool,
     exclude: list,
+    reference: Path,
 ):
     """
     Helper function to run the app.
@@ -88,7 +105,22 @@ def run_class(
         showerrors=showerrors,
         browse=browse,
         exclude=exclude,
+        reference=reference,
     )
+    ui.add_head_html(r'''
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Shadows+Into+Light&display=swap')
+    </style>
+    ''')
+
+    ui.add_style('''
+        .shadows-into light-regular {
+            font-family: "Shadows Into Light", cursive;
+            font-weight: 400;
+            font-style: normal;
+        }
+    ''')
+
     app.on_startup(mainpage.index_page)
     # app.on_startup(startup)
     ui.run(
@@ -98,11 +130,21 @@ def run_class(
 
 @click.command()
 @click.option(
+    '-c', '--config',
+    type         = click.Path(dir_okay=False),
+    default      = DEFAULT_CFG,
+    callback     = configure,
+    is_eager     = True,
+    expose_value = False,
+    help         = 'Read option defaults from the specified INI file',
+    show_default = True,
+)
+@click.option(
     "--port",
     default=8081,
     help="Port for GUI",
 )
-@click.option("--threads", default=4, help="Number of threads available.")
+@click.option("--threads", default=4, help="Number of threads available.", required=True)
 @click.option(
     "--simtime",
     default=False,
@@ -128,6 +170,15 @@ def run_class(
         ["rCNS2", "AML"],
         case_sensitive=True,
     ),
+)
+@click.option(
+    "--reference",
+    "-r",
+    type=click.Path(
+        exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path
+    ),
+    help="Path to the reference genome and index.",
+    required=True,
 )
 @click.option(
     "--browse",
@@ -171,11 +222,13 @@ def package_run(
     output,
     browse,
     exclude,
+    reference,
 ):  # , threads, simtime, watchfolder, output, sequencing_summary):
     """
     Entrypoint for when GUI is launched directly.
     :return: None
     """
+    print(reference)
     if browse:
         # Handle the case when --browse is set
         click.echo("Browse mode is enabled. Watchfolder and output are not required.")
@@ -213,6 +266,7 @@ def package_run(
             showerrors=showerrors,
             browse=browse,
             exclude=exclude,
+            reference=reference,
         )
 
 

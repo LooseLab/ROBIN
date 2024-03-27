@@ -1,7 +1,7 @@
 from __future__ import annotations
 from cnsmeth.subpages.base_analysis import BaseAnalysis
 
-from nicegui import ui, run
+from nicegui import ui, run, background_tasks
 import time
 import os
 import sys
@@ -95,15 +95,15 @@ class NanoDX_object(BaseAnalysis):
 
             ui.notify("NanoDX: Merging bams", type="info", position="top-right")
 
-            await run.cpu_bound(
+            await background_tasks.create(run.cpu_bound(
                 run_samtools_sort, file, tomerge, sortfile, self.threads
-            )
+            ))
 
             ui.notify("NanoDX: Running modkit", type="info", position="top-right")
 
-            await run.cpu_bound(
+            await background_tasks.create(run.cpu_bound(
                 run_modkit, self.cpgs_file, sortfile, temp.name, self.threads
-            )
+            ))
 
             ui.notify("NanoDX: Merging bed files", type="info", position="top-right")
 

@@ -1,4 +1,4 @@
-from nicegui import ui
+from nicegui import ui, run, background_tasks
 
 from cnsmeth.utilities.bam_handler import BamEventHandler
 
@@ -38,6 +38,7 @@ class BrainMeth:
         browse=False,
         exclude=[],
         minknow_connection=None,
+        reference=None,
     ):
         self.threads = threads
         self.simtime = simtime
@@ -49,6 +50,7 @@ class BrainMeth:
         self.browse = browse
         self.exclude = exclude
         self.minknow_connection = minknow_connection
+        self.reference=reference
 
         self.bam_count = {"counter": 0}
         self.bam_passed = {"counter": 0}
@@ -76,7 +78,9 @@ class BrainMeth:
         self.bamforfusions = Queue()
 
         if self.minknow_connection:
-            self.minknow_connection.check_connection()
+            background_tasks.create(run.io_bound(self.waitforclick))
+
+
 
         if not self.browse:
             self.information_panel()
@@ -102,6 +106,10 @@ class BrainMeth:
             ui.button("Choose file", on_click=self.pick_file, icon="folder")
 
             self.content = ui.column().classes("w-full")
+
+    async def waitforclick(self):
+        self.minknow_connection.check_connection()
+        await self.minknow_connection.access_device.clicked()
 
     async def pick_file(self) -> None:
         result = await local_file_picker("/", multiple=True)
@@ -399,6 +407,7 @@ class BrainMeth:
                     bamqueue=self.bamfortargetcoverage,
                     summary=coverage,
                     target_panel=self.target_panel,
+                    reference=self.reference
                 )
             pass
         #    with ui.tab_panel(mgmt).classes("w-full"):

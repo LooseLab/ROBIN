@@ -3,7 +3,7 @@ import os
 import tempfile
 import time
 import pandas as pd
-from nicegui import ui, run
+from nicegui import ui, run, background_tasks
 from cnsmeth import theme, resources
 import pysam
 from cnsmeth import models
@@ -125,13 +125,13 @@ class RandomForest_object(BaseAnalysis):
             sortbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
             tempbed = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bed")
             self.batch += 1
-            await run.cpu_bound(
+            await background_tasks.create(run.cpu_bound(
                 run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads
-            )
+            ))
 
-            await run.cpu_bound(
+            await background_tasks.create(run.cpu_bound(
                 run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads
-            )
+            ))
 
             if not self.first_run:
                 bed_a = pd.read_table(
@@ -233,14 +233,14 @@ class RandomForest_object(BaseAnalysis):
 
             tempDir = tempfile.TemporaryDirectory(dir=self.output)
 
-            await run.cpu_bound(
+            await background_tasks.create(run.cpu_bound(
                 run_rcns2,
                 tempDir.name,
                 self.batch,
                 tempbed.name,
                 self.threads,
                 self.showerrors,
-            )
+            ))
 
             if os.path.isfile(f"{tempDir.name}/live_{self.batch}_votes.tsv"):
                 scores = pd.read_table(

@@ -17,6 +17,8 @@ IMAGEFILE = os.path.join(
 )
 
 
+
+
 @contextmanager
 def frame(navtitle: str, myconnection):
     """Custom page frame to share the same styling and behavior across all pages"""
@@ -38,7 +40,7 @@ def frame(navtitle: str, myconnection):
         "box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)"
     ):
         with ui.grid(columns=2).style("width: 100%"):
-            ui.html(navtitle).style(
+            ui.html(navtitle).classes('shadows-into').style(
                 "color: #FFFFFF; font-size: 150%; font-weight: 300"
             ).tailwind(
                 "drop-shadow", "font-bold"
@@ -51,6 +53,9 @@ def frame(navtitle: str, myconnection):
                     "ml-4 bg-transparent"
                 ).props('color="black"')
                 ui.image(IMAGEFILE).style("width: 50px")
+    if myconnection:
+        myconnection.setup_ui()
+        myconnection.check_connection()
     with ui.column().classes("w-full"):
         yield
     with ui.footer().style('background-color: #4F9153'):
@@ -82,6 +87,9 @@ def frame(navtitle: str, myconnection):
         ui.button(
             "Quit", icon="logout", on_click=quitdialog.open
         )  # .classes('ml-4')#.props('outline') #.classes('shadow-lg')
+        if myconnection:
+            ui.label().bind_text_from(myconnection, 'connection_ip', backward=lambda n: f'Connected to: {n}')
+        ui.label().bind_text_from(app, 'urls', backward=lambda n: f'Available urls: {n}')
         ui.label(
             "Some aspects of this application are ©Looselab - all analyses provided for research use only."
         ).tailwind("text-sm font-italic")
