@@ -1,19 +1,20 @@
-name: cnsmeth
+name: cnsmeth_snp
 channels:
   - bioconda
   - conda-forge
   - defaults
 dependencies:
   - git-lfs
-  - bioconda::samtools>=1.19
-  - r-essentials
+  - r-base
   - bioconda::bioconductor-genomicranges
+  - bioconda::snpsift
+  - bioconda::snpeff
   - r-optparse
   - r-data.table
   - conda-forge::r-ranger
   - r-matrixStats
   - r-glmnet
-  - python=3.8
+  - python >=3.9.0,<3.10
   - pip
   - pip:
     - readfish

@@ -8,9 +8,12 @@ import numpy as np
 import os
 import sys
 import asyncio
-from nicegui import ui
+from nicegui import ui, background_tasks, run
 import click
 from pathlib import Path
+import pickle
+import ruptures as rpt
+import copy
 
 os.environ["CI"] = "1"
 
@@ -20,46 +23,100 @@ class Result:
         self.cnv = cnv_dict
 
 
-def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None):
+def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None, log_level=int(logging.ERROR)):
     result = iterate_bam_file(
         bamfile,
         _threads=_threads,
         mapq_filter=mapq_filter,
         copy_numbers=copy_numbers,
-        log_level=int(logging.ERROR),
+        log_level=log_level,
     )
     return result, copy_numbers
 
 
-def reduce_list(lst, max_length=500):
+def reduce_list(lst, max_length=1000):
     while len(lst) > max_length:
         lst = lst[::2]
     return lst
 
+class CNV_Difference:
+    def __init__(self, *args, **kwargs):
+        self.cnv={}
+
+def moving_average(data, n=3):
+    return np.convolve(data, np.ones(n)/n, mode='same')
+
+def ruptures_plotting(data):
+    x_coords = range(0, (data.size + 1))# * 10, bin_slice * 10, )
+    signal = np.array(list(zip(x_coords,data)))
+
+
+    algo_c = rpt.KernelCPD(kernel="linear", min_size=10).fit(
+        signal#[:, 1]
+    )
+
+    return algo_c
 
 class CNVAnalysis(BaseAnalysis):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, target_panel=None, **kwargs):
         self.file_list = []
         self.cnv_dict = {}
         self.cnv_dict["bin_width"] = 0
         self.cnv_dict["variance"] = 0
         self.update_cnv_dict = {}
         self.result = None
+        self.result2 = None
+        self.result3 = CNV_Difference()
+
+        self.XYestimate = "Unknown"
+
+        with open(os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "HG01280_control.pkl"
+            ), 'rb') as f:
+            self.ref_cnv_dict = pickle.load(f)
+        self.target_panel = target_panel
+        if self.target_panel=="rCNS2":
+            self.gene_bed_file = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "rCNS2_panel_name_uniq.bed"
+            )
+        elif self.target_panel=="AML":
+            self.gene_bed_file = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "AML_panel_name_uniq.bed"
+            )
         self.gene_bed = pd.read_table(
             os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
+                self.gene_bed_file
             ),
             names=["chrom", "start_pos", "end_pos", "gene"],
             header=None,
-            delim_whitespace=True,
+            sep='\s+',
         )
         super().__init__(*args, **kwargs)
+
+    def estimate_XY(self):
+        # We remove zero points as they are likely centromeric.
+        X=round(np.average([i for i in self.result3.cnv["chrX"] if i !=0]),2)
+        Y=round(np.average([i for i in self.result3.cnv["chrY"] if i !=0]),2)
+        #print (f"X={X},Y={Y}")
+        if X>=0.1 and Y<=0.1:
+            self.XYestimate="XX"
+        elif X<=0.1 and Y>=-0.2:
+            self.XYestimate="XY"
+        else:
+            self.XYestimate="Unknown"
+
 
     async def process_bam(self, bamfile, timestamp):
         self.file_list.append(bamfile)
         # cnv_dict = self.update_cnv_dict.copy()
         # self.result, self.update_cnv_dict = await run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=cnv_dict)
         # print (f"Processing {bamfile}, {timestamp}")
+        await self.do_cnv_work(bamfile)
+
+    async def do_cnv_work(self, bamfile):
+
+        #self.result, self.update_cnv_dict = background_tasks.create(run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=self.update_cnv_dict))
+
         self.result = iterate_bam_file(
             bamfile,
             _threads=self.threads,
@@ -70,22 +127,66 @@ class CNVAnalysis(BaseAnalysis):
 
         self.cnv_dict["bin_width"] = self.result.bin_width
         self.cnv_dict["variance"] = self.result.variance
+        self.result2 = iterate_bam_file(
+            bam_file_path=None,
+            _threads=self.threads,
+            mapq_filter=60,
+            copy_numbers=self.ref_cnv_dict,
+            log_level=int(logging.ERROR),
+            bin_width=self.cnv_dict["bin_width"],
+        )
+
+        for key in self.result.cnv.keys():
+            if key!="chrM":
+                #print(key, np.mean(self.result.cnv[key]))#[i for i in self.result.cnv[key] if i !=0]))
+                moving_avg_data1 = moving_average(self.result.cnv[key])
+                moving_avg_data2 = moving_average(self.result2.cnv[key])
+                self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
+                #print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
+                #if len(self.result3.cnv[key]) > 20:
+                #    algo_c = ruptures_plotting(self.result3.cnv[key])
+                #    penalty_value = 5  # beta
+
+                #    result = algo_c.predict(pen=penalty_value)
+                #    print(result)
+        self.estimate_XY()
+
         if self.summary:
             with self.summary:
                 self.summary.clear()
                 with ui.row():
+                    if self.XYestimate!="Unknown":
+                        if self.XYestimate=="XY":
+                            ui.icon('man').classes('text-4xl')
+                        else:
+                            ui.icon('woman').classes('text-4xl')
+                        ui.label(f"Estimated Genetic Sex: {self.XYestimate}")
                     ui.label(f"Current Bin Width: {self.result.bin_width}")
-                    ui.label(f"Current Variance: {round(self.result.variance,3)}")
+                    ui.label(f"Current Variance: {round(self.result.variance, 3)}")
         np.save(os.path.join(self.output, "CNV.npy"), self.result.cnv)
         np.save(os.path.join(self.output, "CNV_dict.npy"), self.cnv_dict)
 
         # Only update the plot if the queue is empty?
         if self.bamqueue.empty() or self.bam_processed % 5 == 0:
-            self._update_cnv_plot()
+            self._update_cnv_plot(plot_to_update=self.scatter_echart,result=self.result, title="CNV")
+            self._update_cnv_plot(plot_to_update=self.reference_scatter_echart,result=self.result2, title="Reference CNV")
+            self._update_cnv_plot(plot_to_update=self.difference_scatter_echart, result=self.result3,
+                                  title="Difference CNV", min="dataMin")
         #else:
         await asyncio.sleep(0.05)
         self.running = False
 
+    def update_plots(self, gene_target=None):
+        if not gene_target:
+            self._update_cnv_plot(plot_to_update=self.scatter_echart, result=self.result, title="CNV")
+            self._update_cnv_plot(plot_to_update=self.reference_scatter_echart, result=self.result2, title="Reference CNV")
+            self._update_cnv_plot(plot_to_update=self.difference_scatter_echart, result=self.result3,
+                                  title="Difference CNV", min="dataMin")
+        else:
+            self._update_cnv_plot(plot_to_update=self.scatter_echart, result=self.result,gene_target=gene_target, title="CNV")
+            self._update_cnv_plot(plot_to_update=self.reference_scatter_echart, result=self.result2, gene_target=gene_target, title="Reference CNV")
+            self._update_cnv_plot(plot_to_update=self.difference_scatter_echart, result=self.result3,
+                                  gene_target=gene_target, title="Difference CNV", min="dataMin")
     def setup_ui(self):
         self.display_row = ui.row()
         if self.summary:
@@ -99,16 +200,16 @@ class CNVAnalysis(BaseAnalysis):
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
-                on_change=self._update_cnv_plot,
+                on_change=self.update_plots,
                 label="Select Chromosome",
                 value="All",
             ).style("width: 150px")
             self.gene_select = ui.select(
                 options={"All": "All"},
                 on_change=lambda e: (
-                    self._update_cnv_plot()
+                    self.update_plots()
                     if e.value == "All"
-                    else self._update_cnv_plot(gene_target=e.value)
+                    else self.update_plots(gene_target=e.value)
                 ),
                 label="Select Gene",
                 value="All",
@@ -119,32 +220,44 @@ class CNVAnalysis(BaseAnalysis):
             ui.label().bind_text_from(
                 self.cnv_dict, "variance", backward=lambda n: f"Variance: {round(n,3)}"
             )
-        self.scatter_echart = (
+
+        self.scatter_echart = self.generate_chart(title="CNV Scatter Plot")
+
+        self.difference_scatter_echart = self.generate_chart(title="Difference Plot", initmin=-2, initmax=2)#, type="log")
+
+        with ui.expansion('See Reference DataSet', icon='loupe').classes('w-full'):
+            self.reference_scatter_echart = self.generate_chart(title="Reference CNV Scatter Plot")
+
+
+    def generate_chart(self, title=None, initmax=8, initmin=0, type="value"):
+        return (
             ui.echart(
                 {
                     "animation": False,
                     "grid": {"containLabel": True},
-                    "title": {"text": "CNV Scatter Plot"},
+                    "title": {"text": f"{title}"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {
-                        "type": "value",
+                        "type": f"{type}",
                         "max": "dataMax",
                         "splitLine": {"show": False},
                     },
                     "yAxis": {
                         "type": "value",
+                        "logBase": 2,
+
                     },
                     "dataZoom": [
-                        {"type": "slider", "xAxisIndex": 0, "filterMode": "none"},
+                        {"type": "slider", "filterMode": "none"},
                         {
                             "type": "slider",
                             "yAxisIndex": 0,
                             "filterMode": "none",
-                            "startValue": 0,
-                            "endValue": 8,
+                            "startValue": initmin,
+                            "endValue": initmax,
                         },
-                        {"type": "inside", "xAxisIndex": 0, "filterMode": "none"},
-                        {"type": "inside", "yAxisIndex": 0, "filterMode": "none"},
+                        #{"type": "inside", "xAxisIndex": 0, "filterMode": "none"},
+                        #{"type": "inside", "yAxisIndex": 0, "filterMode": "none"},
                     ],
                     "series": [
                         {
@@ -158,15 +271,14 @@ class CNVAnalysis(BaseAnalysis):
             .style("height: 450px")
             .classes("border-double")
         )
-
-    def _update_cnv_plot(self, gene_target=None):
-        if self.result:
+    def _update_cnv_plot(self, plot_to_update=None, result=None, gene_target=None, title=None, min=0):
+        if result or self.result:
             total = 0
             valueslist = {"All": "All"}
             genevalueslist = {"All": "All"}
             self.chrom_filter = self.chrom_select.value
 
-            min = 0
+            min = min
             max = "dataMax"
 
             if gene_target:
@@ -174,7 +286,7 @@ class CNVAnalysis(BaseAnalysis):
                 end_pos = self.gene_bed.iloc[int(gene_target)].end_pos
                 chrom = self.gene_bed.iloc[int(gene_target)].chrom
                 for counter, contig in enumerate(
-                    natsort.natsorted(self.result.cnv), start=1
+                    natsort.natsorted(result.cnv), start=1
                 ):
                     valueslist[counter] = contig
                     if contig == chrom:
@@ -185,11 +297,11 @@ class CNVAnalysis(BaseAnalysis):
             if self.chrom_filter == "All":
                 counter = 0
 
-                self.scatter_echart.options["title"][
+                plot_to_update.options["title"][
                     "text"
-                ] = "Copy Number Variation - All Chromosomes"
-                self.scatter_echart.options["series"] = []
-                for contig, cnv in natsort.natsorted(self.result.cnv.items()):
+                ] = f"{title} - All Chromosomes"
+                plot_to_update.options["series"] = []
+                for contig, cnv in natsort.natsorted(result.cnv.items()):
                     if contig == "chrM":
                         continue
                     counter += 1
@@ -205,9 +317,10 @@ class CNVAnalysis(BaseAnalysis):
                     data = reduce_list(data)
 
                     total += len(cnv)
-                    self.scatter_echart.options["xAxis"]["max"] = max
-                    self.scatter_echart.options["xAxis"]["min"] = min
-                    self.scatter_echart.options["series"].append(
+
+                    plot_to_update.options["xAxis"]["max"] = max
+                    plot_to_update.options["xAxis"]["min"] = min
+                    plot_to_update.options["series"].append(
                         {
                             "type": "scatter",
                             "name": contig,
@@ -220,43 +333,39 @@ class CNVAnalysis(BaseAnalysis):
                                 "data": [
                                     {
                                         "name": contig,
-                                        "xAxis": (total * self.cnv_dict["bin_width"]),
+                                        "xAxis": ((total-len(cnv)/2) * self.cnv_dict["bin_width"]),
                                     }
                                 ],
                             },
                         }
                     )
-                    if contig in ["chr7", "chr10"]:
-                        # print (self.scatter_echart.options["series"][-1])
-                        pass
                     for index, gene in self.gene_bed[
                         self.gene_bed["chrom"] == contig
                     ].iterrows():
                         genevalueslist[index] = f"{gene.chrom} - {gene.gene}"
-
             else:
-                self.scatter_echart.options["series"] = []
+                plot_to_update.options["series"] = []
 
                 for counter, contig in enumerate(
-                    natsort.natsorted(self.result.cnv), start=1
+                    natsort.natsorted(result.cnv), start=1
                 ):
                     valueslist[counter] = contig
 
-                contig, cnv = natsort.natsorted(self.result.cnv.items())[
+                contig, cnv = natsort.natsorted(result.cnv.items())[
                     int(self.chrom_filter) - 1
                 ]
-                # self.log(self.gene_bed[self.gene_bed['chrom']==contig])
+
                 data = list(
                     zip((np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"], cnv)
                 )
 
                 if not gene_target:
-                    min = 0
+                    min = min
                     max = "dataMax"
 
                 else:
                     if gene_target == "All":
-                        min = 0
+                        min = min
                         max = "dataMax"
                     else:
                         start_pos = self.gene_bed.iloc[int(gene_target)].start_pos
@@ -265,7 +374,7 @@ class CNVAnalysis(BaseAnalysis):
                         chrom = self.gene_bed.iloc[int(gene_target)].chrom
                         counter = 0
                         for counter, contig in enumerate(
-                            natsort.natsorted(self.result.cnv), start=1
+                            natsort.natsorted(result.cnv), start=1
                         ):
                             if contig == chrom:
                                 self.chrom_filter = counter
@@ -283,12 +392,12 @@ class CNVAnalysis(BaseAnalysis):
                         if min < 0:
                             min = 0
 
-                self.scatter_echart.options["title"][
+                plot_to_update.options["title"][
                     "text"
                 ] = f"Copy Number Variation - {contig}"
-                self.scatter_echart.options["xAxis"]["max"] = max
-                self.scatter_echart.options["xAxis"]["min"] = min
-                self.scatter_echart.options["series"].append(
+                plot_to_update.options["xAxis"]["max"] = max
+                plot_to_update.options["xAxis"]["min"] = min
+                plot_to_update.options["series"].append(
                     {
                         "type": "scatter",
                         "name": contig,
@@ -308,7 +417,7 @@ class CNVAnalysis(BaseAnalysis):
                 for _, row in self.gene_bed[
                     self.gene_bed["chrom"] == contig
                 ].iterrows():
-                    self.scatter_echart.options["series"][0]["markArea"]["data"].append(
+                    plot_to_update.options["series"][0]["markArea"]["data"].append(
                         [
                             {
                                 "name": row["gene"],
@@ -322,7 +431,7 @@ class CNVAnalysis(BaseAnalysis):
 
             self.chrom_select.set_options(valueslist)
             self.gene_select.set_options(genevalueslist)
-            self.scatter_echart.update()
+            plot_to_update.update()
 
     def show_previous_data(self, output):
         result = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()

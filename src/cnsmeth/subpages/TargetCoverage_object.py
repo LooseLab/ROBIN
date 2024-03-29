@@ -8,15 +8,36 @@ import sys
 import click
 import time
 from pathlib import Path
-from nicegui import ui, run
+from nicegui import ui, run, background_tasks
 from io import StringIO
 import pysam
 import asyncio
 import tempfile
 import shutil
+import queue
+
+from cnsmeth.subpages.SNPview import SNPview
 
 os.environ["CI"] = "1"
 
+
+def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
+    #ToDo: handle any platform
+    if sys.platform in ['darwin','linux']:
+        runcommand = f"docker run -it -v {workdir}:{workdir} " \
+                     f"-v {workdirout}:{workdirout} "\
+                     f"-v {reference}:{reference} " \
+                     f"-v {reference}.fai:{reference}.fai " \
+                     f"hkubal/clairs-to:latest "\
+                    f"/opt/bin/run_clairs_to "\
+                    f"--tumor_bam_fn {bamfile} "\
+                    f"--ref_fn {reference} "\
+                    f"--threads {threads} "\
+                    f"--platform ont_r10_guppy_hac_5khz "\
+                    f"--output_dir {workdirout} -b {bedfile}"
+        os.system(runcommand)
+        os.system(f"snpEff hg38 {workdirout}/output.vcf.gz > {workdirout}/snpeff_output.vcf")
+        os.system(f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf")
 
 def get_covdfs(bamfile):
     """
@@ -45,6 +66,13 @@ def get_covdfs(bamfile):
         return newcovdf, bedcovdf
     except Exception as e:
         print(e)
+
+def subset_bam(bamfile, targets, output):
+    pysam.view("-L", f"{targets}", "-o", f"{output}", f"{bamfile}")
+
+def sort_bam(bamfile, output, threads):
+    pysam.sort(f"-@{threads}","-o", output, bamfile)
+    pysam.index(f"{output}")
 
 
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
@@ -83,7 +111,7 @@ def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
 
 def run_bedtools(bamfile, bedfile, tempbamfile):
     """
-    This function extracts the MGMT sites from the bamfile.
+    This function extracts the target sites from the bamfile.
     """
     try:
         os.system(f"bedtools intersect -a {bamfile} -b {bedfile} > {tempbamfile}")
@@ -93,18 +121,63 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
 
 
 class TargetCoverage(BaseAnalysis):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, target_panel=None, reference=None, **kwargs):
+        self.callthreshold = 10
+        self.clair3running = False
+        self.targets_exceeding_threshold = 0
         self.targetbamfile = None
         self.covtable = None
         self.covtable_row_count = 0
         self.cov_df_main = pd.DataFrame()
         self.bedcov_df_main = pd.DataFrame()
-        self.bedfile = os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)),
-            "unique_genes.bed",
-        )
+        self.SNPqueue = queue.Queue()
+        self.reference = reference
+        if self.reference:
+            self.snp_calling = True
+        else:
+            self.snp_calling = False
+        if self.snp_calling:
+            self.SNP_timer_run()
+        self.target_panel = target_panel
+
+        print(f"My reference file is {self.reference}")
+
+
+        if self.target_panel=="rCNS2":
+            self.bedfile = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "rCNS2_panel_name_uniq.bed"
+            )
+        elif self.target_panel=="AML":
+            self.bedfile = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "AML_panel_name_uniq.bed"
+            )
         super().__init__(*args, **kwargs)
 
+    def SNP_timer_run(self):
+        self.snp_timer = ui.timer(0.1, self._snp_worker)
+
+    async def _snp_worker(self):
+        """
+        This function takes reads from the queue and adds them to the background thread for processing.
+        """
+        self.snp_timer.active = False
+        if not self.SNPqueue.empty():
+            while not self.SNPqueue.empty():
+                gene_list, bamfile, bedfile = self.SNPqueue.get()
+            print(gene_list)
+            workdirout = os.path.join(self.output,"clair3")
+            if not os.path.exists(workdirout):
+                os.mkdir(workdirout)
+            # bamfile, bedfile, workdir, workdirout, threads
+            self.clair3running = True
+            shutil.copy2(bedfile, f"{bedfile}2")
+            await background_tasks.create(run.cpu_bound(run_clair3, f"{bamfile}", f"{bedfile}2", self.output, workdirout, self.threads, self.reference))
+            self.SNPview.parse_vcf(f"{workdirout}/snpsift_output.vcf")
+            self.clair3running = False
+
+        else:
+            await asyncio.sleep(1)
+        self.snp_timer.active = True
     def setup_ui(self):
         if self.summary:
             with self.summary:
@@ -127,6 +200,12 @@ class TargetCoverage(BaseAnalysis):
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             self.targ_df = ui.row().classes("w-full").style("height: 900px")
+        with ui.card().style("width: 100%"):
+            ui.label("Candidate SNPs").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
+            self.SNPview = SNPview()
+            self.SNPview.renderme()
 
     def create_coverage_plot(self, title):
         self.echart3 = (
@@ -159,7 +238,7 @@ class TargetCoverage(BaseAnalysis):
             ui.echart(
                 {
                     "grid": {"containLabel": True},
-                    "title": {"text": title},
+                       "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "yAxis": {"type": "value"},
                     "xAxis": {
@@ -308,8 +387,8 @@ class TargetCoverage(BaseAnalysis):
                 self.targ_df.clear()
                 self.covtable = ui.table.from_pandas(
                     self.target_coverage_df,
-                    pagination=15
-                ).classes("w-full").style("height: 900px").style(
+                    pagination=25
+                ).props("dense").classes("w-full").style("height: 900px").style(
                 "font-size: 100%; font-weight: 300"
                 )
                 for col in self.covtable.columns:
@@ -331,11 +410,11 @@ class TargetCoverage(BaseAnalysis):
             self.covtable.update_rows(self.target_coverage_df.to_dict(orient='records'))
 
     async def process_bam(self, bamfile, timestamp):
-        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
+        newcovdf, bedcovdf = await background_tasks.create(run.cpu_bound(get_covdfs, bamfile))
 
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
 
-        await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
+        await background_tasks.create(run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name))
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if not self.targetbamfile:
@@ -354,9 +433,8 @@ class TargetCoverage(BaseAnalysis):
             self.cov_df_main = newcovdf
             self.bedcov_df_main = bedcovdf
         else:
-            self.cov_df_main, self.bedcov_df_main = await run.cpu_bound(
-                run_bedmerge, newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
-            )
+            self.cov_df_main, self.bedcov_df_main = await background_tasks.create(run.cpu_bound(
+                run_bedmerge, newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main))
             # self.cov_df_main, self.bedcov_df_main = run_bedmerge(newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main)
         if self.bamqueue.empty() or self.bam_processed % 5 == 0:
             self.update_coverage_plot(self.cov_df_main)
@@ -387,7 +465,22 @@ class TargetCoverage(BaseAnalysis):
                         ui.label(
                             f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
                         )
+            run_list = self.target_coverage_df[self.target_coverage_df['coverage'].ge(self.callthreshold)]
+            if self.reference:
+                if len(run_list) > self.targets_exceeding_threshold and not self.clair3running:
+                    self.targets_exceeding_threshold = len(run_list)
+                    run_list[['chrom', 'startpos', 'endpos']].to_csv(
+                        os.path.join(self.output, "targets_exceeding_threshold.bed"), sep="\t", header=None, index=None)
+                    clair3workdir = os.path.join(self.output, "clair3")
+                    if not os.path.exists(clair3workdir):
+                        os.mkdir(clair3workdir)
+                    #await run.cpu_bound(subset_bam, self.targetbamfile, os.path.join(self.output, "targets_exceeding_threshold.bed"), os.path.join(self.output, "targets_exceeding.bam"))
+                    await background_tasks.create(run.cpu_bound(sort_bam, self.targetbamfile, os.path.join(clair3workdir, "sorted_targets_exceeding.bam"), self.threads))
+                    if self.snp_calling:
+                        self.SNPqueue.put([run_list,os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),os.path.join(self.output, "targets_exceeding_threshold.bed")])
+
             self.update_target_coverage_table()
+
         await asyncio.sleep(0.05)
         self.running = False
 

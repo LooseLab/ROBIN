@@ -1,22 +1,18 @@
-from nicegui import ui
+from nicegui import ui, run, background_tasks
 
 from cnsmeth.utilities.bam_handler import BamEventHandler
 
-# from cnsmeth.Sturgeon_worker import Sturgeon_worker
-# from cnsmeth.RCNS2_worker import RCNS2_worker
-
-# from cnsmeth.CrossNN_worker import CrossNN_worker
 from cnsmeth.subpages.MGMT_object import MGMT_Object
 from cnsmeth.subpages.Sturgeon_object import Sturgeon_object
 from cnsmeth.subpages.NanoDX_object import NanoDX_object
 from cnsmeth.subpages.RandomForest_object import RandomForest_object
 
-# from cnsmeth.subpages.fusion_panel import Fusion_Panel
 from cnsmeth.subpages.CNV_object import CNVAnalysis
 from cnsmeth.subpages.TargetCoverage_object import TargetCoverage
 from cnsmeth.subpages.Fusion_object import Fusion_object
 from cnsmeth.utilities.local_file_picker import local_file_picker
 from cnsmeth.utilities.ReadBam import ReadBam
+
 
 from watchdog.observers import Observer
 from pathlib import Path
@@ -37,22 +33,37 @@ class BrainMeth:
         watchfolder=None,
         output=None,
         sequencing_summary=None,
+        target_panel=None,
         showerrors=False,
         browse=False,
         exclude=[],
+        minknow_connection=None,
+        reference=None,
     ):
         self.threads = threads
         self.simtime = simtime
         self.watchfolder = watchfolder
         self.output = output
         self.sequencing_summary = sequencing_summary
+        self.target_panel = target_panel
         self.showerrors = showerrors
         self.browse = browse
         self.exclude = exclude
+        self.minknow_connection = minknow_connection
+        self.reference=reference
 
         self.bam_count = {"counter": 0}
         self.bam_passed = {"counter": 0}
         self.bam_failed = {"counter": 0}
+        self.mapped_count = {"counter": 0}
+        self.pass_mapped_count = {"counter": 0}
+        self.fail_mapped_count = {"counter": 0}
+        self.unmapped_count = {"counter": 0}
+        self.pass_unmapped_count = {"counter": 0}
+        self.fail_unmapped_count = {"counter": 0}
+        self.pass_bases_count = {"counter": 0}
+        self.fail_bases_count = {"counter": 0}
+        self.bases_count = {"counter": 0}
         self.devices = set()
         self.basecall_models = set()
         self.run_time = set()
@@ -65,6 +76,11 @@ class BrainMeth:
         self.bamfortargetcoverage = Queue()
         self.bamformgmt = Queue()
         self.bamforfusions = Queue()
+
+        if self.minknow_connection:
+            background_tasks.create(run.io_bound(self.waitforclick))
+
+
 
         if not self.browse:
             self.information_panel()
@@ -90,6 +106,10 @@ class BrainMeth:
             ui.button("Choose file", on_click=self.pick_file, icon="folder")
 
             self.content = ui.column().classes("w-full")
+
+    async def waitforclick(self):
+        self.minknow_connection.check_connection()
+        await self.minknow_connection.access_device.clicked()
 
     async def pick_file(self) -> None:
         result = await local_file_picker("/", multiple=True)
@@ -219,15 +239,38 @@ class BrainMeth:
                     "color: #000000; font-size: 100%; font-weight: 300"
                 )
                 ui.label().bind_text_from(
-                    self.bam_count, "counter", backward=lambda n: f"BAM files seen: {n}"
+                    self.bam_count, "counter", backward=lambda n: f"BAM files seen: {n:,}"
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
-                    self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n}"
+                    self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n:,}"
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
-                    self.bam_failed, "counter", backward=lambda n: f"BAM fail: {n}"
+                    self.bam_failed, "counter", backward=lambda n: f"BAM fail: {n:,}"
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
-
+            with ui.row():
+                ui.label().bind_text_from(
+                    self.mapped_count, "counter", backward=lambda n: f"Mapped Read Count: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.unmapped_count, "counter", backward=lambda n: f"Unmapped Read Count: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.pass_mapped_count, "counter", backward=lambda n: f"Pass Mapped Read Count: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.fail_mapped_count, "counter", backward=lambda n: f"Fail Mapped Read Count: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+            with ui.row():
+                ui.label().bind_text_from(
+                    self.bases_count, "counter", backward=lambda n: f"Total Mapped Bases: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.pass_bases_count, "counter", backward=lambda n: f"Total Mapped Pass Bases: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    self.fail_bases_count, "counter", backward=lambda n: f"Total Mapped Fail Bases: {n:,}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+            with ui.row():
                 if "forest" not in self.exclude:
                     ui.label().bind_text_from(
                         self,
@@ -277,6 +320,7 @@ class BrainMeth:
                 ui.label("Results Summary").style(
                 "color: #6E93D6; font-size: 125%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
+
             with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                 if "sturgeon" not in self.exclude:
                     sturgeonsummary = ui.column()
@@ -300,6 +344,13 @@ class BrainMeth:
                 with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                     if "coverage" not in self.exclude:
                         coverage = ui.column()
+
+        if self.minknow_connection:
+            with ui.card().style("width: 100%"):
+                ui.label("MinKNOW Information").style(
+                    "color: #6E93D6; font-size: 150%; font-weight: 300"
+                ).tailwind("drop-shadow", "font-bold")
+                self.minknow_connection.setup_ui()
 
         with ui.card().style("width: 100%"):
             ui.label("Methylation Classifications").style(
@@ -331,6 +382,7 @@ class BrainMeth:
                     batch=True,
                     bamqueue=self.bamforcns,
                     summary=forestsummary,
+                    showerrors=self.showerrors,
                 )
             pass
         #    with ui.tab_panel(copy_numer).classes("w-full"):
@@ -342,6 +394,7 @@ class BrainMeth:
                     progress=True,
                     bamqueue=self.bamforcnv,
                     summary=cnvsummary,
+                    target_panel=self.target_panel,
                 )
             pass
         #    with ui.tab_panel(coverage).classes("w-full"):
@@ -353,6 +406,8 @@ class BrainMeth:
                     progress=True,
                     bamqueue=self.bamfortargetcoverage,
                     summary=coverage,
+                    target_panel=self.target_panel,
+                    reference=self.reference
                 )
             pass
         #    with ui.tab_panel(mgmt).classes("w-full"):
@@ -375,6 +430,7 @@ class BrainMeth:
                     progress=True,
                     bamqueue=self.bamforfusions,
                     summary=fusions,
+                    target_panel=self.target_panel,
                 )
             pass
 
@@ -419,23 +475,34 @@ class BrainMeth:
         :param bamfile:
         :return:
         """
-        baminfo = ReadBam(bamfile).process_reads()
+        bamdata = ReadBam(bamfile)
+        baminfo = bamdata.process_reads()
         if baminfo["state"] == "pass":
             self.bam_passed["counter"] += 1
+            self.pass_mapped_count["counter"] += bamdata.mapped_reads
+            self.pass_unmapped_count["counter"] += bamdata.unmapped_reads
+            self.pass_bases_count["counter"] += bamdata.yield_tracking
         else:
             self.bam_failed["counter"] += 1
+            self.fail_mapped_count["counter"] += bamdata.mapped_reads
+            self.fail_unmapped_count["counter"] += bamdata.unmapped_reads
+            self.fail_bases_count["counter"] += bamdata.yield_tracking
         self.basecall_models.add(baminfo["basecall_model"])
         self.devices.add(baminfo["device_position"])
         self.sample_ids.add(baminfo["sample_id"])
         self.flowcell_ids.add(baminfo["flow_cell_id"])
         self.run_time.add(baminfo["time_of_run"])
+        self.mapped_count["counter"] +=bamdata.mapped_reads
+        self.unmapped_count["counter"] +=bamdata.unmapped_reads
+        self.bases_count["counter"] +=bamdata.yield_tracking
+
 
     def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
         if sequencing_summary:
-
+            print("Using sequencing summary")
             with self.frontpage:
-                ui.notify("Checking for existing bams against sequencing summary")
+                ui.notify("Checking for existing bams against sequencing summary", type="info", position="top-right")
             df = pd.read_csv(
                 sequencing_summary,
                 delimiter="\t",
@@ -462,14 +529,11 @@ class BrainMeth:
                         latest_timestamps.loc[
                             latest_timestamps["filename_bam"] == f, "full_path"
                         ] = os.path.join(path, f)
-                        self.check_bam(os.path.join(path, f))
-            with self.frontpage:
-                ui.notify("Bams Checked")
 
             step_size = 20
 
             with self.frontpage:
-                ui.notify("Target Playback Started")
+                ui.notify("Target Playback Started", type="info", position="top-right")
 
             if "sturgeon" not in self.exclude:
                 self.Sturgeon.playback(latest_timestamps, step_size=step_size)
@@ -480,11 +544,15 @@ class BrainMeth:
             if "cnv" not in self.exclude:
                 self.CNV.playback(latest_timestamps, step_size=step_size)
             if "coverage" not in self.exclude:
-                self.Target_Coverage.playback(latest_timestamps, step_size=step_size)
+                self.Target_Coverage.playback(latest_timestamps, step_size=step_size, start_time=self.run_time)
             if "fusion" not in self.exclude:
                 self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
             if "mgmt" not in self.exclude:
                 self.MGMT_panel.playback(latest_timestamps, step_size=step_size)
+
+            for index, row in latest_timestamps.iterrows():
+                if len(row["full_path"]) > 0:
+                    self.check_bam(row["full_path"])
 
             self.runfinished = True
         else:

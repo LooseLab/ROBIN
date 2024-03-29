@@ -14,20 +14,22 @@ import threading
 
 class BaseAnalysis:
     def __init__(
-        self,
-        threads,
-        outputfolder,
-        summary=None,
-        bamqueue=None,
-        progress=False,
-        batch=False,
-        *args,
-        **kwargs,
+            self,
+            threads,
+            outputfolder,
+            summary=None,
+            bamqueue=None,
+            progress=False,
+            batch=False,
+            start_time=None,
+            *args,
+            **kwargs,
     ):
         if bamqueue:
             self.bamqueue = bamqueue
         else:
             self.bamqueue = queue.Queue()
+        self.start_time = start_time
         self.batch = batch
         self.output = outputfolder
         self.summary = summary
@@ -117,7 +119,7 @@ class BaseAnalysis:
         if self.bam_count == 0:
             return 0
         return (
-            self.bam_count - self.bams_in_processing - self.bam_processed
+                self.bam_count - self.bams_in_processing - self.bam_processed
         ) / self.bam_count
 
     def progress(self):
@@ -180,28 +182,45 @@ class BaseAnalysis:
             )
             ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
 
-    def playback(self, data: pd.DataFrame, step_size=2):
+    def playback(self, data: pd.DataFrame, step_size=2, start_time=None):
         self.data = data
-        playback = threading.Thread(target=self.playback_bams, args=([step_size]))
+        playback = threading.Thread(target=self.playback_bams, args=([step_size, start_time]))
         playback.daemon = True
         playback.start()
 
-    def playback_bams(self, step_size=2):
+    def playback_bams(self, step_size=2, start_time=None):
+        """
+        This function plays back the processing of bam files from a pandas dataframe.
+        To simulate the behaviour of a run it adds files to the queue in the order in which they were produced.
+        The run time for each individual processing loop is monitored and the reads are added to the queue
+        accounting for this delay.
+        The delay is calculated by the offset parameter which starts as 0.
+
+        """
         latest_timestamps = self.data
         self.offset = 0
+        #print (start_time)
+        playback_start_time = time.time()
         for index, row in latest_timestamps.iterrows():
-            current_time = time.time()
-            time_diff = row["file_produced"] - current_time - self.offset
+            elapsed_time = (time.time() - playback_start_time) + self.offset
+            time_diff = row["file_produced"] #- elapsed_time
+            #print (elapsed_time, time_diff, row["file_produced"])
             if self.offset == 0:
                 self.offset = time_diff
                 time_diff = 0
-            while row["file_produced"] - current_time - self.offset > 0:
-                time.sleep(0.1)
-                if not self.running:
+            while elapsed_time < time_diff:
+                if self.running:
+                    time.sleep(1)
+                    elapsed_time = (time.time() - playback_start_time) + self.offset
+                else:
+                    time.sleep(1)
                     self.offset += step_size
+                    elapsed_time += self.offset
+            #print("out the loop")
+            #print (f"elapsed time now {elapsed_time}")
             if len(row["full_path"]) > 0:
                 # Here we check that the path to the bam file absolutely exists.
-                self.add_bam(row["full_path"], row["file_produced"])
+                self.add_bam(row["full_path"], playback_start_time+row["file_produced"])
 
     def process_bam(self, bamfile, timestamp):
         """
@@ -222,3 +241,20 @@ class BaseAnalysis:
         :return:
         """
         raise NotImplementedError("Subclasses must implement this method.")
+
+
+    def cleanup(self):
+        """
+        This function is called when the app is closed.
+        It should be overridden by subclasses to clean up any resources used by the analysis.
+        :return:
+        """
+        pass
+
+    def check_resources(self):
+        """
+        This function is called to check the resources required for the analysis are present.
+        It should be overridden by subclasses to check the resources required for the analysis are present.
+        :return:
+        """
+        pass

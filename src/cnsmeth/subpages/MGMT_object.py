@@ -5,7 +5,7 @@ import pandas as pd
 import os
 import sys
 import asyncio
-from nicegui import ui, run
+from nicegui import ui, run, background_tasks
 import pysam
 import shutil
 import click
@@ -74,7 +74,7 @@ class MGMT_Object(BaseAnalysis):
         MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
 
-        await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
+        await background_tasks.create(run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name))
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             ui.notify(
@@ -94,9 +94,9 @@ class MGMT_Object(BaseAnalysis):
                 shutil.copy2(tempbamholder.name, self.MGMTbamfile)
             tempmgmtdir = tempfile.TemporaryDirectory(dir=self.output)
 
-            await run.cpu_bound(
+            await background_tasks.create(run.cpu_bound(
                 run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
-            )
+            ))
             ui.notify("MGMT predictor done.", type="positive", position="top")
             try:
                 results = pd.read_csv(
@@ -104,7 +104,7 @@ class MGMT_Object(BaseAnalysis):
                 )
                 self.counter += 1
                 plot_out = os.path.join(self.output, f"{self.counter}_mgmt.png")
-                await run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
+                await background_tasks.create(run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out))
 
                 self.mgmtable.clear()
                 with self.mgmtable:
