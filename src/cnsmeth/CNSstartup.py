@@ -107,11 +107,11 @@ def run_class(
         exclude=exclude,
         reference=reference,
     )
-    ui.add_head_html(r'''
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Shadows+Into+Light&display=swap')
-    </style>
-    ''')
+    #ui.add_head_html(r'''
+    #<style>
+    #@import url('https://fonts.googleapis.com/css2?family=Shadows+Into+Light&display=swap')
+    #</style>
+    #''')
 
     ui.add_style('''
         .shadows-into light-regular {
@@ -120,7 +120,7 @@ def run_class(
             font-style: normal;
         }
     ''')
-
+    app.add_static_files('/fonts', str(Path(__file__).parent / 'fonts'))
     app.on_startup(mainpage.index_page)
     # app.on_startup(startup)
     ui.run(
