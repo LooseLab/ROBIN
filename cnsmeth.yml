@@ -1,4 +1,4 @@
-name: cnsmeth_test
+name: cnsmeth_snp
 channels:
   - bioconda
   - conda-forge
@@ -7,6 +7,8 @@ dependencies:
   - git-lfs
   - r-base
   - bioconda::bioconductor-genomicranges
+  - bioconda::snpsift
+  - bioconda::snpeff
   - r-optparse
   - r-data.table
   - conda-forge::r-ranger
