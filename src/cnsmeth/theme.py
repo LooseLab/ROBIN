@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from nicegui import ui, app, events, core
 import nicegui.air
 
+from pathlib import Path
 
 from cnsmeth import images
 
@@ -15,12 +16,15 @@ import os
 IMAGEFILE = os.path.join(
     os.path.dirname(os.path.abspath(images.__file__)), "MethBrain_small.png"
 )
+HEADER_HTML = (Path(__file__).parent / 'static' / 'header.html').read_text()
+STYLE_CSS = (Path(__file__).parent / 'static' / 'styles.css').read_text()
 
 
 
 
 @contextmanager
 def frame(navtitle: str, myconnection):
+    ui.add_head_html(HEADER_HTML + f'<style>{STYLE_CSS}</style>')
     """Custom page frame to share the same styling and behavior across all pages"""
     with ui.dialog().props("persistent") as quitdialog, ui.card():
         ui.label(
@@ -36,12 +40,12 @@ def frame(navtitle: str, myconnection):
         ui.button("Really Quit", icon="logout", on_click=cleanup_and_exit).props(
             "outline"
         ).classes("shadow-lg")
-    with ui.header(fixed=True).style('background-color: #4F9153').classes(replace="row items-center p-2").style(
-        "box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)"
-    ):
+    with ui.header(elevated=True).classes('items-center duration-200 p-0 px-4 no-wrap'):
+            #.style('background-color: #4F9153'):
+
         with ui.grid(columns=2).style("width: 100%"):
             ui.html(navtitle).classes('shadows-into').style(
-                "color: #FFFFFF; font-size: 150%; font-weight: 300"
+                "color: #FFFFFF; font-size: 200%; font-weight: 150"
             ).tailwind(
                 "drop-shadow", "font-bold"
             )  # .tailwind("text-2xl font-bold font-italic drop-shadow")
