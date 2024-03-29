@@ -256,8 +256,8 @@ class CNVAnalysis(BaseAnalysis):
                             "startValue": initmin,
                             "endValue": initmax,
                         },
-                        {"type": "inside", "xAxisIndex": 0, "filterMode": "none"},
-                        {"type": "inside", "yAxisIndex": 0, "filterMode": "none"},
+                        #{"type": "inside", "xAxisIndex": 0, "filterMode": "none"},
+                        #{"type": "inside", "yAxisIndex": 0, "filterMode": "none"},
                     ],
                     "series": [
                         {
