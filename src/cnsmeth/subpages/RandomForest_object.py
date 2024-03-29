@@ -3,7 +3,7 @@ import os
 import tempfile
 import time
 import pandas as pd
-from nicegui import ui, run
+from nicegui import ui, run, background_tasks
 from cnsmeth import theme, resources
 import pysam
 from cnsmeth import models
@@ -77,7 +77,7 @@ def run_modkit(bamfile, outbed, cpgs, threads):
 
 
 class RandomForest_object(BaseAnalysis):
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, showerrors=False, **kwargs):
         self.rcns2_df_store = pd.DataFrame()
         self.threshold = 0.05
         self.batch = 0
@@ -87,7 +87,7 @@ class RandomForest_object(BaseAnalysis):
         )
         self.offset = False
         self.first_run = True
-        self.showerrors = False
+        self.showerrors = showerrors
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
@@ -125,13 +125,13 @@ class RandomForest_object(BaseAnalysis):
             sortbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
             tempbed = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bed")
             self.batch += 1
-            await run.cpu_bound(
+            await background_tasks.create(run.cpu_bound(
                 run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads
-            )
+            ))
 
-            await run.cpu_bound(
+            await background_tasks.create(run.cpu_bound(
                 run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads
-            )
+            ))
 
             if not self.first_run:
                 bed_a = pd.read_table(
@@ -233,14 +233,14 @@ class RandomForest_object(BaseAnalysis):
 
             tempDir = tempfile.TemporaryDirectory(dir=self.output)
 
-            await run.cpu_bound(
+            await background_tasks.create(run.cpu_bound(
                 run_rcns2,
                 tempDir.name,
                 self.batch,
                 tempbed.name,
                 self.threads,
                 self.showerrors,
-            )
+            ))
 
             if os.path.isfile(f"{tempDir.name}/live_{self.batch}_votes.tsv"):
                 scores = pd.read_table(

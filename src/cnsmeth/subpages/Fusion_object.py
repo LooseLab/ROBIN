@@ -25,13 +25,9 @@ STRAND = {"+": 1, "-": -1}
 
 
 class Fusion_object(BaseAnalysis):
-    def __init__(self, *args, **kwargs):
-        self.gene_bed = os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)), "unique_genes.bed"
-        )
-        self.all_gene_bed = os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)), "all_genes2.bed"
-        )
+    def __init__(self, *args, target_panel=None, **kwargs):
+        self.target_panel = target_panel
+
         self.fusion_candidates = pd.DataFrame()
         self.fusion_candidates_all = pd.DataFrame()
         self.fstable_all = None
@@ -45,18 +41,34 @@ class Fusion_object(BaseAnalysis):
             "gencode.v45.basic.annotation.gff3",
         )
 
+        if self.target_panel=="rCNS2":
+            self.gene_bed = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "rCNS2_panel_name_uniq.bed"
+            )
+        elif self.target_panel=="AML":
+            self.gene_bed = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "AML_panel_name_uniq.bed"
+            )
+
+
+        self.all_gene_bed = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)), "all_genes2.bed"
+        )
+
+        datafile = f"{self.target_panel}_data.csv.gz"
+
         if os.path.isfile(
             os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "data.csv.gz"
+                os.path.dirname(os.path.abspath(resources.__file__)), datafile
             )
         ):
             self.gene_table = pd.read_csv(
                 os.path.join(
-                    os.path.dirname(os.path.abspath(resources.__file__)), "data.csv.gz"
+                    os.path.dirname(os.path.abspath(resources.__file__)), datafile
                 )
             )
         else:
-            print("This looks like the first time you have run cnsmeth.")
+            print(f"This looks like the first time you have run the {self.target_panel} panel.")
             print("Parsing GFF3")
             self.gene_table = gff3_parser.parse_gff3(
                 self.gene_gff3_2, verbose=False, parse_attributes=True
@@ -92,7 +104,7 @@ class Fusion_object(BaseAnalysis):
             )
             self.gene_table_small.to_csv(
                 os.path.join(
-                    os.path.dirname(os.path.abspath(resources.__file__)), "data.csv.gz"
+                    os.path.dirname(os.path.abspath(resources.__file__)), datafile
                 ),
                 index=False,
                 compression="gzip",
@@ -106,7 +118,7 @@ class Fusion_object(BaseAnalysis):
         """
         if self.summary:
             with self.summary:
-                ui.label("Fusion Candidates.")
+                ui.label(f"Fusion Candidates - using panel {self.target_panel}")
                 with ui.row():
                     ui.label("0").bind_text_from(
                         self,
@@ -210,105 +222,36 @@ class Fusion_object(BaseAnalysis):
             if not self.fstable_all:
                 self.fusiontable_all.clear()
                 with self.fusiontable_all:
-                    self.fstable_all = (
-                        ui.aggrid.from_pandas(
-                            result_all.sort_values(by=7).rename(
-                                columns={
-                                    0: "chromBED",
-                                    1: "BS",
-                                    2: "BE",
-                                    3: "Gene",
-                                    4: "chrom",
-                                    5: "mS",
-                                    6: "mE",
-                                    7: "readID",
-                                    8: "mapQ",
-                                    9: "strand",
-                                }
-                            ),
-                            theme="material",
-                            options={
-                                "defaultColDef": {
-                                    "flex": 1,
-                                    "minWidth": 150,
-                                    "sortable": True,
-                                    "resizable": True,
-                                },
-                                "columnDefs": [
-                                    {
-                                        "headerName": "Chromosome",
-                                        "field": "chromBED",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "BS",
-                                        "field": "BS",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "BE",
-                                        "field": "BE",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "Gene",
-                                        "field": "Gene",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "chrom",
-                                        "field": "chrom",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "mS",
-                                        "field": "mS",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "mE",
-                                        "field": "mE",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "readID",
-                                        "field": "readID",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "mapQ",
-                                        "field": "mapQ",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "strand",
-                                        "field": "strand",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                ],
-                                "pagination": True,
-                                "paginationAutoPageSize": True,
-                            },
-                            auto_size_columns=True,
+                    self.fstable_all = ui.table.from_pandas(
+                        result_all.sort_values(by=7).rename(
+                            columns={
+                                0: "chromBED",
+                                1: "BS",
+                                2: "BE",
+                                3: "Gene",
+                                4: "chrom",
+                                5: "mS",
+                                6: "mE",
+                                7: "readID",
+                                8: "mapQ",
+                                9: "strand",
+                            }
+                        ),
+                        pagination=25,
+                    ).props("dense").classes("w-full").style("height: 900px").style(
+                        "font-size: 100%; font-weight: 300"
                         )
-                        .classes("max-h-100 min-w-full")
-                        .style(
-                            "color: #000000; font-size: 100%; font-weight: 300; height: 900px"
-                        )
-                    )
+                    for col in self.fstable_all.columns:
+                        col['sortable'] = True
+
+                    with self.fstable_all.add_slot('top-right'):
+                        with ui.input(placeholder='Search').props('type=search').bind_value(self.fstable_all, 'filter').add_slot(
+                                'append'):
+                            ui.icon('search')
+
                 self.fusionplot_all.clear()
             else:
-                self.fstable_all.options["rowData"] = (
+                self.fstable_all.update_rows(
                     result_all.sort_values(by=7)
                     .rename(
                         columns={
@@ -456,105 +399,36 @@ class Fusion_object(BaseAnalysis):
             if not self.fstable:
                 self.fusiontable.clear()
                 with self.fusiontable:
-                    self.fstable = (
-                        ui.aggrid.from_pandas(
-                            result.sort_values(by=7).rename(
-                                columns={
-                                    0: "chromBED",
-                                    1: "BS",
-                                    2: "BE",
-                                    3: "Gene",
-                                    4: "chrom",
-                                    5: "mS",
-                                    6: "mE",
-                                    7: "readID",
-                                    8: "mapQ",
-                                    9: "strand",
-                                }
-                            ),
-                            theme="material",
-                            options={
-                                "defaultColDef": {
-                                    "flex": 1,
-                                    "minWidth": 150,
-                                    "sortable": True,
-                                    "resizable": True,
-                                },
-                                "columnDefs": [
-                                    {
-                                        "headerName": "Chromosome",
-                                        "field": "chromBED",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "BS",
-                                        "field": "BS",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "BE",
-                                        "field": "BE",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "Gene",
-                                        "field": "Gene",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "chrom",
-                                        "field": "chrom",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "mS",
-                                        "field": "mS",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "mE",
-                                        "field": "mE",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "readID",
-                                        "field": "readID",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "mapQ",
-                                        "field": "mapQ",
-                                        "filter": "agNumberColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                    {
-                                        "headerName": "strand",
-                                        "field": "strand",
-                                        "filter": "agTextColumnFilter",
-                                        "floatingFilter": False,
-                                    },
-                                ],
-                                "pagination": True,
-                                "paginationAutoPageSize": True,
-                            },
-                            auto_size_columns=True,
+                    self.fstable = ui.table.from_pandas(
+                        result.sort_values(by=7).rename(
+                            columns={
+                                0: "chromBED",
+                                1: "BS",
+                                2: "BE",
+                                3: "Gene",
+                                4: "chrom",
+                                5: "mS",
+                                6: "mE",
+                                7: "readID",
+                                8: "mapQ",
+                                9: "strand",
+                            }
+                        ),
+                        pagination=25,
+                    ).props("dense").classes("w-full").style("height: 900px").style(
+                        "font-size: 100%; font-weight: 300"
                         )
-                        .classes("max-h-100 min-w-full")
-                        .style(
-                            "color: #000000; font-size: 100%; font-weight: 300; height: 900px"
-                        )
-                    )
+                    for col in self.fstable.columns:
+                        col['sortable'] = True
+
+                    with self.fstable.add_slot('top-right'):
+                        with ui.input(placeholder='Search').props('type=search').bind_value(self.fstable, 'filter').add_slot(
+                                'append'):
+                            ui.icon('search')
+
                 self.fusionplot.clear()
             else:
-                self.fstable.options["rowData"] = (
+                self.fstable.update_rows(
                     result.sort_values(by=7)
                     .rename(
                         columns={
@@ -572,7 +446,7 @@ class Fusion_object(BaseAnalysis):
                     )
                     .to_dict("records")
                 )
-                self.fstable.update()
+
                 self.fusionplot.clear()
 
             result, goodpairs = self._annotate_results(result)

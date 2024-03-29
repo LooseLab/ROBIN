@@ -5,7 +5,7 @@ import tempfile
 import time
 import shutil
 import pandas as pd
-from nicegui import ui, run
+from nicegui import ui, run, background_tasks
 from cnsmeth import theme
 import pysam
 from cnsmeth import models
@@ -110,13 +110,13 @@ class Sturgeon_object(BaseAnalysis):
             tempbam = tempfile.NamedTemporaryFile(dir=self.output)
             with self.card:
                 ui.notify("Sturgeon: Merging bams")
-            await run.cpu_bound(pysam_cat, tempbam.name, tomerge)
+            await background_tasks.create(run.cpu_bound(pysam_cat, tempbam.name, tomerge))
             file = tempbam.name
             temp = tempfile.NamedTemporaryFile(dir=self.output)
             with tempfile.TemporaryDirectory(dir=self.output) as temp2:
-                await run.cpu_bound(run_modkit, file, temp.name, self.threads)
+                await background_tasks.create(run.cpu_bound(run_modkit, file, temp.name, self.threads))
                 ui.notify("Sturgeon: Modkit Complete")
-                await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
+                await background_tasks.create(run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2))
                 # ui.notify("Sturgeon: Inputtobed Complete")
                 calls_per_probe_file = os.path.join(
                     temp2, "merged_probes_methyl_calls.txt"
@@ -129,23 +129,23 @@ class Sturgeon_object(BaseAnalysis):
                     shutil.copyfile(calls_per_probe_file, merged_output_file)
                     self.first_run = False
                 else:
-                    await run.cpu_bound(
+                    await background_tasks.create(run.cpu_bound(
                         run_sturgeon_merge_probes,
                         calls_per_probe_file,
                         merged_output_file,
-                    )
+                    ))
                 bed_output_file = os.path.join(
                     self.bedDir.name, "final_merged_probes_methyl_calls.bed"
                 )
-                await run.cpu_bound(
+                await background_tasks.create(run.cpu_bound(
                     run_probes_methyl_calls, merged_output_file, bed_output_file
-                )
-                await run.cpu_bound(
+                ))
+                await background_tasks.create(run.cpu_bound(
                     run_sturgeon_predict,
                     self.bedDir.name,
                     self.dataDir.name,
                     self.modelfile,
-                )
+                ))
                 ui.notify("Sturgeon: Prediction Complete")
                 mydf = pd.read_csv(
                     os.path.join(

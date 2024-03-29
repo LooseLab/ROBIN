@@ -21,10 +21,13 @@ class ReadBam:
     def __init__(self, bam_file=None):
         self.sam_file = None
         self.bam_file = bam_file
+        self.mapped_reads = 0
+        self.unmapped_reads = 0
         if "pass" in self.bam_file:
             self.state = "pass"
         else:
             self.state = "fail"
+
 
     def get_rg_tags(self):
         rg_tags = self.sam_file.header.get("RG", [])
@@ -132,4 +135,23 @@ class ReadBam:
                 # "read_basecall_id": read_basecall_id,
             }
 
+            filtered_reads_count = 0
+            yield_tracking = 0
+            readset = set()
+            for read in self.sam_file.fetch():
+                # Check if read is not unmapped and not a secondary alignment
+                if not read.is_unmapped and not read.is_secondary:
+                    filtered_reads_count += 1
+                    if read.query_name not in readset:
+                        readset.add(read.query_name)
+                        #ToDo: Should this only happen for each read once? Or should it happen every time an alignment is seen?
+                        #ToDo: Strictly this is aligned length and not total length??
+                        if read.infer_query_length() and read.infer_query_length()>0:
+                            yield_tracking += read.infer_query_length()
+                    #print(f"Read name: {read.query_name}")
+            self.mapped_reads=len(readset)
+            self.yield_tracking = yield_tracking
+            self.unmapped_reads=self.sam_file.unmapped
+            #print(f"Mapped reads:{filtered_reads_count}")
+            #print(f"Total reads:{filtered_reads_count + self.sam_file.unmapped}")
             return bam_read

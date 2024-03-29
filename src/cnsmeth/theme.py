@@ -7,6 +7,7 @@ from contextlib import contextmanager
 from nicegui import ui, app, events, core
 import nicegui.air
 
+from pathlib import Path
 
 from cnsmeth import images
 
@@ -15,10 +16,15 @@ import os
 IMAGEFILE = os.path.join(
     os.path.dirname(os.path.abspath(images.__file__)), "MethBrain_small.png"
 )
+HEADER_HTML = (Path(__file__).parent / 'static' / 'header.html').read_text()
+STYLE_CSS = (Path(__file__).parent / 'static' / 'styles.css').read_text()
+
+
 
 
 @contextmanager
 def frame(navtitle: str, myconnection):
+    ui.add_head_html(HEADER_HTML + f'<style>{STYLE_CSS}</style>')
     """Custom page frame to share the same styling and behavior across all pages"""
     with ui.dialog().props("persistent") as quitdialog, ui.card():
         ui.label(
@@ -34,12 +40,12 @@ def frame(navtitle: str, myconnection):
         ui.button("Really Quit", icon="logout", on_click=cleanup_and_exit).props(
             "outline"
         ).classes("shadow-lg")
-    with ui.header(fixed=True).classes(replace="row items-center p-2").style(
-        "box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1)"
-    ):
+    with ui.header(elevated=True).classes('items-center duration-200 p-0 px-4 no-wrap'):
+            #.style('background-color: #4F9153'):
+
         with ui.grid(columns=2).style("width: 100%"):
-            ui.label(navtitle).style(
-                "color: #FFFFFF; font-size: 150%; font-weight: 300"
+            ui.html(navtitle).classes('shadows-into').style(
+                "color: #FFFFFF; font-size: 200%; font-weight: 150"
             ).tailwind(
                 "drop-shadow", "font-bold"
             )  # .tailwind("text-2xl font-bold font-italic drop-shadow")
@@ -51,9 +57,12 @@ def frame(navtitle: str, myconnection):
                     "ml-4 bg-transparent"
                 ).props('color="black"')
                 ui.image(IMAGEFILE).style("width: 50px")
+    if myconnection:
+        myconnection.setup_ui()
+        myconnection.check_connection()
     with ui.column().classes("w-full"):
         yield
-    with ui.footer():
+    with ui.footer().style('background-color: #4F9153'):
         with ui.dialog() as dialog, ui.card():
             ui.label("Useful Information.").tailwind(
                 "text-2xl font-bold font-italic drop-shadow"
@@ -77,10 +86,14 @@ def frame(navtitle: str, myconnection):
             ui.link("Looselab", "https://looselab.github.io/")
             ui.button("Close", on_click=dialog.close)
         ui.image(IMAGEFILE).style("width: 30px")
+        ui.colors(primary='#555')
         ui.button("More Information", on_click=dialog.open)
         ui.button(
             "Quit", icon="logout", on_click=quitdialog.open
         )  # .classes('ml-4')#.props('outline') #.classes('shadow-lg')
+        if myconnection:
+            ui.label().bind_text_from(myconnection, 'connection_ip', backward=lambda n: f'Connected to: {n}')
+        ui.label().bind_text_from(app, 'urls', backward=lambda n: f'Available urls: {n}')
         ui.label(
             "Some aspects of this application are ©Looselab - all analyses provided for research use only."
         ).tailwind("text-sm font-italic")
