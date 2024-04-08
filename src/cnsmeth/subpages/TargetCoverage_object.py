@@ -22,22 +22,29 @@ os.environ["CI"] = "1"
 
 
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
-    #ToDo: handle any platform
-    if sys.platform in ['darwin','linux']:
-        runcommand = f"docker run -it -v {workdir}:{workdir} " \
-                     f"-v {workdirout}:{workdirout} "\
-                     f"-v {reference}:{reference} " \
-                     f"-v {reference}.fai:{reference}.fai " \
-                     f"hkubal/clairs-to:latest "\
-                    f"/opt/bin/run_clairs_to "\
-                    f"--tumor_bam_fn {bamfile} "\
-                    f"--ref_fn {reference} "\
-                    f"--threads {threads} "\
-                    f"--platform ont_r10_guppy_hac_5khz "\
-                    f"--output_dir {workdirout} -b {bedfile}"
+    # ToDo: handle any platform
+    if sys.platform in ["darwin", "linux"]:
+        runcommand = (
+            f"docker run -it -v {workdir}:{workdir} "
+            f"-v {workdirout}:{workdirout} "
+            f"-v {reference}:{reference} "
+            f"-v {reference}.fai:{reference}.fai "
+            f"hkubal/clairs-to:latest "
+            f"/opt/bin/run_clairs_to "
+            f"--tumor_bam_fn {bamfile} "
+            f"--ref_fn {reference} "
+            f"--threads {threads} "
+            f"--platform ont_r10_guppy_hac_5khz "
+            f"--output_dir {workdirout} -b {bedfile}"
+        )
         os.system(runcommand)
-        os.system(f"snpEff hg38 {workdirout}/output.vcf.gz > {workdirout}/snpeff_output.vcf")
-        os.system(f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf")
+        os.system(
+            f"snpEff hg38 {workdirout}/output.vcf.gz > {workdirout}/snpeff_output.vcf"
+        )
+        os.system(
+            f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf"
+        )
+
 
 def get_covdfs(bamfile):
     """
@@ -67,11 +74,13 @@ def get_covdfs(bamfile):
     except Exception as e:
         print(e)
 
+
 def subset_bam(bamfile, targets, output):
     pysam.view("-L", f"{targets}", "-o", f"{output}", f"{bamfile}")
 
+
 def sort_bam(bamfile, output, threads):
-    pysam.sort(f"-@{threads}","-o", output, bamfile)
+    pysam.sort(f"-@{threads}", "-o", output, bamfile)
     pysam.index(f"{output}")
 
 
@@ -142,14 +151,15 @@ class TargetCoverage(BaseAnalysis):
 
         print(f"My reference file is {self.reference}")
 
-
-        if self.target_panel=="rCNS2":
+        if self.target_panel == "rCNS2":
             self.bedfile = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "rCNS2_panel_name_uniq.bed"
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "rCNS2_panel_name_uniq.bed",
             )
-        elif self.target_panel=="AML":
+        elif self.target_panel == "AML":
             self.bedfile = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "AML_panel_name_uniq.bed"
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "AML_panel_name_uniq.bed",
             )
         super().__init__(*args, **kwargs)
 
@@ -165,19 +175,30 @@ class TargetCoverage(BaseAnalysis):
             while not self.SNPqueue.empty():
                 gene_list, bamfile, bedfile = self.SNPqueue.get()
             print(gene_list)
-            workdirout = os.path.join(self.output,"clair3")
+            workdirout = os.path.join(self.output, "clair3")
             if not os.path.exists(workdirout):
                 os.mkdir(workdirout)
             # bamfile, bedfile, workdir, workdirout, threads
             self.clair3running = True
             shutil.copy2(bedfile, f"{bedfile}2")
-            await background_tasks.create(run.cpu_bound(run_clair3, f"{bamfile}", f"{bedfile}2", self.output, workdirout, self.threads, self.reference))
+            await background_tasks.create(
+                run.cpu_bound(
+                    run_clair3,
+                    f"{bamfile}",
+                    f"{bedfile}2",
+                    self.output,
+                    workdirout,
+                    self.threads,
+                    self.reference,
+                )
+            )
             self.SNPview.parse_vcf(f"{workdirout}/snpsift_output.vcf")
             self.clair3running = False
 
         else:
             await asyncio.sleep(1)
         self.snp_timer.active = True
+
     def setup_ui(self):
         if self.summary:
             with self.summary:
@@ -238,7 +259,7 @@ class TargetCoverage(BaseAnalysis):
             ui.echart(
                 {
                     "grid": {"containLabel": True},
-                       "title": {"text": title},
+                    "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "yAxis": {"type": "value"},
                     "xAxis": {
@@ -382,39 +403,50 @@ class TargetCoverage(BaseAnalysis):
 
     def update_target_coverage_table(self):
         if not self.covtable:
-            self.target_coverage_df["coverage"] = self.target_coverage_df["coverage"].round(2)
+            self.target_coverage_df["coverage"] = self.target_coverage_df[
+                "coverage"
+            ].round(2)
             with self.targ_df:
                 self.targ_df.clear()
-                self.covtable = ui.table.from_pandas(
-                    self.target_coverage_df,
-                    pagination=25
-                ).props("dense").classes("w-full").style("height: 900px").style(
-                "font-size: 100%; font-weight: 300"
+                self.covtable = (
+                    ui.table.from_pandas(self.target_coverage_df, pagination=25)
+                    .props("dense")
+                    .classes("w-full")
+                    .style("height: 900px")
+                    .style("font-size: 100%; font-weight: 300")
                 )
                 for col in self.covtable.columns:
-                    col['sortable'] = True
-                    if col['name'] == 'coverage':
-                        col[':format']='value => value.toFixed(2)'
-                self.covtable.add_slot('body-cell-coverage', '''
+                    col["sortable"] = True
+                    if col["name"] == "coverage":
+                        col[":format"] = "value => value.toFixed(2)"
+                self.covtable.add_slot(
+                    "body-cell-coverage",
+                    """
                     <q-td key="coverage" :props="props">
                         <q-badge :color="props.value < 10 ? 'red' : 'green'">
                             {{ props.value }}
                         </q-badge>
                     </q-td>
-                ''')
-                with self.covtable.add_slot('top-right'):
-                    with ui.input(placeholder='Search').props('type=search').bind_value(self.covtable, 'filter').add_slot(
-                            'append'):
-                        ui.icon('search')
+                """,
+                )
+                with self.covtable.add_slot("top-right"):
+                    with ui.input(placeholder="Search").props("type=search").bind_value(
+                        self.covtable, "filter"
+                    ).add_slot("append"):
+                        ui.icon("search")
         else:
-            self.covtable.update_rows(self.target_coverage_df.to_dict(orient='records'))
+            self.covtable.update_rows(self.target_coverage_df.to_dict(orient="records"))
 
     async def process_bam(self, bamfile, timestamp):
-        newcovdf, bedcovdf = await background_tasks.create(run.cpu_bound(get_covdfs, bamfile))
+        newcovdf, bedcovdf = await background_tasks.create(
+            run.cpu_bound(get_covdfs, bamfile)
+        )
 
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
 
-        await background_tasks.create(run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name))
+        await background_tasks.create(
+            run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
+        )
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if not self.targetbamfile:
@@ -433,8 +465,15 @@ class TargetCoverage(BaseAnalysis):
             self.cov_df_main = newcovdf
             self.bedcov_df_main = bedcovdf
         else:
-            self.cov_df_main, self.bedcov_df_main = await background_tasks.create(run.cpu_bound(
-                run_bedmerge, newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main))
+            self.cov_df_main, self.bedcov_df_main = await background_tasks.create(
+                run.cpu_bound(
+                    run_bedmerge,
+                    newcovdf,
+                    self.cov_df_main,
+                    bedcovdf,
+                    self.bedcov_df_main,
+                )
+            )
             # self.cov_df_main, self.bedcov_df_main = run_bedmerge(newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main)
         if self.bamqueue.empty() or self.bam_processed % 5 == 0:
             self.update_coverage_plot(self.cov_df_main)
@@ -465,19 +504,45 @@ class TargetCoverage(BaseAnalysis):
                         ui.label(
                             f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
                         )
-            run_list = self.target_coverage_df[self.target_coverage_df['coverage'].ge(self.callthreshold)]
+            run_list = self.target_coverage_df[
+                self.target_coverage_df["coverage"].ge(self.callthreshold)
+            ]
             if self.reference:
-                if len(run_list) > self.targets_exceeding_threshold and not self.clair3running:
+                if (
+                    len(run_list) > self.targets_exceeding_threshold
+                    and not self.clair3running
+                ):
                     self.targets_exceeding_threshold = len(run_list)
-                    run_list[['chrom', 'startpos', 'endpos']].to_csv(
-                        os.path.join(self.output, "targets_exceeding_threshold.bed"), sep="\t", header=None, index=None)
+                    run_list[["chrom", "startpos", "endpos"]].to_csv(
+                        os.path.join(self.output, "targets_exceeding_threshold.bed"),
+                        sep="\t",
+                        header=None,
+                        index=None,
+                    )
                     clair3workdir = os.path.join(self.output, "clair3")
                     if not os.path.exists(clair3workdir):
                         os.mkdir(clair3workdir)
-                    #await run.cpu_bound(subset_bam, self.targetbamfile, os.path.join(self.output, "targets_exceeding_threshold.bed"), os.path.join(self.output, "targets_exceeding.bam"))
-                    await background_tasks.create(run.cpu_bound(sort_bam, self.targetbamfile, os.path.join(clair3workdir, "sorted_targets_exceeding.bam"), self.threads))
+                    # await run.cpu_bound(subset_bam, self.targetbamfile, os.path.join(self.output, "targets_exceeding_threshold.bed"), os.path.join(self.output, "targets_exceeding.bam"))
+                    await background_tasks.create(
+                        run.cpu_bound(
+                            sort_bam,
+                            self.targetbamfile,
+                            os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
+                            self.threads,
+                        )
+                    )
                     if self.snp_calling:
-                        self.SNPqueue.put([run_list,os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),os.path.join(self.output, "targets_exceeding_threshold.bed")])
+                        self.SNPqueue.put(
+                            [
+                                run_list,
+                                os.path.join(
+                                    clair3workdir, "sorted_targets_exceeding.bam"
+                                ),
+                                os.path.join(
+                                    self.output, "targets_exceeding_threshold.bed"
+                                ),
+                            ]
+                        )
 
             self.update_target_coverage_table()
 

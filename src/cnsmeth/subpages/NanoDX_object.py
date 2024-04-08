@@ -95,15 +95,17 @@ class NanoDX_object(BaseAnalysis):
 
             ui.notify("NanoDX: Merging bams", type="info", position="top-right")
 
-            await background_tasks.create(run.cpu_bound(
-                run_samtools_sort, file, tomerge, sortfile, self.threads
-            ))
+            await background_tasks.create(
+                run.cpu_bound(run_samtools_sort, file, tomerge, sortfile, self.threads)
+            )
 
             ui.notify("NanoDX: Running modkit", type="info", position="top-right")
 
-            await background_tasks.create(run.cpu_bound(
-                run_modkit, self.cpgs_file, sortfile, temp.name, self.threads
-            ))
+            await background_tasks.create(
+                run.cpu_bound(
+                    run_modkit, self.cpgs_file, sortfile, temp.name, self.threads
+                )
+            )
 
             ui.notify("NanoDX: Merging bed files", type="info", position="top-right")
 

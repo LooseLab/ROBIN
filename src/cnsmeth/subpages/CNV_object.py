@@ -8,12 +8,11 @@ import numpy as np
 import os
 import sys
 import asyncio
-from nicegui import ui, background_tasks, run
+from nicegui import ui
 import click
 from pathlib import Path
 import pickle
 import ruptures as rpt
-import copy
 
 os.environ["CI"] = "1"
 
@@ -23,7 +22,9 @@ class Result:
         self.cnv = cnv_dict
 
 
-def iterate_bam(bamfile, _threads=1, mapq_filter=60, copy_numbers=None, log_level=int(logging.ERROR)):
+def iterate_bam(
+    bamfile, _threads=1, mapq_filter=60, copy_numbers=None, log_level=int(logging.ERROR)
+):
     result = iterate_bam_file(
         bamfile,
         _threads=_threads,
@@ -39,23 +40,24 @@ def reduce_list(lst, max_length=1000):
         lst = lst[::2]
     return lst
 
+
 class CNV_Difference:
     def __init__(self, *args, **kwargs):
-        self.cnv={}
+        self.cnv = {}
+
 
 def moving_average(data, n=3):
-    return np.convolve(data, np.ones(n)/n, mode='same')
+    return np.convolve(data, np.ones(n) / n, mode="same")
+
 
 def ruptures_plotting(data):
-    x_coords = range(0, (data.size + 1))# * 10, bin_slice * 10, )
-    signal = np.array(list(zip(x_coords,data)))
+    x_coords = range(0, (data.size + 1))  # * 10, bin_slice * 10, )
+    signal = np.array(list(zip(x_coords, data)))
 
-
-    algo_c = rpt.KernelCPD(kernel="linear", min_size=10).fit(
-        signal#[:, 1]
-    )
+    algo_c = rpt.KernelCPD(kernel="linear", min_size=10).fit(signal)  # [:, 1]
 
     return algo_c
+
 
 class CNVAnalysis(BaseAnalysis):
     def __init__(self, *args, target_panel=None, **kwargs):
@@ -70,41 +72,44 @@ class CNVAnalysis(BaseAnalysis):
 
         self.XYestimate = "Unknown"
 
-        with open(os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "HG01280_control.pkl"
-            ), 'rb') as f:
+        with open(
+            os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "HG01280_control.pkl",
+            ),
+            "rb",
+        ) as f:
             self.ref_cnv_dict = pickle.load(f)
         self.target_panel = target_panel
-        if self.target_panel=="rCNS2":
+        if self.target_panel == "rCNS2":
             self.gene_bed_file = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "rCNS2_panel_name_uniq.bed"
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "rCNS2_panel_name_uniq.bed",
             )
-        elif self.target_panel=="AML":
+        elif self.target_panel == "AML":
             self.gene_bed_file = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "AML_panel_name_uniq.bed"
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "AML_panel_name_uniq.bed",
             )
         self.gene_bed = pd.read_table(
-            os.path.join(
-                self.gene_bed_file
-            ),
+            os.path.join(self.gene_bed_file),
             names=["chrom", "start_pos", "end_pos", "gene"],
             header=None,
-            sep='\s+',
+            sep="\s+",
         )
         super().__init__(*args, **kwargs)
 
     def estimate_XY(self):
         # We remove zero points as they are likely centromeric.
-        X=round(np.average([i for i in self.result3.cnv["chrX"] if i !=0]),2)
-        Y=round(np.average([i for i in self.result3.cnv["chrY"] if i !=0]),2)
-        #print (f"X={X},Y={Y}")
-        if X>=0.1 and Y<=0.1:
-            self.XYestimate="XX"
-        elif X<=0.1 and Y>=-0.2:
-            self.XYestimate="XY"
+        X = round(np.average([i for i in self.result3.cnv["chrX"] if i != 0]), 2)
+        Y = round(np.average([i for i in self.result3.cnv["chrY"] if i != 0]), 2)
+        # print (f"X={X},Y={Y}")
+        if X >= 0.1 and Y <= 0.1:
+            self.XYestimate = "XX"
+        elif X <= 0.1 and Y >= -0.2:
+            self.XYestimate = "XY"
         else:
-            self.XYestimate="Unknown"
-
+            self.XYestimate = "Unknown"
 
     async def process_bam(self, bamfile, timestamp):
         self.file_list.append(bamfile)
@@ -115,7 +120,7 @@ class CNVAnalysis(BaseAnalysis):
 
     async def do_cnv_work(self, bamfile):
 
-        #self.result, self.update_cnv_dict = background_tasks.create(run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=self.update_cnv_dict))
+        # self.result, self.update_cnv_dict = background_tasks.create(run.cpu_bound(iterate_bam, bamfile, _threads=self.threads, mapq_filter=60, copy_numbers=self.update_cnv_dict))
 
         self.result = iterate_bam_file(
             bamfile,
@@ -137,13 +142,13 @@ class CNVAnalysis(BaseAnalysis):
         )
 
         for key in self.result.cnv.keys():
-            if key!="chrM":
-                #print(key, np.mean(self.result.cnv[key]))#[i for i in self.result.cnv[key] if i !=0]))
+            if key != "chrM":
+                # print(key, np.mean(self.result.cnv[key]))#[i for i in self.result.cnv[key] if i !=0]))
                 moving_avg_data1 = moving_average(self.result.cnv[key])
                 moving_avg_data2 = moving_average(self.result2.cnv[key])
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                #print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
-                #if len(self.result3.cnv[key]) > 20:
+                # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
+                # if len(self.result3.cnv[key]) > 20:
                 #    algo_c = ruptures_plotting(self.result3.cnv[key])
                 #    penalty_value = 5  # beta
 
@@ -155,11 +160,11 @@ class CNVAnalysis(BaseAnalysis):
             with self.summary:
                 self.summary.clear()
                 with ui.row():
-                    if self.XYestimate!="Unknown":
-                        if self.XYestimate=="XY":
-                            ui.icon('man').classes('text-4xl')
+                    if self.XYestimate != "Unknown":
+                        if self.XYestimate == "XY":
+                            ui.icon("man").classes("text-4xl")
                         else:
-                            ui.icon('woman').classes('text-4xl')
+                            ui.icon("woman").classes("text-4xl")
                         ui.label(f"Estimated Genetic Sex: {self.XYestimate}")
                     ui.label(f"Current Bin Width: {self.result.bin_width}")
                     ui.label(f"Current Variance: {round(self.result.variance, 3)}")
@@ -168,25 +173,61 @@ class CNVAnalysis(BaseAnalysis):
 
         # Only update the plot if the queue is empty?
         if self.bamqueue.empty() or self.bam_processed % 5 == 0:
-            self._update_cnv_plot(plot_to_update=self.scatter_echart,result=self.result, title="CNV")
-            self._update_cnv_plot(plot_to_update=self.reference_scatter_echart,result=self.result2, title="Reference CNV")
-            self._update_cnv_plot(plot_to_update=self.difference_scatter_echart, result=self.result3,
-                                  title="Difference CNV", min="dataMin")
-        #else:
+            self._update_cnv_plot(
+                plot_to_update=self.scatter_echart, result=self.result, title="CNV"
+            )
+            self._update_cnv_plot(
+                plot_to_update=self.reference_scatter_echart,
+                result=self.result2,
+                title="Reference CNV",
+            )
+            self._update_cnv_plot(
+                plot_to_update=self.difference_scatter_echart,
+                result=self.result3,
+                title="Difference CNV",
+                min="dataMin",
+            )
+        # else:
         await asyncio.sleep(0.05)
         self.running = False
 
     def update_plots(self, gene_target=None):
         if not gene_target:
-            self._update_cnv_plot(plot_to_update=self.scatter_echart, result=self.result, title="CNV")
-            self._update_cnv_plot(plot_to_update=self.reference_scatter_echart, result=self.result2, title="Reference CNV")
-            self._update_cnv_plot(plot_to_update=self.difference_scatter_echart, result=self.result3,
-                                  title="Difference CNV", min="dataMin")
+            self._update_cnv_plot(
+                plot_to_update=self.scatter_echart, result=self.result, title="CNV"
+            )
+            self._update_cnv_plot(
+                plot_to_update=self.reference_scatter_echart,
+                result=self.result2,
+                title="Reference CNV",
+            )
+            self._update_cnv_plot(
+                plot_to_update=self.difference_scatter_echart,
+                result=self.result3,
+                title="Difference CNV",
+                min="dataMin",
+            )
         else:
-            self._update_cnv_plot(plot_to_update=self.scatter_echart, result=self.result,gene_target=gene_target, title="CNV")
-            self._update_cnv_plot(plot_to_update=self.reference_scatter_echart, result=self.result2, gene_target=gene_target, title="Reference CNV")
-            self._update_cnv_plot(plot_to_update=self.difference_scatter_echart, result=self.result3,
-                                  gene_target=gene_target, title="Difference CNV", min="dataMin")
+            self._update_cnv_plot(
+                plot_to_update=self.scatter_echart,
+                result=self.result,
+                gene_target=gene_target,
+                title="CNV",
+            )
+            self._update_cnv_plot(
+                plot_to_update=self.reference_scatter_echart,
+                result=self.result2,
+                gene_target=gene_target,
+                title="Reference CNV",
+            )
+            self._update_cnv_plot(
+                plot_to_update=self.difference_scatter_echart,
+                result=self.result3,
+                gene_target=gene_target,
+                title="Difference CNV",
+                min="dataMin",
+            )
+
     def setup_ui(self):
         self.display_row = ui.row()
         if self.summary:
@@ -223,11 +264,14 @@ class CNVAnalysis(BaseAnalysis):
 
         self.scatter_echart = self.generate_chart(title="CNV Scatter Plot")
 
-        self.difference_scatter_echart = self.generate_chart(title="Difference Plot", initmin=-2, initmax=2)#, type="log")
+        self.difference_scatter_echart = self.generate_chart(
+            title="Difference Plot", initmin=-2, initmax=2
+        )  # , type="log")
 
-        with ui.expansion('See Reference DataSet', icon='loupe').classes('w-full'):
-            self.reference_scatter_echart = self.generate_chart(title="Reference CNV Scatter Plot")
-
+        with ui.expansion("See Reference DataSet", icon="loupe").classes("w-full"):
+            self.reference_scatter_echart = self.generate_chart(
+                title="Reference CNV Scatter Plot"
+            )
 
     def generate_chart(self, title=None, initmax=8, initmin=0, type="value"):
         return (
@@ -245,7 +289,6 @@ class CNVAnalysis(BaseAnalysis):
                     "yAxis": {
                         "type": "value",
                         "logBase": 2,
-
                     },
                     "dataZoom": [
                         {"type": "slider", "filterMode": "none"},
@@ -256,8 +299,8 @@ class CNVAnalysis(BaseAnalysis):
                             "startValue": initmin,
                             "endValue": initmax,
                         },
-                        #{"type": "inside", "xAxisIndex": 0, "filterMode": "none"},
-                        #{"type": "inside", "yAxisIndex": 0, "filterMode": "none"},
+                        # {"type": "inside", "xAxisIndex": 0, "filterMode": "none"},
+                        # {"type": "inside", "yAxisIndex": 0, "filterMode": "none"},
                     ],
                     "series": [
                         {
@@ -271,7 +314,10 @@ class CNVAnalysis(BaseAnalysis):
             .style("height: 450px")
             .classes("border-double")
         )
-    def _update_cnv_plot(self, plot_to_update=None, result=None, gene_target=None, title=None, min=0):
+
+    def _update_cnv_plot(
+        self, plot_to_update=None, result=None, gene_target=None, title=None, min=0
+    ):
         if result or self.result:
             total = 0
             valueslist = {"All": "All"}
@@ -297,9 +343,7 @@ class CNVAnalysis(BaseAnalysis):
             if self.chrom_filter == "All":
                 counter = 0
 
-                plot_to_update.options["title"][
-                    "text"
-                ] = f"{title} - All Chromosomes"
+                plot_to_update.options["title"]["text"] = f"{title} - All Chromosomes"
                 plot_to_update.options["series"] = []
                 for contig, cnv in natsort.natsorted(result.cnv.items()):
                     if contig == "chrM":
@@ -333,7 +377,10 @@ class CNVAnalysis(BaseAnalysis):
                                 "data": [
                                     {
                                         "name": contig,
-                                        "xAxis": ((total-len(cnv)/2) * self.cnv_dict["bin_width"]),
+                                        "xAxis": (
+                                            (total - len(cnv) / 2)
+                                            * self.cnv_dict["bin_width"]
+                                        ),
                                     }
                                 ],
                             },

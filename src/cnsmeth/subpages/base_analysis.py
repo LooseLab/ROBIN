@@ -14,16 +14,16 @@ import threading
 
 class BaseAnalysis:
     def __init__(
-            self,
-            threads,
-            outputfolder,
-            summary=None,
-            bamqueue=None,
-            progress=False,
-            batch=False,
-            start_time=None,
-            *args,
-            **kwargs,
+        self,
+        threads,
+        outputfolder,
+        summary=None,
+        bamqueue=None,
+        progress=False,
+        batch=False,
+        start_time=None,
+        *args,
+        **kwargs,
     ):
         if bamqueue:
             self.bamqueue = bamqueue
@@ -119,7 +119,7 @@ class BaseAnalysis:
         if self.bam_count == 0:
             return 0
         return (
-                self.bam_count - self.bams_in_processing - self.bam_processed
+            self.bam_count - self.bams_in_processing - self.bam_processed
         ) / self.bam_count
 
     def progress(self):
@@ -184,7 +184,9 @@ class BaseAnalysis:
 
     def playback(self, data: pd.DataFrame, step_size=2, start_time=None):
         self.data = data
-        playback = threading.Thread(target=self.playback_bams, args=([step_size, start_time]))
+        playback = threading.Thread(
+            target=self.playback_bams, args=([step_size, start_time])
+        )
         playback.daemon = True
         playback.start()
 
@@ -199,12 +201,12 @@ class BaseAnalysis:
         """
         latest_timestamps = self.data
         self.offset = 0
-        #print (start_time)
+        # print (start_time)
         playback_start_time = time.time()
         for index, row in latest_timestamps.iterrows():
             elapsed_time = (time.time() - playback_start_time) + self.offset
-            time_diff = row["file_produced"] #- elapsed_time
-            #print (elapsed_time, time_diff, row["file_produced"])
+            time_diff = row["file_produced"]  # - elapsed_time
+            # print (elapsed_time, time_diff, row["file_produced"])
             if self.offset == 0:
                 self.offset = time_diff
                 time_diff = 0
@@ -216,11 +218,13 @@ class BaseAnalysis:
                     time.sleep(1)
                     self.offset += step_size
                     elapsed_time += self.offset
-            #print("out the loop")
-            #print (f"elapsed time now {elapsed_time}")
+            # print("out the loop")
+            # print (f"elapsed time now {elapsed_time}")
             if len(row["full_path"]) > 0:
                 # Here we check that the path to the bam file absolutely exists.
-                self.add_bam(row["full_path"], playback_start_time+row["file_produced"])
+                self.add_bam(
+                    row["full_path"], playback_start_time + row["file_produced"]
+                )
 
     def process_bam(self, bamfile, timestamp):
         """
@@ -241,7 +245,6 @@ class BaseAnalysis:
         :return:
         """
         raise NotImplementedError("Subclasses must implement this method.")
-
 
     def cleanup(self):
         """

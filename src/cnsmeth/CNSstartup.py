@@ -1,9 +1,8 @@
 import click
 from configparser import ConfigParser
-import json
 from cnsmeth.brain_class import BrainMeth
 from pathlib import Path
-from nicegui import ui, app, run
+from nicegui import ui, app
 import os
 import sys
 import asyncio
@@ -12,17 +11,19 @@ from cnsmeth import images
 from cnsmeth import theme
 from cnsmeth.minknow_info.minknow_panel import MinKNOWFish
 
-DEFAULT_CFG = 'config.ini'
+DEFAULT_CFG = "config.ini"
+
 
 def configure(ctx, param, filename):
     cfg = ConfigParser()
     cfg.read(filename)
     try:
-        options = dict(cfg['options'])
+        options = dict(cfg["options"])
     except KeyError:
         options = {}
     print(options)
     ctx.default_map = options
+
 
 class Methnice:
     def __init__(
@@ -36,11 +37,12 @@ class Methnice:
         showerrors: bool,
         browse: bool,
         exclude: list,
-        reference: Path
+        reference: Path,
+        # minknow_connection,
     ):
         self.threads = threads
         self.simtime = simtime
-        self.watchfolder = watchfolder
+        self._watchfolder = watchfolder
         self.output = output
         self.sequencing_summary = sequencing_summary
         self.target_panel = target_panel
@@ -48,28 +50,103 @@ class Methnice:
         self.browse = browse
         self.exclude = exclude
         self.reference = reference
+        self.minknow_connection = None
+        self.timer = ui.timer(1, self._worker)
+
+    @property
+    def watchfolder(self):
+        return self._watchfolder
+
+    @watchfolder.setter
+    def watchfolder(self, value):
+        self._watchfolder = value
+        self.on_watchfolder_changed()
+
+    def _worker(self):
+        if hasattr(self.minknow_connection, "minKNOW_display"):
+            if self.minknow_connection.minKNOW_display.watchfolder != self.watchfolder:
+                self.watchfolder = self.minknow_connection.minKNOW_display.watchfolder
+
+    def on_watchfolder_changed(self):
+        # define your function here
+        if self.watchfolder:
+            print(f"watchfolder value has been changed! {self.watchfolder}")
+            self.robin.add_watchfolder(self.watchfolder)
 
     @ui.page("/home")
-    def index_page(self) -> None:
-        my_connection = None #MinKNOWFish()
+    async def index_page(self) -> None:
         with theme.frame(
-                "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>",
-                my_connection):
+            "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
+        ):
+            with ui.column().classes("w-full"):
+                if self.watchfolder is None:
+                    self.minknow_connection = MinKNOWFish()
+                else:
+                    self.minknow_connection = None
+                if self.minknow_connection:
+                    with ui.splitter(value=10).classes("w-full h-full") as splitter:
+                        with splitter.before:
+                            with ui.tabs().props("vertical").classes("w-full") as tabs:
+                                analysis = ui.tab("Analysis", icon="analytics")
+                                readfish = ui.tab("ReadFish", icon="phishing")
+                                minknow = ui.tab("minKNOW", icon="set_meal")
+                        with splitter.after:
+                            with ui.tab_panels(tabs, value=minknow).props(
+                                "vertical"
+                            ).classes("w-full h-full"):
+                                self.analysis_tab_pane = ui.tab_panel(analysis)
+                                with self.analysis_tab_pane:
+                                    with ui.row():
+                                        ui.icon("analytics", color="primary").classes(
+                                            "text-h4"
+                                        )
+                                        ui.label("Real Time Analysis").classes(
+                                            "text-h4"
+                                        )
+                                with ui.tab_panel(readfish):
+                                    with ui.row():
+                                        ui.icon("phishing", color="primary").classes(
+                                            "text-h4"
+                                        )
+                                        ui.label("ReadFish Data").classes("text-h4")
+                                    ui.label("To Be Updated.")
+                                self.minknow_tab_pane = ui.tab_panel(minknow)
+                                with self.minknow_tab_pane:
+                                    with ui.row():
+                                        ui.icon("set_meal", color="primary").classes(
+                                            "text-h4"
+                                        )
+                                        ui.label("MinKNOW Data").classes("text-h4")
 
-            BrainMeth(
-                threads=self.threads,
-                simtime=self.simtime,
-                watchfolder=self.watchfolder,
-                output=self.output,
-                sequencing_summary=self.sequencing_summary,
-                target_panel=self.target_panel,
-                showerrors=self.showerrors,
-                browse=self.browse,
-                exclude=self.exclude,
-                minknow_connection=None,
-                reference=self.reference
-            )
+                else:
+                    self.analysis_tab_pane = ui.row()
 
+            if self.minknow_connection:
+                with self.minknow_tab_pane:
+                    self.minknow_connection.setup_ui()
+                    self.minknow_connection.check_connection()
+                    ui.label().bind_text_from(
+                        self.minknow_connection,
+                        "connection_ip",
+                        backward=lambda n: f"Connected to: {n}",
+                    )
+
+            with self.analysis_tab_pane:
+                self.robin = BrainMeth(
+                    threads=self.threads,
+                    simtime=self.simtime,
+                    watchfolder=self.watchfolder,
+                    output=self.output,
+                    sequencing_summary=self.sequencing_summary,
+                    target_panel=self.target_panel,
+                    showerrors=self.showerrors,
+                    browse=self.browse,
+                    exclude=self.exclude,
+                    minknow_connection=self.minknow_connection,
+                    reference=self.reference,
+                )
+                await self.robin.init()
+                # self.watchfolder = self.minknow_connection.watchfolder
 
 
 def run_class(
@@ -85,6 +162,7 @@ def run_class(
     browse: bool,
     exclude: list,
     reference: Path,
+    # minknow_connection,
 ):
     """
     Helper function to run the app.
@@ -106,21 +184,24 @@ def run_class(
         browse=browse,
         exclude=exclude,
         reference=reference,
+        # minknow_connection=minknow_connection,
     )
-    #ui.add_head_html(r'''
-    #<style>
-    #@import url('https://fonts.googleapis.com/css2?family=Shadows+Into+Light&display=swap')
-    #</style>
+    # ui.add_head_html(r'''
+    # <style>
+    # @import url('https://fonts.googleapis.com/css2?family=Shadows+Into+Light&display=swap')
+    # </style>
     #''')
 
-    ui.add_style('''
+    ui.add_style(
+        """
         .shadows-into light-regular {
             font-family: "Shadows Into Light", cursive;
             font-weight: 400;
             font-style: normal;
         }
-    ''')
-    app.add_static_files('/fonts', str(Path(__file__).parent / 'fonts'))
+    """
+    )
+    app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
     app.on_startup(mainpage.index_page)
     # app.on_startup(startup)
     ui.run(
@@ -130,32 +211,39 @@ def run_class(
 
 @click.command()
 @click.option(
-    '-c', '--config',
-    type         = click.Path(dir_okay=False),
-    default      = DEFAULT_CFG,
-    callback     = configure,
-    is_eager     = True,
-    expose_value = False,
-    help         = 'Read option defaults from the specified INI file',
-    show_default = True,
+    "-c",
+    "--config",
+    type=click.Path(dir_okay=False),
+    default=DEFAULT_CFG,
+    callback=configure,
+    is_eager=True,
+    expose_value=False,
+    help="Read option defaults from the specified INI file",
+    show_default=True,
 )
 @click.option(
     "--port",
     default=8081,
     help="Port for GUI",
 )
-@click.option("--threads", default=4, help="Number of threads available.", required=True)
+@click.option(
+    "--threads", default=4, help="Number of threads available.", required=True
+)
 @click.option(
     "--simtime",
     default=False,
     help="If set, will simulate the addition of existing files to the pipeline based on read data.",
 )
-#@click.option(
+# @click.option(
 #    "--showerrors",
 #    default=False,
 #    help="If set, will display all errors in running R.",
-#)
-@click.option('--showerrors/--noerrors', default=False, help="If set, will display all errors in running R.")
+# )
+@click.option(
+    "--showerrors/--noerrors",
+    default=False,
+    help="If set, will display all errors in running R.",
+)
 @click.option(
     "--sequencing_summary",
     default=None,
@@ -197,8 +285,9 @@ def run_class(
         case_sensitive=False,
     ),
 )
-@click.argument(
-    "watchfolder",
+@click.option(
+    "--watchfolder",
+    "-w",
     type=click.Path(
         exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path
     ),
@@ -228,7 +317,6 @@ def package_run(
     Entrypoint for when GUI is launched directly.
     :return: None
     """
-    print(reference)
     if browse:
         # Handle the case when --browse is set
         click.echo("Browse mode is enabled. Watchfolder and output are not required.")
@@ -249,9 +337,13 @@ def package_run(
     else:
         # Handle the case when --browse is not set
         click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
-        if watchfolder is None or output is None:
-            click.echo("Watchfolder and output are required when --browse is not set.")
+        # if watchfolder is None or output is None:
+        #    click.echo("Watchfolder and output are required when --browse is not set.")
+        #    sys.exit(1)
+        if output is None:
+            click.echo("Output is required when --browse is not set.")
             sys.exit(1)
+
         # Your logic for non-browse mode
 
         run_class(
@@ -267,6 +359,7 @@ def package_run(
             browse=browse,
             exclude=exclude,
             reference=reference,
+            # minknow_connection=minknow_connection,
         )
 
 
