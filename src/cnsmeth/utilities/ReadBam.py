@@ -28,7 +28,6 @@ class ReadBam:
         else:
             self.state = "fail"
 
-
     def get_rg_tags(self):
         rg_tags = self.sam_file.header.get("RG", [])
         if not rg_tags:
@@ -144,14 +143,14 @@ class ReadBam:
                     filtered_reads_count += 1
                     if read.query_name not in readset:
                         readset.add(read.query_name)
-                        #ToDo: Should this only happen for each read once? Or should it happen every time an alignment is seen?
-                        #ToDo: Strictly this is aligned length and not total length??
-                        if read.infer_query_length() and read.infer_query_length()>0:
+                        # ToDo: Should this only happen for each read once? Or should it happen every time an alignment is seen?
+                        # ToDo: Strictly this is aligned length and not total length??
+                        if read.infer_query_length() and read.infer_query_length() > 0:
                             yield_tracking += read.infer_query_length()
-                    #print(f"Read name: {read.query_name}")
-            self.mapped_reads=len(readset)
+                    # print(f"Read name: {read.query_name}")
+            self.mapped_reads = len(readset)
             self.yield_tracking = yield_tracking
-            self.unmapped_reads=self.sam_file.unmapped
-            #print(f"Mapped reads:{filtered_reads_count}")
-            #print(f"Total reads:{filtered_reads_count + self.sam_file.unmapped}")
+            self.unmapped_reads = self.sam_file.unmapped
+            # print(f"Mapped reads:{filtered_reads_count}")
+            # print(f"Total reads:{filtered_reads_count + self.sam_file.unmapped}")
             return bam_read

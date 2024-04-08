@@ -16,15 +16,13 @@ import os
 IMAGEFILE = os.path.join(
     os.path.dirname(os.path.abspath(images.__file__)), "MethBrain_small.png"
 )
-HEADER_HTML = (Path(__file__).parent / 'static' / 'header.html').read_text()
-STYLE_CSS = (Path(__file__).parent / 'static' / 'styles.css').read_text()
-
-
+HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
+STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 
 
 @contextmanager
-def frame(navtitle: str, myconnection):
-    ui.add_head_html(HEADER_HTML + f'<style>{STYLE_CSS}</style>')
+def frame(navtitle: str):
+    ui.add_head_html(HEADER_HTML + f"<style>{STYLE_CSS}</style>")
     """Custom page frame to share the same styling and behavior across all pages"""
     with ui.dialog().props("persistent") as quitdialog, ui.card():
         ui.label(
@@ -40,29 +38,25 @@ def frame(navtitle: str, myconnection):
         ui.button("Really Quit", icon="logout", on_click=cleanup_and_exit).props(
             "outline"
         ).classes("shadow-lg")
-    with ui.header(elevated=True).classes('items-center duration-200 p-0 px-4 no-wrap'):
-            #.style('background-color: #4F9153'):
+    with ui.header(elevated=True).classes("items-center duration-200 p-0 px-4 no-wrap"):
+        # .style('background-color: #4F9153'):
 
         with ui.grid(columns=2).style("width: 100%"):
-            ui.html(navtitle).classes('shadows-into').style(
+            ui.html(navtitle).classes("shadows-into").style(
                 "color: #FFFFFF; font-size: 200%; font-weight: 150"
             ).tailwind(
                 "drop-shadow", "font-bold"
             )  # .tailwind("text-2xl font-bold font-italic drop-shadow")
             with ui.row().classes("ml-auto"):
-                ui.switch('allow remote access', value=False, on_change=use_on_air).classes(
-                    "ml-4 bg-transparent"
-                ).props('color="black"')
+                ui.switch(
+                    "allow remote access", value=False, on_change=use_on_air
+                ).classes("ml-4 bg-transparent").props('color="black"')
                 ui.switch("Dark Mode", on_change=dark_mode).classes(
                     "ml-4 bg-transparent"
                 ).props('color="black"')
                 ui.image(IMAGEFILE).style("width: 50px")
-    if myconnection:
-        myconnection.setup_ui()
-        myconnection.check_connection()
-    with ui.column().classes("w-full"):
-        yield
-    with ui.footer().style('background-color: #4F9153'):
+
+    with ui.footer().style("background-color: #4F9153"):
         with ui.dialog() as dialog, ui.card():
             ui.label("Useful Information.").tailwind(
                 "text-2xl font-bold font-italic drop-shadow"
@@ -86,17 +80,19 @@ def frame(navtitle: str, myconnection):
             ui.link("Looselab", "https://looselab.github.io/")
             ui.button("Close", on_click=dialog.close)
         ui.image(IMAGEFILE).style("width: 30px")
-        ui.colors(primary='#555')
+        ui.colors(primary="#555")
         ui.button("More Information", on_click=dialog.open)
         ui.button(
             "Quit", icon="logout", on_click=quitdialog.open
         )  # .classes('ml-4')#.props('outline') #.classes('shadow-lg')
-        if myconnection:
-            ui.label().bind_text_from(myconnection, 'connection_ip', backward=lambda n: f'Connected to: {n}')
-        ui.label().bind_text_from(app, 'urls', backward=lambda n: f'Available urls: {n}')
+
+        ui.label().bind_text_from(
+            app, "urls", backward=lambda n: f"Available urls: {n}"
+        )
         ui.label(
             "Some aspects of this application are ©Looselab - all analyses provided for research use only."
         ).tailwind("text-sm font-italic")
+    yield
 
 
 def cleanup_and_exit():
@@ -118,10 +114,11 @@ def dark_mode(event: events.ValueChangeEventArguments):
     else:
         ui.dark_mode().disable()
 
+
 def use_on_air(args: events.ValueChangeEventArguments):
     if args.value:
         if core.air is None:
-            core.air = nicegui.air.Air('')
+            core.air = nicegui.air.Air("")
         nicegui.air.connect()
     else:
         nicegui.air.disconnect()

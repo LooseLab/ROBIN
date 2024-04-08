@@ -1,4 +1,4 @@
-from nicegui import ui, run, background_tasks
+from nicegui import ui
 
 from cnsmeth.utilities.bam_handler import BamEventHandler
 
@@ -18,6 +18,7 @@ from watchdog.observers import Observer
 from pathlib import Path
 from queue import Queue
 import pandas as pd
+import asyncio
 
 import threading
 import time
@@ -50,8 +51,9 @@ class BrainMeth:
         self.browse = browse
         self.exclude = exclude
         self.minknow_connection = minknow_connection
-        self.reference=reference
+        self.reference = reference
 
+    async def init(self):
         self.bam_count = {"counter": 0}
         self.bam_passed = {"counter": 0}
         self.bam_failed = {"counter": 0}
@@ -76,14 +78,30 @@ class BrainMeth:
         self.bamfortargetcoverage = Queue()
         self.bamformgmt = Queue()
         self.bamforfusions = Queue()
+        self.observer = None
 
         if self.minknow_connection:
-            background_tasks.create(run.io_bound(self.waitforclick))
-
-
+            while not self.minknow_connection.connected:
+                await asyncio.sleep(1)
+            while not self.minknow_connection.selected_position:
+                await asyncio.sleep(1)
+            await self.minknow_connection.access_device.clicked()
 
         if not self.browse:
             self.information_panel()
+
+            if self.watchfolder:
+                self.add_watchfolder(self.watchfolder)
+
+        else:
+            ui.label("Browse mode enabled. Please choose a folder to see data from.")
+            ui.button("Choose file", on_click=self.pick_file, icon="folder")
+
+            self.content = ui.column().classes("w-full")
+
+    def add_watchfolder(self, watchfolder):
+        if not self.observer:
+            self.watchfolder = watchfolder
             self.event_handler = BamEventHandler(self.bam_count)
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
@@ -100,12 +118,6 @@ class BrainMeth:
             )
             self.check_for_existing_bams.daemon = True
             self.check_for_existing_bams.start()
-
-        else:
-            ui.label("Browse mode enabled. Please choose a folder to see data from.")
-            ui.button("Choose file", on_click=self.pick_file, icon="folder")
-
-            self.content = ui.column().classes("w-full")
 
     async def waitforclick(self):
         self.minknow_connection.check_connection()
@@ -232,14 +244,16 @@ class BrainMeth:
                 "drop-shadow", "font-bold"
             )
             with ui.row():
-                ui.label(f"Monitoring the path:{self.watchfolder}").style(
-                    "color: #000000; font-size: 100%; font-weight: 300"
-                )
+                ui.label().bind_text_from(
+                    self, "watchfolder", backward=lambda n: f"Monitoring the path: {n}"
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label(f"Outputting to:{self.output}").style(
                     "color: #000000; font-size: 100%; font-weight: 300"
                 )
                 ui.label().bind_text_from(
-                    self.bam_count, "counter", backward=lambda n: f"BAM files seen: {n:,}"
+                    self.bam_count,
+                    "counter",
+                    backward=lambda n: f"BAM files seen: {n:,}",
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
                     self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n:,}"
@@ -249,26 +263,40 @@ class BrainMeth:
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
             with ui.row():
                 ui.label().bind_text_from(
-                    self.mapped_count, "counter", backward=lambda n: f"Mapped Read Count: {n:,}"
+                    self.mapped_count,
+                    "counter",
+                    backward=lambda n: f"Mapped Read Count: {n:,}",
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
-                    self.unmapped_count, "counter", backward=lambda n: f"Unmapped Read Count: {n:,}"
+                    self.unmapped_count,
+                    "counter",
+                    backward=lambda n: f"Unmapped Read Count: {n:,}",
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
-                    self.pass_mapped_count, "counter", backward=lambda n: f"Pass Mapped Read Count: {n:,}"
+                    self.pass_mapped_count,
+                    "counter",
+                    backward=lambda n: f"Pass Mapped Read Count: {n:,}",
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
-                    self.fail_mapped_count, "counter", backward=lambda n: f"Fail Mapped Read Count: {n:,}"
+                    self.fail_mapped_count,
+                    "counter",
+                    backward=lambda n: f"Fail Mapped Read Count: {n:,}",
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
             with ui.row():
                 ui.label().bind_text_from(
-                    self.bases_count, "counter", backward=lambda n: f"Total Mapped Bases: {n:,}"
+                    self.bases_count,
+                    "counter",
+                    backward=lambda n: f"Total Mapped Bases: {n:,}",
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
-                    self.pass_bases_count, "counter", backward=lambda n: f"Total Mapped Pass Bases: {n:,}"
+                    self.pass_bases_count,
+                    "counter",
+                    backward=lambda n: f"Total Mapped Pass Bases: {n:,}",
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
                 ui.label().bind_text_from(
-                    self.fail_bases_count, "counter", backward=lambda n: f"Total Mapped Fail Bases: {n:,}"
+                    self.fail_bases_count,
+                    "counter",
+                    backward=lambda n: f"Total Mapped Fail Bases: {n:,}",
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
             with ui.row():
                 if "forest" not in self.exclude:
@@ -318,8 +346,8 @@ class BrainMeth:
 
             with ui.row():
                 ui.label("Results Summary").style(
-                "color: #6E93D6; font-size: 125%; font-weight: 300"
-            ).tailwind("drop-shadow", "font-bold")
+                    "color: #6E93D6; font-size: 125%; font-weight: 300"
+                ).tailwind("drop-shadow", "font-bold")
 
             with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
                 if "sturgeon" not in self.exclude:
@@ -329,62 +357,174 @@ class BrainMeth:
                 if "forest" not in self.exclude:
                     forestsummary = ui.column()
             if "mgmt" not in self.exclude:
-                with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
+                with ui.row().style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                ):
                     if "mgmt" not in self.exclude:
                         mgmt = ui.column()
             if "cnv" not in self.exclude:
-                with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
+                with ui.row().style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                ):
                     if "cnv" not in self.exclude:
                         cnvsummary = ui.column()
             if "fusion" not in self.exclude:
-                with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
+                with ui.row().style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                ):
                     if "fusion" not in self.exclude:
                         fusions = ui.column()
             if "coverage" not in self.exclude:
-                with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
+                with ui.row().style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                ):
                     if "coverage" not in self.exclude:
                         coverage = ui.column()
 
-        if self.minknow_connection:
+        selectedtab = None
+        with ui.tabs().classes("w-full") as tabs:
+            if not (set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))):
+                methylationtab = ui.tab("Methylation Classification")
+                if not selectedtab:
+                    selectedtab = methylationtab
+            if "cnv" not in self.exclude:
+                copy_numertab = ui.tab("Copy Number Variation")
+                if not selectedtab:
+                    selectedtab = copy_numertab
+            if "coverage" not in self.exclude:
+                coveragetab = ui.tab("Target Coverage")
+                if not selectedtab:
+                    selectedtab = coveragetab
+            if "mgmt" not in self.exclude:
+                mgmttab = ui.tab("MGMT")
+                if not selectedtab:
+                    selectedtab = mgmttab
+            if "fusion" not in self.exclude:
+                fusionstab = ui.tab("Fusions")
+                if not selectedtab:
+                    selectedtab = fusionstab
+        with ui.tab_panels(tabs, value=selectedtab).classes("w-full"):
+            if not (set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))):
+                with ui.tab_panel(methylationtab).classes("w-full"):
+                    with ui.card().style("width: 100%"):
+                        ui.label("Methylation Classifications").style(
+                            "color: #6E93D6; font-size: 150%; font-weight: 300"
+                        ).tailwind("drop-shadow", "font-bold")
+                        if "sturgeon" not in self.exclude:
+                            self.Sturgeon = Sturgeon_object(
+                                self.threads,
+                                self.output,
+                                progress=True,
+                                batch=True,
+                                bamqueue=self.bamforsturgeon,
+                                summary=sturgeonsummary,
+                            )
+                        if "nanodx" not in self.exclude:
+                            self.NanoDX = NanoDX_object(
+                                self.threads,
+                                self.output,
+                                progress=True,
+                                batch=True,
+                                bamqueue=self.bamfornanodx,
+                                summary=nanodxsummary,
+                            )
+                        if "forest" not in self.exclude:
+                            self.RandomForest = RandomForest_object(
+                                self.threads,
+                                self.output,
+                                progress=True,
+                                batch=True,
+                                bamqueue=self.bamforcns,
+                                summary=forestsummary,
+                                showerrors=self.showerrors,
+                            )
+            if "cnv" not in self.exclude:
+                with ui.tab_panel(copy_numertab).classes("w-full"):
+                    with ui.card().style("width: 100%"):
+                        self.CNV = CNVAnalysis(
+                            self.threads,
+                            self.output,
+                            progress=True,
+                            bamqueue=self.bamforcnv,
+                            summary=cnvsummary,
+                            target_panel=self.target_panel,
+                        )
+            if "coverage" not in self.exclude:
+                with ui.tab_panel(coveragetab).classes("w-full"):
+                    with ui.card().style("width: 100%"):
+                        self.Target_Coverage = TargetCoverage(
+                            self.threads,
+                            self.output,
+                            progress=True,
+                            bamqueue=self.bamfortargetcoverage,
+                            summary=coverage,
+                            target_panel=self.target_panel,
+                            reference=self.reference,
+                        )
+            if "mgmt" not in self.exclude:
+                with ui.tab_panel(mgmttab).classes("w-full"):
+                    with ui.card().style("width: 100%"):
+                        self.MGMT_panel = MGMT_Object(
+                            self.threads,
+                            self.output,
+                            progress=True,
+                            bamqueue=self.bamformgmt,
+                            summary=mgmt,
+                        )
+            if "fusion" not in self.exclude:
+                with ui.tab_panel(fusionstab).classes("w-full"):
+                    with ui.card().style("width: 100%"):
+                        self.Fusion_panel = Fusion_object(
+                            self.threads,
+                            self.output,
+                            progress=True,
+                            bamqueue=self.bamforfusions,
+                            summary=fusions,
+                            target_panel=self.target_panel,
+                        )
+
+        # if self.minknow_connection:
+        # self.minknow_connection.setup_ui()
+        # with ui.card().style("width: 100%"):
+        #    ui.label("MinKNOW Information").style(
+        #        "color: #6E93D6; font-size: 150%; font-weight: 300"
+        #    ).tailwind("drop-shadow", "font-bold")
+
+        """
+        if not (set(['sturgeon','nanodx','forest']).issubset(set(self.exclude))):
             with ui.card().style("width: 100%"):
-                ui.label("MinKNOW Information").style(
+                ui.label("Methylation Classifications").style(
                     "color: #6E93D6; font-size: 150%; font-weight: 300"
                 ).tailwind("drop-shadow", "font-bold")
-                self.minknow_connection.setup_ui()
-
-        with ui.card().style("width: 100%"):
-            ui.label("Methylation Classifications").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
-            ).tailwind("drop-shadow", "font-bold")
-            if "sturgeon" not in self.exclude:
-                self.Sturgeon = Sturgeon_object(
-                    self.threads,
-                    self.output,
-                    progress=True,
-                    batch=True,
-                    bamqueue=self.bamforsturgeon,
-                    summary=sturgeonsummary,
-                )
-            if "nanodx" not in self.exclude:
-                self.NanoDX = NanoDX_object(
-                    self.threads,
-                    self.output,
-                    progress=True,
-                    batch=True,
-                    bamqueue=self.bamfornanodx,
-                    summary=nanodxsummary,
-                )
-            if "forest" not in self.exclude:
-                self.RandomForest = RandomForest_object(
-                    self.threads,
-                    self.output,
-                    progress=True,
-                    batch=True,
-                    bamqueue=self.bamforcns,
-                    summary=forestsummary,
-                    showerrors=self.showerrors,
-                )
-            pass
+                if "sturgeon" not in self.exclude:
+                    self.Sturgeon = Sturgeon_object(
+                        self.threads,
+                        self.output,
+                        progress=True,
+                        batch=True,
+                        bamqueue=self.bamforsturgeon,
+                        summary=sturgeonsummary,
+                    )
+                if "nanodx" not in self.exclude:
+                    self.NanoDX = NanoDX_object(
+                        self.threads,
+                        self.output,
+                        progress=True,
+                        batch=True,
+                        bamqueue=self.bamfornanodx,
+                        summary=nanodxsummary,
+                    )
+                if "forest" not in self.exclude:
+                    self.RandomForest = RandomForest_object(
+                        self.threads,
+                        self.output,
+                        progress=True,
+                        batch=True,
+                        bamqueue=self.bamforcns,
+                        summary=forestsummary,
+                        showerrors=self.showerrors,
+                    )
+        
         #    with ui.tab_panel(copy_numer).classes("w-full"):
         if "cnv" not in self.exclude:
             with ui.card().style("width: 100%"):
@@ -397,6 +537,7 @@ class BrainMeth:
                     target_panel=self.target_panel,
                 )
             pass
+        
         #    with ui.tab_panel(coverage).classes("w-full"):
         if "coverage" not in self.exclude:
             with ui.card().style("width: 100%"):
@@ -433,6 +574,7 @@ class BrainMeth:
                     target_panel=self.target_panel,
                 )
             pass
+        """
 
     def process_bams(self) -> None:
         """
@@ -492,17 +634,20 @@ class BrainMeth:
         self.sample_ids.add(baminfo["sample_id"])
         self.flowcell_ids.add(baminfo["flow_cell_id"])
         self.run_time.add(baminfo["time_of_run"])
-        self.mapped_count["counter"] +=bamdata.mapped_reads
-        self.unmapped_count["counter"] +=bamdata.unmapped_reads
-        self.bases_count["counter"] +=bamdata.yield_tracking
-
+        self.mapped_count["counter"] += bamdata.mapped_reads
+        self.unmapped_count["counter"] += bamdata.unmapped_reads
+        self.bases_count["counter"] += bamdata.yield_tracking
 
     def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
         if sequencing_summary:
             print("Using sequencing summary")
             with self.frontpage:
-                ui.notify("Checking for existing bams against sequencing summary", type="info", position="top-right")
+                ui.notify(
+                    "Checking for existing bams against sequencing summary",
+                    type="info",
+                    position="top-right",
+                )
             df = pd.read_csv(
                 sequencing_summary,
                 delimiter="\t",
@@ -544,7 +689,9 @@ class BrainMeth:
             if "cnv" not in self.exclude:
                 self.CNV.playback(latest_timestamps, step_size=step_size)
             if "coverage" not in self.exclude:
-                self.Target_Coverage.playback(latest_timestamps, step_size=step_size, start_time=self.run_time)
+                self.Target_Coverage.playback(
+                    latest_timestamps, step_size=step_size, start_time=self.run_time
+                )
             if "fusion" not in self.exclude:
                 self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
             if "mgmt" not in self.exclude:

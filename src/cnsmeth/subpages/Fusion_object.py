@@ -41,15 +41,16 @@ class Fusion_object(BaseAnalysis):
             "gencode.v45.basic.annotation.gff3",
         )
 
-        if self.target_panel=="rCNS2":
+        if self.target_panel == "rCNS2":
             self.gene_bed = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "rCNS2_panel_name_uniq.bed"
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "rCNS2_panel_name_uniq.bed",
             )
-        elif self.target_panel=="AML":
+        elif self.target_panel == "AML":
             self.gene_bed = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "AML_panel_name_uniq.bed"
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "AML_panel_name_uniq.bed",
             )
-
 
         self.all_gene_bed = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)), "all_genes2.bed"
@@ -58,9 +59,7 @@ class Fusion_object(BaseAnalysis):
         datafile = f"{self.target_panel}_data.csv.gz"
 
         if os.path.isfile(
-            os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), datafile
-            )
+            os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), datafile)
         ):
             self.gene_table = pd.read_csv(
                 os.path.join(
@@ -68,7 +67,9 @@ class Fusion_object(BaseAnalysis):
                 )
             )
         else:
-            print(f"This looks like the first time you have run the {self.target_panel} panel.")
+            print(
+                f"This looks like the first time you have run the {self.target_panel} panel."
+            )
             print("Parsing GFF3")
             self.gene_table = gff3_parser.parse_gff3(
                 self.gene_gff3_2, verbose=False, parse_attributes=True
@@ -222,32 +223,37 @@ class Fusion_object(BaseAnalysis):
             if not self.fstable_all:
                 self.fusiontable_all.clear()
                 with self.fusiontable_all:
-                    self.fstable_all = ui.table.from_pandas(
-                        result_all.sort_values(by=7).rename(
-                            columns={
-                                0: "chromBED",
-                                1: "BS",
-                                2: "BE",
-                                3: "Gene",
-                                4: "chrom",
-                                5: "mS",
-                                6: "mE",
-                                7: "readID",
-                                8: "mapQ",
-                                9: "strand",
-                            }
-                        ),
-                        pagination=25,
-                    ).props("dense").classes("w-full").style("height: 900px").style(
-                        "font-size: 100%; font-weight: 300"
+                    self.fstable_all = (
+                        ui.table.from_pandas(
+                            result_all.sort_values(by=7).rename(
+                                columns={
+                                    0: "chromBED",
+                                    1: "BS",
+                                    2: "BE",
+                                    3: "Gene",
+                                    4: "chrom",
+                                    5: "mS",
+                                    6: "mE",
+                                    7: "readID",
+                                    8: "mapQ",
+                                    9: "strand",
+                                }
+                            ),
+                            pagination=25,
                         )
+                        .props("dense")
+                        .classes("w-full")
+                        .style("height: 900px")
+                        .style("font-size: 100%; font-weight: 300")
+                    )
                     for col in self.fstable_all.columns:
-                        col['sortable'] = True
+                        col["sortable"] = True
 
-                    with self.fstable_all.add_slot('top-right'):
-                        with ui.input(placeholder='Search').props('type=search').bind_value(self.fstable_all, 'filter').add_slot(
-                                'append'):
-                            ui.icon('search')
+                    with self.fstable_all.add_slot("top-right"):
+                        with ui.input(placeholder="Search").props(
+                            "type=search"
+                        ).bind_value(self.fstable_all, "filter").add_slot("append"):
+                            ui.icon("search")
 
                 self.fusionplot_all.clear()
             else:
@@ -399,32 +405,37 @@ class Fusion_object(BaseAnalysis):
             if not self.fstable:
                 self.fusiontable.clear()
                 with self.fusiontable:
-                    self.fstable = ui.table.from_pandas(
-                        result.sort_values(by=7).rename(
-                            columns={
-                                0: "chromBED",
-                                1: "BS",
-                                2: "BE",
-                                3: "Gene",
-                                4: "chrom",
-                                5: "mS",
-                                6: "mE",
-                                7: "readID",
-                                8: "mapQ",
-                                9: "strand",
-                            }
-                        ),
-                        pagination=25,
-                    ).props("dense").classes("w-full").style("height: 900px").style(
-                        "font-size: 100%; font-weight: 300"
+                    self.fstable = (
+                        ui.table.from_pandas(
+                            result.sort_values(by=7).rename(
+                                columns={
+                                    0: "chromBED",
+                                    1: "BS",
+                                    2: "BE",
+                                    3: "Gene",
+                                    4: "chrom",
+                                    5: "mS",
+                                    6: "mE",
+                                    7: "readID",
+                                    8: "mapQ",
+                                    9: "strand",
+                                }
+                            ),
+                            pagination=25,
                         )
+                        .props("dense")
+                        .classes("w-full")
+                        .style("height: 900px")
+                        .style("font-size: 100%; font-weight: 300")
+                    )
                     for col in self.fstable.columns:
-                        col['sortable'] = True
+                        col["sortable"] = True
 
-                    with self.fstable.add_slot('top-right'):
-                        with ui.input(placeholder='Search').props('type=search').bind_value(self.fstable, 'filter').add_slot(
-                                'append'):
-                            ui.icon('search')
+                    with self.fstable.add_slot("top-right"):
+                        with ui.input(placeholder="Search").props(
+                            "type=search"
+                        ).bind_value(self.fstable, "filter").add_slot("append"):
+                            ui.icon("search")
 
                 self.fusionplot.clear()
             else:

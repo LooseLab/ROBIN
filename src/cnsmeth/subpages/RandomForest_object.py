@@ -125,13 +125,17 @@ class RandomForest_object(BaseAnalysis):
             sortbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
             tempbed = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bed")
             self.batch += 1
-            await background_tasks.create(run.cpu_bound(
-                run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads
-            ))
+            await background_tasks.create(
+                run.cpu_bound(
+                    run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads
+                )
+            )
 
-            await background_tasks.create(run.cpu_bound(
-                run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads
-            ))
+            await background_tasks.create(
+                run.cpu_bound(
+                    run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads
+                )
+            )
 
             if not self.first_run:
                 bed_a = pd.read_table(
@@ -233,14 +237,16 @@ class RandomForest_object(BaseAnalysis):
 
             tempDir = tempfile.TemporaryDirectory(dir=self.output)
 
-            await background_tasks.create(run.cpu_bound(
-                run_rcns2,
-                tempDir.name,
-                self.batch,
-                tempbed.name,
-                self.threads,
-                self.showerrors,
-            ))
+            await background_tasks.create(
+                run.cpu_bound(
+                    run_rcns2,
+                    tempDir.name,
+                    self.batch,
+                    tempbed.name,
+                    self.threads,
+                    self.showerrors,
+                )
+            )
 
             if os.path.isfile(f"{tempDir.name}/live_{self.batch}_votes.tsv"):
                 scores = pd.read_table(
