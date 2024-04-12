@@ -192,7 +192,7 @@ def run_class(
     # </style>
     #''')
 
-    ui.add_style(
+    ui.add_css(
         """
         .shadows-into light-regular {
             font-family: "Shadows Into Light", cursive;

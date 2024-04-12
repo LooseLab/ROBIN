@@ -8,7 +8,7 @@ import numpy as np
 import os
 import sys
 import asyncio
-from nicegui import ui
+from nicegui import ui, app
 import click
 from pathlib import Path
 import pickle
@@ -148,12 +148,12 @@ class CNVAnalysis(BaseAnalysis):
                 moving_avg_data2 = moving_average(self.result2.cnv[key])
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
                 # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
-                # if len(self.result3.cnv[key]) > 20:
-                #    algo_c = ruptures_plotting(self.result3.cnv[key])
-                #    penalty_value = 5  # beta
+                if len(self.result3.cnv[key]) > 20:
+                    algo_c = ruptures_plotting(self.result3.cnv[key])
+                    penalty_value = 5  # beta
 
-                #    result = algo_c.predict(pen=penalty_value)
-                #    print(result)
+                    result = algo_c.predict(pen=penalty_value)
+                    #print(key, result)
         self.estimate_XY()
 
         if self.summary:
@@ -371,17 +371,27 @@ class CNVAnalysis(BaseAnalysis):
                             "data": data,
                             "symbolSize": 5,
                             "markLine": {
-                                "lineStyle": {"width": 1},
                                 "symbol": "none",
-                                "label": {"formatter": contig},
                                 "data": [
                                     {
-                                        "name": contig,
+                                    "lineStyle": {"width": 1},
+                                    "label": {"formatter": contig},
+                                    "name": contig,
                                         "xAxis": (
                                             (total - len(cnv) / 2)
                                             * self.cnv_dict["bin_width"]
                                         ),
-                                    }
+                                    },
+                                    {
+                                        "lineStyle": {"width": 2},
+                                        "label": {"normal": {
+                                                    "show": False
+                                        }},
+                                        "xAxis": (
+                                                (total)
+                                                * self.cnv_dict["bin_width"]
+                                        ),
+                                    },
                                 ],
                             },
                         }
@@ -498,10 +508,20 @@ def test_me(
     output: str,
     reload: bool = False,
     browse: bool = False,
+    target_panel: str = "rCNS2",
 ):
     my_connection = None
-    with theme.frame("Copy Number Variation Testing.", my_connection):
-        TestObject = CNVAnalysis(threads, output, progress=True)
+    app.add_static_files("/fonts", str(Path(__file__).parent / "../fonts"))
+    with theme.frame("Copy Number Variation Testing."):
+        TestObject = CNVAnalysis(
+            threads,
+            output,
+            progress=True,
+            #bamqueue=self.bamforcnv,
+            #summary=cnvsummary,
+            target_panel=target_panel,
+        )
+        #TestObject = CNVAnalysis(threads, output, progress=True)
     if not browse:
         path = watchfolder
         searchdirectory = os.fsencode(path)
@@ -546,7 +566,17 @@ def test_me(
     default=False,
     help="Browse Historic Data.",
 )
-def main(port, threads, watchfolder, output, browse):
+@click.option(
+    "--target_panel",
+    "-t",
+    default="rCNS2",
+    help="Select analysis gene panel from one of these options. Default is rCNS2",
+    type=click.Choice(
+        ["rCNS2", "AML"],
+        case_sensitive=True,
+    ),
+)
+def main(port, threads, watchfolder, output, browse, target_panel):
     """
     Helper function to run the app.
     :param port: The port to serve the app on.
@@ -585,6 +615,7 @@ def main(port, threads, watchfolder, output, browse):
             # sequencing_summary=sequencing_summary,
             # showerrors=showerrors,
             browse=browse,
+            target_panel=target_panel,
             # exclude=exclude,
         )
 
