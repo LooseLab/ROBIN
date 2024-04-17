@@ -34,9 +34,9 @@ class MinknowHistograms:
     # adaptive_sampling_ignore_chunk: reactive[int] = reactive(0)
     # padding: reactive[int] = reactive(0)
 
-    def __init__(self, Position):
+    def __init__(self, position):
         super().__init__()
-        self.Position = Position
+        self.Position = position
         self.Live_Run = True
         self.Run_ID = None
         self.color = "text-blue"
@@ -196,6 +196,11 @@ class MinknowHistograms:
                         time.sleep(1)
                     time.sleep(2)
             time.sleep(5)
+
+    def trim_trailing_zeros(self, lst: list) -> None:
+        while lst and lst[-1] == 0:
+            lst.pop()
+        return lst
 
     def calculate_sequenced_read_lengths(self):
         """
