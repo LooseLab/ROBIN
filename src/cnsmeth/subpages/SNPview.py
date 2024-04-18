@@ -19,7 +19,7 @@ class SNPview:
             "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
         )
         ui.separator()
-        self.placeholder = ui.card().classes("w-full")
+        self.placeholder = ui.card().classes("width: 100%")
 
     def process_annotations(self, record: dict) -> dict:
         """
