@@ -73,7 +73,7 @@ class NanoDX_object(BaseAnalysis):
                 ui.label("NanoDX classification: Unknown")
         if self.browse:
             self.nanodx_df_store = pd.read_csv(
-                os.path.join(os.path.join(self.output, "nanodx_scores.csv")),
+                os.path.join(os.path.join(self.output, "nanoDX_scores.csv")),
                 index_col=0,
             )
             columns_greater_than_threshold = (
