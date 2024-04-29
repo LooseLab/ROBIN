@@ -153,7 +153,7 @@ class CNVAnalysis(BaseAnalysis):
                     penalty_value = 5  # beta
 
                     result = algo_c.predict(pen=penalty_value)
-                    #print(key, result)
+                    # print(key, result)
         self.estimate_XY()
 
         if self.summary:
@@ -272,6 +272,8 @@ class CNVAnalysis(BaseAnalysis):
             self.reference_scatter_echart = self.generate_chart(
                 title="Reference CNV Scatter Plot"
             )
+        if self.browse:
+            self.show_previous_data(self.output)
 
     def generate_chart(self, title=None, initmax=8, initmin=0, type="value"):
         return (
@@ -374,9 +376,9 @@ class CNVAnalysis(BaseAnalysis):
                                 "symbol": "none",
                                 "data": [
                                     {
-                                    "lineStyle": {"width": 1},
-                                    "label": {"formatter": contig},
-                                    "name": contig,
+                                        "lineStyle": {"width": 1},
+                                        "label": {"formatter": contig},
+                                        "name": contig,
                                         "xAxis": (
                                             (total - len(cnv) / 2)
                                             * self.cnv_dict["bin_width"]
@@ -384,13 +386,8 @@ class CNVAnalysis(BaseAnalysis):
                                     },
                                     {
                                         "lineStyle": {"width": 2},
-                                        "label": {"normal": {
-                                                    "show": False
-                                        }},
-                                        "xAxis": (
-                                                (total)
-                                                * self.cnv_dict["bin_width"]
-                                        ),
+                                        "label": {"normal": {"show": False}},
+                                        "xAxis": ((total) * self.cnv_dict["bin_width"]),
                                     },
                                 ],
                             },
@@ -498,7 +495,34 @@ class CNVAnalysis(BaseAnalysis):
         ).item()
         self.cnv_dict["bin_width"] = cnv_dict["bin_width"]
         self.cnv_dict["variance"] = cnv_dict["variance"]
-        self._update_cnv_plot()
+        # self._update_cnv_plot()
+        # self._update_cnv_plot(
+        #    plot_to_update=self.scatter_echart, result=self.result, title="CNV"
+        # )
+        self.result2 = iterate_bam_file(
+            bam_file_path=None,
+            _threads=1,
+            mapq_filter=60,
+            copy_numbers=self.ref_cnv_dict,
+            log_level=int(logging.ERROR),
+            bin_width=self.cnv_dict["bin_width"],
+        )
+
+        for key in self.result.cnv.keys():
+            if key != "chrM":
+                # print(key, np.mean(self.result.cnv[key]))#[i for i in self.result.cnv[key] if i !=0]))
+                moving_avg_data1 = moving_average(self.result.cnv[key])
+                moving_avg_data2 = moving_average(self.result2.cnv[key])
+                self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
+                # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
+                if len(self.result3.cnv[key]) > 20:
+                    algo_c = ruptures_plotting(self.result3.cnv[key])
+                    penalty_value = 5  # beta
+
+                    result = algo_c.predict(pen=penalty_value)
+                    # print(key, result)
+        self.estimate_XY()
+        self.update_plots()
 
 
 def test_me(
@@ -517,11 +541,11 @@ def test_me(
             threads,
             output,
             progress=True,
-            #bamqueue=self.bamforcnv,
-            #summary=cnvsummary,
+            # bamqueue=self.bamforcnv,
+            # summary=cnvsummary,
             target_panel=target_panel,
         )
-        #TestObject = CNVAnalysis(threads, output, progress=True)
+        # TestObject = CNVAnalysis(threads, output, progress=True)
     if not browse:
         path = watchfolder
         searchdirectory = os.fsencode(path)

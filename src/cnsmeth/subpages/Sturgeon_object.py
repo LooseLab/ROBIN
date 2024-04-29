@@ -71,7 +71,6 @@ def run_sturgeon_inputtobed(temp, temp2):
 
 class Sturgeon_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
-
         self.sturgeon_df_store = pd.DataFrame()
         self.threshold = 0.05
         self.first_run = True
@@ -94,6 +93,34 @@ class Sturgeon_object(BaseAnalysis):
         if self.summary:
             with self.summary:
                 ui.label("Sturgeon classification: Unknown")
+        if self.browse:
+            self.sturgeon_df_store = pd.read_csv(
+                os.path.join(os.path.join(self.output, "sturgeon_scores.csv")),
+                index_col=0,
+            )
+            columns_greater_than_threshold = (
+                self.sturgeon_df_store > self.threshold
+            ).any()
+            columns_not_greater_than_threshold = ~columns_greater_than_threshold
+            result = self.sturgeon_df_store.columns[
+                columns_not_greater_than_threshold
+            ].tolist()
+            self.update_sturgeon_time_chart(self.sturgeon_df_store.drop(columns=result))
+            lastrow = self.sturgeon_df_store.iloc[-1].drop("number_probes")
+            lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+            lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+            if self.summary:
+                with self.summary:
+                    self.summary.clear()
+                    ui.label(
+                        f"Sturgeon classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                    )
+            self.update_sturgeon_plot(
+                lastrow_plot.index.to_list(),
+                list(lastrow_plot.values),
+                "All",
+                self.sturgeon_df_store.iloc[-1]["number_probes"],
+            )
 
     async def process_bam(self, bamfile):
         tomerge = []

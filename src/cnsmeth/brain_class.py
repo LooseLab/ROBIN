@@ -124,8 +124,8 @@ class BrainMeth:
         await self.minknow_connection.access_device.clicked()
 
     async def pick_file(self) -> None:
-        result = await local_file_picker("/", multiple=True)
-        print(result)
+        result = await local_file_picker(".", multiple=True)
+        # print(result)
         if result:
             ui.notify(f"You selected {result}")
             self.content.clear()
@@ -134,13 +134,15 @@ class BrainMeth:
                     "drop-shadow", "font-bold"
                 )
                 ui.label("Not yet implemented.")
+                self.output = result[0]
+                self.information_panel()
                 """
                 with ui.tabs().classes("w-full") as tabs:
                     methylation = ui.tab("Methylation Classification")
-                    copy_numer = ui.tab("Copy Number Variation")
-                    coverage = ui.tab("Target Coverage")
-                    mgmt = ui.tab("MGMT")
-                    fusions = ui.tab("Fusions")
+                #    copy_numer = ui.tab("Copy Number Variation")
+                #    coverage = ui.tab("Target Coverage")
+                #    mgmt = ui.tab("MGMT")
+                #    fusions = ui.tab("Fusions")
                 with ui.tab_panels(tabs, value=methylation).classes("w-full"):
                     with ui.tab_panel(methylation).classes("w-full"):
                         with ui.card().classes("w-full"):
@@ -403,7 +405,7 @@ class BrainMeth:
                 fusionstab = ui.tab("Fusions")
                 if not selectedtab:
                     selectedtab = fusionstab
-        with ui.tab_panels(tabs, value=selectedtab).classes("w-full"):
+        with ui.tab_panels(tabs, value=selectedtab).classes("w-screen"):
             if not (set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))):
                 with ui.tab_panel(methylationtab).classes("w-full"):
                     with ui.card().style("width: 100%"):
@@ -418,6 +420,7 @@ class BrainMeth:
                                 batch=True,
                                 bamqueue=self.bamforsturgeon,
                                 summary=sturgeonsummary,
+                                browse=self.browse,
                             )
                         if "nanodx" not in self.exclude:
                             self.NanoDX = NanoDX_object(
@@ -427,6 +430,7 @@ class BrainMeth:
                                 batch=True,
                                 bamqueue=self.bamfornanodx,
                                 summary=nanodxsummary,
+                                browse=self.browse,
                             )
                         if "forest" not in self.exclude:
                             self.RandomForest = RandomForest_object(
@@ -437,10 +441,11 @@ class BrainMeth:
                                 bamqueue=self.bamforcns,
                                 summary=forestsummary,
                                 showerrors=self.showerrors,
+                                browse=self.browse,
                             )
             if "cnv" not in self.exclude:
                 with ui.tab_panel(copy_numertab).classes("w-full"):
-                    with ui.card().style("width: 100%"):
+                    with ui.card().classes("w-full"):
                         self.CNV = CNVAnalysis(
                             self.threads,
                             self.output,
@@ -448,10 +453,11 @@ class BrainMeth:
                             bamqueue=self.bamforcnv,
                             summary=cnvsummary,
                             target_panel=self.target_panel,
+                            browse=self.browse,
                         )
             if "coverage" not in self.exclude:
                 with ui.tab_panel(coveragetab).classes("w-full"):
-                    with ui.card().style("width: 100%"):
+                    with ui.card().classes("w-full"):
                         self.Target_Coverage = TargetCoverage(
                             self.threads,
                             self.output,
@@ -460,20 +466,22 @@ class BrainMeth:
                             summary=coverage,
                             target_panel=self.target_panel,
                             reference=self.reference,
+                            browse=self.browse,
                         )
             if "mgmt" not in self.exclude:
                 with ui.tab_panel(mgmttab).classes("w-full"):
-                    with ui.card().style("width: 100%"):
+                    with ui.card().classes("w-full"):
                         self.MGMT_panel = MGMT_Object(
                             self.threads,
                             self.output,
                             progress=True,
                             bamqueue=self.bamformgmt,
                             summary=mgmt,
+                            browse=self.browse,
                         )
             if "fusion" not in self.exclude:
                 with ui.tab_panel(fusionstab).classes("w-full"):
-                    with ui.card().style("width: 100%"):
+                    with ui.card().classes("w-full"):
                         self.Fusion_panel = Fusion_object(
                             self.threads,
                             self.output,
@@ -481,100 +489,8 @@ class BrainMeth:
                             bamqueue=self.bamforfusions,
                             summary=fusions,
                             target_panel=self.target_panel,
+                            browse=self.browse,
                         )
-
-        # if self.minknow_connection:
-        # self.minknow_connection.setup_ui()
-        # with ui.card().style("width: 100%"):
-        #    ui.label("MinKNOW Information").style(
-        #        "color: #6E93D6; font-size: 150%; font-weight: 300"
-        #    ).tailwind("drop-shadow", "font-bold")
-
-        """
-        if not (set(['sturgeon','nanodx','forest']).issubset(set(self.exclude))):
-            with ui.card().style("width: 100%"):
-                ui.label("Methylation Classifications").style(
-                    "color: #6E93D6; font-size: 150%; font-weight: 300"
-                ).tailwind("drop-shadow", "font-bold")
-                if "sturgeon" not in self.exclude:
-                    self.Sturgeon = Sturgeon_object(
-                        self.threads,
-                        self.output,
-                        progress=True,
-                        batch=True,
-                        bamqueue=self.bamforsturgeon,
-                        summary=sturgeonsummary,
-                    )
-                if "nanodx" not in self.exclude:
-                    self.NanoDX = NanoDX_object(
-                        self.threads,
-                        self.output,
-                        progress=True,
-                        batch=True,
-                        bamqueue=self.bamfornanodx,
-                        summary=nanodxsummary,
-                    )
-                if "forest" not in self.exclude:
-                    self.RandomForest = RandomForest_object(
-                        self.threads,
-                        self.output,
-                        progress=True,
-                        batch=True,
-                        bamqueue=self.bamforcns,
-                        summary=forestsummary,
-                        showerrors=self.showerrors,
-                    )
-        
-        #    with ui.tab_panel(copy_numer).classes("w-full"):
-        if "cnv" not in self.exclude:
-            with ui.card().style("width: 100%"):
-                self.CNV = CNVAnalysis(
-                    self.threads,
-                    self.output,
-                    progress=True,
-                    bamqueue=self.bamforcnv,
-                    summary=cnvsummary,
-                    target_panel=self.target_panel,
-                )
-            pass
-        
-        #    with ui.tab_panel(coverage).classes("w-full"):
-        if "coverage" not in self.exclude:
-            with ui.card().style("width: 100%"):
-                self.Target_Coverage = TargetCoverage(
-                    self.threads,
-                    self.output,
-                    progress=True,
-                    bamqueue=self.bamfortargetcoverage,
-                    summary=coverage,
-                    target_panel=self.target_panel,
-                    reference=self.reference
-                )
-            pass
-        #    with ui.tab_panel(mgmt).classes("w-full"):
-        if "mgmt" not in self.exclude:
-            with ui.card().style("width: 100%"):
-                self.MGMT_panel = MGMT_Object(
-                    self.threads,
-                    self.output,
-                    progress=True,
-                    bamqueue=self.bamformgmt,
-                    summary=mgmt,
-                )
-            pass
-        #    with ui.tab_panel(fusions).classes("w-full"):
-        if "fusion" not in self.exclude:
-            with ui.card().style("width: 100%"):
-                self.Fusion_panel = Fusion_object(
-                    self.threads,
-                    self.output,
-                    progress=True,
-                    bamqueue=self.bamforfusions,
-                    summary=fusions,
-                    target_panel=self.target_panel,
-                )
-            pass
-        """
 
     def process_bams(self) -> None:
         """

@@ -38,12 +38,23 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
             f"--output_dir {workdirout} -b {bedfile}"
         )
         os.system(runcommand)
-        os.system(
-            f"snpEff hg38 {workdirout}/output.vcf.gz > {workdirout}/snpeff_output.vcf"
+        shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
+        shutil.copy2(
+            f"{workdirout}/indel.vcf.gz", f"{workdirout}/output_indel_done.vcf.gz"
         )
-        os.system(
-            f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf"
-        )
+
+        # os.system(f"ls {workdirout}")
+        command = f"snpEff hg38 {workdirout}/output_done.vcf.gz > {workdirout}/snpeff_output.vcf"
+        os.system(command)
+        # os.system(f"ls {workdirout}")
+        command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf"
+        os.system(command)
+        command = f"snpEff hg38 {workdirout}/output_indel_done.vcf.gz > {workdirout}/snpeff_indel_output.vcf"
+        os.system(command)
+        # os.system(f"ls {workdirout}")
+        command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} {workdirout}/snpeff_indel_output.vcf > {workdirout}/snpsift_indel_output.vcf"
+        os.system(command)
+        # os.system(f"ls {workdirout}")
 
 
 def get_covdfs(bamfile):
@@ -149,8 +160,6 @@ class TargetCoverage(BaseAnalysis):
             self.SNP_timer_run()
         self.target_panel = target_panel
 
-        print(f"My reference file is {self.reference}")
-
         if self.target_panel == "rCNS2":
             self.bedfile = os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)),
@@ -203,30 +212,43 @@ class TargetCoverage(BaseAnalysis):
         if self.summary:
             with self.summary:
                 ui.label("Current coverage estimates: Unknown")
-        with ui.card().style("width: 100%"):
+        with ui.card().classes("w-full"):
             ui.label("Coverage Data").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.grid(columns=2).classes("w-full h-auto"):
                 with ui.column():
-                    with ui.card().style("width: 100%"):
+                    with ui.card().classes("w-full"):
                         self.create_coverage_plot("Chromosome Coverage")
                 with ui.column():
-                    with ui.card().style("width: 100%"):
+                    with ui.card().classes("w-full"):
                         self.create_coverage_plot_targets("Target Coverage")
-        with ui.card().style("width: 100%"):
-            self.create_coverage_time_chart()
-        with ui.card().style("width: 100%"):
+        with ui.card().classes("w-full"):
+            ui.label("Coverage over time").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
+            with ui.row().classes("w-full"):
+                self.create_coverage_time_chart()
+        with ui.card().classes("w-full"):
             ui.label("Coverage over targets").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             self.targ_df = ui.row().classes("w-full").style("height: 900px")
-        with ui.card().style("width: 100%"):
+        with ui.card().classes("w-full"):
             ui.label("Candidate SNPs").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
-            self.SNPview = SNPview()
-            self.SNPview.renderme()
+            with ui.row().classes("w-full"):
+                self.SNPview = SNPview()
+                self.SNPview.renderme()
+            ui.label("Candidate IN/DELs").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
+            with ui.row().classes("w-full"):
+                self.INDELview = SNPview()
+                self.INDELview.renderme()
+        if self.browse:
+            self.show_previous_data(self.output)
 
     def create_coverage_plot(self, title):
         self.echart3 = (
@@ -564,6 +586,10 @@ class TargetCoverage(BaseAnalysis):
         #    self.coverage_time_chart = pd.read_csv(os.path.join(watchfolder, file))
         #    self.update_coverage_time_plot(self.cov_df_main, None)
         # self.running = False
+        if os.path.isfile(f"{watchfolder}/clair3/snpsift_output.vcf"):
+            self.SNPview.parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
+        if os.path.isfile(f"{watchfolder}/clair3/snpsift_indel_output.vcf"):
+            self.INDELview.parse_vcf(f"{watchfolder}/clair3/snpsift_indel_output.vcf")
 
 
 def test_me(
