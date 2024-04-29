@@ -5,7 +5,6 @@ import pandas as pd
 import sys
 
 
-from cnsmeth import theme
 
 
 class SNPview:
@@ -15,11 +14,11 @@ class SNPview:
         self.pathogenictable = None
 
     def renderme(self):
-        ui.label(
-            "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
-        )
-        ui.separator()
-        self.placeholder = ui.card().classes("width: 100%")
+        self.placeholder = ui.card().tight().classes("overflow-x-auto")
+        with self.placeholder:
+            ui.label(
+                "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
+            )
 
     def process_annotations(self, record: dict) -> dict:
         """
@@ -105,8 +104,8 @@ class SNPview:
                     # print(mykey, myvalue)
                     # print(len(myvalue.split("|")))
                     rec_dict[mykey] = myvalue
-            else:
-                rec_dict[mykey] = myvalue
+            # else:
+            #    rec_dict[mykey] = myvalue
 
         return ann_dict, rec_dict
 
@@ -141,48 +140,68 @@ class SNPview:
 
                 # if not self.snptable:
                 self.placeholder.clear()
-                with ui.card().classes("w-full"):
+                with self.placeholder:
                     self.snptable = (
                         ui.table.from_pandas(self.vcf, pagination=25)
                         .props("dense")
-                        .classes("w-full")
                         .style("height: 900px")
                         .style("font-size: 100%; font-weight: 300")
                     )
                     for col in self.snptable.columns:
                         col["sortable"] = True
 
-                def toggle(column: dict, visible: bool) -> None:
-                    column["classes"] = "" if visible else "hidden"
-                    column["headerClasses"] = "" if visible else "hidden"
-                    self.snptable.update()
+                    def toggle(column: dict, visible: bool) -> None:
+                        column["classes"] = "" if visible else "hidden"
+                        column["headerClasses"] = "" if visible else "hidden"
+                        self.snptable.update()
 
-                def set_pathogenic(value: bool) -> None:
-                    self.snptable.filter = "pathogenic" if value else None
+                    def set_pathogenic(value: bool) -> None:
+                        self.snptable.filter = "pathogenic" if value else None
 
-                with self.snptable.add_slot("top-left"):
-                    with ui.button(icon="menu"):
-                        with ui.menu(), ui.column().classes("gap-0 p-2"):
-                            for column in self.snptable.columns:
-                                ui.switch(
-                                    column["label"],
-                                    value=True,
-                                    on_change=lambda e, column=column: toggle(
-                                        column, e.value
-                                    ),
-                                )
+                    with self.snptable.add_slot("top-left"):
 
-                    ui.switch(
-                        "Show potentially pathogenic SNPs only",
-                        value=False,
-                        on_change=lambda e: set_pathogenic(e.value),
-                    )
+                        def toggle_fs() -> None:
+                            self.snptable.toggle_fullscreen()
+                            button.props(
+                                "icon=fullscreen_exit"
+                                if self.snptable.is_fullscreen
+                                else "icon=fullscreen"
+                            )
 
-                with self.snptable.add_slot("top-right"):
-                    with ui.input(placeholder="Search").props("type=search").bind_value(
-                        self.snptable, "filter"
-                    ).add_slot("append"):
-                        ui.icon("search")
+                        button = ui.button(
+                            "Toggle fullscreen", icon="fullscreen", on_click=toggle_fs
+                        ).props("flat")
+
+                        with ui.button(icon="menu"):
+                            with ui.menu(), ui.column().classes("gap-0 p-2"):
+                                for column in self.snptable.columns:
+                                    ui.switch(
+                                        column["label"],
+                                        value=True,
+                                        on_change=lambda e, column=column: toggle(
+                                            column, e.value
+                                        ),
+                                    )
+
+                        ui.switch(
+                            "Show potentially pathogenic SNPs only",
+                            value=False,
+                            on_change=lambda e: set_pathogenic(e.value),
+                        )
+
+                    with self.snptable.add_slot("top-right"):
+                        with ui.input(placeholder="Search").props(
+                            "type=search"
+                        ).bind_value(self.snptable, "filter").add_slot("append"):
+                            ui.icon("search")
+
+                    # with self.snptable.add_slot('top-left'):
+                    #    def toggle() -> None:
+                    #        self.snptable.toggle_fullscreen()
+                    #        button.props('icon=fullscreen_exit' if self.snptable.is_fullscreen else 'icon=fullscreen')
+
+                    #    button = ui.button('Toggle fullscreen', icon='fullscreen', on_click=toggle).props('flat')
+
                 # else:
                 #    self.snptable.update_rows(self.vcf.to_dict(orient='records'))
 
@@ -192,14 +211,13 @@ def index_page() -> None:
     # initial_ip = "127.0.0.1"
     # my_connection = ConnectionDialog(initial_ip)
     my_connection = None
-    with theme.frame("MethClass Interactive", my_connection):
-        # my_connection.connect_to_minknow()
-        ui.label("Hello")
-        mySNPview = SNPview()
-        mySNPview.renderme()
-        mySNPview.parse_vcf("test_data2/clair3/snpsift_output.vcf")
+    # with theme.frame("MethClass Interactive"):
+    # my_connection.connect_to_minknow()
+    mySNPview = SNPview()
+    mySNPview.renderme()
+    mySNPview.parse_vcf("test_intraop0049_b/clair3/snpsift_output.vcf")
 
-        # my_object = MinknowHistograms(my_connection.positions[0])
+    # my_object = MinknowHistograms(my_connection.positions[0])
 
 
 def run_class(port: int, reload: bool):

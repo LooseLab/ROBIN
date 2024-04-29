@@ -207,6 +207,8 @@ class Fusion_object(BaseAnalysis):
                             ui.label("Table not yet available.").style(
                                 "color: #000000; font-size: 125%; font-weight: 300"
                             )
+        if self.browse:
+            self.show_previous_data(self.output)
 
     def fusion_table_all(self):
         uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)

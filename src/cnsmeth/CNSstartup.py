@@ -79,7 +79,7 @@ class Methnice:
             "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
         ):
             with ui.column().classes("w-full"):
-                if self.watchfolder is None:
+                if self.watchfolder is None and not self.browse:
                     self.minknow_connection = MinKNOWFish()
                 else:
                     self.minknow_connection = None
@@ -332,6 +332,7 @@ def package_run(
             showerrors=showerrors,
             browse=browse,
             exclude=exclude,
+            reference=reference,
         )
         # Your logic for browse mode
     else:

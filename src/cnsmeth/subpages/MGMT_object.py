@@ -67,6 +67,8 @@ class MGMT_Object(BaseAnalysis):
         if self.summary:
             with self.summary:
                 ui.label("Current MGMT status: Unknown")
+        if self.browse:
+            self.show_previous_data(self.output)
 
     async def process_bam(self, bamfile, timestamp):
         MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"

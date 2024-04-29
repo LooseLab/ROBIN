@@ -22,6 +22,7 @@ class BaseAnalysis:
         progress=False,
         batch=False,
         start_time=None,
+        browse=False,
         *args,
         **kwargs,
     ):
@@ -33,8 +34,9 @@ class BaseAnalysis:
         self.batch = batch
         self.output = outputfolder
         self.summary = summary
+        self.browse = browse
         self.setup_ui()
-        if progress:
+        if progress and not self.browse:
             self.progress()
         self.bam_count = 0
         self.bam_processed = 0

@@ -71,6 +71,34 @@ class NanoDX_object(BaseAnalysis):
         if self.summary:
             with self.summary:
                 ui.label("NanoDX classification: Unknown")
+        if self.browse:
+            self.nanodx_df_store = pd.read_csv(
+                os.path.join(os.path.join(self.output, "nanodx_scores.csv")),
+                index_col=0,
+            )
+            columns_greater_than_threshold = (
+                self.nanodx_df_store > self.threshold
+            ).any()
+            columns_not_greater_than_threshold = ~columns_greater_than_threshold
+            result = self.nanodx_df_store.columns[
+                columns_not_greater_than_threshold
+            ].tolist()
+            self.update_nanodx_time_chart(self.nanodx_df_store.drop(columns=result))
+            lastrow = self.nanodx_df_store.iloc[-1].drop("number_probes")
+            lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+            lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+            if self.summary:
+                with self.summary:
+                    self.summary.clear()
+                    ui.label(
+                        f"NanoDX classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                    )
+            self.update_nanodx_plot(
+                lastrow_plot.index.to_list(),
+                list(lastrow_plot.values),
+                "All",
+                self.nanodx_df_store.iloc[-1]["number_probes"],
+            )
 
     async def process_bam(self, bamfile):
         tomerge = []
