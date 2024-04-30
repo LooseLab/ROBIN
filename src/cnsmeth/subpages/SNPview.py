@@ -136,6 +136,26 @@ class SNPview:
                 else:
                     self.vcf = self.vcf.drop_duplicates()
 
+                def set_unique_values(series):
+                    return '[{}]'.format(', '.join(map(str, series)))
+
+
+                # Define shared columns
+                shared_columns = ['CHROM', 'POS', 'ID', 'REF','ALT', 'QUAL', 'FILTER','FORMAT','GT', 'Allele']
+
+                # Define columns to be aggregated
+                non_shared_columns = [col for col in self.vcf.columns if col not in shared_columns]
+
+                print(self.vcf)
+
+                # Group by shared columns and aggregate non-shared columns
+                result = self.vcf.groupby(shared_columns)[non_shared_columns].agg(set_unique_values).reset_index()
+
+                # Display the resulting DataFrame
+                print(result)
+
+                self.vcf=result
+
                 # print(self.vcf[self.vcf['CLNSIG].notnull() and self.vcf['CLNSIG'].str.contains("pathogenic")])
 
                 # if not self.snptable:

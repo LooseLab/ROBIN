@@ -75,7 +75,7 @@ class CNVAnalysis(BaseAnalysis):
         with open(
             os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)),
-                "HG01280_control.pkl",
+                "HG01280_control_new.pkl",
             ),
             "rb",
         ) as f:
@@ -521,7 +521,8 @@ class CNVAnalysis(BaseAnalysis):
 
                     result = algo_c.predict(pen=penalty_value)
                     # print(key, result)
-        self.estimate_XY()
+
+        #self.estimate_XY()
         self.update_plots()
 
 

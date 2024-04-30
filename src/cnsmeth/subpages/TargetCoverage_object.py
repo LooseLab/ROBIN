@@ -183,7 +183,7 @@ class TargetCoverage(BaseAnalysis):
         if not self.SNPqueue.empty():
             while not self.SNPqueue.empty():
                 gene_list, bamfile, bedfile = self.SNPqueue.get()
-            print(gene_list)
+
             workdirout = os.path.join(self.output, "clair3")
             if not os.path.exists(workdirout):
                 os.mkdir(workdirout)
