@@ -201,7 +201,11 @@ class TargetCoverage(BaseAnalysis):
                     self.reference,
                 )
             )
-            self.SNPview.parse_vcf(f"{workdirout}/snpsift_output.vcf")
+            if os.path.isfile(f"{workdirout}/snpsift_output.vcf"):
+                self.SNPview.parse_vcf(f"{workdirout}/snpsift_output.vcf")
+            if os.path.isfile(f"{workdirout}/snpsift_indel_output.vcf"):
+                self.INDELview.parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
+
             self.clair3running = False
 
         else:
