@@ -33,14 +33,14 @@ def run_bedtools(bamfile, MGMT_BED, tempbamfile):
     """
     try:
         os.system(f"bedtools intersect -a {bamfile} -b {MGMT_BED} > {tempbamfile}")
-        pysam.index(tempbamfile)
+        pysam.index(tempbamfile, f"{tempbamfile}.bai")
     except Exception as e:
         print(e)
 
 
 def run_modkit(tempmgmtdir, MGMTbamfile, threads):
     pysam.sort("-o", os.path.join(tempmgmtdir, "mgmt.bam"), MGMTbamfile)
-    pysam.index(os.path.join(tempmgmtdir, "mgmt.bam"))
+    pysam.index(os.path.join(tempmgmtdir, "mgmt.bam"), f"{tempmgmtdir}/mgmt.bam.bai")
     cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress  >/dev/null 2>&1 "
     os.system(cmd)
     cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir, 'mgmt.bed')} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
@@ -88,12 +88,17 @@ class MGMT_Object(BaseAnalysis):
                 # self.MGMTbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
                 self.MGMTbamfile = os.path.join(self.output, "mgmt.bam")
                 shutil.copy2(tempbamfile.name, self.MGMTbamfile)
+                os.remove(tempbamfile.name)
+                os.remove(f"{tempbamfile.name}.bai")
             else:
                 tempbamholder = tempfile.NamedTemporaryFile(
                     dir=self.output, suffix=".bam"
                 )
                 pysam.cat("-o", tempbamholder.name, self.MGMTbamfile, tempbamfile.name)
                 shutil.copy2(tempbamholder.name, self.MGMTbamfile)
+                os.remove(tempbamholder.name)
+                os.remove(f"{tempbamholder.name}.bai")
+                os.remove(f"{tempbamfile.name}.bai")
             tempmgmtdir = tempfile.TemporaryDirectory(dir=self.output)
 
             await background_tasks.create(
@@ -129,6 +134,7 @@ class MGMT_Object(BaseAnalysis):
             except Exception:
                 ui.notify("MGMT prediction failed.", type="negative", position="top")
         else:
+            os.remove(f"{tempbamfile.name}.bai")
             ui.notify("No new MGMT sites found.", type="warning", position="bottom")
         await asyncio.sleep(0.1)
         self.running = False

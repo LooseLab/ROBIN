@@ -27,7 +27,7 @@ dependencies = [
   "niceGUI",
   "click",
   "flet",
-  "cnv_from_bam==0.4.4b2",
+  "cnv_from_bam==0.4.4",
   "watchdog",
   "pysam",
   "pandas",
