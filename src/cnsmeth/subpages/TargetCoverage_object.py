@@ -62,7 +62,7 @@ def get_covdfs(bamfile):
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
-        pysam.index(f"{bamfile}")
+        pysam.index(f"{bamfile}", f"{bamfile}.bai")
         newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{bamfile}")), sep="\t")
         newcovdf.drop(
             columns=["coverage", "meanbaseq", "meanmapq"],
@@ -81,9 +81,14 @@ def get_covdfs(bamfile):
             names=["chrom", "startpos", "endpos", "name", "bases"],
             sep="\t",
         )
-        return newcovdf, bedcovdf
     except Exception as e:
         print(e)
+        return None
+    try:
+        os.remove(f"{bamfile}.bai")
+    except FileNotFoundError:
+        pass
+    return newcovdf, bedcovdf
 
 
 def subset_bam(bamfile, targets, output):
@@ -92,7 +97,7 @@ def subset_bam(bamfile, targets, output):
 
 def sort_bam(bamfile, output, threads):
     pysam.sort(f"-@{threads}", "-o", output, bamfile)
-    pysam.index(f"{output}")
+    pysam.index(f"{output}", f"{output}.bai")
 
 
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
@@ -478,6 +483,7 @@ class TargetCoverage(BaseAnalysis):
             if not self.targetbamfile:
                 self.targetbamfile = os.path.join(self.output, "target.bam")
                 shutil.copy2(tempbamfile.name, self.targetbamfile)
+                os.remove(f"{tempbamfile.name}.bai")
             else:
                 tempbamholder = tempfile.NamedTemporaryFile(
                     dir=self.output, suffix=".bam"
@@ -486,6 +492,12 @@ class TargetCoverage(BaseAnalysis):
                     "-o", tempbamholder.name, self.targetbamfile, tempbamfile.name
                 )
                 shutil.copy2(tempbamholder.name, self.targetbamfile)
+                try:
+                    os.remove(f"{tempbamholder.name}.bai")
+                except FileNotFoundError:
+                    pass
+        else:
+            os.remove(f"{tempbamfile.name}.bai")
 
         if self.cov_df_main.empty:
             self.cov_df_main = newcovdf

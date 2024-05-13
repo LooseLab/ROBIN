@@ -135,6 +135,11 @@ class NanoDX_object(BaseAnalysis):
                 )
             )
 
+            try:
+                os.remove(f"{sortfile}.csi")
+            except FileNotFoundError:
+                pass
+
             ui.notify("NanoDX: Merging bed files", type="info", position="top-right")
 
             if self.not_first_run:
@@ -181,13 +186,18 @@ class NanoDX_object(BaseAnalysis):
                         "Nnocall": "int16",
                     },
                     header=None,
-                    delim_whitespace=True,
+                    sep='\s+',
+                    #delim_whitespace=True,
                 )
 
                 self.merged_bed_file = merge_bedmethyl(bed_a, self.merged_bed_file)
                 save_bedmethyl(self.merged_bed_file, self.nanodxfile.name)
             else:
                 shutil.copy(f"{temp.name}", self.nanodxfile.name)
+                try:
+                    os.remove(f"{temp.name}")
+                except FileNotFoundError:
+                    pass
                 self.merged_bed_file = pd.read_table(
                     self.nanodxfile.name,
                     names=[
@@ -231,7 +241,8 @@ class NanoDX_object(BaseAnalysis):
                         "Nnocall": "int16",
                     },
                     header=None,
-                    delim_whitespace=True,
+                    sep='\s+',
+                    #delim_whitespace=True,
                 )
 
                 self.not_first_run = True
@@ -309,22 +320,7 @@ class NanoDX_object(BaseAnalysis):
         self.running = False
 
     def create_nanodx_chart(self, title):
-        self.nanodxchart = (
-            ui.echart(
-                {
-                    "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "value", "max": 1},
-                    "yAxis": {"type": "category", "data": [], "inverse": True},
-                    #'legend': {},
-                    "series": [],
-                }
-            )
-            .style("color: #6E93D6; font-size: 150%; font-weight: 300; height: 350px")
-            .classes("border-double")
-        )
+        self.nanodxchart = self.create_chart(title)
 
     def update_nanodx_plot(self, x, y, count, n_features):
         """
@@ -345,21 +341,7 @@ class NanoDX_object(BaseAnalysis):
         self.nanodxchart.update()
 
     def create_nanodx_time_chart(self):
-        self.nanodx_time_chart = (
-            ui.echart(
-                {
-                    "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": "NanoDX Over Time"},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "time"},
-                    "yAxis": {"type": "value", "data": [], "inverse": False},
-                    "series": [],
-                }
-            )
-            .style("height: 350px")
-            .classes("border-double")
-        )
+        self.nanodx_time_chart = self.create_time_chart()
 
     def update_nanodx_time_chart(self, datadf):
         """

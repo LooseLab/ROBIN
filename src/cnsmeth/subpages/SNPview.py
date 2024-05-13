@@ -3,7 +3,7 @@ from __future__ import annotations
 from nicegui import ui
 import pandas as pd
 import sys
-
+import numpy as np
 
 
 
@@ -137,8 +137,10 @@ class SNPview:
                     self.vcf = self.vcf.drop_duplicates()
 
                 def set_unique_values(series):
-                    return '[{}]'.format(', '.join(map(str, series)))
-
+                    set_series=set(series)
+                    if len(set_series) > 0:
+                        return '{}'.format(', '.join(map(str, set_series)))
+                    return None
 
                 # Define shared columns
                 shared_columns = ['CHROM', 'POS', 'ID', 'REF','ALT', 'QUAL', 'FILTER','FORMAT','GT', 'Allele']
@@ -146,19 +148,11 @@ class SNPview:
                 # Define columns to be aggregated
                 non_shared_columns = [col for col in self.vcf.columns if col not in shared_columns]
 
-                print(self.vcf)
-
-                # Group by shared columns and aggregate non-shared columns
+                self.vcf = self.vcf.replace({np.nan: None})
                 result = self.vcf.groupby(shared_columns)[non_shared_columns].agg(set_unique_values).reset_index()
-
-                # Display the resulting DataFrame
-                print(result)
 
                 self.vcf=result
 
-                # print(self.vcf[self.vcf['CLNSIG].notnull() and self.vcf['CLNSIG'].str.contains("pathogenic")])
-
-                # if not self.snptable:
                 self.placeholder.clear()
                 with self.placeholder:
                     self.snptable = (

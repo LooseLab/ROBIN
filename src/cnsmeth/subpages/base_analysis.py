@@ -228,6 +228,49 @@ class BaseAnalysis:
                     row["full_path"], playback_start_time + row["file_produced"]
                 )
 
+    def create_time_chart(self):
+        """
+        This function creates a time chart for any module which needs it.
+        :return: an echarts object
+        """
+        return (
+            ui.echart(
+                {
+                    "animation": False,
+                    "grid": {"containLabel": True},
+                    "title": {"text": "NanoDX Over Time"},
+                    "toolbox": {"show": True, "feature": {"dataZoom": {"yAxisIndex": "none"},"restore": {},"saveAsImage": {}}},
+                    "xAxis": {"type": "time"},
+                    "yAxis": {"type": "value", "data": [], "inverse": False},
+                    "series": [],
+                }
+            )
+            .style("height: 350px")
+            .classes("border-double")
+        )
+
+    def create_chart(self, title):
+        """
+        This function creates a time chart for any module which needs it.
+        :return: an echarts object
+        """
+        return (
+            ui.echart(
+                {
+                    "animation": False,
+                    "grid": {"containLabel": True},
+                    "title": {"text": title},
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
+                    "xAxis": {"type": "value", "max": 1},
+                    "yAxis": {"type": "category", "data": [], "inverse": True},
+                    #'legend': {},
+                    "series": [],
+                }
+            )
+            .style("color: #6E93D6; font-size: 150%; font-weight: 300; height: 350px")
+            .classes("border-double")
+        )
+
     def process_bam(self, bamfile, timestamp):
         """
         Process a bam file.
