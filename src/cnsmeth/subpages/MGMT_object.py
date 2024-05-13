@@ -88,7 +88,7 @@ class MGMT_Object(BaseAnalysis):
                 # self.MGMTbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
                 self.MGMTbamfile = os.path.join(self.output, "mgmt.bam")
                 shutil.copy2(tempbamfile.name, self.MGMTbamfile)
-                os.remove(tempbamfile.name)
+                #os.remove(tempbamfile.name)
                 os.remove(f"{tempbamfile.name}.bai")
             else:
                 tempbamholder = tempfile.NamedTemporaryFile(
@@ -96,9 +96,12 @@ class MGMT_Object(BaseAnalysis):
                 )
                 pysam.cat("-o", tempbamholder.name, self.MGMTbamfile, tempbamfile.name)
                 shutil.copy2(tempbamholder.name, self.MGMTbamfile)
-                os.remove(tempbamholder.name)
-                os.remove(f"{tempbamholder.name}.bai")
-                os.remove(f"{tempbamfile.name}.bai")
+                #os.remove(tempbamholder.name)
+                try:
+                    os.remove(f"{tempbamholder.name}.bai")
+                    os.remove(f"{tempbamfile.name}.bai")
+                except FileNotFoundError:
+                    pass
             tempmgmtdir = tempfile.TemporaryDirectory(dir=self.output)
 
             await background_tasks.create(

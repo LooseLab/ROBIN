@@ -235,22 +235,7 @@ class Sturgeon_object(BaseAnalysis):
         self.running = False
 
     def create_sturgeon_chart(self, title):
-        self.echart2 = (
-            ui.echart(
-                {
-                    "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "value", "max": 1},
-                    "yAxis": {"type": "category", "data": [], "inverse": True},
-                    #'legend': {},
-                    "series": [],
-                }
-            )
-            .style("height: 320px")
-            .classes("border-double")
-        )
+        self.echart2 = self.create_chart(title)
 
     def update_sturgeon_plot(self, x, y, count, st_num_probes):
         """
@@ -270,21 +255,7 @@ class Sturgeon_object(BaseAnalysis):
         self.echart2.update()
 
     def create_sturgeon_time_chart(self):
-        self.sturgeon_time_chart = (
-            ui.echart(
-                {
-                    "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": "Sturgeon Over Time"},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "time"},
-                    "yAxis": {"type": "value", "data": [], "inverse": False},
-                    "series": [],
-                }
-            )
-            .style("height: 320px")
-            .classes("border-double")
-        )
+        self.sturgeon_time_chart = self.create_time_chart()
 
     def update_sturgeon_time_chart(self, datadf):
         """

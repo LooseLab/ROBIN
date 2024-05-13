@@ -167,6 +167,11 @@ class RandomForest_object(BaseAnalysis):
                 )
             )
 
+            try:
+                os.remove(f"{sortbam.name}.csi")
+            except FileNotFoundError:
+                pass
+
             if not self.first_run:
                 bed_a = pd.read_table(
                     f"{tempbed.name}",
@@ -333,21 +338,7 @@ class RandomForest_object(BaseAnalysis):
         self.running = False
 
     def create_rcns2_chart(self, title):
-        self.echart = (
-            ui.echart(
-                {
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "value", "max": 1},
-                    "yAxis": {"type": "category", "data": [], "inverse": True},
-                    # 'legend': {},
-                    "series": [],
-                }
-            )
-            .style("height: 350px")
-            .classes("border-double")
-        )
+        self.echart  = self.create_chart(title)
 
     def update_rcns2_plot(self, x, y, count):
         """
@@ -365,25 +356,7 @@ class RandomForest_object(BaseAnalysis):
         self.echart.update()
 
     def create_rcns2_time_chart(self):
-        self.rcns2_time_chart = (
-            ui.echart(
-                {
-                    "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": "Random Forest Over Time"},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "time"},
-                    "yAxis": {"type": "value", "data": [], "inverse": False},
-                    #'tooltip': {
-                    #    'order': 'valueDesc',
-                    #    'trigger': 'axis'
-                    # },
-                    "series": [],
-                }
-            )
-            .style("height: 350px")
-            .classes("border-double")
-        )
+        self.rcns2_time_chart = self.create_time_chart()
 
     def update_rcns2_time_chart(self, datadf):
         """
