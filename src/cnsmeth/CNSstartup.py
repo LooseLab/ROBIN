@@ -119,7 +119,7 @@ class Methnice:
                                         ui.label("MinKNOW Data").classes("text-h4")
 
                 else:
-                    self.analysis_tab_pane = ui.row()
+                    self.analysis_tab_pane = ui.row().classes("w-full")
 
             if self.minknow_connection:
                 with self.minknow_tab_pane:

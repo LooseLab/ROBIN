@@ -235,7 +235,7 @@ class BrainMeth:
             return 0
 
     def information_panel(self):
-        self.frontpage = ui.card().style("width: 100%")
+        self.frontpage = ui.card().classes("w-screen")
         with self.frontpage:
             ui.label("CNS Tumour Methylation Classification").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
@@ -245,106 +245,110 @@ class BrainMeth:
             ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
                 "drop-shadow", "font-bold"
             )
-            with ui.row():
-                ui.label().bind_text_from(
+
+            with ui.expansion(icon='work').bind_text_from(
                     self, "watchfolder", backward=lambda n: f"Monitoring the path: {n}"
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label(f"Outputting to:{self.output}").style(
-                    "color: #000000; font-size: 100%; font-weight: 300"
-                )
-                ui.label().bind_text_from(
-                    self.bam_count,
-                    "counter",
-                    backward=lambda n: f"BAM files seen: {n:,}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n:,}"
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self.bam_failed, "counter", backward=lambda n: f"BAM fail: {n:,}"
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-            with ui.row():
-                ui.label().bind_text_from(
-                    self.mapped_count,
-                    "counter",
-                    backward=lambda n: f"Mapped Read Count: {n:,}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self.unmapped_count,
-                    "counter",
-                    backward=lambda n: f"Unmapped Read Count: {n:,}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self.pass_mapped_count,
-                    "counter",
-                    backward=lambda n: f"Pass Mapped Read Count: {n:,}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self.fail_mapped_count,
-                    "counter",
-                    backward=lambda n: f"Fail Mapped Read Count: {n:,}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-            with ui.row():
-                ui.label().bind_text_from(
-                    self.bases_count,
-                    "counter",
-                    backward=lambda n: f"Total Mapped Bases: {n:,}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self.pass_bases_count,
-                    "counter",
-                    backward=lambda n: f"Total Mapped Pass Bases: {n:,}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self.fail_bases_count,
-                    "counter",
-                    backward=lambda n: f"Total Mapped Fail Bases: {n:,}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-            with ui.row():
-                if "forest" not in self.exclude:
+                ).classes('w-full'):
+                with ui.row():
+                    ui.label().bind_text_from(
+                        self, "watchfolder", backward=lambda n: f"Monitoring the path: {n}"
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label(f"Outputting to:{self.output}").style(
+                        "color: #000000; font-size: 100%; font-weight: 300"
+                    )
+                    ui.label().bind_text_from(
+                        self.bam_count,
+                        "counter",
+                        backward=lambda n: f"BAM files seen: {n:,}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label().bind_text_from(
+                        self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n:,}"
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label().bind_text_from(
+                        self.bam_failed, "counter", backward=lambda n: f"BAM fail: {n:,}"
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                with ui.row():
+                    ui.label().bind_text_from(
+                        self.mapped_count,
+                        "counter",
+                        backward=lambda n: f"Mapped Read Count: {n:,}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label().bind_text_from(
+                        self.unmapped_count,
+                        "counter",
+                        backward=lambda n: f"Unmapped Read Count: {n:,}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label().bind_text_from(
+                        self.pass_mapped_count,
+                        "counter",
+                        backward=lambda n: f"Pass Mapped Read Count: {n:,}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label().bind_text_from(
+                        self.fail_mapped_count,
+                        "counter",
+                        backward=lambda n: f"Fail Mapped Read Count: {n:,}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                with ui.row():
+                    ui.label().bind_text_from(
+                        self.bases_count,
+                        "counter",
+                        backward=lambda n: f"Total Mapped Bases: {n:,}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label().bind_text_from(
+                        self.pass_bases_count,
+                        "counter",
+                        backward=lambda n: f"Total Mapped Pass Bases: {n:,}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label().bind_text_from(
+                        self.fail_bases_count,
+                        "counter",
+                        backward=lambda n: f"Total Mapped Fail Bases: {n:,}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                with ui.row():
+                    if "forest" not in self.exclude:
+                        ui.label().bind_text_from(
+                            self,
+                            "bamforcns",
+                            backward=lambda n: f"BAM files for CNS: {n.qsize()}",
+                        ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    if "sturgeon" not in self.exclude:
+                        ui.label().bind_text_from(
+                            self,
+                            "bamforsturgeon",
+                            backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
+                        ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    if "nanodx" not in self.exclude:
+                        ui.label().bind_text_from(
+                            self,
+                            "bamfornanodx",
+                            backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
+                        ).style("color: #000000; font-size: 100%; font-weight: 300")
+                with ui.row():
                     ui.label().bind_text_from(
                         self,
-                        "bamforcns",
-                        backward=lambda n: f"BAM files for CNS: {n.qsize()}",
+                        "devices",
+                        backward=lambda n: f"Devices: {str(n)}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
-                if "sturgeon" not in self.exclude:
                     ui.label().bind_text_from(
                         self,
-                        "bamforsturgeon",
-                        backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
+                        "basecall_models",
+                        backward=lambda n: f"Basecall Models: {str(n)}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
-                if "nanodx" not in self.exclude:
                     ui.label().bind_text_from(
                         self,
-                        "bamfornanodx",
-                        backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
+                        "flowcell_ids",
+                        backward=lambda n: f"Flowcell IDs: {str(n)}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
-            with ui.row():
-                ui.label().bind_text_from(
-                    self,
-                    "devices",
-                    backward=lambda n: f"Devices: {str(n)}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self,
-                    "basecall_models",
-                    backward=lambda n: f"Basecall Models: {str(n)}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self,
-                    "flowcell_ids",
-                    backward=lambda n: f"Flowcell IDs: {str(n)}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self,
-                    "min_start_time",
-                    backward=lambda n: f"Run Start Time: {n}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
-                ui.label().bind_text_from(
-                    self,
-                    "sample_ids",
-                    backward=lambda n: f"Sample ID: {str(n)}",
-                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label().bind_text_from(
+                        self,
+                        "min_start_time",
+                        backward=lambda n: f"Run Start Time: {n}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
+                    ui.label().bind_text_from(
+                        self,
+                        "sample_ids",
+                        backward=lambda n: f"Sample ID: {str(n)}",
+                    ).style("color: #000000; font-size: 100%; font-weight: 300")
 
             with ui.row():
                 ui.label("Results Summary").style(
