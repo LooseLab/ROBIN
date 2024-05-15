@@ -228,7 +228,7 @@ class BaseAnalysis:
                     row["full_path"], playback_start_time + row["file_produced"]
                 )
 
-    def create_time_chart(self):
+    def create_time_chart(self, title):
         """
         This function creates a time chart for any module which needs it.
         :return: an echarts object
@@ -238,7 +238,7 @@ class BaseAnalysis:
                 {
                     "animation": False,
                     "grid": {"containLabel": True},
-                    "title": {"text": "NanoDX Over Time"},
+                    "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"dataZoom": {"yAxisIndex": "none"},"restore": {},"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},

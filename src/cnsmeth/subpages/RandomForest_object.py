@@ -102,7 +102,7 @@ class RandomForest_object(BaseAnalysis):
                 with ui.card().classes("col-span-3"):
                     self.create_rcns2_chart("Random Forest")
                 with ui.card().classes("col-span-5"):
-                    self.create_rcns2_time_chart()
+                    self.create_rcns2_time_chart("Random Forest Time Series")
         if self.summary:
             with self.summary:
                 ui.label("Forest classification: Unknown")
@@ -338,7 +338,7 @@ class RandomForest_object(BaseAnalysis):
         self.running = False
 
     def create_rcns2_chart(self, title):
-        self.echart  = self.create_chart(title)
+        self.echart = self.create_chart(title)
 
     def update_rcns2_plot(self, x, y, count):
         """
@@ -355,8 +355,8 @@ class RandomForest_object(BaseAnalysis):
         ]
         self.echart.update()
 
-    def create_rcns2_time_chart(self):
-        self.rcns2_time_chart = self.create_time_chart()
+    def create_rcns2_time_chart(self, title):
+        self.rcns2_time_chart = self.create_time_chart(title)
 
     def update_rcns2_time_chart(self, datadf):
         """
