@@ -89,7 +89,7 @@ class Sturgeon_object(BaseAnalysis):
                 with ui.card().classes("col-span-3"):
                     self.create_sturgeon_chart("Sturgeon")
                 with ui.card().classes("col-span-5"):
-                    self.create_sturgeon_time_chart()
+                    self.create_sturgeon_time_chart("Sturgeon Time Series")
         if self.summary:
             with self.summary:
                 ui.label("Sturgeon classification: Unknown")
@@ -254,8 +254,8 @@ class Sturgeon_object(BaseAnalysis):
         ]
         self.echart2.update()
 
-    def create_sturgeon_time_chart(self):
-        self.sturgeon_time_chart = self.create_time_chart()
+    def create_sturgeon_time_chart(self,title):
+        self.sturgeon_time_chart = self.create_time_chart(title)
 
     def update_sturgeon_time_chart(self, datadf):
         """

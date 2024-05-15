@@ -67,7 +67,7 @@ class NanoDX_object(BaseAnalysis):
                 with ui.card().classes("col-span-3"):
                     self.create_nanodx_chart("NanoDX")
                 with ui.card().classes("col-span-5"):
-                    self.create_nanodx_time_chart()
+                    self.create_nanodx_time_chart("NanoDX Time Series")
         if self.summary:
             with self.summary:
                 ui.label("NanoDX classification: Unknown")
@@ -340,8 +340,8 @@ class NanoDX_object(BaseAnalysis):
         ]
         self.nanodxchart.update()
 
-    def create_nanodx_time_chart(self):
-        self.nanodx_time_chart = self.create_time_chart()
+    def create_nanodx_time_chart(self, title):
+        self.nanodx_time_chart = self.create_time_chart(title)
 
     def update_nanodx_time_chart(self, datadf):
         """
