@@ -38,7 +38,7 @@ def save_bedmethyl(result_df, output_file):
 def collapse_bedmethyl(concat_df):
     # ToDo: Don't hack strand
     # Hack Strand
-    concat_df["strand"] = concat_df["strand"].replace({"+": ".", "-": "."})
+    concat_df["strand"] = concat_df["strand"].astype(str).replace({"+": ".", "-": "."})
     grouped = concat_df.groupby(
         [
             "chrom",
@@ -89,9 +89,7 @@ def collapse_bedmethyl(concat_df):
         "Ndiff",
         "Nnocall",
     ]
-    merged_df = result_df[column_order]
-    # merged_df[['start_pos2', 'end_pos2','score','Nvalid','Nmod', 'Ncanon', 'Nother', 'Ndel', 'Nfail', 'Ndiff', 'Nnocall']] = merged_df[['start_pos2', 'end_pos2','score','Nvalid','Nmod', 'Ncanon', 'Nother', 'Ndel', 'Nfail', 'Ndiff', 'Nnocall']].astype(int)
-    merged_df.sort_values(by=["chrom", "start_pos"], inplace=True)
+    merged_df = result_df[column_order].sort_values(by=["chrom", "start_pos"])
     return merged_df
 
 
