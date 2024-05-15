@@ -216,7 +216,7 @@ class RandomForest_object(BaseAnalysis):
                         "Nnocall": "int16",
                     },
                     header=None,
-                    delim_whitespace=True,
+                    sep='\s+',
                 )
 
                 self.merged_bed_file = merge_bedmethyl(bed_a, self.merged_bed_file)
@@ -266,7 +266,7 @@ class RandomForest_object(BaseAnalysis):
                         "Nnocall": "int16",
                     },
                     header=None,
-                    delim_whitespace=True,
+                    sep='\s+',
                 )
                 self.first_run = False
 
@@ -286,7 +286,7 @@ class RandomForest_object(BaseAnalysis):
             if os.path.isfile(f"{tempDir.name}/live_{self.batch}_votes.tsv"):
                 scores = pd.read_table(
                     f"{tempDir.name}/live_{self.batch}_votes.tsv",
-                    delim_whitespace=True,
+                    sep='\s+',
                 )
                 scores_to_save = scores.drop(columns=["Freq"]).T
 
