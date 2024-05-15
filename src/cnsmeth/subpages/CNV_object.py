@@ -522,7 +522,7 @@ class CNVAnalysis(BaseAnalysis):
                     result = algo_c.predict(pen=penalty_value)
                     # print(key, result)
 
-        #self.estimate_XY()
+        # self.estimate_XY()
         self.update_plots()
 
 

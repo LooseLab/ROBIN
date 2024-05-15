@@ -239,7 +239,14 @@ class BaseAnalysis:
                     "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"dataZoom": {"yAxisIndex": "none"},"restore": {},"saveAsImage": {}}},
+                    "toolbox": {
+                        "show": True,
+                        "feature": {
+                            "dataZoom": {"yAxisIndex": "none"},
+                            "restore": {},
+                            "saveAsImage": {},
+                        },
+                    },
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
                     "series": [],
