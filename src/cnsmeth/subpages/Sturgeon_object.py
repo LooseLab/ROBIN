@@ -254,7 +254,7 @@ class Sturgeon_object(BaseAnalysis):
         ]
         self.echart2.update()
 
-    def create_sturgeon_time_chart(self,title):
+    def create_sturgeon_time_chart(self, title):
         self.sturgeon_time_chart = self.create_time_chart(title)
 
     def update_sturgeon_time_chart(self, datadf):

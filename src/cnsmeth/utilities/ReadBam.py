@@ -3,6 +3,7 @@
 import pysam
 import os
 
+
 class ReadBam:
     """
     :param bam_file: A bam format alignment file.
@@ -62,7 +63,9 @@ class ReadBam:
     def read_bam(self):
         if self.bam_file:
             if not os.path.isfile(f"{self.bam_file}.bai"):
-                print(f"Index file for {self.bam_file} does not exist. Generating index file.")
+                print(
+                    f"Index file for {self.bam_file} does not exist. Generating index file."
+                )
                 pysam.index(self.bam_file)
             self.sam_file = pysam.AlignmentFile(self.bam_file, "rb", check_sq=False)
 

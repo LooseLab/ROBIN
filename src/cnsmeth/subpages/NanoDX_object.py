@@ -186,8 +186,8 @@ class NanoDX_object(BaseAnalysis):
                         "Nnocall": "int16",
                     },
                     header=None,
-                    sep='\s+',
-                    #delim_whitespace=True,
+                    sep="\s+",
+                    # delim_whitespace=True,
                 )
 
                 self.merged_bed_file = merge_bedmethyl(bed_a, self.merged_bed_file)
@@ -241,8 +241,8 @@ class NanoDX_object(BaseAnalysis):
                         "Nnocall": "int16",
                     },
                     header=None,
-                    sep='\s+',
-                    #delim_whitespace=True,
+                    sep="\s+",
+                    # delim_whitespace=True,
                 )
 
                 self.not_first_run = True
