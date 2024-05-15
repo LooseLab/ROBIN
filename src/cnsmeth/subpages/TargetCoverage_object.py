@@ -62,7 +62,6 @@ def get_covdfs(bamfile):
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
-        pysam.index(f"{bamfile}", f"{bamfile}.bai")
         newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{bamfile}")), sep="\t")
         newcovdf.drop(
             columns=["coverage", "meanbaseq", "meanmapq"],
@@ -84,10 +83,6 @@ def get_covdfs(bamfile):
     except Exception as e:
         print(e)
         return None
-    try:
-        os.remove(f"{bamfile}.bai")
-    except FileNotFoundError:
-        pass
     return newcovdf, bedcovdf
 
 
