@@ -194,10 +194,7 @@ class NanoDX_object(BaseAnalysis):
                 save_bedmethyl(self.merged_bed_file, self.nanodxfile.name)
             else:
                 shutil.copy(f"{temp.name}", self.nanodxfile.name)
-                try:
-                    os.remove(f"{temp.name}")
-                except FileNotFoundError:
-                    pass
+
                 self.merged_bed_file = pd.read_table(
                     self.nanodxfile.name,
                     names=[
