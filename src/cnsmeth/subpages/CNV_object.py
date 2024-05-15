@@ -129,6 +129,13 @@ class CNVAnalysis(BaseAnalysis):
             copy_numbers=self.update_cnv_dict,
             log_level=int(logging.ERROR),
         )
+        def pad_arrays(arr1, arr2, pad_value=0):
+            len_diff = abs(len(arr1) - len(arr2))
+            if len(arr1) < len(arr2):
+                arr1 = np.pad(arr1, (0, len_diff), mode='constant', constant_values=pad_value)
+            elif len(arr1) > len(arr2):
+                arr2 = np.pad(arr2, (0, len_diff), mode='constant', constant_values=pad_value)
+            return arr1, arr2
 
         self.cnv_dict["bin_width"] = self.result.bin_width
         self.cnv_dict["variance"] = self.result.variance
@@ -146,6 +153,7 @@ class CNVAnalysis(BaseAnalysis):
                 # print(key, np.mean(self.result.cnv[key]))#[i for i in self.result.cnv[key] if i !=0]))
                 moving_avg_data1 = moving_average(self.result.cnv[key])
                 moving_avg_data2 = moving_average(self.result2.cnv[key])
+                moving_avg_data1, moving_avg_data2 = pad_arrays(moving_avg_data1, moving_avg_data2)
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
                 # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
                 if len(self.result3.cnv[key]) > 20:
