@@ -141,99 +141,101 @@ class SNPview:
                         return "{}".format(", ".join(map(str, set_series)))
                     return None
 
-                # Define shared columns
-                shared_columns = [
-                    "CHROM",
-                    "POS",
-                    "ID",
-                    "REF",
-                    "ALT",
-                    "QUAL",
-                    "FILTER",
-                    "FORMAT",
-                    "GT",
-                    "Allele",
-                ]
+                if len(self.vcf) > 0:
+                    print (self.vcf)
+                    # Define shared columns
+                    shared_columns = [
+                        "CHROM",
+                        "POS",
+                        "ID",
+                        "REF",
+                        "ALT",
+                        "QUAL",
+                        "FILTER",
+                        "FORMAT",
+                        "GT",
+                        "Allele",
+                    ]
 
-                # Define columns to be aggregated
-                non_shared_columns = [
-                    col for col in self.vcf.columns if col not in shared_columns
-                ]
+                    # Define columns to be aggregated
+                    non_shared_columns = [
+                        col for col in self.vcf.columns if col not in shared_columns
+                    ]
 
-                self.vcf = self.vcf.replace({np.nan: None})
-                result = (
-                    self.vcf.groupby(shared_columns)[non_shared_columns]
-                    .agg(set_unique_values)
-                    .reset_index()
-                )
-
-                self.vcf = result
-
-                self.placeholder.clear()
-                with self.placeholder:
-                    self.snptable = (
-                        ui.table.from_pandas(self.vcf, pagination=25)
-                        .props("dense")
-                        .style("height: 900px")
-                        .style("font-size: 100%; font-weight: 300")
+                    self.vcf = self.vcf.replace({np.nan: None})
+                    result = (
+                        self.vcf.groupby(shared_columns)[non_shared_columns]
+                        .agg(set_unique_values)
+                        .reset_index()
                     )
-                    for col in self.snptable.columns:
-                        col["sortable"] = True
 
-                    def toggle(column: dict, visible: bool) -> None:
-                        column["classes"] = "" if visible else "hidden"
-                        column["headerClasses"] = "" if visible else "hidden"
-                        self.snptable.update()
+                    self.vcf = result
 
-                    def set_pathogenic(value: bool) -> None:
-                        self.snptable.filter = "pathogenic" if value else None
+                    self.placeholder.clear()
+                    with self.placeholder:
+                        self.snptable = (
+                            ui.table.from_pandas(self.vcf, pagination=25)
+                            .props("dense")
+                            .style("height: 900px")
+                            .style("font-size: 100%; font-weight: 300")
+                        )
+                        for col in self.snptable.columns:
+                            col["sortable"] = True
 
-                    with self.snptable.add_slot("top-left"):
+                        def toggle(column: dict, visible: bool) -> None:
+                            column["classes"] = "" if visible else "hidden"
+                            column["headerClasses"] = "" if visible else "hidden"
+                            self.snptable.update()
 
-                        def toggle_fs() -> None:
-                            self.snptable.toggle_fullscreen()
-                            button.props(
-                                "icon=fullscreen_exit"
-                                if self.snptable.is_fullscreen
-                                else "icon=fullscreen"
+                        def set_pathogenic(value: bool) -> None:
+                            self.snptable.filter = "pathogenic" if value else None
+
+                        with self.snptable.add_slot("top-left"):
+
+                            def toggle_fs() -> None:
+                                self.snptable.toggle_fullscreen()
+                                button.props(
+                                    "icon=fullscreen_exit"
+                                    if self.snptable.is_fullscreen
+                                    else "icon=fullscreen"
+                                )
+
+                            button = ui.button(
+                                "Toggle fullscreen", icon="fullscreen", on_click=toggle_fs
+                            ).props("flat")
+
+                            with ui.button(icon="menu"):
+                                with ui.menu(), ui.column().classes("gap-0 p-2"):
+                                    for column in self.snptable.columns:
+                                        ui.switch(
+                                            column["label"],
+                                            value=True,
+                                            on_change=lambda e, column=column: toggle(
+                                                column, e.value
+                                            ),
+                                        )
+
+                            ui.switch(
+                                "Show potentially pathogenic SNPs only",
+                                value=False,
+                                on_change=lambda e: set_pathogenic(e.value),
                             )
 
-                        button = ui.button(
-                            "Toggle fullscreen", icon="fullscreen", on_click=toggle_fs
-                        ).props("flat")
+                        with self.snptable.add_slot("top-right"):
+                            with ui.input(placeholder="Search").props(
+                                "type=search"
+                            ).bind_value(self.snptable, "filter").add_slot("append"):
+                                ui.icon("search")
 
-                        with ui.button(icon="menu"):
-                            with ui.menu(), ui.column().classes("gap-0 p-2"):
-                                for column in self.snptable.columns:
-                                    ui.switch(
-                                        column["label"],
-                                        value=True,
-                                        on_change=lambda e, column=column: toggle(
-                                            column, e.value
-                                        ),
-                                    )
+                        # with self.snptable.add_slot('top-left'):
+                        #    def toggle() -> None:
+                        #        self.snptable.toggle_fullscreen()
+                        #        button.props('icon=fullscreen_exit' if self.snptable.is_fullscreen else 'icon=fullscreen')
 
-                        ui.switch(
-                            "Show potentially pathogenic SNPs only",
-                            value=False,
-                            on_change=lambda e: set_pathogenic(e.value),
-                        )
+                        #    button = ui.button('Toggle fullscreen', icon='fullscreen', on_click=toggle).props('flat')
 
-                    with self.snptable.add_slot("top-right"):
-                        with ui.input(placeholder="Search").props(
-                            "type=search"
-                        ).bind_value(self.snptable, "filter").add_slot("append"):
-                            ui.icon("search")
-
-                    # with self.snptable.add_slot('top-left'):
-                    #    def toggle() -> None:
-                    #        self.snptable.toggle_fullscreen()
-                    #        button.props('icon=fullscreen_exit' if self.snptable.is_fullscreen else 'icon=fullscreen')
-
-                    #    button = ui.button('Toggle fullscreen', icon='fullscreen', on_click=toggle).props('flat')
-
-                # else:
-                #    self.snptable.update_rows(self.vcf.to_dict(orient='records'))
+                    # else:
+                    #    self.snptable.update_rows(self.vcf.to_dict(orient='records'))
 
 
 def index_page() -> None:
