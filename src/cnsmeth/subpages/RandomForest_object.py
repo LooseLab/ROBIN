@@ -3,7 +3,7 @@ import os
 import tempfile
 import time
 import pandas as pd
-from nicegui import ui, run, background_tasks
+from nicegui import ui, background_tasks, app
 from cnsmeth import theme, resources
 import pysam
 from cnsmeth import models
@@ -50,7 +50,7 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
     )
     if not showerrors:
         command += ">/dev/null 2>&1"
-        print(command)
+    print(command)
 
     os.system(command)
 
@@ -107,46 +107,53 @@ class RandomForest_object(BaseAnalysis):
             with self.summary:
                 ui.label("Forest classification: Unknown")
         if self.browse:
-            try:
-                self.rcns2_df_store = pd.read_csv(
-                    os.path.join(os.path.join(self.output, "random_forest_scores.csv")),
-                    index_col=0,
-                )
-                columns_greater_than_threshold = (
-                    self.rcns2_df_store > self.threshold
-                ).any()
-                columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                result = self.rcns2_df_store.columns[
-                    columns_not_greater_than_threshold
-                ].tolist()
-                self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
-                lastrow = self.rcns2_df_store.iloc[-1]  # .drop("number_probes")
-                lastrow_plot = lastrow.sort_values(ascending=False).head(10)
-                lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-                if self.summary:
-                    with self.summary:
-                        self.summary.clear()
-                        ui.label(
-                            f"Forest classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
-                        )
-                self.update_rcns2_plot(
-                    lastrow_plot.index.to_list(),
-                    list(lastrow_plot.values / 100),
-                    "All",
-                )
-            except FileNotFoundError:
-                pass
+            self.show_previous_data(self.output)
+        else:
+            ui.timer(5, lambda: self.show_previous_data(self.output))
+
+    def show_previous_data(self, output):
+        try:
+            self.rcns2_df_store = pd.read_csv(
+                os.path.join(os.path.join(self.output, "random_forest_scores.csv")),
+                index_col=0,
+            )
+            columns_greater_than_threshold = (
+                self.rcns2_df_store > self.threshold
+            ).any()
+            columns_not_greater_than_threshold = ~columns_greater_than_threshold
+            result = self.rcns2_df_store.columns[
+                columns_not_greater_than_threshold
+            ].tolist()
+            self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
+            lastrow = self.rcns2_df_store.iloc[-1]  # .drop("number_probes")
+            lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+            lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+            if self.summary:
+                with self.summary:
+                    self.summary.clear()
+                    ui.label(
+                        f"Forest classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                    )
+            self.update_rcns2_plot(
+                lastrow_plot.index.to_list(),
+                list(lastrow_plot.values / 100),
+                "All",
+            )
+        except FileNotFoundError:
+            pass
 
     async def process_bam(self, bamfile):
         tomerge = []
-        timestamp = None
+        #timestamp = None
 
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop()
             tomerge.append(file)
-            timestamp = filetime
-            self.bams_in_processing += 1
+            #timestamp = filetime
+            app.storage.general[self.mainuuid][self.name]["counters"][
+                "bams_in_processing"
+            ] += 1
             if len(tomerge) > 200:
                 break
 
@@ -155,17 +162,38 @@ class RandomForest_object(BaseAnalysis):
             sortbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
             tempbed = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bed")
             self.batch += 1
-            await background_tasks.create(
-                run.cpu_bound(
-                    run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads
-                )
-            )
 
-            await background_tasks.create(
-                run.cpu_bound(
-                    run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads
+            async def load_samtoolssort():
+                loop = asyncio.get_event_loop()
+                # await loop.run_in_executor(None, sync_func)
+                await loop.run_in_executor(
+                    None,
+                    run_samtools_sort,
+                    tempbam.name,
+                    tomerge,
+                    sortbam.name,
+                    self.threads,
                 )
-            )
+
+            await background_tasks.create(load_samtoolssort())
+
+            await asyncio.sleep(0.1)
+
+            async def load_modkit():
+                loop = asyncio.get_event_loop()
+                # await loop.run_in_executor(None, sync_func)
+                await loop.run_in_executor(
+                    None,
+                    run_modkit,
+                    sortbam.name,
+                    tempbed.name,
+                    self.cpgs_file,
+                    self.threads,
+                )
+
+            await background_tasks.create(load_modkit())
+
+            await asyncio.sleep(0.1)
 
             try:
                 os.remove(f"{sortbam.name}.csi")
@@ -216,7 +244,7 @@ class RandomForest_object(BaseAnalysis):
                         "Nnocall": "int16",
                     },
                     header=None,
-                    sep='\s+',
+                    sep="\s+",
                 )
 
                 self.merged_bed_file = merge_bedmethyl(bed_a, self.merged_bed_file)
@@ -266,14 +294,17 @@ class RandomForest_object(BaseAnalysis):
                         "Nnocall": "int16",
                     },
                     header=None,
-                    sep='\s+',
+                    sep="\s+",
                 )
                 self.first_run = False
 
             tempDir = tempfile.TemporaryDirectory(dir=self.output)
 
-            await background_tasks.create(
-                run.cpu_bound(
+            async def load_rcns2():
+                loop = asyncio.get_event_loop()
+                # await loop.run_in_executor(None, sync_func)
+                await loop.run_in_executor(
+                    None,
                     run_rcns2,
                     tempDir.name,
                     self.batch,
@@ -281,19 +312,22 @@ class RandomForest_object(BaseAnalysis):
                     self.threads,
                     self.showerrors,
                 )
-            )
+
+            await background_tasks.create(load_rcns2())
+
+            await asyncio.sleep(0.1)
 
             if os.path.isfile(f"{tempDir.name}/live_{self.batch}_votes.tsv"):
                 scores = pd.read_table(
                     f"{tempDir.name}/live_{self.batch}_votes.tsv",
-                    sep='\s+',
+                    sep="\s+",
                 )
                 scores_to_save = scores.drop(columns=["Freq"]).T
 
-                if timestamp:
-                    scores_to_save["timestamp"] = timestamp * 1000
-                else:
-                    scores_to_save["timestamp"] = time.time() * 1000
+                # if timestamp:
+                #    scores_to_save["timestamp"] = timestamp * 1000
+                # else:
+                scores_to_save["timestamp"] = time.time() * 1000
 
                 self.rcns2_df_store = pd.concat(
                     [self.rcns2_df_store, scores_to_save.set_index("timestamp")]
@@ -303,6 +337,8 @@ class RandomForest_object(BaseAnalysis):
                     os.path.join(self.output, "random_forest_scores.csv")
                 )
 
+                """
+                
                 columns_greater_than_threshold = (
                     self.rcns2_df_store > self.threshold * 100
                 ).any()
@@ -317,13 +353,13 @@ class RandomForest_object(BaseAnalysis):
                 scores_top = scores.sort_values(by=["cal_Freq"], ascending=False).head(
                     1
                 )
-                self.bam_processed += len(tomerge)
-                self.bams_in_processing -= len(tomerge)
+                app.storage.general[self.mainuuid][self.name]['counters']['bam_processed'] += len(tomerge)
+                app.storage.general[self.mainuuid][self.name]['counters']['bams_in_processing'] -= len(tomerge)
 
                 self.update_rcns2_plot(
                     scores.index.to_list(),
                     list(scores["cal_Freq"].values / 100),
-                    self.bam_processed,
+                    app.storage.general[self.mainuuid][self.name]['counters']['bam_processed'],
                 )
                 if self.summary:
                     with self.summary:
@@ -331,10 +367,12 @@ class RandomForest_object(BaseAnalysis):
                         ui.label(
                             f"Forest classification: {scores_top.head(1).index[0]} - {scores_top['cal_Freq'].head(1).values[0]:.2f} "
                         )
+                """
             else:
-                ui.notify("Random Forest Complete by no data.")
+                pass
+                # ui.notify("Random Forest Complete by no data.")
 
-        await asyncio.sleep(30)
+        await asyncio.sleep(5)
         self.running = False
 
     def create_rcns2_chart(self, title):

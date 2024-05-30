@@ -1,3 +1,10 @@
+"""
+This code has the following known issues:
+1. The code lacks documentation.
+2. The code will load earlier iterations of the data on first load. This is not ideal!
+
+"""
+
 from cnsmeth.subpages.base_analysis import BaseAnalysis
 import natsort
 from cnsmeth import theme, resources
@@ -8,7 +15,7 @@ import sys
 import click
 import time
 from pathlib import Path
-from nicegui import ui, run, background_tasks
+from nicegui import ui  # , background_tasks
 from io import StringIO
 import pysam
 import asyncio
@@ -148,6 +155,7 @@ class TargetCoverage(BaseAnalysis):
         self.targetbamfile = None
         self.covtable = None
         self.covtable_row_count = 0
+        self.coverage_over_time = np.empty((0, 2))
         self.cov_df_main = pd.DataFrame()
         self.bedcov_df_main = pd.DataFrame()
         self.SNPqueue = queue.Queue()
@@ -190,21 +198,33 @@ class TargetCoverage(BaseAnalysis):
             # bamfile, bedfile, workdir, workdirout, threads
             self.clair3running = True
             shutil.copy2(bedfile, f"{bedfile}2")
-            await background_tasks.create(
-                run.cpu_bound(
-                    run_clair3,
-                    f"{bamfile}",
-                    f"{bedfile}2",
-                    self.output,
-                    workdirout,
-                    self.threads,
-                    self.reference,
-                )
+            # await background_tasks.create(
+            #    run.cpu_bound(
+            #        run_clair3,
+            #        f"{bamfile}",
+            #        f"{bedfile}2",
+            #        self.output,
+            #        workdirout,
+            #        self.threads,
+            #        self.reference,
+            #    )
+            # )
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                None,
+                run_clair3,
+                f"{bamfile}",
+                f"{bedfile}2",
+                self.output,
+                workdirout,
+                self.threads,
+                self.reference,
             )
-            if os.path.isfile(f"{workdirout}/snpsift_output.vcf"):
-                self.SNPview.parse_vcf(f"{workdirout}/snpsift_output.vcf")
-            if os.path.isfile(f"{workdirout}/snpsift_indel_output.vcf"):
-                self.INDELview.parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
+
+            # if os.path.isfile(f"{workdirout}/snpsift_output.vcf"):
+            #    self.SNPview.parse_vcf(f"{workdirout}/snpsift_output.vcf")
+            # if os.path.isfile(f"{workdirout}/snpsift_indel_output.vcf"):
+            #    self.INDELview.parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
 
             self.clair3running = False
 
@@ -253,6 +273,8 @@ class TargetCoverage(BaseAnalysis):
                 self.INDELview.renderme()
         if self.browse:
             self.show_previous_data(self.output)
+        else:
+            ui.timer(5, lambda: self.show_previous_data(self.output))
 
     def create_coverage_plot(self, title):
         self.echart3 = (
@@ -407,25 +429,15 @@ class TargetCoverage(BaseAnalysis):
         ]
         self.echart4.update()
 
-    def update_coverage_time_plot(self, covdf, timestamp):
-        """
-        Replaces the data in the RapidCNS2 plot.
-        :param x: list of tumour types
-        :param y: confidence scores for each tumour type
-        :param count: the number of bams used to generate the plot
-        :return:
-        """
-        bases = covdf["covbases"].sum()
-        genome = covdf["endpos"].sum()
-        coverage = bases / genome
-        if timestamp:
-            currenttime = timestamp * 1000
-        else:
-            currenttime = time.time() * 1000
-        self.coverage_time_chart.options["series"][0]["data"].append(
-            [currenttime, coverage]
-        )
-        self.coverage_time_chart.update()
+    def update_coverage_time_plot(self):
+        if os.path.isfile(os.path.join(self.output, "coverage_time_chart.npy")):
+            self.coverage_over_time = np.load(
+                os.path.join(self.output, "coverage_time_chart.npy")
+            )
+            self.coverage_time_chart.options["series"][0][
+                "data"
+            ] = self.coverage_over_time.tolist()
+            self.coverage_time_chart.update()
 
     def update_target_coverage_table(self):
         if not self.covtable:
@@ -464,15 +476,19 @@ class TargetCoverage(BaseAnalysis):
             self.covtable.update_rows(self.target_coverage_df.to_dict(orient="records"))
 
     async def process_bam(self, bamfile, timestamp):
-        newcovdf, bedcovdf = await background_tasks.create(
-            run.cpu_bound(get_covdfs, bamfile)
-        )
+        loop = asyncio.get_event_loop()
+        newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
+
+        # newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
 
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
-
-        await background_tasks.create(
-            run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
+        await loop.run_in_executor(
+            None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
         )
+        # run_bedtools(bamfile, self.bedfile, tempbamfile.name)
+        # await background_tasks.create(
+        #    run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
+        # )
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if not self.targetbamfile:
@@ -498,105 +514,151 @@ class TargetCoverage(BaseAnalysis):
             self.cov_df_main = newcovdf
             self.bedcov_df_main = bedcovdf
         else:
-            self.cov_df_main, self.bedcov_df_main = await background_tasks.create(
-                run.cpu_bound(
-                    run_bedmerge,
-                    newcovdf,
-                    self.cov_df_main,
-                    bedcovdf,
-                    self.bedcov_df_main,
+            # self.cov_df_main, self.bedcov_df_main = await background_tasks.create(
+            #    run.cpu_bound(
+            #        run_bedmerge,
+            #        newcovdf,
+            #        self.cov_df_main,
+            #        bedcovdf,
+            #        self.bedcov_df_main,
+            #    )
+            # )
+
+            self.cov_df_main, self.bedcov_df_main = run_bedmerge(
+                newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
+            )
+
+        bases = self.cov_df_main["covbases"].sum()
+        genome = self.cov_df_main["endpos"].sum()
+        coverage = bases / genome
+        # if timestamp:
+        #    currenttime = timestamp * 1000
+        # else:
+        currenttime = time.time() * 1000
+        self.coverage_over_time = np.vstack(
+            [self.coverage_over_time, [(currenttime, coverage)]]
+        )
+        np.save(
+            os.path.join(self.output, "coverage_time_chart.npy"),
+            self.coverage_over_time,
+        )
+
+        self.cov_df_main.to_csv(
+            os.path.join(self.output, "coverage_main.csv"), index=False
+        )
+        # await asyncio.sleep(0.01)
+
+        # self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
+        self.bedcov_df_main.to_csv(
+            os.path.join(self.output, "bed_coverage_main.csv"), index=False
+        )
+        # await asyncio.sleep(0.01)
+        # self.update_coverage_time_plot(self.cov_df_main, timestamp)
+        # await asyncio.sleep(0.01)
+        self.target_coverage_df = self.bedcov_df_main
+        self.target_coverage_df["length"] = (
+            self.target_coverage_df["endpos"] - self.target_coverage_df["startpos"] + 1
+        )
+
+        self.target_coverage_df["coverage"] = (
+            self.target_coverage_df["bases"] / self.target_coverage_df["length"]
+        )
+        self.target_coverage_df.to_csv(
+            os.path.join(self.output, "target_coverage.csv"), index=False
+        )
+        if self.summary:
+            with self.summary:
+                self.summary.clear()
+                with ui.row():
+                    ui.label("Coverage Depths - ")
+                    ui.label(
+                        f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
+                    )
+                    ui.label(
+                        f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
+                    )
+        run_list = self.target_coverage_df[
+            self.target_coverage_df["coverage"].ge(self.callthreshold)
+        ]
+
+        if self.reference:
+            if (
+                len(run_list) > self.targets_exceeding_threshold
+                and not self.clair3running
+            ):
+                self.targets_exceeding_threshold = len(run_list)
+                run_list[["chrom", "startpos", "endpos"]].to_csv(
+                    os.path.join(self.output, "targets_exceeding_threshold.bed"),
+                    sep="\t",
+                    header=None,
+                    index=None,
                 )
+                clair3workdir = os.path.join(self.output, "clair3")
+                if not os.path.exists(clair3workdir):
+                    os.mkdir(clair3workdir)
+                # await run.cpu_bound(subset_bam, self.targetbamfile, os.path.join(self.output, "targets_exceeding_threshold.bed"), os.path.join(self.output, "targets_exceeding.bam"))
+                # await background_tasks.create(
+                #    run.cpu_bound(
+                #        sort_bam,
+                #        self.targetbamfile,
+                #        os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
+                #        self.threads,
+                #    )
+                # )
+                await loop.run_in_executor(
+                    None,
+                    sort_bam,
+                    self.targetbamfile,
+                    os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
+                    self.threads,
+                )
+                # sort_bam(self.targetbamfile, os.path.join(clair3workdir, "sorted_targets_exceeding.bam"), self.threads)
+                if self.snp_calling:
+                    self.SNPqueue.put(
+                        [
+                            run_list,
+                            os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
+                            os.path.join(
+                                self.output, "targets_exceeding_threshold.bed"
+                            ),
+                        ]
+                    )
+        # ToDo: Reinstate this line later.
+        # self.update_target_coverage_table()
+
+        await asyncio.sleep(0.5)
+        self.running = False
+
+    def show_previous_data(self, watchfolder):
+        # ToDo: This function needs to run in background threads.
+        if os.path.isfile(os.path.join(watchfolder, "coverage_main.csv")):
+            self.cov_df_main = pd.read_csv(
+                os.path.join(watchfolder, "coverage_main.csv")
             )
-            # self.cov_df_main, self.bedcov_df_main = run_bedmerge(newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main)
-        if self.bamqueue.empty() or self.bam_processed % 5 == 0:
             self.update_coverage_plot(self.cov_df_main)
-            self.cov_df_main.to_csv(os.path.join(self.output, "coverage_main.csv"))
-            # await asyncio.sleep(0.01)
+
+        if os.path.isfile(os.path.join(watchfolder, "bed_coverage_main.csv")):
+            self.bedcov_df_main = pd.read_csv(
+                os.path.join(watchfolder, "bed_coverage_main.csv")
+            )
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
-            self.bedcov_df_main.to_csv(
-                os.path.join(self.output, "bed_coverage_main.csv")
+        if os.path.isfile(os.path.join(watchfolder, "target_coverage.csv")):
+            self.target_coverage_df = pd.read_csv(
+                os.path.join(watchfolder, "target_coverage.csv")
             )
-            # await asyncio.sleep(0.01)
-            self.update_coverage_time_plot(self.cov_df_main, timestamp)
-            # await asyncio.sleep(0.01)
-            self.target_coverage_df = self.bedcov_df_main
-            self.target_coverage_df["coverage"] = (
-                self.target_coverage_df["bases"] / self.target_coverage_df["length"]
-            )
-            self.target_coverage_df.to_csv(
-                os.path.join(self.output, "target_coverage.csv")
-            )
+            self.update_target_coverage_table()
+            self.update_coverage_time_plot()
             if self.summary:
                 with self.summary:
                     self.summary.clear()
                     with ui.row():
                         ui.label("Coverage Depths - ")
                         ui.label(
-                            f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
+                            f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum() / self.cov_df_main['endpos'].sum()):.2f}x"
                         )
                         ui.label(
-                            f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
+                            f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum() / self.bedcov_df_main['length'].sum()):.2f}x"
                         )
-            run_list = self.target_coverage_df[
-                self.target_coverage_df["coverage"].ge(self.callthreshold)
-            ]
-            if self.reference:
-                if (
-                    len(run_list) > self.targets_exceeding_threshold
-                    and not self.clair3running
-                ):
-                    self.targets_exceeding_threshold = len(run_list)
-                    run_list[["chrom", "startpos", "endpos"]].to_csv(
-                        os.path.join(self.output, "targets_exceeding_threshold.bed"),
-                        sep="\t",
-                        header=None,
-                        index=None,
-                    )
-                    clair3workdir = os.path.join(self.output, "clair3")
-                    if not os.path.exists(clair3workdir):
-                        os.mkdir(clair3workdir)
-                    # await run.cpu_bound(subset_bam, self.targetbamfile, os.path.join(self.output, "targets_exceeding_threshold.bed"), os.path.join(self.output, "targets_exceeding.bam"))
-                    await background_tasks.create(
-                        run.cpu_bound(
-                            sort_bam,
-                            self.targetbamfile,
-                            os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
-                            self.threads,
-                        )
-                    )
-                    if self.snp_calling:
-                        self.SNPqueue.put(
-                            [
-                                run_list,
-                                os.path.join(
-                                    clair3workdir, "sorted_targets_exceeding.bam"
-                                ),
-                                os.path.join(
-                                    self.output, "targets_exceeding_threshold.bed"
-                                ),
-                            ]
-                        )
-
-            self.update_target_coverage_table()
-
-        await asyncio.sleep(0.05)
-        self.running = False
-
-    def show_previous_data(self, watchfolder):
-        self.cov_df_main = pd.read_csv(os.path.join(watchfolder, "coverage_main.csv"))
-        self.update_coverage_plot(self.cov_df_main)
-        self.bedcov_df_main = pd.read_csv(
-            os.path.join(watchfolder, "bed_coverage_main.csv")
-        )
-        self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
-        self.target_coverage_df = pd.read_csv(
-            os.path.join(watchfolder, "target_coverage.csv")
-        )
-        self.update_target_coverage_table()
-        # if file.endswith("coverage_time_chart.csv"):
-        #    self.coverage_time_chart = pd.read_csv(os.path.join(watchfolder, file))
-        #    self.update_coverage_time_plot(self.cov_df_main, None)
-        # self.running = False
         if os.path.isfile(f"{watchfolder}/clair3/snpsift_output.vcf"):
             self.SNPview.parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
         if os.path.isfile(f"{watchfolder}/clair3/snpsift_indel_output.vcf"):

@@ -142,7 +142,7 @@ class SNPview:
                     return None
 
                 if len(self.vcf) > 0:
-                    print (self.vcf)
+                    # print (self.vcf)
                     # Define shared columns
                     shared_columns = [
                         "CHROM",
@@ -201,7 +201,9 @@ class SNPview:
                                 )
 
                             button = ui.button(
-                                "Toggle fullscreen", icon="fullscreen", on_click=toggle_fs
+                                "Toggle fullscreen",
+                                icon="fullscreen",
+                                on_click=toggle_fs,
                             ).props("flat")
 
                             with ui.button(icon="menu"):
@@ -242,7 +244,7 @@ def index_page() -> None:
     # from check_connection import ConnectionDialog
     # initial_ip = "127.0.0.1"
     # my_connection = ConnectionDialog(initial_ip)
-    my_connection = None
+    # my_connection = None
     # with theme.frame("MethClass Interactive"):
     # my_connection.connect_to_minknow()
     mySNPview = SNPview()

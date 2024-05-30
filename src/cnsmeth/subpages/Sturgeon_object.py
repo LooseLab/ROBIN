@@ -5,7 +5,7 @@ import tempfile
 import time
 import shutil
 import pandas as pd
-from nicegui import ui, run, background_tasks
+from nicegui import ui, app, background_tasks
 from cnsmeth import theme
 import pysam
 from cnsmeth import models
@@ -94,6 +94,12 @@ class Sturgeon_object(BaseAnalysis):
             with self.summary:
                 ui.label("Sturgeon classification: Unknown")
         if self.browse:
+            self.show_previous_data(self.output)
+        else:
+            ui.timer(5, lambda: self.show_previous_data(self.output))
+
+    def show_previous_data(self, output):
+        if os.path.exists(os.path.join(output, "sturgeon_scores.csv")):
             self.sturgeon_df_store = pd.read_csv(
                 os.path.join(os.path.join(self.output, "sturgeon_scores.csv")),
                 index_col=0,
@@ -124,33 +130,65 @@ class Sturgeon_object(BaseAnalysis):
 
     async def process_bam(self, bamfile):
         tomerge = []
-        timestamp = None
+        #timestamp = None
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop()
             tomerge.append(file)
-            timestamp = filetime
-            self.bams_in_processing += 1
-            if len(tomerge) > 200:
+            #timestamp = filetime
+            app.storage.general[self.mainuuid][self.name]["counters"][
+                "bams_in_processing"
+            ] += 1
+            # self.bams_in_processing += 1
+            if len(tomerge) > 25:
                 break
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(dir=self.output)
-            with self.card:
-                ui.notify("Sturgeon: Merging bams")
-            await background_tasks.create(
-                run.cpu_bound(pysam_cat, tempbam.name, tomerge)
-            )
+            # with self.card:
+            #    ui.notify("Sturgeon: Merging bams")
+
+            async def load_data():
+                loop = asyncio.get_event_loop()
+                # await loop.run_in_executor(None, sync_func)
+                await loop.run_in_executor(None, pysam_cat, tempbam.name, tomerge)
+
+            await background_tasks.create(load_data())
+
+            await asyncio.sleep(0.1)
+
+            # await background_tasks.create(
+            #    run.cpu_bound(pysam_cat, tempbam.name, tomerge)
+            # )
             file = tempbam.name
             temp = tempfile.NamedTemporaryFile(dir=self.output)
             with tempfile.TemporaryDirectory(dir=self.output) as temp2:
-                await background_tasks.create(
-                    run.cpu_bound(run_modkit, file, temp.name, self.threads)
-                )
-                ui.notify("Sturgeon: Modkit Complete")
-                await background_tasks.create(
-                    run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
-                )
-                # ui.notify("Sturgeon: Inputtobed Complete")
+
+                async def load_modkit():
+                    loop = asyncio.get_event_loop()
+                    # await loop.run_in_executor(None, sync_func)
+                    await loop.run_in_executor(
+                        None, run_modkit, file, temp.name, self.threads
+                    )
+
+                await background_tasks.create(load_modkit())
+
+                await asyncio.sleep(0.1)
+                # await background_tasks.create(
+                #    run.cpu_bound(run_modkit, file, temp.name, self.threads)
+                # )
+                # ui.notify("Sturgeon: Modkit Complete")
+
+                async def load_inputtobed():
+                    loop = asyncio.get_event_loop()
+                    # await loop.run_in_executor(None, sync_func)
+                    await loop.run_in_executor(
+                        None, run_sturgeon_inputtobed, temp.name, temp2
+                    )
+
+                await background_tasks.create(load_inputtobed())
+
+                await asyncio.sleep(0.1)
+
                 calls_per_probe_file = os.path.join(
                     temp2, "merged_probes_methyl_calls.txt"
                 )
@@ -162,30 +200,74 @@ class Sturgeon_object(BaseAnalysis):
                     shutil.copyfile(calls_per_probe_file, merged_output_file)
                     self.first_run = False
                 else:
-                    await background_tasks.create(
-                        run.cpu_bound(
+
+                    async def load_mergeprobes():
+                        loop = asyncio.get_event_loop()
+                        # await loop.run_in_executor(None, sync_func)
+                        await loop.run_in_executor(
+                            None,
                             run_sturgeon_merge_probes,
                             calls_per_probe_file,
                             merged_output_file,
                         )
-                    )
+
+                    await background_tasks.create(load_mergeprobes())
+
+                    await asyncio.sleep(0.1)
+                    # await background_tasks.create(
+                    #    run.cpu_bound(
+                    #        run_sturgeon_merge_probes,
+                    #        calls_per_probe_file,
+                    #        merged_output_file,
+                    #    )
+                    # )
                 bed_output_file = os.path.join(
                     self.bedDir.name, "final_merged_probes_methyl_calls.bed"
                 )
-                await background_tasks.create(
-                    run.cpu_bound(
-                        run_probes_methyl_calls, merged_output_file, bed_output_file
+
+                async def load_methylcalls():
+                    loop = asyncio.get_event_loop()
+                    # await loop.run_in_executor(None, sync_func)
+                    await loop.run_in_executor(
+                        None,
+                        run_probes_methyl_calls,
+                        merged_output_file,
+                        bed_output_file,
                     )
-                )
-                await background_tasks.create(
-                    run.cpu_bound(
+
+                await background_tasks.create(load_methylcalls())
+
+                await asyncio.sleep(0.1)
+
+                # await background_tasks.create(
+                #    run.cpu_bound(
+                #        run_probes_methyl_calls, merged_output_file, bed_output_file
+                #    )
+                # )
+                async def load_predict():
+                    loop = asyncio.get_event_loop()
+                    # await loop.run_in_executor(None, sync_func)
+                    await loop.run_in_executor(
+                        None,
                         run_sturgeon_predict,
                         self.bedDir.name,
                         self.dataDir.name,
                         self.modelfile,
                     )
-                )
-                ui.notify("Sturgeon: Prediction Complete")
+
+                await background_tasks.create(load_predict())
+
+                await asyncio.sleep(0.1)
+
+                # await background_tasks.create(
+                #    run.cpu_bound(
+                #        run_sturgeon_predict,
+                #        self.bedDir.name,
+                #        self.dataDir.name,
+                #        self.modelfile,
+                #    )
+                # )
+                # ui.notify("Sturgeon: Prediction Complete")
                 mydf = pd.read_csv(
                     os.path.join(
                         self.dataDir.name,
@@ -194,7 +276,7 @@ class Sturgeon_object(BaseAnalysis):
                 )
                 self.st_num_probes = mydf.iloc[-1]["number_probes"]
                 lastrow = mydf.iloc[-1].drop("number_probes")
-                lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+                #lastrow_plot = lastrow.sort_values(ascending=False).head(10)
                 lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
                 if self.summary:
                     with self.summary:
@@ -203,35 +285,43 @@ class Sturgeon_object(BaseAnalysis):
                             f"Sturgeon classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
                         )
                 mydf_to_save = mydf
-                if timestamp:
-                    mydf_to_save["timestamp"] = timestamp * 1000
-                else:
-                    mydf_to_save["timestamp"] = time.time() * 1000
-                self.bam_processed += len(tomerge)
-                self.bams_in_processing -= len(tomerge)
+                # if timestamp:
+                #    mydf_to_save["timestamp"] = timestamp * 1000
+                # else:
+                mydf_to_save["timestamp"] = time.time() * 1000
+                app.storage.general[self.mainuuid][self.name]["counters"][
+                    "bam_processed"
+                ] += len(tomerge)
+
+                app.storage.general[self.mainuuid][self.name]["counters"][
+                    "bams_in_processing"
+                ] -= len(tomerge)
+                # self.bams_in_processing -= len(tomerge)
                 self.sturgeon_df_store = pd.concat(
                     [self.sturgeon_df_store, mydf_to_save.set_index("timestamp")]
                 )
                 self.sturgeon_df_store.to_csv(
                     os.path.join(self.output, "sturgeon_scores.csv")
                 )
-                columns_greater_than_threshold = (
-                    self.sturgeon_df_store > self.threshold
-                ).any()
-                columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                result = self.sturgeon_df_store.columns[
-                    columns_not_greater_than_threshold
-                ].tolist()
-                self.update_sturgeon_time_chart(
-                    self.sturgeon_df_store.drop(columns=result)
-                )
-                self.update_sturgeon_plot(
-                    lastrow_plot.index.to_list(),
-                    list(lastrow_plot.values),
-                    self.bam_processed,
-                    self.st_num_probes,
-                )
-        await asyncio.sleep(30)
+
+                # columns_greater_than_threshold = (
+                #    self.sturgeon_df_store > self.threshold
+                # ).any()
+                # columns_not_greater_than_threshold = ~columns_greater_than_threshold
+                # result = self.sturgeon_df_store.columns[
+                #    columns_not_greater_than_threshold
+                # ].tolist()
+
+                # self.update_sturgeon_time_chart(
+                #    self.sturgeon_df_store.drop(columns=result)
+                # )
+                # self.update_sturgeon_plot(
+                #    lastrow_plot.index.to_list(),
+                #    list(lastrow_plot.values),
+                #    self.bam_processed,
+                #    self.st_num_probes,
+                # )
+        await asyncio.sleep(0.1)
         self.running = False
 
     def create_sturgeon_chart(self, title):
