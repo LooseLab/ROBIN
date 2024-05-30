@@ -1,16 +1,10 @@
 from cnsmeth.subpages.base_analysis import BaseAnalysis
-import natsort
-from cnsmeth import theme, resources
-import pandas as pd
-import logging
-import numpy as np
+from cnsmeth import theme
 import os
 import sys
-import asyncio
 from nicegui import ui, app
 import click
 from pathlib import Path
-import pickle
 
 
 class Analysis(BaseAnalysis):
@@ -27,7 +21,7 @@ def test_me(
     browse: bool = False,
     target_panel: str = "rCNS2",
 ):
-    my_connection = None
+    # my_connection = None
     app.add_static_files("/fonts", str(Path(__file__).parent / "../fonts"))
     with theme.frame("Example."):
         TestObject = Analysis(

@@ -9,7 +9,7 @@ import pandas as pd
 import click
 
 
-from nicegui import ui
+from nicegui import ui, background_tasks
 from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
@@ -22,6 +22,62 @@ from matplotlib import pyplot as plt
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
+
+
+def fusion_work(
+    threads,
+    bamfile,
+    gene_bed,
+    all_gene_bed,
+    tempreadfile,
+    tempbamfile,
+    tempmappings,
+    tempallmappings,
+):
+    fusion_candidates = None
+    fusion_candidates_all = None
+    os.system(
+        f"samtools view -@{threads} -L {gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile.name}"
+    )
+    if os.path.getsize(tempreadfile.name) > 0:
+        os.system(
+            f"samtools view -@{threads} -N {tempreadfile.name} -o {tempbamfile.name} {bamfile}"
+        )
+        if os.path.getsize(tempbamfile.name) > 0:
+            os.system(
+                f"bedtools intersect -a {gene_bed} -b {tempbamfile.name} -wa -wb > {tempmappings.name}"
+            )
+            os.system(
+                f"bedtools intersect -a {all_gene_bed} -b {tempbamfile.name} -wa -wb > {tempallmappings.name}"
+            )
+            if os.path.getsize(tempmappings.name) > 0:
+                fusion_candidates = pd.read_csv(
+                    tempmappings.name, sep="\t", header=None
+                )
+                # Filter to only include good mappings
+                fusion_candidates = fusion_candidates[fusion_candidates[8].gt(50)]
+                # Filter to only keep reads that map to 1 kb or more of the reference.
+                fusion_candidates["diff"] = fusion_candidates[6] - fusion_candidates[5]
+                fusion_candidates = fusion_candidates[
+                    fusion_candidates["diff"].gt(1000)
+                ]
+            if os.path.getsize(tempallmappings.name) > 0:
+                fusion_candidates_all = pd.read_csv(
+                    tempallmappings.name, sep="\t", header=None
+                )
+
+                fusion_candidates_all = fusion_candidates_all[
+                    fusion_candidates_all[8].gt(59)
+                ]
+
+                fusion_candidates_all["diff"] = (
+                    fusion_candidates_all[6] - fusion_candidates_all[5]
+                )
+
+                fusion_candidates_all = fusion_candidates_all[
+                    fusion_candidates_all["diff"].gt(1000)
+                ]
+    return fusion_candidates, fusion_candidates_all
 
 
 class Fusion_object(BaseAnalysis):
@@ -209,14 +265,18 @@ class Fusion_object(BaseAnalysis):
                             )
         if self.browse:
             self.show_previous_data(self.output)
+        else:
+            ui.timer(5, lambda: self.show_previous_data(self.output))
 
     def fusion_table_all(self):
         uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)
         doubles_all = self.fusion_candidates_all[uniques_all]
         counts_all = doubles_all.groupby(7)[3].transform("nunique")
         result_all = doubles_all[counts_all > 1]
-        result_all.to_csv(os.path.join(self.output, "fusion_candidates_all.csv"))
-        self.update_fusion_table_all(result_all)
+        result_all.to_csv(
+            os.path.join(self.output, "fusion_candidates_all.csv"), index=False
+        )
+        # self.update_fusion_table_all(result_all)
 
     def update_fusion_table_all(self, result_all):
         if result_all.shape[0] > self.fstable_all_row_count:
@@ -398,8 +458,10 @@ class Fusion_object(BaseAnalysis):
         doubles = self.fusion_candidates[uniques]
         counts = doubles.groupby(7)[3].transform("nunique")
         result = doubles[counts > 1]
-        result.to_csv(os.path.join(self.output, "fusion_candidates_master.csv"))
-        self.update_fusion_table(result)
+        result.to_csv(
+            os.path.join(self.output, "fusion_candidates_master.csv"), index=False
+        )
+        # self.update_fusion_table(result)
 
     def update_fusion_table(self, result):
         if result.shape[0] > self.fstable_row_count:
@@ -555,12 +617,33 @@ class Fusion_object(BaseAnalysis):
         Function to process a bam file and identify fusion candidates.
         :param bamfile: The path to the bam file to process.
         """
-
+        # ToDo: This function needs to be run in the background. It is often too slow.
         tempreadfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
         tempmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
         tempallmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
 
+        async def process_bam_fusions():
+            loop = asyncio.get_event_loop()
+            # await loop.run_in_executor(None, sync_func)
+            fusion_candidates, fusion_candidates_all = await loop.run_in_executor(
+                None,
+                fusion_work,
+                self.threads,
+                bamfile,
+                self.gene_bed,
+                self.all_gene_bed,
+                tempreadfile,
+                tempbamfile,
+                tempmappings,
+                tempallmappings,
+            )
+            return fusion_candidates, fusion_candidates_all
+
+        fusion_candidates, fusion_candidates_all = await background_tasks.create(
+            process_bam_fusions()
+        )
+        """
         # Get the subset of reads that map to the target gene panel and have supplementary alignments
         os.system(
             f"samtools view -@{self.threads} -L {self.gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile.name}"
@@ -589,16 +672,18 @@ class Fusion_object(BaseAnalysis):
                     fusion_candidates = fusion_candidates[
                         fusion_candidates["diff"].gt(1000)
                     ]
-                    if self.fusion_candidates.empty:
-                        self.fusion_candidates = fusion_candidates
-                    else:
-                        self.fusion_candidates = pd.concat(
-                            [self.fusion_candidates, fusion_candidates]
-                        ).reset_index(drop=True)
-
+                """
+        if fusion_candidates is not None:
+            if self.fusion_candidates.empty:
+                self.fusion_candidates = fusion_candidates
+            else:
+                self.fusion_candidates = pd.concat(
+                    [self.fusion_candidates, fusion_candidates]
+                ).reset_index(drop=True)
+                """
                 if os.path.getsize(tempallmappings.name) > 0:
                     fusion_candidates_all = pd.read_csv(
-                        tempallmappings.name, sep="\t", header=None
+                        tempallmappings.name, sep="\t", header=none
                     )
 
                     fusion_candidates_all = fusion_candidates_all[
@@ -612,13 +697,14 @@ class Fusion_object(BaseAnalysis):
                     fusion_candidates_all = fusion_candidates_all[
                         fusion_candidates_all["diff"].gt(1000)
                     ]
-
-                    if self.fusion_candidates_all.empty:
-                        self.fusion_candidates_all = fusion_candidates_all
-                    else:
-                        self.fusion_candidates_all = pd.concat(
-                            [self.fusion_candidates_all, fusion_candidates_all]
-                        ).reset_index(drop=True)
+                """
+        if fusion_candidates_all is not None:
+            if self.fusion_candidates_all.empty:
+                self.fusion_candidates_all = fusion_candidates_all
+            else:
+                self.fusion_candidates_all = pd.concat(
+                    [self.fusion_candidates_all, fusion_candidates_all]
+                ).reset_index(drop=True)
 
                 self.fusion_table()
 
@@ -648,22 +734,24 @@ class Fusion_object(BaseAnalysis):
         return group[7].nunique()
 
     def show_previous_data(self, output):
-        fusion_candidates = pd.read_csv(
-            os.path.join(output, "fusion_candidates_master.csv"),
-            dtype=str,
-            names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
-            header=None,
-            skiprows=1,
-        )
-        self.update_fusion_table(fusion_candidates)
-        fusion_candidates_all = pd.read_csv(
-            os.path.join(output, "fusion_candidates_all.csv"),
-            dtype=str,
-            names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
-            header=None,
-            skiprows=1,
-        )
-        self.update_fusion_table_all(fusion_candidates_all)
+        if os.path.isfile(os.path.join(output, "fusion_candidates_master.csv")):
+            fusion_candidates = pd.read_csv(
+                os.path.join(output, "fusion_candidates_master.csv"),
+                dtype=str,
+                names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                header=None,
+                skiprows=1,
+            )
+            self.update_fusion_table(fusion_candidates)
+        if os.path.isfile(os.path.join(output, "fusion_candidates_all.csv")):
+            fusion_candidates_all = pd.read_csv(
+                os.path.join(output, "fusion_candidates_all.csv"),
+                dtype=str,
+                names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                header=None,
+                skiprows=1,
+            )
+            self.update_fusion_table_all(fusion_candidates_all)
 
 
 def test_me(

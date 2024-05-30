@@ -47,13 +47,26 @@ def frame(navtitle: str):
             ).tailwind(
                 "drop-shadow", "font-bold"
             )  # .tailwind("text-2xl font-bold font-italic drop-shadow")
-            with ui.row().classes("ml-auto"):
-                ui.switch(
-                    "allow remote access", value=False, on_change=use_on_air
-                ).classes("ml-4 bg-transparent").props('color="black"')
-                ui.switch("Dark Mode", on_change=dark_mode).classes(
-                    "ml-4 bg-transparent"
-                ).props('color="black"')
+            with ui.row().classes("ml-auto align-top"):
+                # ui.switch(
+                #    "allow remote access", value=False, on_change=use_on_air
+                # ).classes("ml-4 bg-transparent object-center").props('color="black"')
+                with ui.button(icon="menu"):
+                    with ui.menu() as menu:
+                        ui.menu_item("Home", lambda: ui.navigate.to("/"))
+                        ui.menu_item("Live Data", lambda: ui.navigate.to("/live"))
+                        ui.menu_item(
+                            "Browse Historic Data", lambda: ui.navigate.to("/browse")
+                        )
+                        ui.separator()
+                        # ToDo: Dark mode doesn't work on every element
+                        # ui.switch("Dark Mode", on_change=dark_mode)
+                        # ToDo: Air mode needs to be a global level switch - not per page
+                        # ui.switch(
+                        #    "allow remote access", value=False, on_change=use_on_air
+                        # )
+                        ui.separator()
+                        ui.menu_item("Close", menu.close)
                 ui.image(IMAGEFILE).style("width: 50px")
 
     with ui.footer().style("background-color: #4F9153"):

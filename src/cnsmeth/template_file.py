@@ -10,14 +10,14 @@ def index_page() -> None:
     # from check_connection import ConnectionDialog
     # initial_ip = "127.0.0.1"
     # my_connection = ConnectionDialog(initial_ip)
-    my_connection = None
+    # my_connection = None
     with theme.frame("MethClass Interactive"):
         # my_connection.connect_to_minknow()
         ui.label("Hello")
-        with ui.card().classes('w-full'):
-            ui.label('See, a shadow!')
-            with ui.card().classes('w-full border-[1px]'):
-                ui.label('See, a shadow!')
+        with ui.card().classes("w-full"):
+            ui.label("See, a shadow!")
+            with ui.card().classes("w-full border-[1px]"):
+                ui.label("See, a shadow!")
         # my_object = MinknowHistograms(my_connection.positions[0])
 
 
@@ -38,7 +38,7 @@ def run_class(port: int, reload: bool):
     """
     )
     app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
-    #app.on_startup(mainpage.index_page)
+    # app.on_startup(mainpage.index_page)
     index_page()
     ui.run(
         port=port, reload=reload, title="MethClass NiceGUI"

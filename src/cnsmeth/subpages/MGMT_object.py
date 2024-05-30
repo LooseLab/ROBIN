@@ -5,7 +5,7 @@ import pandas as pd
 import os
 import sys
 import asyncio
-from nicegui import ui, run, background_tasks
+from nicegui import ui
 import pysam
 import shutil
 import click
@@ -51,6 +51,7 @@ class MGMT_Object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
         self.MGMTbamfile = None
         self.counter = 0
+        self.last_seen = None
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
@@ -69,14 +70,20 @@ class MGMT_Object(BaseAnalysis):
                 ui.label("Current MGMT status: Unknown")
         if self.browse:
             self.show_previous_data(self.output)
+        else:
+            ui.timer(5, lambda: self.show_previous_data(self.output))
 
     async def process_bam(self, bamfile, timestamp):
         MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
-
-        await background_tasks.create(
-            run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
+        loop = asyncio.get_event_loop()
+        # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
+        await loop.run_in_executor(
+            None, run_bedtools, bamfile, MGMT_BED, tempbamfile.name
         )
+        # await background_tasks.create(
+        #    run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
+        # )
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             ui.notify(
@@ -104,26 +111,41 @@ class MGMT_Object(BaseAnalysis):
                     pass
             tempmgmtdir = tempfile.TemporaryDirectory(dir=self.output)
 
-            await background_tasks.create(
-                run.cpu_bound(
-                    run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
-                )
+            # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
+
+            await loop.run_in_executor(
+                None, run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
             )
-            ui.notify("MGMT predictor done.", type="positive", position="top")
+
+            # await background_tasks.create(
+            #    run.cpu_bound(
+            #        run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
+            #    )
+            # )
+
+            # ui.notify("MGMT predictor done.", type="positive", position="top")
+
             try:
                 results = pd.read_csv(
                     os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
                 )
                 self.counter += 1
                 plot_out = os.path.join(self.output, f"{self.counter}_mgmt.png")
-                await background_tasks.create(
-                    run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
-                )
 
-                self.mgmtable.clear()
-                with self.mgmtable:
-                    self.tabulate(results)
-                results.to_csv(os.path.join(self.output, f"{self.counter}_mgmt.csv"))
+                await loop.run_in_executor(
+                    None, run_methylartist, tempmgmtdir.name, plot_out
+                )
+                # await background_tasks.create(
+                #    run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
+                # )
+                results.to_csv(
+                    os.path.join(self.output, f"{self.counter}_mgmt.csv"), index=False
+                )
+                """
+                #self.mgmtable.clear()
+                #with self.mgmtable:
+                #    self.tabulate(results)
+                
                 if os.path.exists(plot_out):
                     self.mgmtplot.clear()
                     with self.mgmtplot.classes("w-full"):
@@ -134,11 +156,13 @@ class MGMT_Object(BaseAnalysis):
                         self.summary.clear()
                         ui.label(f"Current MGMT status: {results['status'].values[0]}")
                 ui.notify("MGMT predictor complete.", type="positive", position="top")
-            except Exception:
-                ui.notify("MGMT prediction failed.", type="negative", position="top")
+                """
+            except Exception as e:
+                print(e)
+                # ui.notify("MGMT prediction failed.", type="negative", position="top")
         else:
             os.remove(f"{tempbamfile.name}.bai")
-            ui.notify("No new MGMT sites found.", type="warning", position="bottom")
+            # ui.notify("No new MGMT sites found.", type="warning", position="bottom")
         await asyncio.sleep(0.1)
         self.running = False
 
@@ -177,17 +201,28 @@ class MGMT_Object(BaseAnalysis):
         ).classes("w-full").style("height: 200px")
 
     def show_previous_data(self, watchfolder):
-        for file in natsort.natsorted(os.listdir(watchfolder)):
-            if file.endswith("_mgmt.csv"):
-                results = pd.read_csv(os.path.join(watchfolder, file))
-                plot_out = os.path.join(watchfolder, file.replace(".csv", ".png"))
-                self.mgmtable.clear()
-                with self.mgmtable:
-                    self.tabulate(results)
-                if os.path.exists(plot_out):
-                    self.mgmtplot.clear()
-                    with self.mgmtplot.classes("w-full"):
-                        ui.image(plot_out).props("fit=scale-up")
+        if not self.last_seen:
+            for file in natsort.natsorted(os.listdir(watchfolder)):
+                if file.endswith("_mgmt.csv"):
+                    if file != self.last_seen:
+                        results = pd.read_csv(os.path.join(watchfolder, file))
+                        plot_out = os.path.join(
+                            watchfolder, file.replace(".csv", ".png")
+                        )
+                        self.mgmtable.clear()
+                        with self.mgmtable:
+                            self.tabulate(results)
+                        if os.path.exists(plot_out):
+                            self.mgmtplot.clear()
+                            with self.mgmtplot.classes("w-full"):
+                                ui.image(plot_out).props("fit=scale-up")
+                        if self.summary:
+                            with self.summary:
+                                self.summary.clear()
+                                ui.label(
+                                    f"Current MGMT status: {results['status'].values[0]}"
+                                )
+                    self.last_seen = file
 
 
 def test_me(

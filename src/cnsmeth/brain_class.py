@@ -1,4 +1,4 @@
-from nicegui import ui
+from nicegui import ui, app
 
 from cnsmeth.utilities.bam_handler import BamEventHandler
 
@@ -13,17 +13,28 @@ from cnsmeth.subpages.Fusion_object import Fusion_object
 from cnsmeth.utilities.local_file_picker import local_file_picker
 from cnsmeth.utilities.ReadBam import ReadBam
 
-
 from watchdog.observers import Observer
 from pathlib import Path
 from queue import Queue
 import pandas as pd
 import asyncio
+from collections import Counter
 
-import threading
 import time
 from datetime import datetime
 import os
+
+
+def check_bam(bamfile):
+    """
+    This function checks a bam file and returns a dictionary of its attributes.
+    :param bamfile:
+    :return:
+    """
+    # print("Check BAMS")
+    bamdata = ReadBam(bamfile)
+    baminfo = bamdata.process_reads()
+    return baminfo, bamdata
 
 
 class BrainMeth:
@@ -40,7 +51,9 @@ class BrainMeth:
         exclude=[],
         minknow_connection=None,
         reference=None,
+        mainuuid=None,
     ):
+        self.mainuuid = mainuuid
         self.threads = threads
         self.simtime = simtime
         self.watchfolder = watchfolder
@@ -52,25 +65,35 @@ class BrainMeth:
         self.exclude = exclude
         self.minknow_connection = minknow_connection
         self.reference = reference
+        self.observer = None
 
     async def init(self):
-        self.bam_count = {"counter": 0}
-        self.bam_passed = {"counter": 0}
-        self.bam_failed = {"counter": 0}
-        self.mapped_count = {"counter": 0}
-        self.pass_mapped_count = {"counter": 0}
-        self.fail_mapped_count = {"counter": 0}
-        self.unmapped_count = {"counter": 0}
-        self.pass_unmapped_count = {"counter": 0}
-        self.fail_unmapped_count = {"counter": 0}
-        self.pass_bases_count = {"counter": 0}
-        self.fail_bases_count = {"counter": 0}
-        self.bases_count = {"counter": 0}
-        self.devices = set()
-        self.basecall_models = set()
-        self.run_time = set()
-        self.flowcell_ids = set()
-        self.sample_ids = set()
+        print("Init Brain Class")
+        app.storage.general[self.mainuuid]["bam_count"] = {}
+        app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
+        app.storage.general[self.mainuuid]["bam_count"]["files"] = {}
+        app.storage.general[self.mainuuid]["file_counters"] = Counter(
+            bam_passed=0,
+            bam_failed=0,
+            mapped_count=0,
+            pass_mapped_count=0,
+            fail_mapped_count=0,
+            unmapped_count=0,
+            pass_unmapped_count=0,
+            fail_unmapped_count=0,
+            pass_bases_count=0,
+            fail_bases_count=0,
+            bases_count=0,
+        )
+        app.storage.general[self.mainuuid]["devices"] = []  # set
+        app.storage.general[self.mainuuid]["basecall_models"] = []  # set()
+        app.storage.general[self.mainuuid]["run_time"] = []  # set()
+        app.storage.general[self.mainuuid]["flowcell_ids"] = []  # set()
+        app.storage.general[self.mainuuid]["sample_ids"] = []  # set()
+        if self.watchfolder:
+            print(f"Adding a watchfolder {self.watchfolder}")
+            await self.add_watchfolder(self.watchfolder)
+        self.bam_tracking = Queue()
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
         self.bamfornanodx = Queue()
@@ -78,20 +101,114 @@ class BrainMeth:
         self.bamfortargetcoverage = Queue()
         self.bamformgmt = Queue()
         self.bamforfusions = Queue()
-        self.observer = None
 
-        if self.minknow_connection:
-            while not self.minknow_connection.connected:
-                await asyncio.sleep(1)
-            while not self.minknow_connection.selected_position:
-                await asyncio.sleep(1)
-            await self.minknow_connection.access_device.clicked()
+        if "sturgeon" not in self.exclude:
+            self.Sturgeon = Sturgeon_object(
+                self.threads,
+                self.output,
+                "STURGEON",
+                progress=True,
+                batch=True,
+                bamqueue=self.bamforsturgeon,
+                browse=self.browse,
+                uuid=self.mainuuid,
+            )
+            self.Sturgeon.process_data()
 
+        if "nanodx" not in self.exclude:
+            self.NanoDX = NanoDX_object(
+                self.threads,
+                self.output,
+                "NANODX",
+                progress=True,
+                batch=True,
+                bamqueue=self.bamfornanodx,
+                browse=self.browse,
+                uuid=self.mainuuid,
+            )
+            self.NanoDX.process_data()
+
+        if "forest" not in self.exclude:
+            self.RandomForest = RandomForest_object(
+                self.threads,
+                self.output,
+                "FOREST",
+                progress=True,
+                batch=True,
+                showerrors=self.showerrors,
+                bamqueue=self.bamforcns,
+                browse=self.browse,
+                uuid=self.mainuuid,
+            )
+            self.RandomForest.process_data()
+
+        if "cnv" not in self.exclude:
+            self.CNV = CNVAnalysis(
+                self.threads,
+                self.output,
+                "CNV",
+                progress=True,
+                bamqueue=self.bamforcnv,
+                # summary=cnvsummary,
+                target_panel=self.target_panel,
+                browse=self.browse,
+                uuid=self.mainuuid,
+            )
+            self.CNV.process_data()
+
+        if "coverage" not in self.exclude:
+            self.Target_Coverage = TargetCoverage(
+                self.threads,
+                self.output,
+                "COVERAGE",
+                progress=True,
+                bamqueue=self.bamfortargetcoverage,
+                #    summary=coverage,
+                target_panel=self.target_panel,
+                reference=self.reference,
+                browse=self.browse,
+                uuid=self.mainuuid,
+            )
+            self.Target_Coverage.process_data()
+
+        if "mgmt" not in self.exclude:
+            self.MGMT_panel = MGMT_Object(
+                self.threads,
+                self.output,
+                "MGMT",
+                progress=True,
+                bamqueue=self.bamformgmt,
+                browse=self.browse,
+                uuid=self.mainuuid,
+            )
+            self.MGMT_panel.process_data()
+
+        if "fusion" not in self.exclude:
+            self.Fusion_panel = Fusion_object(
+                self.threads,
+                self.output,
+                "FUSION",
+                progress=True,
+                bamqueue=self.bamforfusions,
+                browse=self.browse,
+                target_panel=self.target_panel,
+                uuid=self.mainuuid,
+            )
+            self.Fusion_panel.process_data()
+
+        # if self.minknow_connection:
+        #    while not self.minknow_connection.connected:
+        #        await asyncio.sleep(1)
+        #    while not self.minknow_connection.selected_position:
+        #        await asyncio.sleep(1)
+        #    await self.minknow_connection.access_device.clicked()
+
+    def render_ui(self):
         if not self.browse:
             self.information_panel()
 
-            if self.watchfolder:
-                self.add_watchfolder(self.watchfolder)
+            # if self.watchfolder:
+            #    self.add_watchfolder(self.watchfolder)
 
         else:
             ui.label("Browse mode enabled. Please choose a folder to see data from.")
@@ -99,25 +216,30 @@ class BrainMeth:
 
             self.content = ui.column().classes("w-full")
 
-    def add_watchfolder(self, watchfolder):
+    async def add_watchfolder(self, watchfolder):
         if not self.observer:
             self.watchfolder = watchfolder
-            self.event_handler = BamEventHandler(self.bam_count)
+            self.event_handler = BamEventHandler(
+                app.storage.general[self.mainuuid]["bam_count"]
+            )
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
             self.observer.start()
 
-            self.bam_processing = threading.Thread(target=self.process_bams, args=())
-            self.bam_processing.daemon = True
-            self.bam_processing.start()
+            # self.bam_processing = threading.Thread(target=self.process_bams, args=())
+            ui.timer(1, callback=self.background_process_bams, once=True)
+            # self.bam_processing.daemon = True
+            # self.bam_processing.start()
 
-            self.check_for_existing_bams = threading.Thread(
-                target=self.check_existing_bams,
-                args=(),
-                kwargs={"sequencing_summary": self.sequencing_summary},
-            )
-            self.check_for_existing_bams.daemon = True
-            self.check_for_existing_bams.start()
+            ui.timer(1, self.check_existing_bams, once=True)
+            # self.check_for_existing_bams = threading.Thread(
+            #    target=self.check_existing_bams,
+            #    args=(),
+            #    kwargs={"sequencing_summary": self.sequencing_summary},
+            # )
+            # self.check_for_existing_bams.daemon = True
+            # self.check_for_existing_bams.start()
+            print("watchfolder setup and added")
 
     async def waitforclick(self):
         self.minknow_connection.check_connection()
@@ -246,62 +368,68 @@ class BrainMeth:
                 "drop-shadow", "font-bold"
             )
 
-            with ui.expansion(icon='work').bind_text_from(
-                    self, "watchfolder", backward=lambda n: f"Monitoring the path: {n}"
-                ).classes('w-full'):
+            with ui.expansion(icon="work").bind_text_from(
+                self, "watchfolder", backward=lambda n: f"Monitoring the path: {n}"
+            ).classes("w-full"):
                 with ui.row():
                     ui.label().bind_text_from(
-                        self, "watchfolder", backward=lambda n: f"Monitoring the path: {n}"
+                        self,
+                        "watchfolder",
+                        backward=lambda n: f"Monitoring the path: {n}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label(f"Outputting to:{self.output}").style(
                         "color: #000000; font-size: 100%; font-weight: 300"
                     )
                     ui.label().bind_text_from(
-                        self.bam_count,
+                        app.storage.general[self.mainuuid]["bam_count"],
                         "counter",
                         backward=lambda n: f"BAM files seen: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self.bam_passed, "counter", backward=lambda n: f"BAM pass: {n:,}"
+                        app.storage.general[self.mainuuid]["file_counters"],
+                        "bam_passed",
+                        backward=lambda n: f"BAM pass: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self.bam_failed, "counter", backward=lambda n: f"BAM fail: {n:,}"
+                        app.storage.general[self.mainuuid]["file_counters"],
+                        "bam_failed",
+                        backward=lambda n: f"BAM fail: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                 with ui.row():
                     ui.label().bind_text_from(
-                        self.mapped_count,
-                        "counter",
+                        app.storage.general[self.mainuuid]["file_counters"],
+                        "mapped_count",
                         backward=lambda n: f"Mapped Read Count: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self.unmapped_count,
-                        "counter",
+                        app.storage.general[self.mainuuid]["file_counters"],
+                        "unmapped_count",
                         backward=lambda n: f"Unmapped Read Count: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self.pass_mapped_count,
-                        "counter",
+                        app.storage.general[self.mainuuid]["file_counters"],
+                        "pass_mapped_count",
                         backward=lambda n: f"Pass Mapped Read Count: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self.fail_mapped_count,
-                        "counter",
+                        app.storage.general[self.mainuuid]["file_counters"],
+                        "fail_mapped_count",
                         backward=lambda n: f"Fail Mapped Read Count: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                 with ui.row():
                     ui.label().bind_text_from(
-                        self.bases_count,
-                        "counter",
+                        app.storage.general[self.mainuuid]["file_counters"],
+                        "bases_count",
                         backward=lambda n: f"Total Mapped Bases: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self.pass_bases_count,
-                        "counter",
+                        app.storage.general[self.mainuuid]["file_counters"],
+                        "pass_bases_count",
                         backward=lambda n: f"Total Mapped Pass Bases: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self.fail_bases_count,
-                        "counter",
+                        app.storage.general[self.mainuuid]["file_counters"],
+                        "fail_bases_count",
                         backward=lambda n: f"Total Mapped Fail Bases: {n:,}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                 with ui.row():
@@ -394,9 +522,9 @@ class BrainMeth:
                 if not selectedtab:
                     selectedtab = methylationtab
             if "cnv" not in self.exclude:
-                copy_numertab = ui.tab("Copy Number Variation")
+                copy_numbertab = ui.tab("Copy Number Variation")
                 if not selectedtab:
-                    selectedtab = copy_numertab
+                    selectedtab = copy_numbertab
             if "coverage" not in self.exclude:
                 coveragetab = ui.tab("Target Coverage")
                 if not selectedtab:
@@ -420,83 +548,165 @@ class BrainMeth:
                             self.Sturgeon = Sturgeon_object(
                                 self.threads,
                                 self.output,
+                                "STURGEON",
                                 progress=True,
                                 batch=True,
-                                bamqueue=self.bamforsturgeon,
+                                bamqueue=None,
                                 summary=sturgeonsummary,
                                 browse=self.browse,
+                                uuid=self.mainuuid,
                             )
+                            self.Sturgeon.render_ui()
                         if "nanodx" not in self.exclude:
                             self.NanoDX = NanoDX_object(
                                 self.threads,
                                 self.output,
+                                "NANODX",
                                 progress=True,
                                 batch=True,
-                                bamqueue=self.bamfornanodx,
+                                bamqueue=None,
                                 summary=nanodxsummary,
                                 browse=self.browse,
+                                uuid=self.mainuuid,
                             )
+                            self.NanoDX.render_ui()
                         if "forest" not in self.exclude:
                             self.RandomForest = RandomForest_object(
                                 self.threads,
                                 self.output,
+                                "FOREST",
                                 progress=True,
                                 batch=True,
-                                bamqueue=self.bamforcns,
+                                bamqueue=None,
                                 summary=forestsummary,
                                 showerrors=self.showerrors,
                                 browse=self.browse,
+                                uuid=self.mainuuid,
                             )
+                            self.RandomForest.render_ui()
             if "cnv" not in self.exclude:
-                with ui.tab_panel(copy_numertab).classes("w-full"):
+                with ui.tab_panel(copy_numbertab).classes("w-full"):
                     with ui.card().classes("w-full"):
                         self.CNV = CNVAnalysis(
                             self.threads,
                             self.output,
+                            "CNV",
                             progress=True,
-                            bamqueue=self.bamforcnv,
+                            bamqueue=None,  # self.bamforcnv,
                             summary=cnvsummary,
                             target_panel=self.target_panel,
                             browse=self.browse,
+                            uuid=self.mainuuid,
                         )
+                        self.CNV.render_ui()
             if "coverage" not in self.exclude:
                 with ui.tab_panel(coveragetab).classes("w-full"):
                     with ui.card().classes("w-full"):
                         self.Target_Coverage = TargetCoverage(
                             self.threads,
                             self.output,
+                            "COVERAGE",
                             progress=True,
-                            bamqueue=self.bamfortargetcoverage,
+                            bamqueue=None,  # self.bamfortargetcoverage,
                             summary=coverage,
                             target_panel=self.target_panel,
                             reference=self.reference,
                             browse=self.browse,
+                            uuid=self.mainuuid,
                         )
+                        self.Target_Coverage.render_ui()
             if "mgmt" not in self.exclude:
                 with ui.tab_panel(mgmttab).classes("w-full"):
                     with ui.card().classes("w-full"):
                         self.MGMT_panel = MGMT_Object(
                             self.threads,
                             self.output,
+                            "MGMT",
                             progress=True,
-                            bamqueue=self.bamformgmt,
+                            bamqueue=None,
                             summary=mgmt,
                             browse=self.browse,
+                            uuid=self.mainuuid,
                         )
+                        self.MGMT_panel.render_ui()
             if "fusion" not in self.exclude:
                 with ui.tab_panel(fusionstab).classes("w-full"):
                     with ui.card().classes("w-full"):
                         self.Fusion_panel = Fusion_object(
                             self.threads,
                             self.output,
+                            "FUSION",
                             progress=True,
-                            bamqueue=self.bamforfusions,
+                            bamqueue=None,
                             summary=fusions,
                             target_panel=self.target_panel,
                             browse=self.browse,
+                            uuid=self.mainuuid,
                         )
+                        self.Fusion_panel.render_ui()
 
-    def process_bams(self) -> None:
+    async def background_process_bams(self):
+        await asyncio.sleep(5)
+        ui.timer(1, self.process_bams)
+        self.bam_tracker = ui.timer(1, self._bam_worker)
+
+    async def _bam_worker(self):
+        if not self.bam_tracking.empty():
+            while not self.bam_tracking.empty():
+                file = self.bam_tracking.get()
+                loop = asyncio.get_event_loop()
+                baminfo, bamdata = await loop.run_in_executor(None, check_bam, file)
+                if baminfo["state"] == "pass":
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "bam_passed"
+                    ] += 1
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "pass_mapped_count"
+                    ] += bamdata.mapped_reads
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "pass_unmapped_count"
+                    ] += bamdata.unmapped_reads
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "pass_bases_count"
+                    ] += bamdata.yield_tracking
+                else:
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "bam_failed"
+                    ] += 1
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "fail_mapped_count"
+                    ] += bamdata.mapped_reads
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "fail_unmapped_count"
+                    ] += bamdata.unmapped_reads
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "fail_bases_count"
+                    ] += bamdata.yield_tracking
+                # self.basecall_models.add(baminfo["basecall_model"])
+                if (
+                    baminfo["device_position"]
+                    not in app.storage.general[self.mainuuid]["devices"]
+                ):
+                    app.storage.general[self.mainuuid]["devices"].append(
+                        baminfo["device_position"]
+                    )
+                # self.sample_ids.add(baminfo["sample_id"])
+                # self.flowcell_ids.add(baminfo["flow_cell_id"])
+                # self.run_time.add(baminfo["time_of_run"])
+                app.storage.general[self.mainuuid]["file_counters"][
+                    "mapped_count"
+                ] += bamdata.mapped_reads
+                app.storage.general[self.mainuuid]["file_counters"][
+                    "unmapped_count"
+                ] += bamdata.unmapped_reads
+                app.storage.general[self.mainuuid]["file_counters"][
+                    "bases_count"
+                ] += bamdata.yield_tracking
+
+                # self.check_bam(file)
+                # await asyncio.sleep(0)
+
+    async def process_bams(self) -> None:
         """
         This function processes the bam files and adds them to the bamforcns and bamforsturgeon lists.
         These lists are then processed by the rapid_cns2 and sturgeon functions.
@@ -504,70 +714,51 @@ class BrainMeth:
         :param self:
         :return:
         """
-        while True:
-            if "file" in self.bam_count:
-                while len(self.bam_count["file"]) > 0:
-                    self.nofiles = False
-                    file = self.bam_count["file"].popitem()
-                    if file[1] > time.time() - 5:
-                        time.sleep(5)
-                    self.check_bam(file[0])
-                    if "forest" not in self.exclude:
-                        self.bamforcns.put([file[0], file[1]])
-                    if "sturgeon" not in self.exclude:
-                        self.bamforsturgeon.put([file[0], file[1]])
-                    if "nanodx" not in self.exclude:
-                        self.bamfornanodx.put([file[0], file[1]])
-                    if "cnv" not in self.exclude:
-                        self.bamforcnv.put([file[0], file[1]])
-                    if "coverage" not in self.exclude:
-                        self.bamfortargetcoverage.put([file[0], file[1]])
-                    if "mgmt" not in self.exclude:
-                        self.bamformgmt.put([file[0], file[1]])
-                    if "fusion" not in self.exclude:
-                        self.bamforfusions.put([file[0], file[1]])
+        counter = 0
+        # while True:
+        # print(f"We're processing a bam man - {self.mainuuid}")
+        if "file" in app.storage.general[self.mainuuid]["bam_count"]:
+            # print (app.storage.general[self.mainuuid]['bam_count']["file"])
+            while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
+                self.nofiles = False
+                file = app.storage.general[self.mainuuid]["bam_count"]["file"].popitem()
+                # ToDo: Check if the file is still being written to.
+                if file[1] > time.time() - 5:
+                    break
+                # ToDo: This function should be moved to a background task.
+                # self.check_bam(file[0])
+                self.bam_tracking.put(file[0])
 
-                time.sleep(1)
-                self.nofiles = True
-            time.sleep(1)
+                counter += 1
+                if "forest" not in self.exclude:
+                    self.bamforcns.put([file[0], file[1]])
+                if "sturgeon" not in self.exclude:
+                    self.bamforsturgeon.put([file[0], file[1]])
+                if "nanodx" not in self.exclude:
+                    self.bamfornanodx.put([file[0], file[1]])
+                if "cnv" not in self.exclude:
+                    self.bamforcnv.put([file[0], file[1]])
+                if "coverage" not in self.exclude:
+                    self.bamfortargetcoverage.put([file[0], file[1]])
+                if "mgmt" not in self.exclude:
+                    self.bamformgmt.put([file[0], file[1]])
+                if "fusion" not in self.exclude:
+                    self.bamforfusions.put([file[0], file[1]])
+                # await asyncio.sleep(0.001)
+                if counter > 25:
+                    break
+            self.nofiles = True
 
-    def check_bam(self, bamfile):
-        """
-        This function checks a bam file and returns a dictionary of its attributes.
-        :param bamfile:
-        :return:
-        """
-        bamdata = ReadBam(bamfile)
-        baminfo = bamdata.process_reads()
-        if baminfo["state"] == "pass":
-            self.bam_passed["counter"] += 1
-            self.pass_mapped_count["counter"] += bamdata.mapped_reads
-            self.pass_unmapped_count["counter"] += bamdata.unmapped_reads
-            self.pass_bases_count["counter"] += bamdata.yield_tracking
-        else:
-            self.bam_failed["counter"] += 1
-            self.fail_mapped_count["counter"] += bamdata.mapped_reads
-            self.fail_unmapped_count["counter"] += bamdata.unmapped_reads
-            self.fail_bases_count["counter"] += bamdata.yield_tracking
-        self.basecall_models.add(baminfo["basecall_model"])
-        self.devices.add(baminfo["device_position"])
-        self.sample_ids.add(baminfo["sample_id"])
-        self.flowcell_ids.add(baminfo["flow_cell_id"])
-        self.run_time.add(baminfo["time_of_run"])
-        self.mapped_count["counter"] += bamdata.mapped_reads
-        self.unmapped_count["counter"] += bamdata.unmapped_reads
-        self.bases_count["counter"] += bamdata.yield_tracking
-
-    def check_existing_bams(self, sequencing_summary=None):
+    async def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
         if sequencing_summary:
             print("Using sequencing summary")
-            with self.frontpage:
-                ui.notify(
-                    "Checking for existing bams against sequencing summary",
-                    type="info",
-                    position="top-right",
-                )
+            # with self.frontpage:
+            #    ui.notify(
+            #        "Checking for existing bams against sequencing summary",
+            #        type="info",
+            #        position="top-right",
+            #    )
             df = pd.read_csv(
                 sequencing_summary,
                 delimiter="\t",
@@ -597,8 +788,8 @@ class BrainMeth:
 
             step_size = 20
 
-            with self.frontpage:
-                ui.notify("Target Playback Started", type="info", position="top-right")
+            # with self.frontpage:
+            #    ui.notify("Target Playback Started", type="info", position="top-right")
 
             if "sturgeon" not in self.exclude:
                 self.Sturgeon.playback(latest_timestamps, step_size=step_size)
@@ -619,6 +810,7 @@ class BrainMeth:
 
             for index, row in latest_timestamps.iterrows():
                 if len(row["full_path"]) > 0:
+                    # ToDo: This needs to be called in the background.
                     self.check_bam(row["full_path"])
 
             self.runfinished = True
@@ -626,9 +818,16 @@ class BrainMeth:
             for path, dirs, files in os.walk(self.watchfolder):
                 for f in files:
                     if "".join(Path(f).suffixes) in file_endings:
-                        self.bam_count["counter"] += 1
-                        if "file" not in self.bam_count:
-                            self.bam_count["file"] = {}
-                        self.bam_count["file"][os.path.join(path, f)] = time.time()
+                        app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
+                        if (
+                            "file"
+                            not in app.storage.general[self.mainuuid]["bam_count"]
+                        ):
+                            app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
+                        app.storage.general[self.mainuuid]["bam_count"]["file"][
+                            os.path.join(path, f)
+                        ] = time.time()
                         if self.simtime:
-                            time.sleep(30)
+                            await asyncio.sleep(1)
+                        else:
+                            await asyncio.sleep(0)

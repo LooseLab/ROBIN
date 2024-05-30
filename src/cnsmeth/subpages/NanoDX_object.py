@@ -1,7 +1,7 @@
 from __future__ import annotations
 from cnsmeth.subpages.base_analysis import BaseAnalysis
 
-from nicegui import ui, run, background_tasks
+from nicegui import ui, background_tasks, app
 import time
 import os
 import sys
@@ -34,6 +34,7 @@ def run_modkit(cpgs, sortfile, temp, threads):
 
 
 def run_samtools_sort(file, tomerge, sortfile, threads):
+    print(f"Running samtools sort with {threads} threads")
     pysam.cat("-o", file, *tomerge)
     pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
 
@@ -72,6 +73,12 @@ class NanoDX_object(BaseAnalysis):
             with self.summary:
                 ui.label("NanoDX classification: Unknown")
         if self.browse:
+            self.show_previous_data(self.output)
+        else:
+            ui.timer(5, lambda: self.show_previous_data(self.output))
+
+    def show_previous_data(self, output):
+        if os.path.exists(os.path.join(output, "nanoDX_scores.csv")):
             self.nanodx_df_store = pd.read_csv(
                 os.path.join(os.path.join(self.output, "nanoDX_scores.csv")),
                 index_col=0,
@@ -102,15 +109,17 @@ class NanoDX_object(BaseAnalysis):
 
     async def process_bam(self, bamfile):
         tomerge = []
-        timestamp = None
+        #timestamp = None
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop()
             self.nanodx_bam_count += 1
             tomerge.append(file)
-            timestamp = filetime
-            self.bams_in_processing += 1
-            if len(tomerge) > 150:
+            #timestamp = filetime
+            app.storage.general[self.mainuuid][self.name]["counters"][
+                "bams_in_processing"
+            ] += 1
+            if len(tomerge) > 25:
                 break
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
@@ -121,26 +130,33 @@ class NanoDX_object(BaseAnalysis):
 
             sortfile = sorttempbam.name
 
-            ui.notify("NanoDX: Merging bams", type="info", position="top-right")
-
-            await background_tasks.create(
-                run.cpu_bound(run_samtools_sort, file, tomerge, sortfile, self.threads)
-            )
-
-            ui.notify("NanoDX: Running modkit", type="info", position="top-right")
-
-            await background_tasks.create(
-                run.cpu_bound(
-                    run_modkit, self.cpgs_file, sortfile, temp.name, self.threads
+            # ui.notify("NanoDX: Merging bams", type="info", position="top-right")
+            async def load_samtoolssort():
+                loop = asyncio.get_event_loop()
+                # await loop.run_in_executor(None, sync_func)
+                await loop.run_in_executor(
+                    None, run_samtools_sort, file, tomerge, sortfile, self.threads
                 )
-            )
+
+            await background_tasks.create(load_samtoolssort())
+
+            await asyncio.sleep(0.1)
+
+            async def load_modkit():
+                loop = asyncio.get_event_loop()
+                # await loop.run_in_executor(None, sync_func)
+                await loop.run_in_executor(
+                    None, run_modkit, self.cpgs_file, sortfile, temp.name, self.threads
+                )
+
+            await background_tasks.create(load_modkit())
+
+            await asyncio.sleep(0.1)
 
             try:
                 os.remove(f"{sortfile}.csi")
             except FileNotFoundError:
                 pass
-
-            ui.notify("NanoDX: Merging bed files", type="info", position="top-right")
 
             if self.not_first_run:
                 bed_a = pd.read_table(
@@ -189,12 +205,10 @@ class NanoDX_object(BaseAnalysis):
                     sep="\s+",
                     # delim_whitespace=True,
                 )
-
                 self.merged_bed_file = merge_bedmethyl(bed_a, self.merged_bed_file)
                 save_bedmethyl(self.merged_bed_file, self.nanodxfile.name)
             else:
                 shutil.copy(f"{temp.name}", self.nanodxfile.name)
-
                 self.merged_bed_file = pd.read_table(
                     self.nanodxfile.name,
                     names=[
@@ -243,9 +257,7 @@ class NanoDX_object(BaseAnalysis):
                 )
 
                 self.not_first_run = True
-
             self.merged_bed_file = collapse_bedmethyl(self.merged_bed_file)
-
             test_df = pd.merge(
                 self.merged_bed_file,
                 self.cpgs,
@@ -258,7 +270,6 @@ class NanoDX_object(BaseAnalysis):
             )
             test_df.loc[test_df["methylation_call"] < 60, "methylation_call"] = -1
             test_df.loc[test_df["methylation_call"] >= 60, "methylation_call"] = 1
-
             try:
                 predictions, class_labels, n_features = self.NN.predict(test_df)
             except Exception as e:
@@ -266,16 +277,14 @@ class NanoDX_object(BaseAnalysis):
                 test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
                 # self.nanodx_status_txt["message"] = "Error generating predictions."
                 sys.exit(1)
-
             nanoDX_df = pd.DataFrame({"class": class_labels, "score": predictions})
 
             nanoDX_save = nanoDX_df.set_index("class").T
             nanoDX_save["number_probes"] = n_features
-
-            if timestamp:
-                nanoDX_save["timestamp"] = timestamp * 1000
-            else:
-                nanoDX_save["timestamp"] = time.time() * 1000
+            # if timestamp:
+            #    nanoDX_save["timestamp"] = timestamp * 1000
+            # else:
+            nanoDX_save["timestamp"] = time.time() * 1000
 
             self.nanodx_df_store = pd.concat(
                 [self.nanodx_df_store, nanoDX_save.set_index("timestamp")]
@@ -283,6 +292,7 @@ class NanoDX_object(BaseAnalysis):
 
             self.nanodx_df_store.to_csv(os.path.join(self.output, "nanoDX_scores.csv"))
 
+            """
             columns_greater_than_threshold = (
                 self.nanodx_df_store > self.threshold
             ).any()
@@ -310,10 +320,15 @@ class NanoDX_object(BaseAnalysis):
                 type="success",
                 position="top-right",
             )
+            """
 
-            self.bam_processed += len(tomerge)
-            self.bams_in_processing -= len(tomerge)
-        await asyncio.sleep(30)
+            app.storage.general[self.mainuuid][self.name]["counters"][
+                "bam_processed"
+            ] += len(tomerge)
+            app.storage.general[self.mainuuid][self.name]["counters"][
+                "bams_in_processing"
+            ] -= len(tomerge)
+        await asyncio.sleep(3)
         self.running = False
 
     def create_nanodx_chart(self, title):

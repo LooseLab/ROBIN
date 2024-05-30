@@ -1,15 +1,18 @@
 """
 This file provides a base class for analysis of bam files output during a sequencing run.
 The base class provides a queue to receive bam files and a background thread to process the data.
+The class also provides a render pipeline. These are separate. The background thread should only be called in
+one class instance. Rendering can be called in as many classes as make connections.
 """
 
 import queue
-from nicegui import ui
+from nicegui import ui, app
 from typing import BinaryIO
 import pandas as pd
 import time
 import asyncio
 import threading
+from collections import Counter
 
 
 class BaseAnalysis:
@@ -17,43 +20,60 @@ class BaseAnalysis:
         self,
         threads,
         outputfolder,
+        analysis_name,
         summary=None,
         bamqueue=None,
         progress=False,
         batch=False,
         start_time=None,
         browse=False,
+        uuid=None,
         *args,
         **kwargs,
     ):
+        # Create a unique ID that we can use to register this specific item.
+        self.mainuuid = uuid
         if bamqueue:
             self.bamqueue = bamqueue
         else:
             self.bamqueue = queue.Queue()
+        self.name = analysis_name
         self.start_time = start_time
         self.batch = batch
         self.output = outputfolder
         self.summary = summary
         self.browse = browse
-        self.setup_ui()
-        if progress and not self.browse:
-            self.progress()
-        self.bam_count = 0
-        self.bam_processed = 0
-        self.bams_in_processing = 0
+        self.progress = progress
+        if self.name not in app.storage.general[self.mainuuid]:
+            app.storage.general[self.mainuuid][self.name] = {}
+            app.storage.general[self.mainuuid][self.name]["counters"] = Counter(
+                bam_count=0, bam_processed=0, bams_in_processing=0
+            )
+        # self.bam_count = 0
+        # self.bam_processed = 0
+        # self.bams_in_processing = 0
         self.running = False
         if threads > 1:
             self.threads = int(threads / 2)
         else:
             self.threads = threads
-        if batch:
+
+    def render_ui(self):
+        self.setup_ui()
+        if self.progress and not self.browse:
+            self.progress_bars()
+
+    def process_data(self):
+        print("Setting up data processing")
+        if self.batch:
             self.bams = []
             self.batch_timer_run()
         else:
             self.timer_run()
 
     def timer_run(self):
-        self.timer = ui.timer(0.1, self._worker)
+        print("non batch timer")
+        self.timer = ui.timer(1, self._worker)
 
     async def _worker(self):
         """
@@ -63,12 +83,14 @@ class BaseAnalysis:
         if not self.bamqueue.empty() and not self.running:
             self.running = True
             bamfile, timestamp = self.bamqueue.get()
-            self.bam_count += 1
+            app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += 1
+
             if not timestamp:
                 timestamp = time.time()
-            # print (bamfile,timestamp)
             await self.process_bam(bamfile, timestamp)
-            self.bam_processed += 1
+            app.storage.general[self.mainuuid][self.name]["counters"][
+                "bam_processed"
+            ] += 1
         else:
             await asyncio.sleep(1)
         self.timer.active = True
@@ -83,6 +105,7 @@ class BaseAnalysis:
         # self.bam_count += 1
 
     def batch_timer_run(self):
+        print("batch timer")
         self.timer = ui.timer(1, self._batch_worker)
 
     async def _batch_worker(self):
@@ -92,7 +115,9 @@ class BaseAnalysis:
         self.timer.active = False
         while self.bamqueue.qsize() > 0:
             self.bams.append((self.bamqueue.get()))
-            self.bam_count += 1
+            app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += 1
+            # print (self.bams)
+            # app.storage.general[self.mainuuid][self.name]['counters']['bams_in_processing'] += 1
             # self.bams_in_processing += 1
         if not self.running and len(self.bams) > 0:
             self.running = True
@@ -106,25 +131,35 @@ class BaseAnalysis:
         """
         This property generates a progress bar indicating the number of files that have been successfully processed.
         """
-        if self.bam_count == 0:
+        if app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] == 0:
             return 0
-        return (self.bam_processed) / self.bam_count
+        return (
+            app.storage.general[self.mainuuid][self.name]["counters"]["bam_processed"]
+        ) / app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"]
 
     @property
     def _progress2(self):
-        if self.bam_count == 0:
+        if app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] == 0:
             return 0
-        return (self.bams_in_processing) / self.bam_count
+        return (
+            app.storage.general[self.mainuuid][self.name]["counters"][
+                "bams_in_processing"
+            ]
+        ) / app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"]
 
     @property
     def _not_analysed(self):
-        if self.bam_count == 0:
+        if app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] == 0:
             return 0
         return (
-            self.bam_count - self.bams_in_processing - self.bam_processed
-        ) / self.bam_count
+            app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"]
+            - app.storage.general[self.mainuuid][self.name]["counters"][
+                "bams_in_processing"
+            ]
+            - app.storage.general[self.mainuuid][self.name]["counters"]["bam_processed"]
+        ) / app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"]
 
-    def progress(self):
+    def progress_bars(self):
         """
         Show a progress bar for the number of bam files processed.
         :return:
@@ -134,16 +169,18 @@ class BaseAnalysis:
             with ui.row():
                 ui.label("File Tracker").tailwind("drop-shadow", "font-bold")
                 ui.label().bind_text_from(
-                    self, "bam_count", backward=lambda n: f"Bam files seen: {n}"
+                    app.storage.general[self.mainuuid][self.name]["counters"],
+                    "bam_count",
+                    backward=lambda n: f"Bam files seen: {n}",
                 )
                 if self.batch:
                     ui.label().bind_text_from(
-                        self,
+                        app.storage.general[self.mainuuid][self.name]["counters"],
                         "bams_in_processing",
                         backward=lambda n: f"Bam files being processed: {n}",
                     )
                 ui.label().bind_text_from(
-                    self,
+                    app.storage.general[self.mainuuid][self.name]["counters"],
                     "bam_processed",
                     backward=lambda n: f"Bam files processed: {n}",
                 )
