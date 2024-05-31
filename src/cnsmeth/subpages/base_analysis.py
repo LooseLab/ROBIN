@@ -106,24 +106,26 @@ class BaseAnalysis:
 
     def batch_timer_run(self):
         print("batch timer")
-        self.timer = ui.timer(1, self._batch_worker)
+        self.timer = ui.timer(5, self._batch_worker)
 
     async def _batch_worker(self):
         """
         This function takes bam files from a queue in batches and adds them to a background thread for processing.
         """
         self.timer.active = False
+        count = 0
         while self.bamqueue.qsize() > 0:
             self.bams.append((self.bamqueue.get()))
-            app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += 1
-            # print (self.bams)
-            # app.storage.general[self.mainuuid][self.name]['counters']['bams_in_processing'] += 1
-            # self.bams_in_processing += 1
+            count += 1
+            if count >= 20:
+                break
+        app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += count
+
         if not self.running and len(self.bams) > 0:
             self.running = True
             await self.process_bam(self.bams)
-        else:
-            await asyncio.sleep(1)
+        #else:
+            #await asyncio.sleep(1)
         self.timer.active = True
 
     @property

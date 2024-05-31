@@ -15,7 +15,7 @@ import sys
 import click
 import time
 from pathlib import Path
-from nicegui import ui  # , background_tasks
+from nicegui import ui, run  # , background_tasks
 from io import StringIO
 import pysam
 import asyncio
@@ -198,28 +198,17 @@ class TargetCoverage(BaseAnalysis):
             # bamfile, bedfile, workdir, workdirout, threads
             self.clair3running = True
             shutil.copy2(bedfile, f"{bedfile}2")
-            # await background_tasks.create(
-            #    run.cpu_bound(
-            #        run_clair3,
-            #        f"{bamfile}",
-            #        f"{bedfile}2",
-            #        self.output,
-            #        workdirout,
-            #        self.threads,
-            #        self.reference,
-            #    )
-            # )
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                None,
-                run_clair3,
-                f"{bamfile}",
-                f"{bedfile}2",
-                self.output,
-                workdirout,
-                self.threads,
-                self.reference,
-            )
+            await run.cpu_bound(
+                    run_clair3,
+                    f"{bamfile}",
+                    f"{bedfile}2",
+                    self.output,
+                    workdirout,
+                    self.threads,
+                    self.reference,
+                )
+
+
 
             # if os.path.isfile(f"{workdirout}/snpsift_output.vcf"):
             #    self.SNPview.parse_vcf(f"{workdirout}/snpsift_output.vcf")
@@ -476,18 +465,17 @@ class TargetCoverage(BaseAnalysis):
             self.covtable.update_rows(self.target_coverage_df.to_dict(orient="records"))
 
     async def process_bam(self, bamfile, timestamp):
-        loop = asyncio.get_event_loop()
-        newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
+        #loop = asyncio.get_event_loop()
+        #newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
 
-        # newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
+        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
 
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
-        await loop.run_in_executor(
-            None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
-        )
+        #await loop.run_in_executor(
+        #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
+        #)
         # run_bedtools(bamfile, self.bedfile, tempbamfile.name)
-        # await background_tasks.create(
-        #    run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
+        await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
         # )
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
@@ -514,19 +502,18 @@ class TargetCoverage(BaseAnalysis):
             self.cov_df_main = newcovdf
             self.bedcov_df_main = bedcovdf
         else:
-            # self.cov_df_main, self.bedcov_df_main = await background_tasks.create(
-            #    run.cpu_bound(
-            #        run_bedmerge,
-            #        newcovdf,
-            #        self.cov_df_main,
-            #        bedcovdf,
-            #        self.bedcov_df_main,
-            #    )
-            # )
+            self.cov_df_main, self.bedcov_df_main = await run.cpu_bound(
+                    run_bedmerge,
+                    newcovdf,
+                    self.cov_df_main,
+                    bedcovdf,
+                    self.bedcov_df_main,
+                )
 
-            self.cov_df_main, self.bedcov_df_main = run_bedmerge(
-                newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
-            )
+
+            #self.cov_df_main, self.bedcov_df_main = run_bedmerge(
+            #    newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
+            #)
 
         bases = self.cov_df_main["covbases"].sum()
         genome = self.cov_df_main["endpos"].sum()
@@ -605,13 +592,14 @@ class TargetCoverage(BaseAnalysis):
                 #        self.threads,
                 #    )
                 # )
-                await loop.run_in_executor(
-                    None,
-                    sort_bam,
-                    self.targetbamfile,
-                    os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
-                    self.threads,
-                )
+                #await loop.run_in_executor(
+                #    None,
+                #    sort_bam,
+                #    self.targetbamfile,
+                #    os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
+                #    self.threads,
+                #)
+                await run.cpu_bound(sort_bam, self.targetbamfile, os.path.join(clair3workdir, "sorted_targets_exceeding.bam"), self.threads)
                 # sort_bam(self.targetbamfile, os.path.join(clair3workdir, "sorted_targets_exceeding.bam"), self.threads)
                 if self.snp_calling:
                     self.SNPqueue.put(

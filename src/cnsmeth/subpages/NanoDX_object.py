@@ -1,7 +1,7 @@
 from __future__ import annotations
 from cnsmeth.subpages.base_analysis import BaseAnalysis
 
-from nicegui import ui, background_tasks, app
+from nicegui import ui, background_tasks, app, run
 import time
 import os
 import sys
@@ -27,14 +27,13 @@ def run_modkit(cpgs, sortfile, temp, threads):
     """
     try:
         os.system(
-            f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp} --suppress-progress"
+            f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp} --suppress-progress >/dev/null 2>&1"
         )
     except Exception as e:
         print(e)
 
 
 def run_samtools_sort(file, tomerge, sortfile, threads):
-    print(f"Running samtools sort with {threads} threads")
     pysam.cat("-o", file, *tomerge)
     pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
 
@@ -116,11 +115,13 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_bam_count += 1
             tomerge.append(file)
             #timestamp = filetime
-            app.storage.general[self.mainuuid][self.name]["counters"][
-                "bams_in_processing"
-            ] += 1
-            if len(tomerge) > 25:
+
+            if len(tomerge) > 200:
                 break
+        app.storage.general[self.mainuuid][self.name]["counters"][
+            "bams_in_processing"
+        ] += len(tomerge)
+
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
             sorttempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
@@ -130,28 +131,9 @@ class NanoDX_object(BaseAnalysis):
 
             sortfile = sorttempbam.name
 
-            # ui.notify("NanoDX: Merging bams", type="info", position="top-right")
-            async def load_samtoolssort():
-                loop = asyncio.get_event_loop()
-                # await loop.run_in_executor(None, sync_func)
-                await loop.run_in_executor(
-                    None, run_samtools_sort, file, tomerge, sortfile, self.threads
-                )
+            await run.cpu_bound(run_samtools_sort, file, tomerge, sortfile, self.threads)
 
-            await background_tasks.create(load_samtoolssort())
-
-            await asyncio.sleep(0.1)
-
-            async def load_modkit():
-                loop = asyncio.get_event_loop()
-                # await loop.run_in_executor(None, sync_func)
-                await loop.run_in_executor(
-                    None, run_modkit, self.cpgs_file, sortfile, temp.name, self.threads
-                )
-
-            await background_tasks.create(load_modkit())
-
-            await asyncio.sleep(0.1)
+            await run.cpu_bound(run_modkit, self.cpgs_file, sortfile, temp.name, self.threads)
 
             try:
                 os.remove(f"{sortfile}.csi")
@@ -205,7 +187,7 @@ class NanoDX_object(BaseAnalysis):
                     sep="\s+",
                     # delim_whitespace=True,
                 )
-                self.merged_bed_file = merge_bedmethyl(bed_a, self.merged_bed_file)
+                self.merged_bed_file = await run.cpu_bound(merge_bedmethyl, bed_a, self.merged_bed_file)
                 save_bedmethyl(self.merged_bed_file, self.nanodxfile.name)
             else:
                 shutil.copy(f"{temp.name}", self.nanodxfile.name)
@@ -257,7 +239,7 @@ class NanoDX_object(BaseAnalysis):
                 )
 
                 self.not_first_run = True
-            self.merged_bed_file = collapse_bedmethyl(self.merged_bed_file)
+            self.merged_bed_file = await run.cpu_bound(collapse_bedmethyl, self.merged_bed_file)
             test_df = pd.merge(
                 self.merged_bed_file,
                 self.cpgs,
@@ -292,43 +274,12 @@ class NanoDX_object(BaseAnalysis):
 
             self.nanodx_df_store.to_csv(os.path.join(self.output, "nanoDX_scores.csv"))
 
-            """
-            columns_greater_than_threshold = (
-                self.nanodx_df_store > self.threshold
-            ).any()
-            columns_not_greater_than_threshold = ~columns_greater_than_threshold
-            result = self.nanodx_df_store.columns[
-                columns_not_greater_than_threshold
-            ].tolist()
-
-            self.update_nanodx_time_chart(self.nanodx_df_store.drop(columns=result))
-
-            self.update_nanodx_plot(
-                nanoDX_df["class"].head(10).values,
-                nanoDX_df["score"].head(10).values,
-                self.nanodx_bam_count,
-                n_features,
-            )
-            if self.summary:
-                with self.summary:
-                    self.summary.clear()
-                    ui.label(
-                        f"NanoDX classification: {nanoDX_df['class'].head(1).values[0]} - {nanoDX_df['score'].head(1).values[0]:.2f}"
-                    )
-            ui.notify(
-                f"NanoDX: Done - {nanoDX_df['class'].head(1).values}",
-                type="success",
-                position="top-right",
-            )
-            """
-
             app.storage.general[self.mainuuid][self.name]["counters"][
                 "bam_processed"
             ] += len(tomerge)
             app.storage.general[self.mainuuid][self.name]["counters"][
                 "bams_in_processing"
             ] -= len(tomerge)
-        await asyncio.sleep(3)
         self.running = False
 
     def create_nanodx_chart(self, title):
