@@ -9,7 +9,7 @@ import pandas as pd
 import click
 
 
-from nicegui import ui, background_tasks
+from nicegui import ui, background_tasks, run
 from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
@@ -617,62 +617,16 @@ class Fusion_object(BaseAnalysis):
         Function to process a bam file and identify fusion candidates.
         :param bamfile: The path to the bam file to process.
         """
-        # ToDo: This function needs to be run in the background. It is often too slow.
         tempreadfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
         tempmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
         tempallmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
 
-        async def process_bam_fusions():
-            loop = asyncio.get_event_loop()
-            # await loop.run_in_executor(None, sync_func)
-            fusion_candidates, fusion_candidates_all = await loop.run_in_executor(
-                None,
-                fusion_work,
-                self.threads,
-                bamfile,
-                self.gene_bed,
-                self.all_gene_bed,
-                tempreadfile,
-                tempbamfile,
-                tempmappings,
-                tempallmappings,
-            )
-            return fusion_candidates, fusion_candidates_all
 
-        fusion_candidates, fusion_candidates_all = await background_tasks.create(
-            process_bam_fusions()
-        )
-        """
-        # Get the subset of reads that map to the target gene panel and have supplementary alignments
-        os.system(
-            f"samtools view -@{self.threads} -L {self.gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile.name}"
-        )
-        if os.path.getsize(tempreadfile.name) > 0:
-            os.system(
-                f"samtools view -@{self.threads} -N {tempreadfile.name} -o {tempbamfile.name} {bamfile}"
-            )
-            if os.path.getsize(tempbamfile.name) > 0:
-                os.system(
-                    f"bedtools intersect -a {self.gene_bed} -b {tempbamfile.name} -wa -wb > {tempmappings.name}"
-                )
-                os.system(
-                    f"bedtools intersect -a {self.all_gene_bed} -b {tempbamfile.name} -wa -wb > {tempallmappings.name}"
-                )
-                if os.path.getsize(tempmappings.name) > 0:
-                    fusion_candidates = pd.read_csv(
-                        tempmappings.name, sep="\t", header=None
-                    )
-                    # Filter to only include good mappings
-                    fusion_candidates = fusion_candidates[fusion_candidates[8].gt(50)]
-                    # Filter to only keep reads that map to 1 kb or more of the reference.
-                    fusion_candidates["diff"] = (
-                        fusion_candidates[6] - fusion_candidates[5]
-                    )
-                    fusion_candidates = fusion_candidates[
-                        fusion_candidates["diff"].gt(1000)
-                    ]
-                """
+        #ToDo: Move this to another process
+
+        fusion_candidates, fusion_candidates_all = fusion_work(self.threads, bamfile, self.gene_bed, self.all_gene_bed, tempreadfile, tempbamfile, tempmappings, tempallmappings)
+
         if fusion_candidates is not None:
             if self.fusion_candidates.empty:
                 self.fusion_candidates = fusion_candidates
@@ -680,24 +634,7 @@ class Fusion_object(BaseAnalysis):
                 self.fusion_candidates = pd.concat(
                     [self.fusion_candidates, fusion_candidates]
                 ).reset_index(drop=True)
-                """
-                if os.path.getsize(tempallmappings.name) > 0:
-                    fusion_candidates_all = pd.read_csv(
-                        tempallmappings.name, sep="\t", header=none
-                    )
 
-                    fusion_candidates_all = fusion_candidates_all[
-                        fusion_candidates_all[8].gt(59)
-                    ]
-
-                    fusion_candidates_all["diff"] = (
-                        fusion_candidates_all[6] - fusion_candidates_all[5]
-                    )
-
-                    fusion_candidates_all = fusion_candidates_all[
-                        fusion_candidates_all["diff"].gt(1000)
-                    ]
-                """
         if fusion_candidates_all is not None:
             if self.fusion_candidates_all.empty:
                 self.fusion_candidates_all = fusion_candidates_all
@@ -706,11 +643,11 @@ class Fusion_object(BaseAnalysis):
                     [self.fusion_candidates_all, fusion_candidates_all]
                 ).reset_index(drop=True)
 
-                self.fusion_table()
+        self.fusion_table()
 
-                self.fusion_table_all()
+        self.fusion_table_all()
 
-        await asyncio.sleep(0.1)
+        #await asyncio.sleep(0.1)
         self.running = False
 
     def _generate_random_color(self):

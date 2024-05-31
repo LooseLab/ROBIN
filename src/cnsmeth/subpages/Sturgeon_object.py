@@ -5,7 +5,7 @@ import tempfile
 import time
 import shutil
 import pandas as pd
-from nicegui import ui, app, background_tasks
+from nicegui import ui, app, background_tasks, run
 from cnsmeth import theme
 import pysam
 from cnsmeth import models
@@ -74,7 +74,6 @@ class Sturgeon_object(BaseAnalysis):
         self.sturgeon_df_store = pd.DataFrame()
         self.threshold = 0.05
         self.first_run = True
-        self.loop = asyncio.get_event_loop()
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
@@ -147,14 +146,16 @@ class Sturgeon_object(BaseAnalysis):
             # with self.card:
             #    ui.notify("Sturgeon: Merging bams")
 
-            async def load_data():
-                loop = asyncio.get_event_loop()
+            #async def load_data():
+            #    loop = asyncio.get_event_loop()
                 # await loop.run_in_executor(None, sync_func)
-                await loop.run_in_executor(None, pysam_cat, tempbam.name, tomerge)
+            #    await loop.run_in_executor(None, pysam_cat, tempbam.name, tomerge)
 
-            await background_tasks.create(load_data())
+            #await background_tasks.create(load_data())
 
-            await asyncio.sleep(0.1)
+            await run.cpu_bound(pysam_cat, tempbam.name, tomerge)
+
+            #await asyncio.sleep(0.1)
 
             # await background_tasks.create(
             #    run.cpu_bound(pysam_cat, tempbam.name, tomerge)
@@ -163,31 +164,34 @@ class Sturgeon_object(BaseAnalysis):
             temp = tempfile.NamedTemporaryFile(dir=self.output)
             with tempfile.TemporaryDirectory(dir=self.output) as temp2:
 
-                async def load_modkit():
-                    loop = asyncio.get_event_loop()
-                    # await loop.run_in_executor(None, sync_func)
-                    await loop.run_in_executor(
-                        None, run_modkit, file, temp.name, self.threads
-                    )
+                #async def load_modkit():
+                #    loop = asyncio.get_event_loop()
+                #    # await loop.run_in_executor(None, sync_func)
+                #    await loop.run_in_executor(
+                #        None, run_modkit, file, temp.name, self.threads
+                #    )
 
-                await background_tasks.create(load_modkit())
+                #await background_tasks.create(load_modkit())
 
-                await asyncio.sleep(0.1)
+                await run.cpu_bound(run_modkit, file, temp.name, self.threads)
+
+                #await asyncio.sleep(0.1)
                 # await background_tasks.create(
                 #    run.cpu_bound(run_modkit, file, temp.name, self.threads)
                 # )
                 # ui.notify("Sturgeon: Modkit Complete")
 
-                async def load_inputtobed():
-                    loop = asyncio.get_event_loop()
+                #async def load_inputtobed():
+                #    loop = asyncio.get_event_loop()
                     # await loop.run_in_executor(None, sync_func)
-                    await loop.run_in_executor(
-                        None, run_sturgeon_inputtobed, temp.name, temp2
-                    )
+                #    await loop.run_in_executor(
+                #        None, run_sturgeon_inputtobed, temp.name, temp2
+                #    )
 
-                await background_tasks.create(load_inputtobed())
+                await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
+                #await background_tasks.create(load_inputtobed())
 
-                await asyncio.sleep(0.1)
+                #await asyncio.sleep(0.1)
 
                 calls_per_probe_file = os.path.join(
                     temp2, "merged_probes_methyl_calls.txt"
@@ -201,19 +205,20 @@ class Sturgeon_object(BaseAnalysis):
                     self.first_run = False
                 else:
 
-                    async def load_mergeprobes():
-                        loop = asyncio.get_event_loop()
+                    #async def load_mergeprobes():
+                    #    loop = asyncio.get_event_loop()
                         # await loop.run_in_executor(None, sync_func)
-                        await loop.run_in_executor(
-                            None,
-                            run_sturgeon_merge_probes,
-                            calls_per_probe_file,
-                            merged_output_file,
-                        )
+                    #    await loop.run_in_executor(
+                    #        None,
+                    #        run_sturgeon_merge_probes,
+                    #        calls_per_probe_file,
+                    #        merged_output_file,
+                    #    )
 
-                    await background_tasks.create(load_mergeprobes())
+                    await run.cpu_bound(run_sturgeon_merge_probes, calls_per_probe_file, merged_output_file)
+                    #await background_tasks.create(load_mergeprobes())
 
-                    await asyncio.sleep(0.1)
+                    #await asyncio.sleep(0.1)
                     # await background_tasks.create(
                     #    run.cpu_bound(
                     #        run_sturgeon_merge_probes,
@@ -225,39 +230,39 @@ class Sturgeon_object(BaseAnalysis):
                     self.bedDir.name, "final_merged_probes_methyl_calls.bed"
                 )
 
-                async def load_methylcalls():
-                    loop = asyncio.get_event_loop()
+                #async def load_methylcalls():
+                #    loop = asyncio.get_event_loop()
                     # await loop.run_in_executor(None, sync_func)
-                    await loop.run_in_executor(
-                        None,
-                        run_probes_methyl_calls,
-                        merged_output_file,
-                        bed_output_file,
-                    )
+                #    await loop.run_in_executor(
+                #        None,
+                #        run_probes_methyl_calls,
+                #        merged_output_file,
+                #        bed_output_file,
+                #    )
+                await run.cpu_bound(run_probes_methyl_calls, merged_output_file, bed_output_file)
+                #await background_tasks.create(load_methylcalls())
 
-                await background_tasks.create(load_methylcalls())
-
-                await asyncio.sleep(0.1)
+                #await asyncio.sleep(0.1)
 
                 # await background_tasks.create(
                 #    run.cpu_bound(
                 #        run_probes_methyl_calls, merged_output_file, bed_output_file
                 #    )
                 # )
-                async def load_predict():
-                    loop = asyncio.get_event_loop()
+                #async def load_predict():
+                #    loop = asyncio.get_event_loop()
                     # await loop.run_in_executor(None, sync_func)
-                    await loop.run_in_executor(
-                        None,
-                        run_sturgeon_predict,
-                        self.bedDir.name,
-                        self.dataDir.name,
-                        self.modelfile,
-                    )
+                #    await loop.run_in_executor(
+                #        None,
+                #        run_sturgeon_predict,
+                #         self.bedDir.name,
+                #         self.dataDir.name,
+                #         self.modelfile,
+                #     )
+                await run.cpu_bound(run_sturgeon_predict, self.bedDir.name, self.dataDir.name, self.modelfile)
+                #await background_tasks.create(load_predict())
 
-                await background_tasks.create(load_predict())
-
-                await asyncio.sleep(0.1)
+                #await asyncio.sleep(0.1)
 
                 # await background_tasks.create(
                 #    run.cpu_bound(

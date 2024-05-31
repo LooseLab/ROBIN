@@ -137,7 +137,7 @@ class CNVAnalysis(BaseAnalysis):
             copy_numbers=self.update_cnv_dict,
             log_level=int(logging.ERROR),
         )
-        await asyncio.sleep(0.05)
+        #await asyncio.sleep(0.05)
 
         def pad_arrays(arr1, arr2, pad_value=0):
             len_diff = abs(len(arr1) - len(arr2))
@@ -161,7 +161,7 @@ class CNVAnalysis(BaseAnalysis):
             log_level=int(logging.ERROR),
             bin_width=self.cnv_dict["bin_width"],
         )
-        await asyncio.sleep(0.05)
+        #await asyncio.sleep(0.05)
 
         for key in self.result.cnv.keys():
             if key != "chrM":
@@ -178,7 +178,7 @@ class CNVAnalysis(BaseAnalysis):
                 #    result = algo_c.predict(pen=penalty_value)
                     # print(key, result)
 
-        await asyncio.sleep(0.05)
+        #await asyncio.sleep(0.05)
 
         self.estimate_XY()
 
