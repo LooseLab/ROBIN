@@ -226,19 +226,10 @@ class BrainMeth:
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
             self.observer.start()
 
-            # self.bam_processing = threading.Thread(target=self.process_bams, args=())
             ui.timer(1, callback=self.background_process_bams, once=True)
-            # self.bam_processing.daemon = True
-            # self.bam_processing.start()
-
+            
             ui.timer(1, self.check_existing_bams, once=True)
-            # self.check_for_existing_bams = threading.Thread(
-            #    target=self.check_existing_bams,
-            #    args=(),
-            #    kwargs={"sequencing_summary": self.sequencing_summary},
-            # )
-            # self.check_for_existing_bams.daemon = True
-            # self.check_for_existing_bams.start()
+            
             print("watchfolder setup and added")
 
     async def waitforclick(self):
@@ -258,85 +249,6 @@ class BrainMeth:
                 ui.label("Not yet implemented.")
                 self.output = result[0]
                 self.information_panel()
-                """
-                with ui.tabs().classes("w-full") as tabs:
-                    methylation = ui.tab("Methylation Classification")
-                #    copy_numer = ui.tab("Copy Number Variation")
-                #    coverage = ui.tab("Target Coverage")
-                #    mgmt = ui.tab("MGMT")
-                #    fusions = ui.tab("Fusions")
-                with ui.tab_panels(tabs, value=methylation).classes("w-full"):
-                    with ui.tab_panel(methylation).classes("w-full"):
-                        with ui.card().classes("w-full"):
-                            with ui.column().classes("w-full"):
-                                self.rcns2_worker = RCNS2_worker(
-                                    self.bamforcns,
-                                    self.cnv,
-                                    self.target_coverage,
-                                    self.mgmt_panel,
-                                    self.fusion_panel,
-                                    threads=self.threads,
-                                    output_folder=result[0],
-                                    showerrors=self.showerrors,
-                                    browse=self.browse,
-                                )
-                                self.sturgeon_worker = Sturgeon_worker(
-                                    self.bamforsturgeon,
-                                    threads=self.threads,
-                                    output_folder=result[0],
-                                    showerrors=self.showerrors,
-                                    browse=self.browse,
-                                )
-
-                                with ui.card().classes("w-full h-auto"):
-                                    with ui.grid(columns=3).classes("w-full h-auto"):
-                                        with ui.column():
-                                            with ui.card().style("width: 100%"):
-                                                self.rcns2_worker.status_rcns2()
-                                                self.rcns2_worker.create_rcns2_chart(
-                                                    "RapidCNS2 (Random Forest)"
-                                                )
-
-                                        with ui.column():
-                                            with ui.card().style("width: 100%"):
-                                                self.sturgeon_worker.status_sturgeon()
-                                                self.sturgeon_worker.create_sturgeon_chart(
-                                                    "Sturgeon"
-                                                )
-                                        with ui.column():
-                                            with ui.card().style("width: 100%"):
-                                                # self.sturgeon_worker.status_sturgeon()
-                                                self.sturgeon_worker.create_nanodx_chart(
-                                                    "NanoDX"
-                                                )
-
-                                with ui.card().style("width: 100%"):
-                                    self.rcns2_worker.create_rcns2_time_chart()
-
-                                with ui.card().style("width: 100%"):
-                                    self.sturgeon_worker.create_sturgeon_time_chart()
-
-                    with ui.tab_panel(copy_numer).classes("w-full"):
-                        with ui.card().style("width: 100%"):
-                            self.cnv.create_cnv_scatter("CNV Scatter")
-
-                    with ui.tab_panel(coverage).classes("w-full"):
-                        pass
-
-                    with ui.tab_panel(mgmt).classes("w-full"):
-                        self.mgmt_panel.setup_ui(mgmt)
-
-                    with ui.tab_panel(fusions).classes("w-full"):
-                        self.fusion_panel.setup_ui()
-
-                    self.rcns2_worker.load_prior_data()
-                    self.sturgeon_worker.load_prior_data()
-
-                self.replaycontrol = ui.button(
-                    "replay data", on_click=self.replay, icon="replay"
-                )
-                """
-            # self.rcns2_worker.replay_prior_data()
 
     def replay(self):
         ui.notify("Replaying data")
