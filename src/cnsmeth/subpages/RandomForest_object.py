@@ -339,7 +339,7 @@ class RandomForest_object(BaseAnalysis):
 
                 app.storage.general[self.mainuuid][self.name]['counters']['bam_processed'] += len(tomerge)
                 app.storage.general[self.mainuuid][self.name]['counters']['bams_in_processing'] -= len(tomerge)
-                
+
                 """
                 
                 columns_greater_than_threshold = (
