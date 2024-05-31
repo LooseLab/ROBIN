@@ -1,5 +1,30 @@
 """
-This is the main page which sets up the niceGUI real time application.
+This is the main page which sets up the ROBIN real time application.
+
+The code implements a NiceGUI app (https://nicegui.io/) which requires all long running processes to
+operate in the background. The fundamental principle is that nothing should block the 
+main thread.
+
+On launch, the app creates an instance of the run class for the specific run, taking arguments either
+from the command line or via a config file.
+
+The run class in turn sets up the application. Arguments to be shared across the application
+are written to niceguis app.storage.general to allow them to be accessed by all users of this
+instance.
+
+The run class then configures the app with a specific on_startup function. This function handles
+all slow running background processes. However, the function shares the main event loop with the ui
+process. It is important to exploit run.cpu_bound and run.io_bound wherever necessary.
+
+The result of this is that a single instance of the Methnice class is created which will process data 
+in the background. Whenever a user connects to the site, the user will receive individual 
+instances of these classes which will enable visualisation of the data but will not themselves
+run any analysis.
+
+The concept of one class providing both analysis and ui elements is maintained throughout the codebase.
+
+Hopefully this simplifies code maintenance and future improvements.
+
 
 """
 
