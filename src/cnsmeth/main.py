@@ -37,7 +37,7 @@ import uuid
 import asyncio
 
 from pathlib import Path
-from nicegui import ui, app
+from nicegui import ui,app
 from cnsmeth import theme
 from cnsmeth import images
 from configparser import ConfigParser
@@ -47,16 +47,23 @@ from cnsmeth.minknow_info.minknow_panel import MinKNOWFish
 
 
 ### The location for a default config file.
+#ToDo: Confirm if this actually works!!!
 DEFAULT_CFG = "config.ini"
 
 
-### This ID identifies the access key for this specific run of NiceGUI.
+### This ID provides an access key for this specific run of NiceGUI.
 ### Data will be written to the general store using this key.
+#ToDo: Confirm if multiple instances of ROBIN can run in the same folder.
 UNIQUE_ID = str(uuid.uuid4())
-
 
 @ui.page("/", response_timeout=10)
 async def index():
+    """
+    This function defines the main index page for the ROBIN site.
+    We setup an instance of Methnice which will provide the user with
+    the "splash screen" and allow them to choose which pages to browse
+    to.
+    """
     GUI = Methnice(
         threads=app.storage.general[UNIQUE_ID]["threads"],
         simtime=app.storage.general[UNIQUE_ID]["simtime"],
@@ -79,6 +86,11 @@ async def index():
 
 @ui.page("/live", response_timeout=10)
 async def live():
+    """
+    This page is served at /live and is the interaction with live data from ROBIN.
+    This page is created for every user who visits.
+    #ToDo: Many of the variables being passed to Methnice are most likely redundant.
+    """
     GUI = Methnice(
         threads=app.storage.general[UNIQUE_ID]["threads"],
         simtime=app.storage.general[UNIQUE_ID]["simtime"],
@@ -98,19 +110,24 @@ async def live():
 
 @ui.page("/browse", response_timeout=10)
 async def test():
+    """
+    #ToDo: This code is to be implemented.
+    The idea is that we will implement the browse functions that allow someone
+    to explore previous data even when a live run is in progress.
+    """
     ui.link("Home", "/")
     ui.link("Live", "/live")
     ui.link("Browse", "/browse")
-    ui.label("Good to be back.")
-    container = ui.row()
-    with container:
-        ui.label("Hello, world!")
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, handle_click, container)
-        # await handle_click()
+    ui.label("Good to be back. This code is still to be implemented.")
+    
 
 
 def clean_up():
+    """
+    This function serves to clean up the stored data at the end of a run.
+    #ToDo: We should wait to pop the data until after all the subrunning processes have
+    been wound up.
+    """
     print("App shutdown detected.")
     print("Resetting Storage.")
     # We have seen the app stop. Therefore we want to remove data important for this instance.
@@ -119,7 +136,11 @@ def clean_up():
 
 
 async def startup():
-    # Start data processing on the main page.
+    """
+	This function starts data processing in the main application loop.
+    The function is only started once. It must not be run more than once!
+    """
+    
     loop = asyncio.get_running_loop()
     loop.set_debug(True)
     loop.slow_callback_duration = 0.5
@@ -141,6 +162,7 @@ async def startup():
     await MAINPAGE.start_analysis()
 
     # handle any occasions when a user stops with a ctrl-c
+    #ToDo: surely this can be replaced by the clean_up funtion itself.
     def handler(*args):
         clean_up()
 
@@ -148,6 +170,11 @@ async def startup():
 
 
 class Methnice:
+    """
+    This class handles configuration of all the pages and page contents. 
+    
+    #ToDo: See if we can reduce or remove this.
+    """
     def __init__(
         self,
         threads: int,
