@@ -269,14 +269,15 @@ class Fusion_object(BaseAnalysis):
             ui.timer(5, lambda: self.show_previous_data(self.output))
 
     def fusion_table_all(self):
-        uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)
-        doubles_all = self.fusion_candidates_all[uniques_all]
-        counts_all = doubles_all.groupby(7)[3].transform("nunique")
-        result_all = doubles_all[counts_all > 1]
-        result_all.to_csv(
-            os.path.join(self.output, "fusion_candidates_all.csv"), index=False
-        )
-        # self.update_fusion_table_all(result_all)
+        if not self.fusion_candidates_all.empty:
+            uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)
+            doubles_all = self.fusion_candidates_all[uniques_all]
+            counts_all = doubles_all.groupby(7)[3].transform("nunique")
+            result_all = doubles_all[counts_all > 1]
+            result_all.to_csv(
+                os.path.join(self.output, "fusion_candidates_all.csv"), index=False
+            )
+            # self.update_fusion_table_all(result_all)
 
     def update_fusion_table_all(self, result_all):
         if result_all.shape[0] > self.fstable_all_row_count:
@@ -454,13 +455,14 @@ class Fusion_object(BaseAnalysis):
                                             )
 
     def fusion_table(self):
-        uniques = self.fusion_candidates[7].duplicated(keep=False)
-        doubles = self.fusion_candidates[uniques]
-        counts = doubles.groupby(7)[3].transform("nunique")
-        result = doubles[counts > 1]
-        result.to_csv(
-            os.path.join(self.output, "fusion_candidates_master.csv"), index=False
-        )
+        if not self.fusion_candidates.empty:
+            uniques = self.fusion_candidates[7].duplicated(keep=False)
+            doubles = self.fusion_candidates[uniques]
+            counts = doubles.groupby(7)[3].transform("nunique")
+            result = doubles[counts > 1]
+            result.to_csv(
+                os.path.join(self.output, "fusion_candidates_master.csv"), index=False
+            )
         # self.update_fusion_table(result)
 
     def update_fusion_table(self, result):
