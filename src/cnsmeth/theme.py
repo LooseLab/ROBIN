@@ -1,5 +1,36 @@
 """
-This module contains the theme for the whole application.
+This module defines the theme and layout for the entire application, ensuring a consistent look and feel across all pages. 
+
+It includes:
+- A context manager `frame` to create a custom page frame with navigation, header, and footer.
+- Utility functions to handle dark mode and remote access toggling.
+- Paths to external resources like images, HTML, and CSS files for styling.
+
+Functions:
+- frame(navtitle: str): Context manager for creating a consistent page layout with header, footer, and navigation.
+- cleanup_and_exit(): Handles cleanup operations before shutting down the application.
+- dark_mode(event: events.ValueChangeEventArguments): Toggles dark mode based on the event argument.
+- use_on_air(args: events.ValueChangeEventArguments): Toggles remote access based on the event argument.
+
+Constants:
+- IMAGEFILE: Path to the image file used in the header and footer.
+- HEADER_HTML: HTML content for the header.
+- STYLE_CSS: CSS styles for the application.
+
+External Dependencies:
+- contextlib.contextmanager
+- nicegui (ui, app, events, core, air)
+- pathlib.Path
+- cnsmeth.images
+- os
+
+Example usage:
+```
+from theme import frame
+
+with frame(“Home”):
+ui.label(“Welcome to the Application”)
+```
 """
 
 from contextlib import contextmanager
