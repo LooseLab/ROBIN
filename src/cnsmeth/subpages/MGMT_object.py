@@ -76,11 +76,11 @@ class MGMT_Object(BaseAnalysis):
     async def process_bam(self, bamfile, timestamp):
         MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
-        #loop = asyncio.get_event_loop()
+        # loop = asyncio.get_event_loop()
         # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
-        #await loop.run_in_executor(
+        # await loop.run_in_executor(
         #    None, run_bedtools, bamfile, MGMT_BED, tempbamfile.name
-        #)
+        # )
         # await background_tasks.create(
         await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
         # )
@@ -113,14 +113,13 @@ class MGMT_Object(BaseAnalysis):
 
             # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
 
-            #await loop.run_in_executor(
+            # await loop.run_in_executor(
             #    None, run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
-            #)
+            # )
 
             await run.cpu_bound(
-                    run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
-                )
-
+                run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
+            )
 
             # ui.notify("MGMT predictor done.", type="positive", position="top")
 
@@ -131,9 +130,9 @@ class MGMT_Object(BaseAnalysis):
                 self.counter += 1
                 plot_out = os.path.join(self.output, f"{self.counter}_mgmt.png")
 
-                #await loop.run_in_executor(
+                # await loop.run_in_executor(
                 #    None, run_methylartist, tempmgmtdir.name, plot_out
-                #)
+                # )
                 await run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
                 # )
                 results.to_csv(

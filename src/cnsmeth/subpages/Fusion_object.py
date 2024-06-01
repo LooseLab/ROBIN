@@ -4,12 +4,11 @@ import sys
 import gff3_parser
 import tempfile
 import random
-import asyncio
 import pandas as pd
 import click
 
 
-from nicegui import ui, background_tasks, run
+from nicegui import ui, run
 from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
@@ -37,22 +36,22 @@ def fusion_work(
     fusion_candidates = None
     fusion_candidates_all = None
     os.system(
-        f"samtools view -@{threads} -L {gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile.name}"
+        f"samtools view -@{threads} -L {gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile}"
     )
-    if os.path.getsize(tempreadfile.name) > 0:
+    if os.path.getsize(tempreadfile) > 0:
         os.system(
-            f"samtools view -@{threads} -N {tempreadfile.name} -o {tempbamfile.name} {bamfile}"
+            f"samtools view -@{threads} -N {tempreadfile} -o {tempbamfile} {bamfile}"
         )
-        if os.path.getsize(tempbamfile.name) > 0:
+        if os.path.getsize(tempbamfile) > 0:
             os.system(
-                f"bedtools intersect -a {gene_bed} -b {tempbamfile.name} -wa -wb > {tempmappings.name}"
+                f"bedtools intersect -a {gene_bed} -b {tempbamfile} -wa -wb > {tempmappings}"
             )
             os.system(
-                f"bedtools intersect -a {all_gene_bed} -b {tempbamfile.name} -wa -wb > {tempallmappings.name}"
+                f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}"
             )
-            if os.path.getsize(tempmappings.name) > 0:
+            if os.path.getsize(tempmappings) > 0:
                 fusion_candidates = pd.read_csv(
-                    tempmappings.name, sep="\t", header=None
+                    tempmappings, sep="\t", header=None
                 )
                 # Filter to only include good mappings
                 fusion_candidates = fusion_candidates[fusion_candidates[8].gt(50)]
@@ -61,9 +60,9 @@ def fusion_work(
                 fusion_candidates = fusion_candidates[
                     fusion_candidates["diff"].gt(1000)
                 ]
-            if os.path.getsize(tempallmappings.name) > 0:
+            if os.path.getsize(tempallmappings) > 0:
                 fusion_candidates_all = pd.read_csv(
-                    tempallmappings.name, sep="\t", header=None
+                    tempallmappings, sep="\t", header=None
                 )
 
                 fusion_candidates_all = fusion_candidates_all[
@@ -624,10 +623,18 @@ class Fusion_object(BaseAnalysis):
         tempmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
         tempallmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
 
+        # ToDo: Move this to another process
 
-        #ToDo: Move this to another process
-
-        fusion_candidates, fusion_candidates_all = fusion_work(self.threads, bamfile, self.gene_bed, self.all_gene_bed, tempreadfile, tempbamfile, tempmappings, tempallmappings)
+        fusion_candidates, fusion_candidates_all = await run.cpu_bound(fusion_work,
+            self.threads,
+            bamfile,
+            self.gene_bed,
+            self.all_gene_bed,
+            tempreadfile.name,
+            tempbamfile.name,
+            tempmappings.name,
+            tempallmappings.name,
+        )
 
         if fusion_candidates is not None:
             if self.fusion_candidates.empty:
@@ -649,7 +656,7 @@ class Fusion_object(BaseAnalysis):
 
         self.fusion_table_all()
 
-        #await asyncio.sleep(0.1)
+        # await asyncio.sleep(0.1)
         self.running = False
 
     def _generate_random_color(self):

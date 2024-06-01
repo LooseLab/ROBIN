@@ -64,7 +64,6 @@ class BaseAnalysis:
             self.progress_bars()
 
     def process_data(self):
-        print("Setting up data processing")
         if self.batch:
             self.bams = []
             self.batch_timer_run()
@@ -72,7 +71,6 @@ class BaseAnalysis:
             self.timer_run()
 
     def timer_run(self):
-        print("non batch timer")
         self.timer = ui.timer(1, self._worker)
 
     async def _worker(self):
@@ -91,8 +89,8 @@ class BaseAnalysis:
             app.storage.general[self.mainuuid][self.name]["counters"][
                 "bam_processed"
             ] += 1
-        else:
-            await asyncio.sleep(1)
+        #else:
+        #    await asyncio.sleep(1)
         self.timer.active = True
 
     def add_bam(self, bamfile: BinaryIO, timestamp=None):
@@ -105,7 +103,6 @@ class BaseAnalysis:
         # self.bam_count += 1
 
     def batch_timer_run(self):
-        print("batch timer")
         self.timer = ui.timer(5, self._batch_worker)
 
     async def _batch_worker(self):
@@ -117,15 +114,15 @@ class BaseAnalysis:
         while self.bamqueue.qsize() > 0:
             self.bams.append((self.bamqueue.get()))
             count += 1
-            if count >= 20:
+            if count >= 200:
                 break
         app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += count
 
         if not self.running and len(self.bams) > 0:
             self.running = True
             await self.process_bam(self.bams)
-        #else:
-            #await asyncio.sleep(1)
+        # else:
+        # await asyncio.sleep(1)
         self.timer.active = True
 
     @property
@@ -242,12 +239,10 @@ class BaseAnalysis:
         """
         latest_timestamps = self.data
         self.offset = 0
-        # print (start_time)
         playback_start_time = time.time()
         for index, row in latest_timestamps.iterrows():
             elapsed_time = (time.time() - playback_start_time) + self.offset
             time_diff = row["file_produced"]  # - elapsed_time
-            # print (elapsed_time, time_diff, row["file_produced"])
             if self.offset == 0:
                 self.offset = time_diff
                 time_diff = 0
@@ -259,8 +254,6 @@ class BaseAnalysis:
                     time.sleep(1)
                     self.offset += step_size
                     elapsed_time += self.offset
-            # print("out the loop")
-            # print (f"elapsed time now {elapsed_time}")
             if len(row["full_path"]) > 0:
                 # Here we check that the path to the bam file absolutely exists.
                 self.add_bam(

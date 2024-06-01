@@ -6,9 +6,9 @@ import pandas as pd
 import logging
 import numpy as np
 import os
-import sys
 import asyncio
-from nicegui import ui, app
+import sys
+from nicegui import ui, app, run
 import click
 from pathlib import Path
 import pickle
@@ -22,19 +22,6 @@ class Result:
         self.cnv = cnv_dict
 
 
-def _iterate_bam(
-    bamfile, _threads=1, mapq_filter=60, copy_numbers=None, log_level=int(logging.ERROR)
-):
-    result = iterate_bam_file(
-        bamfile,
-        _threads=_threads,
-        mapq_filter=mapq_filter,
-        copy_numbers=copy_numbers,
-        log_level=log_level,
-    )
-    return result, copy_numbers
-
-
 def iterate_bam(bamfile, _threads, mapq_filter, copy_numbers, log_level):
     result = iterate_bam_file(
         bamfile,
@@ -43,8 +30,18 @@ def iterate_bam(bamfile, _threads, mapq_filter, copy_numbers, log_level):
         copy_numbers=copy_numbers,
         log_level=log_level,
     )
-    return result, copy_numbers
+    return result.cnv,result.bin_width, result.variance, copy_numbers
 
+def iterate_bam_bin(bamfile, _threads, mapq_filter, copy_numbers, log_level, bin_width):
+    result = iterate_bam_file(
+        bamfile,
+        _threads=_threads,
+        mapq_filter=mapq_filter,
+        copy_numbers=copy_numbers,
+        log_level=log_level,
+        bin_width=bin_width,
+    )
+    return result.cnv,result.bin_width, result.variance, copy_numbers
 
 def reduce_list(lst, max_length=1000):
     while len(lst) > max_length:
@@ -59,6 +56,20 @@ class CNV_Difference:
 
 def moving_average(data, n=3):
     return np.convolve(data, np.ones(n) / n, mode="same")
+
+
+def pad_arrays(arr1, arr2, pad_value=0):
+    len_diff = abs(len(arr1) - len(arr2))
+    if len(arr1) < len(arr2):
+        arr1 = np.pad(
+            arr1, (0, len_diff), mode="constant", constant_values=pad_value
+        )
+    elif len(arr1) > len(arr2):
+        arr2 = np.pad(
+            arr2, (0, len_diff), mode="constant", constant_values=pad_value
+        )
+    return arr1, arr2
+
 
 
 def ruptures_plotting(data):
@@ -129,60 +140,56 @@ class CNVAnalysis(BaseAnalysis):
         await self.do_cnv_work(bamfile)
 
     async def do_cnv_work(self, bamfile):
-        # ToDo: This function blocks the main thread occasionally. Further optimisation would be useful.
-        self.result = iterate_bam_file(
+        r_cnv,r_bin,r_var, self.update_cnv_dict = await run.cpu_bound(
+            iterate_bam,
             bamfile,
-            _threads=self.threads,
-            mapq_filter=60,
-            copy_numbers=self.update_cnv_dict,
-            log_level=int(logging.ERROR),
+            self.threads,
+            60,
+            self.update_cnv_dict,
+            int(logging.ERROR),
         )
-        #await asyncio.sleep(0.05)
 
-        def pad_arrays(arr1, arr2, pad_value=0):
-            len_diff = abs(len(arr1) - len(arr2))
-            if len(arr1) < len(arr2):
-                arr1 = np.pad(
-                    arr1, (0, len_diff), mode="constant", constant_values=pad_value
-                )
-            elif len(arr1) > len(arr2):
-                arr2 = np.pad(
-                    arr2, (0, len_diff), mode="constant", constant_values=pad_value
-                )
-            return arr1, arr2
-
-        self.cnv_dict["bin_width"] = self.result.bin_width
-        self.cnv_dict["variance"] = self.result.variance
-        self.result2 = iterate_bam_file(
-            bam_file_path=None,
-            _threads=self.threads,
-            mapq_filter=60,
-            copy_numbers=self.ref_cnv_dict,
-            log_level=int(logging.ERROR),
+        self.cnv_dict["bin_width"] = r_bin #self.result.bin_width
+        self.cnv_dict["variance"] = r_var #self.result.variance
+        r2_cnv, r2_bin, r2_var, self.ref_cnv_dict = await run.cpu_bound(
+            iterate_bam_bin,
+            bamfile,
+            self.threads,
+            60,
+            self.ref_cnv_dict,
+            int(logging.ERROR),
             bin_width=self.cnv_dict["bin_width"],
         )
-        #await asyncio.sleep(0.05)
+        #self.result2 = iterate_bam_file(
+        #    bam_file_path=None,
+        #    _threads=self.threads,
+        #    mapq_filter=60,
+        #    copy_numbers=self.ref_cnv_dict,
+        #    log_level=int(logging.ERROR),
+        #    bin_width=self.cnv_dict["bin_width"],
+        #)
+        #await asyncio.sleep(0)
 
-        for key in self.result.cnv.keys():
+        for key in r_cnv.keys():
             if key != "chrM":
-                moving_avg_data1 = moving_average(self.result.cnv[key])
-                moving_avg_data2 = moving_average(self.result2.cnv[key])
-                moving_avg_data1, moving_avg_data2 = pad_arrays(
+                moving_avg_data1 = await run.cpu_bound(moving_average, r_cnv[key])
+                moving_avg_data2 = await run.cpu_bound(moving_average, r2_cnv[key])
+                moving_avg_data1, moving_avg_data2 = await run.cpu_bound(pad_arrays,
                     moving_avg_data1, moving_avg_data2
                 )
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
                 # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
-                #if len(self.result3.cnv[key]) > 20:
+                # if len(self.result3.cnv[key]) > 20:
                 #    algo_c = ruptures_plotting(self.result3.cnv[key])
                 #    penalty_value = 5  # beta
                 #    result = algo_c.predict(pen=penalty_value)
-                    # print(key, result)
+                # print(key, result)
 
-        #await asyncio.sleep(0.05)
+        #await asyncio.sleep(0)
 
         self.estimate_XY()
 
-        np.save(os.path.join(self.output, "CNV.npy"), self.result.cnv)
+        np.save(os.path.join(self.output, "CNV.npy"), r_cnv)
         np.save(os.path.join(self.output, "CNV_dict.npy"), self.cnv_dict)
 
         self.running = False
@@ -486,7 +493,7 @@ class CNVAnalysis(BaseAnalysis):
             self.gene_select.set_options(genevalueslist)
             ui.update(plot_to_update)
 
-    def show_previous_data(self, output):
+    async def show_previous_data(self, output):
         if not os.path.exists(os.path.join(output, "CNV.npy")):
             return
         result = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
@@ -500,20 +507,37 @@ class CNVAnalysis(BaseAnalysis):
         # self._update_cnv_plot(
         #    plot_to_update=self.scatter_echart, result=self.result, title="CNV"
         # )
-        self.result2 = iterate_bam_file(
-            bam_file_path=None,
-            _threads=1,
-            mapq_filter=60,
-            copy_numbers=self.ref_cnv_dict,
-            log_level=int(logging.ERROR),
+
+        # ToDo: We are recalculating the CNV data here. We should load the data from the output folder.
+        # If it does not exist already, we should calculate it and save it.
+        # This will reduce the burden when multiple people view the site.
+
+        r2_cnv, r2_bin, r2_var, self.ref_cnv_dict = await run.cpu_bound(
+            iterate_bam_bin,
+            None,
+            1,
+            60,
+            self.ref_cnv_dict,
+            int(logging.ERROR),
             bin_width=self.cnv_dict["bin_width"],
         )
+
+        self.result2 = Result(r2_cnv)
+
+        #self.result2 = iterate_bam_file(
+        #    bam_file_path=None,
+        #    _threads=1,
+        #    mapq_filter=60,
+        #    copy_numbers=self.ref_cnv_dict,
+        #    log_level=int(logging.ERROR),
+        #    bin_width=self.cnv_dict["bin_width"],
+        #)
 
         for key in self.result.cnv.keys():
             if key != "chrM":
                 # print(key, np.mean(self.result.cnv[key]))#[i for i in self.result.cnv[key] if i !=0]))
                 moving_avg_data1 = moving_average(self.result.cnv[key])
-                moving_avg_data2 = moving_average(self.result2.cnv[key])
+                moving_avg_data2 = moving_average(r2_cnv[key])
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
                 # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
                 if len(self.result3.cnv[key]) > 20:
@@ -550,7 +574,7 @@ def test_me(
     browse: bool = False,
     target_panel: str = "rCNS2",
 ):
-    #my_connection = None
+    # my_connection = None
     app.add_static_files("/fonts", str(Path(__file__).parent / "../fonts"))
     with theme.frame("Copy Number Variation Testing."):
         TestObject = CNVAnalysis(
