@@ -227,9 +227,9 @@ class BrainMeth:
             self.observer.start()
 
             ui.timer(1, callback=self.background_process_bams, once=True)
-            
+
             ui.timer(1, self.check_existing_bams, once=True)
-            
+
             print("watchfolder setup and added")
 
     async def waitforclick(self):
@@ -365,27 +365,27 @@ class BrainMeth:
                         ).style("color: #000000; font-size: 100%; font-weight: 300")
                 with ui.row():
                     ui.label().bind_text_from(
-                        self,
+                        app.storage.general[self.mainuuid],
                         "devices",
                         backward=lambda n: f"Devices: {str(n)}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self,
+                        app.storage.general[self.mainuuid],
                         "basecall_models",
                         backward=lambda n: f"Basecall Models: {str(n)}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self,
+                        app.storage.general[self.mainuuid],
                         "flowcell_ids",
                         backward=lambda n: f"Flowcell IDs: {str(n)}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self,
-                        "min_start_time",
+                        app.storage.general[self.mainuuid],
+                        "run_time",
                         backward=lambda n: f"Run Start Time: {n}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
-                        self,
+                        app.storage.general[self.mainuuid],
                         "sample_ids",
                         backward=lambda n: f"Sample ID: {str(n)}",
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
@@ -601,6 +601,34 @@ class BrainMeth:
                 ):
                     app.storage.general[self.mainuuid]["devices"].append(
                         baminfo["device_position"]
+                    )
+                if (
+                    baminfo["basecall_model"]
+                    not in app.storage.general[self.mainuuid]["basecall_models"]
+                ):
+                    app.storage.general[self.mainuuid]["basecall_models"].append(
+                        baminfo["basecall_model"]
+                    )
+                if (
+                    baminfo["sample_id"]
+                    not in app.storage.general[self.mainuuid]["sample_ids"]
+                ):
+                    app.storage.general[self.mainuuid]["sample_ids"].append(
+                        baminfo["sample_id"]
+                    )
+                if (
+                    baminfo["flow_cell_id"]
+                    not in app.storage.general[self.mainuuid]["flowcell_ids"]
+                ):
+                    app.storage.general[self.mainuuid]["flowcell_ids"].append(
+                        baminfo["flow_cell_id"]
+                    )
+                if (
+                    baminfo["time_of_run"]
+                    not in app.storage.general[self.mainuuid]["run_time"]
+                ):
+                    app.storage.general[self.mainuuid]["run_time"].append(
+                        baminfo["time_of_run"]
                     )
                 # self.sample_ids.add(baminfo["sample_id"])
                 # self.flowcell_ids.add(baminfo["flow_cell_id"])

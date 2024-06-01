@@ -31,13 +31,12 @@ Hopefully this simplifies code maintenance and future improvements.
 import click
 import os
 import sys
-import time
 import signal
 import uuid
 import asyncio
 
 from pathlib import Path
-from nicegui import ui,app
+from nicegui import ui, app
 from cnsmeth import theme
 from cnsmeth import images
 from configparser import ConfigParser
@@ -45,16 +44,15 @@ from configparser import ConfigParser
 from cnsmeth.brain_class import BrainMeth
 from cnsmeth.minknow_info.minknow_panel import MinKNOWFish
 
-
 ### The location for a default config file.
-#ToDo: Confirm if this actually works!!!
+# ToDo: Confirm if this actually works!!!
 DEFAULT_CFG = "config.ini"
-
 
 ### This ID provides an access key for this specific run of NiceGUI.
 ### Data will be written to the general store using this key.
-#ToDo: Confirm if multiple instances of ROBIN can run in the same folder.
+# ToDo: Confirm if multiple instances of ROBIN can run in the same folder.
 UNIQUE_ID = str(uuid.uuid4())
+
 
 @ui.page("/", response_timeout=10)
 async def index():
@@ -119,7 +117,6 @@ async def test():
     ui.link("Live", "/live")
     ui.link("Browse", "/browse")
     ui.label("Good to be back. This code is still to be implemented.")
-    
 
 
 def clean_up():
@@ -137,13 +134,13 @@ def clean_up():
 
 async def startup():
     """
-	This function starts data processing in the main application loop.
+        This function starts data processing in the main application loop.
     The function is only started once. It must not be run more than once!
     """
-    
-    loop = asyncio.get_running_loop()
-    loop.set_debug(True)
-    loop.slow_callback_duration = 0.5
+
+    #loop = asyncio.get_running_loop()
+    #loop.set_debug(True)
+    #loop.slow_callback_duration = 0.2
     print(f"Setting up {UNIQUE_ID}.")
     MAINPAGE = Methnice(
         threads=app.storage.general[UNIQUE_ID]["threads"],
@@ -162,7 +159,7 @@ async def startup():
     await MAINPAGE.start_analysis()
 
     # handle any occasions when a user stops with a ctrl-c
-    #ToDo: surely this can be replaced by the clean_up funtion itself.
+    # ToDo: surely this can be replaced by the clean_up funtion itself.
     def handler(*args):
         clean_up()
 
@@ -171,10 +168,11 @@ async def startup():
 
 class Methnice:
     """
-    This class handles configuration of all the pages and page contents. 
-    
+    This class handles configuration of all the pages and page contents.
+
     #ToDo: See if we can reduce or remove this.
     """
+
     def __init__(
         self,
         threads: int,
