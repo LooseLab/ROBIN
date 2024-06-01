@@ -36,6 +36,7 @@ def run_samtools_sort(file, tomerge, sortfile, threads):
     pysam.cat("-o", file, *tomerge)
     pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
 
+
 def classification(modelfile, test_df):
     NN = NN_classifier(modelfile)
     try:
@@ -45,6 +46,7 @@ def classification(modelfile, test_df):
         test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
         sys.exit(1)
     return predictions, class_labels, n_features
+
 
 class NanoDX_object(BaseAnalysis):
     def __init__(self, *args, model="Capper_et_al_NN.pkl", **kwargs):
@@ -273,9 +275,9 @@ class NanoDX_object(BaseAnalysis):
                 classification, self.modelfile, test_df
             )
 
-            #try:
+            # try:
             #    predictions, class_labels, n_features = self.NN.predict(test_df)
-            #except Exception as e:
+            # except Exception as e:
             #    print(e)
             #    test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
             #    # self.nanodx_status_txt["message"] = "Error generating predictions."

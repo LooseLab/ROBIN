@@ -70,9 +70,9 @@ def frame(navtitle: str):
                             "Browse Historic Data", lambda: ui.navigate.to("/browse")
                         )
                         ui.separator()
-                        ui.switch('allow remote access', value=False, on_change=use_on_air).classes(
-                            "ml-4 bg-transparent"
-                        ).props('color="black"')
+                        ui.switch(
+                            "allow remote access", value=False, on_change=use_on_air
+                        ).classes("ml-4 bg-transparent").props('color="black"')
                         ui.switch("Dark Mode", on_change=dark_mode).classes(
                             "ml-4 bg-transparent"
                         ).props('color="black"')

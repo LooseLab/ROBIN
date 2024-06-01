@@ -1,11 +1,13 @@
 from cnsmeth.subpages.base_analysis import BaseAnalysis
 import os
 import sys
+import subprocess
 import gff3_parser
 import tempfile
 import random
 import pandas as pd
 import click
+from typing import Optional, Tuple
 
 
 from nicegui import ui, run
@@ -23,7 +25,95 @@ os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
 
 
+def run_command(command: str) -> None:
+    """
+    Run a shell command and handle exceptions.
+
+    Args:
+        command (str): The shell command to run.
+    """
+    try:
+        subprocess.run(command, shell=True, check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"Command failed: {command}")
+        raise e
+
+
 def fusion_work(
+    threads: int,
+    bamfile: str,
+    gene_bed: str,
+    all_gene_bed: str,
+    tempreadfile: str,
+    tempbamfile: str,
+    tempmappings: str,
+    tempallmappings: str,
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+    """
+    Identify fusion candidates from BAM file based on gene BED files.
+
+    Args:
+        threads (int): Number of threads to use for parallel processing.
+        bamfile (str): Path to the BAM file.
+        gene_bed (str): Path to the gene BED file.
+        all_gene_bed (str): Path to the BED file with all genes.
+        tempreadfile (str): Path to the temporary file to store read names.
+        tempbamfile (str): Path to the temporary BAM file.
+        tempmappings (str): Path to the temporary file for gene mappings.
+        tempallmappings (str): Path to the temporary file for all gene mappings.
+
+    Returns:
+        Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]: DataFrames with fusion candidates and all fusion candidates.
+    """
+    fusion_candidates: Optional[pd.DataFrame] = None
+    fusion_candidates_all: Optional[pd.DataFrame] = None
+
+    # Extract reads mapped with supplementary alignments
+    run_command(
+        f"samtools view -@{threads} -L {gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile}"
+    )
+
+    if os.path.getsize(tempreadfile) > 0:
+        # Extract reads to a temporary BAM file
+        run_command(
+            f"samtools view -@{threads} -N {tempreadfile} -o {tempbamfile} {bamfile}"
+        )
+
+        if os.path.getsize(tempbamfile) > 0:
+            # Intersect the gene BED file with the temporary BAM file
+            run_command(
+                f"bedtools intersect -a {gene_bed} -b {tempbamfile} -wa -wb > {tempmappings}"
+            )
+            run_command(
+                f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}"
+            )
+
+            # Process gene mappings if available
+            if os.path.getsize(tempmappings) > 0:
+                fusion_candidates = pd.read_csv(tempmappings, sep="\t", header=None)
+                fusion_candidates = fusion_candidates[fusion_candidates[8] > 50]
+                fusion_candidates["diff"] = fusion_candidates[6] - fusion_candidates[5]
+                fusion_candidates = fusion_candidates[fusion_candidates["diff"] > 1000]
+
+            # Process all gene mappings if available
+            if os.path.getsize(tempallmappings) > 0:
+                fusion_candidates_all = pd.read_csv(
+                    tempallmappings, sep="\t", header=None
+                )
+                fusion_candidates_all = fusion_candidates_all[
+                    fusion_candidates_all[8] > 59
+                ]
+                fusion_candidates_all["diff"] = (
+                    fusion_candidates_all[6] - fusion_candidates_all[5]
+                )
+                fusion_candidates_all = fusion_candidates_all[
+                    fusion_candidates_all["diff"] > 1000
+                ]
+
+    return fusion_candidates, fusion_candidates_all
+
+
+def fusion_work_old(
     threads,
     bamfile,
     gene_bed,
@@ -50,9 +140,7 @@ def fusion_work(
                 f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}"
             )
             if os.path.getsize(tempmappings) > 0:
-                fusion_candidates = pd.read_csv(
-                    tempmappings, sep="\t", header=None
-                )
+                fusion_candidates = pd.read_csv(tempmappings, sep="\t", header=None)
                 # Filter to only include good mappings
                 fusion_candidates = fusion_candidates[fusion_candidates[8].gt(50)]
                 # Filter to only keep reads that map to 1 kb or more of the reference.
@@ -623,9 +711,8 @@ class Fusion_object(BaseAnalysis):
         tempmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
         tempallmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
 
-        # ToDo: Move this to another process
-
-        fusion_candidates, fusion_candidates_all = await run.cpu_bound(fusion_work,
+        fusion_candidates, fusion_candidates_all = await run.cpu_bound(
+            fusion_work,
             self.threads,
             bamfile,
             self.gene_bed,

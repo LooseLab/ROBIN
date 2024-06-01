@@ -15,7 +15,6 @@ import tempfile
 
 os.environ["CI"] = "1"
 
-
 HVPATH = os.path.join(
     os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
 )
@@ -142,7 +141,7 @@ class MGMT_Object(BaseAnalysis):
                 #self.mgmtable.clear()
                 #with self.mgmtable:
                 #    self.tabulate(results)
-                
+
                 if os.path.exists(plot_out):
                     self.mgmtplot.clear()
                     with self.mgmtplot.classes("w-full"):

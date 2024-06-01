@@ -6,7 +6,6 @@ import pandas as pd
 import logging
 import numpy as np
 import os
-import asyncio
 import sys
 from nicegui import ui, app, run
 import click
@@ -30,7 +29,8 @@ def iterate_bam(bamfile, _threads, mapq_filter, copy_numbers, log_level):
         copy_numbers=copy_numbers,
         log_level=log_level,
     )
-    return result.cnv,result.bin_width, result.variance, copy_numbers
+    return result.cnv, result.bin_width, result.variance, copy_numbers
+
 
 def iterate_bam_bin(bamfile, _threads, mapq_filter, copy_numbers, log_level, bin_width):
     result = iterate_bam_file(
@@ -41,7 +41,8 @@ def iterate_bam_bin(bamfile, _threads, mapq_filter, copy_numbers, log_level, bin
         log_level=log_level,
         bin_width=bin_width,
     )
-    return result.cnv,result.bin_width, result.variance, copy_numbers
+    return result.cnv, result.bin_width, result.variance, copy_numbers
+
 
 def reduce_list(lst, max_length=1000):
     while len(lst) > max_length:
@@ -61,15 +62,10 @@ def moving_average(data, n=3):
 def pad_arrays(arr1, arr2, pad_value=0):
     len_diff = abs(len(arr1) - len(arr2))
     if len(arr1) < len(arr2):
-        arr1 = np.pad(
-            arr1, (0, len_diff), mode="constant", constant_values=pad_value
-        )
+        arr1 = np.pad(arr1, (0, len_diff), mode="constant", constant_values=pad_value)
     elif len(arr1) > len(arr2):
-        arr2 = np.pad(
-            arr2, (0, len_diff), mode="constant", constant_values=pad_value
-        )
+        arr2 = np.pad(arr2, (0, len_diff), mode="constant", constant_values=pad_value)
     return arr1, arr2
-
 
 
 def ruptures_plotting(data):
@@ -140,7 +136,7 @@ class CNVAnalysis(BaseAnalysis):
         await self.do_cnv_work(bamfile)
 
     async def do_cnv_work(self, bamfile):
-        r_cnv,r_bin,r_var, self.update_cnv_dict = await run.cpu_bound(
+        r_cnv, r_bin, r_var, self.update_cnv_dict = await run.cpu_bound(
             iterate_bam,
             bamfile,
             self.threads,
@@ -149,8 +145,8 @@ class CNVAnalysis(BaseAnalysis):
             int(logging.ERROR),
         )
 
-        self.cnv_dict["bin_width"] = r_bin #self.result.bin_width
-        self.cnv_dict["variance"] = r_var #self.result.variance
+        self.cnv_dict["bin_width"] = r_bin  # self.result.bin_width
+        self.cnv_dict["variance"] = r_var  # self.result.variance
         r2_cnv, r2_bin, r2_var, self.ref_cnv_dict = await run.cpu_bound(
             iterate_bam_bin,
             bamfile,
@@ -160,22 +156,22 @@ class CNVAnalysis(BaseAnalysis):
             int(logging.ERROR),
             bin_width=self.cnv_dict["bin_width"],
         )
-        #self.result2 = iterate_bam_file(
+        # self.result2 = iterate_bam_file(
         #    bam_file_path=None,
         #    _threads=self.threads,
         #    mapq_filter=60,
         #    copy_numbers=self.ref_cnv_dict,
         #    log_level=int(logging.ERROR),
         #    bin_width=self.cnv_dict["bin_width"],
-        #)
-        #await asyncio.sleep(0)
+        # )
+        # await asyncio.sleep(0)
 
         for key in r_cnv.keys():
             if key != "chrM":
                 moving_avg_data1 = await run.cpu_bound(moving_average, r_cnv[key])
                 moving_avg_data2 = await run.cpu_bound(moving_average, r2_cnv[key])
-                moving_avg_data1, moving_avg_data2 = await run.cpu_bound(pad_arrays,
-                    moving_avg_data1, moving_avg_data2
+                moving_avg_data1, moving_avg_data2 = await run.cpu_bound(
+                    pad_arrays, moving_avg_data1, moving_avg_data2
                 )
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
                 # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
@@ -185,7 +181,7 @@ class CNVAnalysis(BaseAnalysis):
                 #    result = algo_c.predict(pen=penalty_value)
                 # print(key, result)
 
-        #await asyncio.sleep(0)
+        # await asyncio.sleep(0)
 
         self.estimate_XY()
 
@@ -524,14 +520,14 @@ class CNVAnalysis(BaseAnalysis):
 
         self.result2 = Result(r2_cnv)
 
-        #self.result2 = iterate_bam_file(
+        # self.result2 = iterate_bam_file(
         #    bam_file_path=None,
         #    _threads=1,
         #    mapq_filter=60,
         #    copy_numbers=self.ref_cnv_dict,
         #    log_level=int(logging.ERROR),
         #    bin_width=self.cnv_dict["bin_width"],
-        #)
+        # )
 
         for key in self.result.cnv.keys():
             if key != "chrM":

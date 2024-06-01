@@ -5,15 +5,24 @@ Helper functions to sort and merge bedmethyl files.
 import pandas as pd
 import csv
 import os
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
-def save_bedmethyl(result_df, output_file):
+def save_bedmethyl(result_df: pd.DataFrame, output_file: str) -> None:
     """
     Save a bedmethyl dataframe to a file.
-    Given a bedmethyl dataframe, save it to a file.
+
+    Given a bedmethyl dataframe, save it to a file with specific formatting.
+
+    Args:
+        result_df (pd.DataFrame): The dataframe containing bedmethyl data.
+        output_file (str): The path to the output file.
     """
-    # Combine columns up to the 11th as tab-separated values
-    tab_sep_cols = result_df.iloc[:, :9].astype(str).apply("    ".join, axis=1)
+    # Combine columns up to the 9th as tab-separated values
+    tab_sep_cols = result_df.iloc[:, :9].astype(str).apply("\t".join, axis=1)
 
     # Combine remaining columns as space-separated values
     space_sep_cols = result_df.iloc[:, 9:].astype(str).apply(" ".join, axis=1)
@@ -29,15 +38,29 @@ def save_bedmethyl(result_df, output_file):
         sep="\t",
         header=None,
         index=False,
-        quoting=csv.QUOTE_NONE,
-        quotechar="",
+        quoting=csv.QUOTE_NONNUMERIC,
+        quotechar='"',
+        escapechar='\\'
     )
-    os.system(f"sed -i.bak 's/    /\t/g' {file_path}")
+    logger.info(f"Saved bedmethyl data to {file_path}")
+
+    os.system(f"sed -i.bak 's/\t/\t/g' {file_path}")
+    logger.info(f"Post-processed the file with sed: {file_path}")
 
 
-def collapse_bedmethyl(concat_df):
-    # ToDo: Don't hack strand
-    # Hack Strand
+def collapse_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Collapse and aggregate bedmethyl dataframe.
+
+    This function aggregates the bedmethyl data by specified columns and calculates the fraction.
+
+    Args:
+        concat_df (pd.DataFrame): The concatenated dataframe to collapse.
+
+    Returns:
+        pd.DataFrame: The collapsed and aggregated dataframe.
+    """
+    # Hack strand for aggregation
     concat_df["strand"] = concat_df["strand"].astype(str).replace({"+": ".", "-": "."})
     grouped = concat_df.groupby(
         [
@@ -90,17 +113,24 @@ def collapse_bedmethyl(concat_df):
         "Nnocall",
     ]
     merged_df = result_df[column_order].sort_values(by=["chrom", "start_pos"])
+    logger.info("Collapsed and aggregated the bedmethyl data.")
     return merged_df
 
 
-def merge_bedmethyl(dfA, dfB):
+def merge_bedmethyl(dfA: pd.DataFrame, dfB: pd.DataFrame) -> pd.DataFrame:
     """
-    Merge bedmethyl files into a single dataframe.
-    Given one or more bedmethyl files, merge them into a single dataframe.
-    """
+    Merge two bedmethyl dataframes into a single dataframe.
 
+    Given two bedmethyl dataframes, merge them into a single dataframe.
+
+    Args:
+        dfA (pd.DataFrame): The first bedmethyl dataframe.
+        dfB (pd.DataFrame): The second bedmethyl dataframe.
+
+    Returns:
+        pd.DataFrame: The merged dataframe.
+    """
     concat_df = pd.concat([dfA, dfB])
-
     merged_df = collapse_bedmethyl(concat_df)
-
+    logger.info("Merged two bedmethyl dataframes.")
     return merged_df
