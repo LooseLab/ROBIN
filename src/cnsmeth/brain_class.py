@@ -10,7 +10,7 @@ from cnsmeth.subpages.RandomForest_object import RandomForest_object
 from cnsmeth.subpages.CNV_object import CNVAnalysis
 from cnsmeth.subpages.TargetCoverage_object import TargetCoverage
 from cnsmeth.subpages.Fusion_object import Fusion_object
-from cnsmeth.utilities.local_file_picker import local_file_picker
+from cnsmeth.utilities.local_file_picker import LocalFilePicker
 from cnsmeth.utilities.ReadBam import ReadBam
 
 from watchdog.observers import Observer
@@ -237,7 +237,7 @@ class BrainMeth:
         await self.minknow_connection.access_device.clicked()
 
     async def pick_file(self) -> None:
-        result = await local_file_picker(".", multiple=True)
+        result = await LocalFilePicker(".", multiple=True)
         # print(result)
         if result:
             ui.notify(f"You selected {result}")
@@ -367,27 +367,32 @@ class BrainMeth:
                     ui.label().bind_text_from(
                         app.storage.general[self.mainuuid],
                         "devices",
-                        backward=lambda n: f"Devices: {str(n)}",
+                        backward=lambda n: [f"Devices: {str(item)}" for item in n],
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
                         app.storage.general[self.mainuuid],
                         "basecall_models",
-                        backward=lambda n: f"Basecall Models: {str(n)}",
+                        backward=lambda n: [
+                            f"Basecall Models: {str(item)}" for item in n
+                        ],
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
                         app.storage.general[self.mainuuid],
                         "flowcell_ids",
-                        backward=lambda n: f"Flowcell IDs: {str(n)}",
+                        backward=lambda n: [f"Flowcell IDs: {str(item)}" for item in n],
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
                         app.storage.general[self.mainuuid],
                         "run_time",
-                        backward=lambda n: f"Run Start Time: {n}",
+                        backward=lambda n: [
+                            f"Run Start Time: {datetime.fromisoformat(date).strftime('%Y-%m-%d %H:%M:%S %Z')}"
+                            for date in n
+                        ],
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
                     ui.label().bind_text_from(
                         app.storage.general[self.mainuuid],
                         "sample_ids",
-                        backward=lambda n: f"Sample ID: {str(n)}",
+                        backward=lambda n: [f"Sample ID: {str(item)}" for item in n],
                     ).style("color: #000000; font-size: 100%; font-weight: 300")
 
             with ui.row():
@@ -406,8 +411,7 @@ class BrainMeth:
                 with ui.row().style(
                     "color: #000000; font-size: 100%; font-weight: 300"
                 ):
-                    if "mgmt" not in self.exclude:
-                        mgmt = ui.column()
+                    mgmt = ui.column()
             if "cnv" not in self.exclude:
                 with ui.row().style(
                     "color: #000000; font-size: 100%; font-weight: 300"
@@ -560,7 +564,7 @@ class BrainMeth:
     async def background_process_bams(self):
         await asyncio.sleep(5)
         ui.timer(5, self.process_bams)
-        self.bam_tracker = ui.timer(1, self._bam_worker)
+        self.bam_tracker = ui.timer(0.1, self._bam_worker)
 
     async def _bam_worker(self):
         if not self.bam_tracking.empty():
@@ -684,9 +688,9 @@ class BrainMeth:
                     self.bamformgmt.put([file[0], file[1]])
                 if "fusion" not in self.exclude:
                     self.bamforfusions.put([file[0], file[1]])
-                if counter > 25:
-                    break
-                await asyncio.sleep(0.01)
+                # if counter > 25:
+                #    break
+                await asyncio.sleep(0)
             self.nofiles = True
 
     async def check_existing_bams(self, sequencing_summary=None):

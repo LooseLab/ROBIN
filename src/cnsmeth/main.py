@@ -33,7 +33,7 @@ import os
 import sys
 import signal
 import uuid
-import asyncio
+import logging
 
 from pathlib import Path
 from nicegui import ui, app
@@ -52,6 +52,18 @@ DEFAULT_CFG = "config.ini"
 ### Data will be written to the general store using this key.
 # ToDo: Confirm if multiple instances of ROBIN can run in the same folder.
 UNIQUE_ID = str(uuid.uuid4())
+
+
+def setup_logging(level):
+    """Configure global logging level."""
+    numeric_level = getattr(logging, level.upper(), None)
+    if numeric_level is None:
+        raise ValueError(f"Invalid log level: {level}")
+    logging.basicConfig(
+        level=numeric_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+    logging.debug("Logging configured to level: %s", level)
 
 
 @ui.page("/", response_timeout=10)
@@ -77,9 +89,6 @@ async def index():
     )
     GUI.setup()
     await GUI.splash_screen()
-    ui.link("Home", "/")
-    ui.link("Live", "/live")
-    ui.link("Browse", "/browse")
 
 
 @ui.page("/live", response_timeout=10)
@@ -138,9 +147,9 @@ async def startup():
     The function is only started once. It must not be run more than once!
     """
 
-    #loop = asyncio.get_running_loop()
-    #loop.set_debug(True)
-    #loop.slow_callback_duration = 0.2
+    # loop = asyncio.get_running_loop()
+    # loop.set_debug(True)
+    # loop.slow_callback_duration = 0.2
     print(f"Setting up {UNIQUE_ID}.")
     MAINPAGE = Methnice(
         threads=app.storage.general[UNIQUE_ID]["threads"],
@@ -272,8 +281,36 @@ class Methnice:
         with theme.frame(
             "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
         ):
-            with ui.column().classes("w-full"):
-                ui.label("Welcome to Robin.")
+            self.frontpage = ui.card().classes("w-full")
+            with self.frontpage:
+                ui.label("Welcome to R.O.B.I.N").style(
+                    "color: #6E93D6; font-size: 150%; font-weight: 300"
+                ).tailwind("drop-shadow", "font-bold")
+                ui.label(
+                    "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
+                ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
+                    "drop-shadow", "font-bold"
+                )
+                with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
+                    "color=green"
+                ):
+                    ui.label("View Live Data")
+                    ui.image(
+                        os.path.join(
+                            os.path.dirname(os.path.abspath(images.__file__)),
+                            "favicon.ico",
+                        )
+                    ).classes("rounded-full w-16 h-16 ml-4")
+                with ui.button(on_click=lambda: ui.navigate.to("/browse")).props(
+                    "color=green"
+                ):
+                    ui.label("Browse Historic Data")
+                    ui.image(
+                        os.path.join(
+                            os.path.dirname(os.path.abspath(images.__file__)),
+                            "favicon.ico",
+                        )
+                    ).classes("rounded-full w-16 h-16 ml-4")
 
     async def index_page(self) -> None:
         with theme.frame(
@@ -429,6 +466,11 @@ def configure(ctx, param, filename):
     "--threads", default=4, help="Number of threads available.", required=True
 )
 @click.option(
+    "--log-level",
+    default="WARNING",
+    help="Set the logging level (e.g., DEBUG, INFO, WARNING).",
+)
+@click.option(
     "--simtime",
     default=False,
     help="If set, will simulate the addition of existing files to the pipeline based on read data.",
@@ -500,6 +542,7 @@ def configure(ctx, param, filename):
 def package_run(
     port,
     threads,
+    log_level,
     simtime,
     showerrors,
     sequencing_summary,
@@ -514,6 +557,7 @@ def package_run(
     Entrypoint for when GUI is launched directly.
     :return: None
     """
+    setup_logging(log_level)
     if sequencing_summary:
         sequencing_summary = click.format_filename(sequencing_summary)
     if browse:
