@@ -1,7 +1,7 @@
 from __future__ import annotations
 from cnsmeth.subpages.base_analysis import BaseAnalysis
 
-from nicegui import ui, background_tasks, app, run
+from nicegui import ui, app, run
 import time
 import os
 import sys
@@ -10,7 +10,6 @@ from pathlib import Path
 import pysam
 import pandas as pd
 import shutil
-import asyncio
 import tempfile
 from cnsmeth import models, theme, resources
 from cnsmeth.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
@@ -37,6 +36,15 @@ def run_samtools_sort(file, tomerge, sortfile, threads):
     pysam.cat("-o", file, *tomerge)
     pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
 
+def classification(modelfile, test_df):
+    NN = NN_classifier(modelfile)
+    try:
+        predictions, class_labels, n_features = NN.predict(test_df)
+    except Exception as e:
+        print(e)
+        test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
+        sys.exit(1)
+    return predictions, class_labels, n_features
 
 class NanoDX_object(BaseAnalysis):
     def __init__(self, *args, model="Capper_et_al_NN.pkl", **kwargs):
@@ -108,13 +116,13 @@ class NanoDX_object(BaseAnalysis):
 
     async def process_bam(self, bamfile):
         tomerge = []
-        #timestamp = None
+        # timestamp = None
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop()
             self.nanodx_bam_count += 1
             tomerge.append(file)
-            #timestamp = filetime
+            # timestamp = filetime
 
             if len(tomerge) > 200:
                 break
@@ -131,9 +139,13 @@ class NanoDX_object(BaseAnalysis):
 
             sortfile = sorttempbam.name
 
-            await run.cpu_bound(run_samtools_sort, file, tomerge, sortfile, self.threads)
+            await run.cpu_bound(
+                run_samtools_sort, file, tomerge, sortfile, self.threads
+            )
 
-            await run.cpu_bound(run_modkit, self.cpgs_file, sortfile, temp.name, self.threads)
+            await run.cpu_bound(
+                run_modkit, self.cpgs_file, sortfile, temp.name, self.threads
+            )
 
             try:
                 os.remove(f"{sortfile}.csi")
@@ -187,7 +199,9 @@ class NanoDX_object(BaseAnalysis):
                     sep="\s+",
                     # delim_whitespace=True,
                 )
-                self.merged_bed_file = await run.cpu_bound(merge_bedmethyl, bed_a, self.merged_bed_file)
+                self.merged_bed_file = await run.cpu_bound(
+                    merge_bedmethyl, bed_a, self.merged_bed_file
+                )
                 save_bedmethyl(self.merged_bed_file, self.nanodxfile.name)
             else:
                 shutil.copy(f"{temp.name}", self.nanodxfile.name)
@@ -239,7 +253,9 @@ class NanoDX_object(BaseAnalysis):
                 )
 
                 self.not_first_run = True
-            self.merged_bed_file = await run.cpu_bound(collapse_bedmethyl, self.merged_bed_file)
+            self.merged_bed_file = await run.cpu_bound(
+                collapse_bedmethyl, self.merged_bed_file
+            )
             test_df = pd.merge(
                 self.merged_bed_file,
                 self.cpgs,
@@ -252,13 +268,18 @@ class NanoDX_object(BaseAnalysis):
             )
             test_df.loc[test_df["methylation_call"] < 60, "methylation_call"] = -1
             test_df.loc[test_df["methylation_call"] >= 60, "methylation_call"] = 1
-            try:
-                predictions, class_labels, n_features = self.NN.predict(test_df)
-            except Exception as e:
-                print(e)
-                test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
-                # self.nanodx_status_txt["message"] = "Error generating predictions."
-                sys.exit(1)
+
+            predictions, class_labels, n_features = await run.cpu_bound(
+                classification, self.modelfile, test_df
+            )
+
+            #try:
+            #    predictions, class_labels, n_features = self.NN.predict(test_df)
+            #except Exception as e:
+            #    print(e)
+            #    test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
+            #    # self.nanodx_status_txt["message"] = "Error generating predictions."
+            #    sys.exit(1)
             nanoDX_df = pd.DataFrame({"class": class_labels, "score": predictions})
 
             nanoDX_save = nanoDX_df.set_index("class").T
