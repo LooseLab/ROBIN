@@ -1,30 +1,79 @@
 """
-This is the main page which sets up the ROBIN real time application.
+Main Page for Setting Up the ROBIN Real-Time Application
 
-The code implements a NiceGUI app (https://nicegui.io/) which requires all long running processes to
-operate in the background. The fundamental principle is that nothing should block the 
-main thread.
+This module initializes and configures the ROBIN real-time application using the NiceGUI framework (https://nicegui.io/). The application ensures that all long-running processes operate in the background, preventing the main thread from being blocked.
 
-On launch, the app creates an instance of the run class for the specific run, taking arguments either
-from the command line or via a config file.
+The app creates an instance of the `run` class for each specific run, taking arguments from either the command line or a configuration file. Shared arguments are stored in `nicegui.app.storage.general` for accessibility across the application.
 
-The run class in turn sets up the application. Arguments to be shared across the application
-are written to niceguis app.storage.general to allow them to be accessed by all users of this
-instance.
+Key Components:
 
-The run class then configures the app with a specific on_startup function. This function handles
-all slow running background processes. However, the function shares the main event loop with the ui
-process. It is important to exploit run.cpu_bound and run.io_bound wherever necessary.
+1. **Run Class**:
 
-The result of this is that a single instance of the Methnice class is created which will process data 
-in the background. Whenever a user connects to the site, the user will receive individual 
-instances of these classes which will enable visualisation of the data but will not themselves
-run any analysis.
+   - Sets up the application.
 
-The concept of one class providing both analysis and ui elements is maintained throughout the codebase.
+   - Shares arguments across the app through `app.storage.general`.
 
-Hopefully this simplifies code maintenance and future improvements.
+2. **Methnice Class**:
 
+   - Processes data in the background.
+
+   - Each user connecting to the site gets individual instances for data visualization without running analysis.
+
+3. **Pages**:
+
+   - `index`: Main page displaying the splash screen and navigation options.
+
+   - `live`: Page for live data interaction.
+
+   - `test`: Placeholder for browsing historic data (to be implemented).
+
+4. **Utility Functions**:
+
+   - `setup_logging(level)`: Configures global logging level.
+
+   - `clean_up()`: Cleans up stored data at the end of a run.
+
+   - `startup()`: Starts data processing in the main application loop.
+
+5. **Configuration**:
+
+   - Uses `click` for command-line interface options.
+
+   - Loads configuration from `config.ini` or specified file.
+
+Constants:
+
+- `DEFAULT_CFG`: Default path to the configuration file.
+
+- `UNIQUE_ID`: Unique identifier for each run, used as an access key in `app.storage.general`.
+
+Dependencies:
+
+- `click`
+
+- `os`
+
+- `sys`
+
+- `signal`
+
+- `uuid`
+
+- `logging`
+
+- `pathlib.Path`
+
+- `nicegui` (ui, app)
+
+- `cnsmeth.theme`
+
+- `cnsmeth.images`
+
+- `configparser.ConfigParser`
+
+Example usage::
+
+    python main.py --config config.ini --port 8081 --threads 4 --log-level INFO
 
 """
 
@@ -59,11 +108,19 @@ def setup_logging(level):
     numeric_level = getattr(logging, level.upper(), None)
     if numeric_level is None:
         raise ValueError(f"Invalid log level: {level}")
+
+    # Clear any existing handlers to ensure basicConfig can set up the new configuration
+    for handler in logging.root.handlers[:]:
+        logging.root.removeHandler(handler)
+
     logging.basicConfig(
         level=numeric_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-    logging.debug("Logging configured to level: %s", level)
+
+    # Logging a message after configuration to check the level
+    logging.info(f"Logging configured to level: {level}")
+    logging.debug("Debug logging enabled.")
 
 
 @ui.page("/", response_timeout=10)
@@ -122,10 +179,21 @@ async def test():
     The idea is that we will implement the browse functions that allow someone
     to explore previous data even when a live run is in progress.
     """
-    ui.link("Home", "/")
-    ui.link("Live", "/live")
-    ui.link("Browse", "/browse")
-    ui.label("Good to be back. This code is still to be implemented.")
+    GUI_browse = Methnice(
+        threads=1,  # app.storage.general[UNIQUE_ID]["threads"],
+        simtime=False,  # app.storage.general[UNIQUE_ID]["simtime"],
+        watchfolder=None,  # app.storage.general[UNIQUE_ID]["watchfolder"],
+        output=None,  # app.storage.general[UNIQUE_ID]["output"],
+        sequencing_summary=None,  # app.storage.general[UNIQUE_ID]["sequencing_summary"],
+        target_panel=app.storage.general[UNIQUE_ID]["target_panel"],
+        showerrors=app.storage.general[UNIQUE_ID]["showerrors"],
+        browse=True,  # app.storage.general[UNIQUE_ID]["browse"],
+        exclude=app.storage.general[UNIQUE_ID]["exclude"],
+        reference=app.storage.general[UNIQUE_ID]["reference"],
+        unique_id=UNIQUE_ID,
+    )
+    GUI_browse.setup()
+    await GUI_browse.browse_page()
 
 
 def clean_up():
@@ -143,10 +211,9 @@ def clean_up():
 
 async def startup():
     """
-        This function starts data processing in the main application loop.
+    This function starts data processing in the main application loop.
     The function is only started once. It must not be run more than once!
     """
-
     # loop = asyncio.get_running_loop()
     # loop.set_debug(True)
     # loop.slow_callback_duration = 0.2
@@ -257,25 +324,25 @@ class Methnice:
         with theme.frame(
             "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
         ):
-            ui.label(f"private page with ID {uuid.uuid4()}")
             self.analysis_tab_pane = ui.row().classes("w-full")
+            self.robin_browse = BrainMeth(
+                mainuuid=self.MAINID,
+                threads=self.threads,
+                simtime=self.simtime,
+                watchfolder=None,
+                output=self.output,
+                sequencing_summary=self.sequencing_summary,
+                target_panel=self.target_panel,
+                showerrors=self.showerrors,
+                browse=True,
+                exclude=self.exclude,
+                minknow_connection=self.minknow_connection,
+                reference=self.reference,
+            )
+            await self.robin_browse.init()
 
             with self.analysis_tab_pane:
-                self.robin_browse = BrainMeth(
-                    mainuuid=self.MAINID,
-                    threads=self.threads,
-                    simtime=self.simtime,
-                    watchfolder=self.watchfolder,
-                    output=self.output,
-                    sequencing_summary=self.sequencing_summary,
-                    target_panel=self.target_panel,
-                    showerrors=self.showerrors,
-                    browse=self.browse,
-                    exclude=self.exclude,
-                    minknow_connection=self.minknow_connection,
-                    reference=self.reference,
-                )
-                await self.robin_browse.init()
+                await self.robin_browse.render_ui()
 
     async def splash_screen(self) -> None:
         with theme.frame(
@@ -371,7 +438,7 @@ class Methnice:
                     )
 
             with self.analysis_tab_pane:
-                self.robin.render_ui()
+                await self.robin.render_ui()
 
 
 def run_class(
@@ -395,6 +462,9 @@ def run_class(
         app.storage.general.clear()
     except Exception as e:
         print(e)
+    logger = logging.getLogger(__name__)
+    logger.info("Starting ROBIN.")
+    logger.debug("Starting DEBUG ROBIN")
     # Configure the icon for the GUI
     iconfile = os.path.join(
         os.path.dirname(os.path.abspath(images.__file__)), "favicon.ico"
@@ -468,6 +538,10 @@ def configure(ctx, param, filename):
 @click.option(
     "--log-level",
     default="WARNING",
+    type=click.Choice(
+        ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
+        case_sensitive=True,
+    ),
     help="Set the logging level (e.g., DEBUG, INFO, WARNING).",
 )
 @click.option(
@@ -589,7 +663,9 @@ def package_run(
             reload=False,
             threads=threads,
             simtime=simtime,
-            watchfolder=click.format_filename(watchfolder),
+            watchfolder=(
+                click.format_filename(watchfolder) if watchfolder is not None else None
+            ),
             output=click.format_filename(output),
             sequencing_summary=sequencing_summary,
             target_panel=target_panel,

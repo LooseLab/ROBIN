@@ -1,3 +1,102 @@
+"""
+Main Module for Initializing and Configuring the Brain Tumour Classification Application
+
+This module sets up and configures the Brain Tumour Classification application using the NiceGUI framework (https://nicegui.io/). The application ensures that all long-running processes operate in the background, preventing the main thread from being blocked.
+
+The app creates an instance of the `BrainMeth` class for each specific run, taking arguments from either the command line or a configuration file. Shared arguments are stored in `nicegui.app.storage.general` for accessibility across the application.
+
+Key Components:
+
+1. **BrainMeth Class**:
+
+   - Sets up the application.
+
+   - Manages BAM file processing and classification tasks.
+
+   - Handles the configuration of subpages for various analysis types (e.g., MGMT, Sturgeon, NanoDX).
+
+2. **BAM File Handling**:
+
+   - `check_bam(bamfile)`: Checks a BAM file and returns its attributes.
+
+   - Uses `watchdog.observers.Observer` to monitor a directory for new BAM files.
+
+3. **Subpage Objects**:
+
+   - `MGMT_Object`
+
+   - `Sturgeon_object`
+
+   - `NanoDX_object`
+
+   - `RandomForest_object`
+
+   - `CNVAnalysis`
+
+   - `TargetCoverage`
+
+   - `Fusion_object`
+
+4. **Utility Functions**:
+
+   - `check_bam(bamfile)`: Verifies BAM file attributes.
+
+   - `LocalFilePicker`: Allows for local file selection.
+
+5. **Queues for BAM Processing**:
+
+   - `bam_tracking`
+
+   - `bamforcns`
+
+   - `bamforsturgeon`
+
+   - `bamfornanodx`
+
+   - `bamforcnv`
+
+   - `bamfortargetcoverage`
+
+   - `bamformgmt`
+
+   - `bamforfusions`
+
+6. **Configuration**:
+
+   - Uses `click` for command-line interface options.
+
+   - Loads configuration from `config.ini` or specified file.
+
+Dependencies:
+
+- `nicegui` (ui, app)
+
+- `cnsmeth.utilities.bam_handler.BamEventHandler`
+
+- `cnsmeth.subpages` (MGMT_Object, Sturgeon_object, NanoDX_object, RandomForest_object, CNVAnalysis, TargetCoverage, Fusion_object)
+
+- `cnsmeth.utilities.local_file_picker.LocalFilePicker`
+
+- `cnsmeth.utilities.ReadBam.ReadBam`
+
+- `watchdog.observers.Observer`
+
+- `pathlib.Path`
+
+- `queue.Queue`
+
+- `pandas`
+
+- `asyncio`
+
+- `collections.Counter`
+
+- `datetime`
+
+- `os`
+
+"""
+
 from nicegui import ui, app
 
 from cnsmeth.utilities.bam_handler import BamEventHandler
@@ -18,11 +117,16 @@ from pathlib import Path
 from queue import Queue
 import pandas as pd
 import asyncio
+import logging
 from collections import Counter
 
 import time
 from datetime import datetime
 import os
+
+# Configure logging
+# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 
 def check_bam(bamfile):
@@ -68,7 +172,7 @@ class BrainMeth:
         self.observer = None
 
     async def init(self):
-        print("Init Brain Class")
+        logger.debug("Init Brain Class")
         app.storage.general[self.mainuuid]["bam_count"] = {}
         app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
         app.storage.general[self.mainuuid]["bam_count"]["files"] = {}
@@ -203,9 +307,9 @@ class BrainMeth:
         #        await asyncio.sleep(1)
         #    await self.minknow_connection.access_device.clicked()
 
-    def render_ui(self):
+    async def render_ui(self):
         if not self.browse:
-            self.information_panel()
+            await self.information_panel()
 
             # if self.watchfolder:
             #    self.add_watchfolder(self.watchfolder)
@@ -248,7 +352,7 @@ class BrainMeth:
                 )
                 ui.label("Not yet implemented.")
                 self.output = result[0]
-                self.information_panel()
+                await self.information_panel()
 
     def replay(self):
         ui.notify("Replaying data")
@@ -268,7 +372,7 @@ class BrainMeth:
         else:
             return 0
 
-    def information_panel(self):
+    async def information_panel(self):
         self.frontpage = ui.card().classes("w-screen")
         with self.frontpage:
             ui.label("CNS Tumour Methylation Classification").style(
@@ -472,7 +576,7 @@ class BrainMeth:
                                 browse=self.browse,
                                 uuid=self.mainuuid,
                             )
-                            self.Sturgeon.render_ui()
+                            await self.Sturgeon.render_ui()
                         if "nanodx" not in self.exclude:
                             self.NanoDX = NanoDX_object(
                                 self.threads,
@@ -485,7 +589,7 @@ class BrainMeth:
                                 browse=self.browse,
                                 uuid=self.mainuuid,
                             )
-                            self.NanoDX.render_ui()
+                            await self.NanoDX.render_ui()
                         if "forest" not in self.exclude:
                             self.RandomForest = RandomForest_object(
                                 self.threads,
@@ -499,7 +603,7 @@ class BrainMeth:
                                 browse=self.browse,
                                 uuid=self.mainuuid,
                             )
-                            self.RandomForest.render_ui()
+                            await self.RandomForest.render_ui()
             if "cnv" not in self.exclude:
                 with ui.tab_panel(copy_numbertab).classes("w-full"):
                     with ui.card().classes("w-full"):
@@ -514,7 +618,7 @@ class BrainMeth:
                             browse=self.browse,
                             uuid=self.mainuuid,
                         )
-                        self.CNV.render_ui()
+                        await self.CNV.render_ui()
             if "coverage" not in self.exclude:
                 with ui.tab_panel(coveragetab).classes("w-full"):
                     with ui.card().classes("w-full"):
@@ -530,7 +634,7 @@ class BrainMeth:
                             browse=self.browse,
                             uuid=self.mainuuid,
                         )
-                        self.Target_Coverage.render_ui()
+                        await self.Target_Coverage.render_ui()
             if "mgmt" not in self.exclude:
                 with ui.tab_panel(mgmttab).classes("w-full"):
                     with ui.card().classes("w-full"):
@@ -544,7 +648,7 @@ class BrainMeth:
                             browse=self.browse,
                             uuid=self.mainuuid,
                         )
-                        self.MGMT_panel.render_ui()
+                        await self.MGMT_panel.render_ui()
             if "fusion" not in self.exclude:
                 with ui.tab_panel(fusionstab).classes("w-full"):
                     with ui.card().classes("w-full"):
@@ -559,7 +663,7 @@ class BrainMeth:
                             browse=self.browse,
                             uuid=self.mainuuid,
                         )
-                        self.Fusion_panel.render_ui()
+                        await self.Fusion_panel.render_ui()
 
     async def background_process_bams(self):
         await asyncio.sleep(5)

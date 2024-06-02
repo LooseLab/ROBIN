@@ -1,4 +1,50 @@
-from cnsmeth.subpages.base_analysis import BaseAnalysis
+"""
+Fusion Gene Identification Module
+
+This module provides functionality for identifying gene fusion candidates from BAM files.
+The primary components include running external tools to extract and process gene fusion
+candidates, visualizing the results using a GUI, and managing the process asynchronously.
+
+Dependencies:
+    - pandas
+    - os
+    - sys
+    - subprocess
+    - gff3_parser
+    - tempfile
+    - random
+    - nicegui
+    - dna_features_viewer
+    - matplotlib
+    - click
+
+Modules:
+    - subpages.base_analysis: BaseAnalysis class from cnsmeth.subpages.base_analysis
+    - theme: cnsmeth theme module
+    - resources: cnsmeth resources module
+
+Environment Variables:
+    - CI: Set to "1"
+
+Constants:
+    - STRAND: Dictionary for mapping strand symbols to integers
+
+Functions:
+    - run_command(command: str): Executes a shell command and handles exceptions.
+    - fusion_work(threads, bamfile, gene_bed, all_gene_bed, tempreadfile, tempbamfile, tempmappings, tempallmappings): Identifies fusion candidates from BAM files.
+    - fusion_work_old(threads, bamfile, gene_bed, all_gene_bed, tempreadfile, tempbamfile, tempmappings, tempallmappings): Legacy function for identifying fusion candidates.
+
+Classes:
+    - Fusion_object(BaseAnalysis): Manages the gene fusion identification process, including setting up the GUI and handling BAM file processing.
+
+Command-line Interface:
+    - main(port, threads, watchfolder, output, browse): CLI entry point for running the app, using Click for argument parsing.
+
+Usage:
+    The module can be run as a script to start the GUI for gene fusion identification, specifying
+    options like the port, number of threads, watch folder, and output directory.
+"""
+
 import os
 import sys
 import subprocess
@@ -8,18 +54,22 @@ import random
 import pandas as pd
 import click
 from typing import Optional, Tuple
-
-
 from nicegui import ui, run
 from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
-
 import matplotlib
 
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
+from cnsmeth.subpages.base_analysis import BaseAnalysis
 
+import logging
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
@@ -35,7 +85,7 @@ def run_command(command: str) -> None:
     try:
         subprocess.run(command, shell=True, check=True)
     except subprocess.CalledProcessError as e:
-        print(f"Command failed: {command}")
+        logging.error(f"Command failed: {command}")
         raise e
 
 
@@ -68,47 +118,55 @@ def fusion_work(
     fusion_candidates: Optional[pd.DataFrame] = None
     fusion_candidates_all: Optional[pd.DataFrame] = None
 
-    # Extract reads mapped with supplementary alignments
-    run_command(
-        f"samtools view -@{threads} -L {gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile}"
-    )
-
-    if os.path.getsize(tempreadfile) > 0:
-        # Extract reads to a temporary BAM file
+    try:
+        # Extract reads mapped with supplementary alignments
         run_command(
-            f"samtools view -@{threads} -N {tempreadfile} -o {tempbamfile} {bamfile}"
+            f"samtools view -@{threads} -L {gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile}"
         )
 
-        if os.path.getsize(tempbamfile) > 0:
-            # Intersect the gene BED file with the temporary BAM file
+        if os.path.getsize(tempreadfile) > 0:
+            # Extract reads to a temporary BAM file
             run_command(
-                f"bedtools intersect -a {gene_bed} -b {tempbamfile} -wa -wb > {tempmappings}"
-            )
-            run_command(
-                f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}"
+                f"samtools view -@{threads} -N {tempreadfile} -o {tempbamfile} {bamfile}"
             )
 
-            # Process gene mappings if available
-            if os.path.getsize(tempmappings) > 0:
-                fusion_candidates = pd.read_csv(tempmappings, sep="\t", header=None)
-                fusion_candidates = fusion_candidates[fusion_candidates[8] > 50]
-                fusion_candidates["diff"] = fusion_candidates[6] - fusion_candidates[5]
-                fusion_candidates = fusion_candidates[fusion_candidates["diff"] > 1000]
+            if os.path.getsize(tempbamfile) > 0:
+                # Intersect the gene BED file with the temporary BAM file
+                run_command(
+                    f"bedtools intersect -a {gene_bed} -b {tempbamfile} -wa -wb > {tempmappings}"
+                )
+                run_command(
+                    f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}"
+                )
 
-            # Process all gene mappings if available
-            if os.path.getsize(tempallmappings) > 0:
-                fusion_candidates_all = pd.read_csv(
-                    tempallmappings, sep="\t", header=None
-                )
-                fusion_candidates_all = fusion_candidates_all[
-                    fusion_candidates_all[8] > 59
-                ]
-                fusion_candidates_all["diff"] = (
-                    fusion_candidates_all[6] - fusion_candidates_all[5]
-                )
-                fusion_candidates_all = fusion_candidates_all[
-                    fusion_candidates_all["diff"] > 1000
-                ]
+                # Process gene mappings if available
+                if os.path.getsize(tempmappings) > 0:
+                    fusion_candidates = pd.read_csv(tempmappings, sep="\t", header=None)
+                    fusion_candidates = fusion_candidates[fusion_candidates[8] > 50]
+                    fusion_candidates["diff"] = (
+                        fusion_candidates[6] - fusion_candidates[5]
+                    )
+                    fusion_candidates = fusion_candidates[
+                        fusion_candidates["diff"] > 1000
+                    ]
+
+                # Process all gene mappings if available
+                if os.path.getsize(tempallmappings) > 0:
+                    fusion_candidates_all = pd.read_csv(
+                        tempallmappings, sep="\t", header=None
+                    )
+                    fusion_candidates_all = fusion_candidates_all[
+                        fusion_candidates_all[8] > 59
+                    ]
+                    fusion_candidates_all["diff"] = (
+                        fusion_candidates_all[6] - fusion_candidates_all[5]
+                    )
+                    fusion_candidates_all = fusion_candidates_all[
+                        fusion_candidates_all["diff"] > 1000
+                    ]
+    except Exception as e:
+        logging.error(f"Error during fusion work: {e}")
+        raise
 
     return fusion_candidates, fusion_candidates_all
 
@@ -123,51 +181,89 @@ def fusion_work_old(
     tempmappings,
     tempallmappings,
 ):
+    """
+    Legacy function for identifying fusion candidates from BAM files.
+
+    Args:
+        threads (int): Number of threads to use for parallel processing.
+        bamfile (str): Path to the BAM file.
+        gene_bed (str): Path to the gene BED file.
+        all_gene_bed (str): Path to the BED file with all genes.
+        tempreadfile (str): Path to the temporary file to store read names.
+        tempbamfile (str): Path to the temporary BAM file.
+        tempmappings (str): Path to the temporary file for gene mappings.
+        tempallmappings (str): Path to the temporary file for all gene mappings.
+
+    Returns:
+        Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]: DataFrames with fusion candidates and all fusion candidates.
+    """
     fusion_candidates = None
     fusion_candidates_all = None
-    os.system(
-        f"samtools view -@{threads} -L {gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile}"
-    )
-    if os.path.getsize(tempreadfile) > 0:
+    try:
         os.system(
-            f"samtools view -@{threads} -N {tempreadfile} -o {tempbamfile} {bamfile}"
+            f"samtools view -@{threads} -L {gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile}"
         )
-        if os.path.getsize(tempbamfile) > 0:
+        if os.path.getsize(tempreadfile) > 0:
             os.system(
-                f"bedtools intersect -a {gene_bed} -b {tempbamfile} -wa -wb > {tempmappings}"
+                f"samtools view -@{threads} -N {tempreadfile} -o {tempbamfile} {bamfile}"
             )
-            os.system(
-                f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}"
-            )
-            if os.path.getsize(tempmappings) > 0:
-                fusion_candidates = pd.read_csv(tempmappings, sep="\t", header=None)
-                # Filter to only include good mappings
-                fusion_candidates = fusion_candidates[fusion_candidates[8].gt(50)]
-                # Filter to only keep reads that map to 1 kb or more of the reference.
-                fusion_candidates["diff"] = fusion_candidates[6] - fusion_candidates[5]
-                fusion_candidates = fusion_candidates[
-                    fusion_candidates["diff"].gt(1000)
-                ]
-            if os.path.getsize(tempallmappings) > 0:
-                fusion_candidates_all = pd.read_csv(
-                    tempallmappings, sep="\t", header=None
+            if os.path.getsize(tempbamfile) > 0:
+                os.system(
+                    f"bedtools intersect -a {gene_bed} -b {tempbamfile} -wa -wb > {tempmappings}"
                 )
-
-                fusion_candidates_all = fusion_candidates_all[
-                    fusion_candidates_all[8].gt(59)
-                ]
-
-                fusion_candidates_all["diff"] = (
-                    fusion_candidates_all[6] - fusion_candidates_all[5]
+                os.system(
+                    f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}"
                 )
-
-                fusion_candidates_all = fusion_candidates_all[
-                    fusion_candidates_all["diff"].gt(1000)
-                ]
+                if os.path.getsize(tempmappings) > 0:
+                    fusion_candidates = pd.read_csv(tempmappings, sep="\t", header=None)
+                    fusion_candidates = fusion_candidates[fusion_candidates[8].gt(50)]
+                    fusion_candidates["diff"] = (
+                        fusion_candidates[6] - fusion_candidates[5]
+                    )
+                    fusion_candidates = fusion_candidates[
+                        fusion_candidates["diff"].gt(1000)
+                    ]
+                if os.path.getsize(tempallmappings) > 0:
+                    fusion_candidates_all = pd.read_csv(
+                        tempallmappings, sep="\t", header=None
+                    )
+                    fusion_candidates_all = fusion_candidates_all[
+                        fusion_candidates_all[8].gt(59)
+                    ]
+                    fusion_candidates_all["diff"] = (
+                        fusion_candidates_all[6] - fusion_candidates_all[5]
+                    )
+                    fusion_candidates_all = fusion_candidates_all[
+                        fusion_candidates_all["diff"].gt(1000)
+                    ]
+    except Exception as e:
+        logging.error(f"Error in legacy fusion work: {e}")
+        raise
     return fusion_candidates, fusion_candidates_all
 
 
 class Fusion_object(BaseAnalysis):
+    """
+    Fusion_object handles the gene fusion identification process, including setting up the GUI
+    and processing BAM files asynchronously.
+
+    Attributes:
+        target_panel (str): Name of the target panel.
+        fusion_candidates (DataFrame): DataFrame with fusion candidates.
+        fusion_candidates_all (DataFrame): DataFrame with all fusion candidates.
+        fstable_all (ui.Table): UI table for displaying all fusion candidates.
+        fstable (ui.Table): UI table for displaying fusion candidates.
+        fstable_all_row_count (int): Row count for all fusion candidates table.
+        all_candidates (int): Number of all fusion candidates.
+        fstable_row_count (int): Row count for fusion candidates table.
+        candidates (int): Number of fusion candidates.
+        gene_gff3_2 (str): Path to the GFF3 file with gene annotations.
+        gene_bed (str): Path to the gene BED file.
+        all_gene_bed (str): Path to the BED file with all genes.
+        gene_table (DataFrame): DataFrame with gene annotations.
+        gene_table_small (DataFrame): Filtered DataFrame with gene annotations.
+    """
+
     def __init__(self, *args, target_panel=None, **kwargs):
         self.target_panel = target_panel
 
@@ -210,10 +306,10 @@ class Fusion_object(BaseAnalysis):
                 )
             )
         else:
-            print(
+            logging.info(
                 f"This looks like the first time you have run the {self.target_panel} panel."
             )
-            print("Parsing GFF3")
+            logging.info("Parsing GFF3")
             self.gene_table = gff3_parser.parse_gff3(
                 self.gene_gff3_2, verbose=False, parse_attributes=True
             )
@@ -258,7 +354,10 @@ class Fusion_object(BaseAnalysis):
 
     def setup_ui(self):
         """
-        Function to setup the UI for the Fusion Panel. This function creates the UI elements for the Fusion Panel.
+        Sets up the user interface for the Fusion Panel. This function creates the UI elements for the Fusion Panel.
+
+        Returns:
+            None
         """
         if self.summary:
             with self.summary:
@@ -356,6 +455,12 @@ class Fusion_object(BaseAnalysis):
             ui.timer(5, lambda: self.show_previous_data(self.output))
 
     def fusion_table_all(self):
+        """
+        Displays all fusion candidates in a table format.
+
+        Returns:
+            None
+        """
         if not self.fusion_candidates_all.empty:
             uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)
             doubles_all = self.fusion_candidates_all[uniques_all]
@@ -367,6 +472,15 @@ class Fusion_object(BaseAnalysis):
             # self.update_fusion_table_all(result_all)
 
     def update_fusion_table_all(self, result_all):
+        """
+        Updates the UI table with all fusion candidates.
+
+        Args:
+            result_all (DataFrame): DataFrame with all fusion candidates.
+
+        Returns:
+            None
+        """
         if result_all.shape[0] > self.fstable_all_row_count:
             self.fstable_all_row_count = result_all.shape[0]
             # self.fusiontable_all.clear()
@@ -448,14 +562,6 @@ class Fusion_object(BaseAnalysis):
                                     goodpairs
                                     & result_all[goodpairs]["tag"].eq(gene_pair)
                                 ][3].unique():
-                                    # self.create_fusion_plot(
-                                    #    gene,
-                                    #    result_all[goodpairs].sort_values(by=7)[
-                                    #        result_all[goodpairs]
-                                    #        .sort_values(by=7)[3]
-                                    #        .eq(gene)
-                                    #    ],
-                                    # )
                                     title = gene
                                     reads = result_all[goodpairs].sort_values(by=7)[
                                         result_all[goodpairs]
@@ -542,6 +648,12 @@ class Fusion_object(BaseAnalysis):
                                             )
 
     def fusion_table(self):
+        """
+        Displays fusion candidates in a table format.
+
+        Returns:
+            None
+        """
         if not self.fusion_candidates.empty:
             uniques = self.fusion_candidates[7].duplicated(keep=False)
             doubles = self.fusion_candidates[uniques]
@@ -553,6 +665,15 @@ class Fusion_object(BaseAnalysis):
         # self.update_fusion_table(result)
 
     def update_fusion_table(self, result):
+        """
+        Updates the UI table with fusion candidates.
+
+        Args:
+            result (DataFrame): DataFrame with fusion candidates.
+
+        Returns:
+            None
+        """
         if result.shape[0] > self.fstable_row_count:
             self.fstable_row_count = result.shape[0]
             if not self.fstable:
@@ -635,9 +756,14 @@ class Fusion_object(BaseAnalysis):
 
     def create_fusion_plot(self, title, reads):
         """
-        Function to create a fusion plot. This function creates a plot to illustrate the alignments of reads to each region of the genome.
-        :param title: The title of the plot.
-        :param reads: The reads to be plotted.
+        Creates a fusion plot to illustrate the alignments of reads to each region of the genome.
+
+        Args:
+            title (str): Title of the plot.
+            reads (DataFrame): DataFrame with reads to be plotted.
+
+        Returns:
+            None
         """
         with ui.card().classes("no-shadow border-[2px]"):
             with ui.pyplot(figsize=(16, 2)):
@@ -703,56 +829,76 @@ class Fusion_object(BaseAnalysis):
 
     async def process_bam(self, bamfile, timestamp):
         """
-        Function to process a bam file and identify fusion candidates.
-        :param bamfile: The path to the bam file to process.
+        Processes a BAM file and identifies fusion candidates.
+
+        Args:
+            bamfile (str): Path to the BAM file to process.
+            timestamp (str): Timestamp for the analysis.
+
+        Returns:
+            None
         """
         tempreadfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
         tempmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
         tempallmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
 
-        fusion_candidates, fusion_candidates_all = await run.cpu_bound(
-            fusion_work,
-            self.threads,
-            bamfile,
-            self.gene_bed,
-            self.all_gene_bed,
-            tempreadfile.name,
-            tempbamfile.name,
-            tempmappings.name,
-            tempallmappings.name,
-        )
+        try:
+            fusion_candidates, fusion_candidates_all = await run.cpu_bound(
+                fusion_work,
+                self.threads,
+                bamfile,
+                self.gene_bed,
+                self.all_gene_bed,
+                tempreadfile.name,
+                tempbamfile.name,
+                tempmappings.name,
+                tempallmappings.name,
+            )
 
-        if fusion_candidates is not None:
-            if self.fusion_candidates.empty:
-                self.fusion_candidates = fusion_candidates
-            else:
-                self.fusion_candidates = pd.concat(
-                    [self.fusion_candidates, fusion_candidates]
-                ).reset_index(drop=True)
+            if fusion_candidates is not None:
+                if self.fusion_candidates.empty:
+                    self.fusion_candidates = fusion_candidates
+                else:
+                    self.fusion_candidates = pd.concat(
+                        [self.fusion_candidates, fusion_candidates]
+                    ).reset_index(drop=True)
 
-        if fusion_candidates_all is not None:
-            if self.fusion_candidates_all.empty:
-                self.fusion_candidates_all = fusion_candidates_all
-            else:
-                self.fusion_candidates_all = pd.concat(
-                    [self.fusion_candidates_all, fusion_candidates_all]
-                ).reset_index(drop=True)
+            if fusion_candidates_all is not None:
+                if self.fusion_candidates_all.empty:
+                    self.fusion_candidates_all = fusion_candidates_all
+                else:
+                    self.fusion_candidates_all = pd.concat(
+                        [self.fusion_candidates_all, fusion_candidates_all]
+                    ).reset_index(drop=True)
 
-        self.fusion_table()
+            self.fusion_table()
+            self.fusion_table_all()
 
-        self.fusion_table_all()
-
-        # await asyncio.sleep(0.1)
-        self.running = False
+        except Exception as e:
+            logging.error(f"Error processing BAM file: {e}")
+        finally:
+            self.running = False
 
     def _generate_random_color(self):
         """
-        Function to generate a random color for use in plotting.
+        Generates a random color for use in plotting.
+
+        Returns:
+            str: A random hex color code.
         """
         return "#{:06x}".format(random.randint(0, 0xFFFFFF))
 
     def _annotate_results(self, result):
+        """
+        Annotates the result DataFrame with tags and colors.
+
+        Args:
+            result (DataFrame): DataFrame with fusion candidates.
+
+        Returns:
+            Tuple[DataFrame, Series]: Annotated DataFrame and a boolean Series indicating good pairs.
+        """
         result_copy = result.copy()
         lookup = result_copy.groupby(7)[3].agg(lambda x: ",".join(set(x)))
         tags = result_copy[7].map(lookup.get)
@@ -764,9 +910,27 @@ class Fusion_object(BaseAnalysis):
         return result, goodpairs
 
     def count_shared_values(self, group):
+        """
+        Counts the number of unique values in the group for the specified column.
+
+        Args:
+            group (DataFrame): Grouped DataFrame.
+
+        Returns:
+            int: Number of unique values in the group.
+        """
         return group[7].nunique()
 
     def show_previous_data(self, output):
+        """
+        Displays previously analyzed data from the specified output folder.
+
+        Args:
+            output (str): Path to the output folder.
+
+        Returns:
+            None
+        """
         if os.path.isfile(os.path.join(output, "fusion_candidates_master.csv")):
             fusion_candidates = pd.read_csv(
                 os.path.join(output, "fusion_candidates_master.csv"),
@@ -795,6 +959,20 @@ def test_me(
     reload: bool = False,
     browse: bool = False,
 ):
+    """
+    Sets up and runs the gene fusion identification application.
+
+    Args:
+        port (int): Port number for the server.
+        threads (int): Number of threads to use for processing.
+        watchfolder (str): Path to the folder to watch for new BAM files.
+        output (str): Path to the output directory.
+        reload (bool): Flag to reload the application on changes.
+        browse (bool): Flag to enable browsing historic data.
+
+    Returns:
+        None
+    """
     my_connection = None
     with theme.frame("Fusion Gene Identification.", my_connection):
         TestObject = Fusion_object(threads, output, progress=True)
@@ -808,7 +986,6 @@ def test_me(
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
     else:
-        # print("Browse mode not implemented.")
         TestObject.progress_trackers.visible = False
         TestObject.show_previous_data(output)
     ui.run(port=port, reload=reload)
@@ -844,29 +1021,29 @@ def test_me(
 )
 def main(port, threads, watchfolder, output, browse):
     """
-    Helper function to run the app.
-    :param port: The port to serve the app on.
-    :param reload: Should we reload the app on changes.
-    :return:
+    CLI entry point for running the gene fusion identification app.
+
+    Args:
+        port (int): The port to serve the app on.
+        threads (int): Number of threads available for processing.
+        watchfolder (str): Directory to watch for new BAM files.
+        output (str): Directory to save output files.
+        browse (bool): Enable browsing historic data.
+
+    Returns:
+        None
     """
     if browse:
-        # Handle the case when --browse is set
         click.echo("Browse mode is enabled. Only the output folder is required.")
         test_me(
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,
             watchfolder=None,
             output=watchfolder,
-            # sequencing_summary=sequencing_summary,
-            # showerrors=showerrors,
             browse=browse,
-            # exclude=exclude,
         )
-        # Your logic for browse mode
     else:
-        # Handle the case when --browse is not set
         click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
         if watchfolder is None or output is None:
             click.echo("Watchfolder and output are required when --browse is not set.")
@@ -875,13 +1052,9 @@ def main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,
             watchfolder=watchfolder,
             output=output,
-            # sequencing_summary=sequencing_summary,
-            # showerrors=showerrors,
             browse=browse,
-            # exclude=exclude,
         )
 
 
