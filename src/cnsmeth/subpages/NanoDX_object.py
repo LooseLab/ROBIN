@@ -126,7 +126,7 @@ class NanoDX_object(BaseAnalysis):
             tomerge.append(file)
             # timestamp = filetime
 
-            if len(tomerge) > 200:
+            if len(tomerge) > 50:
                 break
         app.storage.general[self.mainuuid][self.name]["counters"][
             "bams_in_processing"

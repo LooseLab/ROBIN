@@ -40,7 +40,7 @@ def save_bedmethyl(result_df: pd.DataFrame, output_file: str) -> None:
         index=False,
         quoting=csv.QUOTE_NONNUMERIC,
         quotechar='"',
-        escapechar='\\'
+        escapechar="\\",
     )
     logger.info(f"Saved bedmethyl data to {file_path}")
 

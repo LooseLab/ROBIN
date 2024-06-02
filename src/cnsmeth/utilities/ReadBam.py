@@ -121,7 +121,7 @@ class ReadBam:
         """
         if self.bam_file:
             if not os.path.isfile(f"{self.bam_file}.bai"):
-                logger.info(
+                logger.warning(
                     f"Index file for {self.bam_file} does not exist. Generating index file."
                 )
                 pysam.index(self.bam_file)
@@ -180,8 +180,8 @@ class ReadBam:
             self.mapped_reads = len(readset)
             self.unmapped_reads = self.sam_file.mapped if self.sam_file else 0
 
-            logger.info(f"Mapped reads: {filtered_reads_count}")
-            logger.info(f"Total reads: {filtered_reads_count + self.unmapped_reads}")
+            logger.debug(f"Mapped reads: {filtered_reads_count}")
+            logger.debug(f"Total reads: {filtered_reads_count + self.unmapped_reads}")
 
             return bam_read
         return None

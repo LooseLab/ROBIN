@@ -1,3 +1,104 @@
+"""
+Copy Number Variation (CNV) Analysis Module
+
+This module provides functionality for analyzing copy number variations (CNVs) from BAM files generated during sequencing runs. It includes classes and functions for iterating over BAM files, processing CNV data, and visualizing results using NiceGUI for web-based user interfaces.
+
+Key Components:
+
+1. **Result Class**:
+
+   - A simple class to store CNV results.
+
+2. **Helper Functions**:
+
+   - `iterate_bam`: Iterates over a BAM file and returns CNV data and associated metrics.
+
+   - `iterate_bam_bin`: Iterates over a BAM file with specified bin width and returns CNV data and associated metrics.
+
+   - `reduce_list`: Reduces the length of a list to a specified maximum length by subsampling.
+
+   - `moving_average`: Calculates the moving average of a given data array.
+
+   - `pad_arrays`: Pads two arrays to the same length with a specified value.
+
+   - `ruptures_plotting`: Applies the Kernel Change Point Detection (CPD) algorithm to identify change points in data.
+
+3. **CNVAnalysis Class**:
+
+   - Inherits from `BaseAnalysis` and provides specific methods for CNV analysis.
+
+   - Initializes with specific target panel information and loads reference data.
+
+   - Implements methods to estimate genetic sex (XX or XY) based on CNV data.
+
+   - Processes BAM files to extract CNV data and updates visualizations.
+
+   - Provides a user interface for visualizing CNV data using NiceGUI.
+
+4. **User Interface and Visualization**:
+
+   - `setup_ui`: Sets up the user interface for CNV analysis, including selection controls and plots.
+
+   - `generate_chart`: Generates ECharts objects for displaying CNV scatter plots and difference plots.
+
+   - `_update_cnv_plot`: Updates CNV plots with new data and annotations based on selected chromosomes and genes.
+
+   - `show_previous_data`: Loads and displays previously computed CNV data.
+
+5. **Command-Line Interface**:
+
+   - Uses Click for defining command-line options and arguments to run the CNV analysis application.
+
+   - `test_me`: Helper function to initialize and run the CNV analysis application.
+
+   - `main`: Entry point for the command-line interface to start the CNV analysis application.
+
+Dependencies:
+
+- `cnv_from_bam.iterate_bam_file`
+
+- `cnsmeth.subpages.base_analysis.BaseAnalysis`
+
+- `natsort`
+
+- `pandas`
+
+- `logging`
+
+- `numpy`
+
+- `os`
+
+- `sys`
+
+- `nicegui` (ui, app, run)
+
+- `click`
+
+- `pathlib.Path`
+
+- `pickle`
+
+- `ruptures`
+
+Example usage::
+
+    @click.command()
+    @click.option("--port", default=12345, help="Port for GUI")
+    @click.option("--threads", default=4, help="Number of threads available.")
+    @click.argument("watchfolder", type=click.Path(exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path), required=False)
+    @click.argument("output", type=click.Path(exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path), required=False)
+    @click.option("--browse", is_flag=True, show_default=True, default=False, help="Browse Historic Data.")
+    @click.option("--target_panel", "-t", default="rCNS2", help="Select analysis gene panel from one of these options. Default is rCNS2", type=click.Choice(["rCNS2", "AML"], case_sensitive=True))
+    def main(port, threads, watchfolder, output, browse, target_panel):
+        # Run the CNV analysis application
+        pass
+
+if name in {"main", "mp_main"}:
+    main()
+
+"""
+
 from cnv_from_bam import iterate_bam_file
 from cnsmeth.subpages.base_analysis import BaseAnalysis
 import natsort
@@ -273,7 +374,7 @@ class CNVAnalysis(BaseAnalysis):
                 title="Reference CNV Scatter Plot"
             )
         if self.browse:
-            self.show_previous_data(self.output)
+            ui.timer(0.1, lambda: self.show_previous_data(self.output), once=True)
         else:
             ui.timer(5, lambda: self.show_previous_data(self.output))
 

@@ -38,6 +38,7 @@ dependencies = [
   "gff3_parser",
   "dna_features_viewer",
   "natsort",
+  "reportlab",
   "pywebview",
   "torch",
   "scikit-learn",
