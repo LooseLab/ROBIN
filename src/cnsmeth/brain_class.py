@@ -120,6 +120,7 @@ import asyncio
 import logging
 from collections import Counter
 
+
 import time
 from datetime import datetime
 import os
@@ -350,7 +351,6 @@ class BrainMeth:
                 ui.label(f"Monitoring the path:{result}").tailwind(
                     "drop-shadow", "font-bold"
                 )
-                ui.label("Not yet implemented.")
                 self.output = result[0]
                 await self.information_panel()
 
@@ -665,6 +665,8 @@ class BrainMeth:
                         )
                         await self.Fusion_panel.render_ui()
 
+        # ui.button("Generate Report", on_click=lambda: create_pdf("test.pdf", CNV_data=self.CNV))
+
     async def background_process_bams(self):
         await asyncio.sleep(5)
         ui.timer(5, self.process_bams)
@@ -750,6 +752,10 @@ class BrainMeth:
                 app.storage.general[self.mainuuid]["file_counters"][
                     "bases_count"
                 ] += bamdata.yield_tracking
+
+                mydf = pd.DataFrame.from_dict(app.storage.general)
+
+                mydf.to_csv(os.path.join(self.output, "master.csv"))
 
                 # self.check_bam(file)
                 # await asyncio.sleep(0)

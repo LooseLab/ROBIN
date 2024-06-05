@@ -239,6 +239,8 @@ class TargetCoverage(BaseAnalysis):
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
+                self.target_boxplot()
+            with ui.row().classes("w-full"):
                 self.create_coverage_time_chart()
         with ui.card().classes("w-full"):
             ui.label("Coverage over targets").style(
@@ -350,6 +352,108 @@ class TargetCoverage(BaseAnalysis):
             .style("height: 350px")
             .classes("border-double")
         )
+
+    def target_boxplot(self):
+        self.target_boxplot = (
+            ui.echart(
+                {
+                    "grid": {"containLabel": True},
+                    "title": [
+                        {"text": "Target Coverage Boxplot"},
+                        {
+                            "text": "upper: Q3 + 1.5 * IQR \nlower: Q1 - 1.5 * IQR",
+                            "borderColor": "#999",
+                            "borderWidth": 1,
+                            "textStyle": {
+                                "fontWeight": "normal",
+                                "fontSize": 14,
+                                "lineHeight": 20,
+                            },
+                            "left": "10%",
+                            "top": "70%",
+                        },
+                    ],
+                    "dataset": [
+                        {
+                            "source": [
+
+                            ]
+                        },
+                        {
+                            "transform": {
+                                "type": "boxplot",
+                                "config": {"itemNameFormatter": "expr {value}"},
+                            }
+                        },
+                        {"fromDatasetIndex": 1, "fromTransformResult": 1},
+                    ],
+                    "tooltip": {"trigger": "item", "axisPointer": {"type": "shadow"}},
+                    "grid": {"left": "10%", "right": "10%", "bottom": "15%"},
+                    "xAxis": {
+                        "type": "category",
+                        "boundaryGap": True,
+                        "nameGap": 30,
+                        "splitArea": {"show": False},
+                        "splitLine": {"show": False},
+                    },
+                    "yAxis": {
+                        "type": "value",
+                        "name": "km/s minus 299,000",
+                        "splitArea": {"show": True},
+                    },
+                    "series": [
+                    {"name": "boxplot", "type": "boxplot", "datasetIndex": 1},
+                    {"name": "outlier", "type": "scatter", "datasetIndex": 2,
+                     "label": {"show": True, "formatter": '{@[2]}'},
+                     "encode": {"x": 0, "y": 1}}
+                ],
+                }
+            )
+            .style("height: 400px")
+            .classes("border-double")
+        )
+
+    def update_target_boxplot(self, dataframe):
+        """
+        Replaces the data in the RapidCNS2 plot.
+        :param covdf: a pandas dataframe of
+        :return:
+        """
+        # Group the data by 'chrom' and get the 'coverage' values for each group
+        grouped_data = dataframe.groupby('chrom')['coverage'].apply(list).reset_index()
+
+        # Prepare the dataset source for the boxplot
+        boxplot_data = grouped_data['coverage'].tolist()
+
+        # Identify outliers
+        def find_outliers(data):
+            q1 = pd.Series(data).quantile(0.25)
+            q3 = pd.Series(data).quantile(0.75)
+            iqr = q3 - q1
+            lower_bound = q1 - 1.5 * iqr
+            upper_bound = q3 + 1.5 * iqr
+            outliers = [x for x in data if x < lower_bound or x > upper_bound]
+            return outliers
+
+        outliers = grouped_data.apply(lambda row: find_outliers(row['coverage']), axis=1)
+
+        # Prepare the outliers data
+        outliers_data = []
+        for i, chrom in enumerate(grouped_data['chrom']):
+            for outlier in outliers[i]:
+                name = dataframe[(dataframe['chrom'] == chrom) & (dataframe['coverage'] == outlier)]['name'].values[0]
+                outliers_data.append([i, outlier, name])
+
+        self.target_boxplot.options["dataset"][0]["source"]=boxplot_data
+        #print (self.target_boxplot.options["dataset"][1])
+        self.target_boxplot.options["dataset"][1]["transform"]= {
+                            "type": "boxplot",
+                            "config": {"itemNameFormatter": grouped_data['chrom'].tolist()},
+                        }
+        print(self.target_boxplot.options["dataset"][1]["transform"])
+
+        self.target_boxplot.update()
+
 
     def update_coverage_plot(self, covdf):
         """
@@ -632,6 +736,8 @@ class TargetCoverage(BaseAnalysis):
                 os.path.join(watchfolder, "bed_coverage_main.csv")
             )
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
+            # print(self.bedcov_df_main)
+            self.update_target_boxplot(self.bedcov_df_main)
         if os.path.isfile(os.path.join(watchfolder, "target_coverage.csv")):
             self.target_coverage_df = pd.read_csv(
                 os.path.join(watchfolder, "target_coverage.csv")
