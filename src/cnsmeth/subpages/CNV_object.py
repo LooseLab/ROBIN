@@ -421,13 +421,22 @@ class CNVAnalysis(BaseAnalysis):
         )
 
     def _update_cnv_plot(
-        self, plot_to_update=None, result=None, gene_target=None, title=None, min=0
+        self,
+        plot_to_update=None,
+        result=None,
+        gene_target=None,
+        title=None,
+        min=0,
+        ui_mode=True,
     ):
         if result or self.result:
             total = 0
             valueslist = {"All": "All"}
             genevalueslist = {"All": "All"}
-            self.chrom_filter = self.chrom_select.value
+            try:
+                self.chrom_filter = self.chrom_select.value
+            except AttributeError:
+                self.chrom_filter = "All"
 
             min = min
             max = "dataMax"
@@ -585,10 +594,18 @@ class CNVAnalysis(BaseAnalysis):
                             },
                         ]
                     )
-
-            self.chrom_select.set_options(valueslist)
-            self.gene_select.set_options(genevalueslist)
-            ui.update(plot_to_update)
+            try:
+                self.chrom_select.set_options(valueslist)
+            except AttributeError:
+                pass
+            try:
+                self.gene_select.set_options(genevalueslist)
+            except AttributeError:
+                pass
+            if ui_mode:
+                ui.update(plot_to_update)
+            else:
+                return plot_to_update
 
     async def show_previous_data(self, output):
         if not os.path.exists(os.path.join(output, "CNV.npy")):

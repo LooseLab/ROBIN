@@ -308,6 +308,25 @@ class MGMT_Object(BaseAnalysis):
             },
         ).classes("w-full").style("height: 200px")
 
+    def get_report(self, watchfolder):
+        """
+        Generates a report from the analysis results.
+
+        Args:
+            watchfolder (str): Path to the folder containing previous analysis results.
+
+        Returns:
+            None
+        """
+        logger.debug(f"Generating report from {watchfolder}")
+        for file in natsort.natsorted(os.listdir(watchfolder)):
+            if file.endswith("_mgmt.csv"):
+                if file != self.last_seen:
+                    results = pd.read_csv(os.path.join(watchfolder, file))
+                    plot_out = os.path.join(watchfolder, file.replace(".csv", ".png"))
+                    summary = f"Current MGMT status: {results['status'].values[0]}"
+        return results, plot_out, summary
+
     def show_previous_data(self, watchfolder):
         """
         Displays previously analyzed data from the specified watch folder.
@@ -341,7 +360,6 @@ class MGMT_Object(BaseAnalysis):
                                     f"Current MGMT status: {results['status'].values[0]}"
                                 )
                         self.last_seen = file
-                        break
 
 
 def test_me(
