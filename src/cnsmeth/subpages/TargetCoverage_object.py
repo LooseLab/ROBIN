@@ -243,8 +243,8 @@ class TargetCoverage(BaseAnalysis):
             ui.label("Coverage over time").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
-            with ui.row().classes("w-full"):
-                self.target_boxplot()
+            #with ui.row().classes("w-full"):
+            #    self.target_boxplot()
             with ui.row().classes("w-full"):
                 self.create_coverage_time_chart()
         with ui.card().classes("w-full"):
@@ -362,61 +362,104 @@ class TargetCoverage(BaseAnalysis):
         self.target_boxplot = (
             ui.echart(
                 {
-                    "grid": {"containLabel": True},
-                    "title": [
-                        {"text": "Target Coverage Boxplot"},
+                    "dataset":[
                         {
-                            "text": "upper: Q3 + 1.5 * IQR \nlower: Q1 - 1.5 * IQR",
-                            "borderColor": "#999",
-                            "borderWidth": 1,
-                            "textStyle": {
-                                "fontWeight": "normal",
-                                "fontSize": 14,
-                                "lineHeight": 20,
-                            },
-                            "left": "10%",
-                            "top": "70%",
+                            "id": 'raw',
+                            "source": []
                         },
-                    ],
-                    "dataset": [
                         {
-                            "source": [
-
+                            "id": 'coverage_data',
+                            "source": [],
+                            "transform": [
+                                {
+                                    "type": 'sort',
+                                    "config": {
+                                        "dimension": 'index',
+                                        "order": 'asc'
+                                    }
+                                }
                             ]
-                        },
-                        {
-                            "transform": {
-                                "type": "boxplot",
-                                "config": {"itemNameFormatter": "expr {value}"},
-                            }
-                        },
-                        {"fromDatasetIndex": 1, "fromTransformResult": 1},
+                        }
                     ],
-                    "tooltip": {"trigger": "item", "axisPointer": {"type": "shadow"}},
-                    "grid": {"left": "10%", "right": "10%", "bottom": "15%"},
-                    "xAxis": {
-                        "type": "category",
-                        "boundaryGap": True,
-                        "nameGap": 30,
-                        "splitArea": {"show": False},
-                        "splitLine": {"show": False},
+                    "title": {
+                        "text": 'Coverage by Targets Detail'
+                    },
+                    "tooltip": {
+                        "trigger": 'axis',
+                            "confine": True
                     },
                     "yAxis": {
-                        "type": "value",
-                        "name": "km/s minus 299,000",
-                        "splitArea": {"show": True},
+                        "name": 'Coverage',
+                        "nameLocation": 'middle',
+                        "nameGap": 30,
+                        "scale": True
                     },
-                    "series": [
-                    {"name": "boxplot", "type": "boxplot", "datasetIndex": 1},
-                    {"name": "outlier", "type": "scatter", "datasetIndex": 2,
-                     "label": {"show": True, "formatter": '{@[2]}'},
-                     "encode": {"x": 0, "y": 1}}
-                ],
+                    "xAxis": {
+                        "type": 'category'
+                    },
+                    "grid": {
+                        "bottom": 100
+                    },
+                    "legend": {
+                        "selected": {"detail": False}
+                    },
+                    #"dataZoom":[
+                    #    {
+                    #        "type": 'inside'
+                    #    },
+                    #    {
+                    #        "type": 'slider',
+                    #        "yAxisIndex": 0,
+                    #    }
+                    #],
+                    "series":[
+                        {
+                            "name": 'boxplot',
+                            "type": 'boxplot',
+                            "datasetId": 'coverage_data',
+                            "itemStyle": {
+                                "color": '#b8c5f2'
+                               },
+                            "encode": {
+                                "y":['min', 'Q1', 'median', 'Q3', 'max'],
+                                "x": 'chrom',
+                                "itemName":['chrom'],
+                                "tooltip":['min', 'Q1', 'median', 'Q3', 'max']
+                            }
+                        },
+                        {
+                            "name": 'Genes',
+                            "type": 'scatter',
+                            "datasetId": 'raw',
+                            "symbolSize": 6,
+                            "tooltip": {
+                                "trigger": 'item'
+                            },
+                            "label": {
+                                "show": True,
+                                "position": 'top',
+                                "align": 'left',
+                                "verticalAlign": 'middle',
+                                "fontSize": 12
+                            },
+                            "itemStyle": {
+                                "color": '#d00000'
+                            },
+                            "encode": {
+                                "y": 'coverage',
+                                "x": 'chrom',
+                                "label": 'name',
+                                "itemName": 'name',
+                                "tooltip":['chrom', 'name', 'coverage']
+                            }
+                        }
+                    ]
                 }
             )
             .style("height: 400px")
             .classes("border-double")
         )
+
 
     def update_target_boxplot(self, dataframe):
         """
@@ -424,40 +467,38 @@ class TargetCoverage(BaseAnalysis):
         :param dataframe: a pandas dataframe of
         :return:
         """
-        # Naturally sort the dataframe by chromosome
-        sorted_dataframe = dataframe.sort_values(
-            by="chrom",
-            key=lambda x: np.argsort(natsort.index_natsorted(dataframe["chrom"]))
-        )
+        #print (dataframe)
+        if 'coverage' in dataframe.columns:
+            # Naturally sort the unique chromosome values
+            sorted_chroms = natsort.natsorted(dataframe['chrom'].unique())
 
-        if "coverage" in sorted_dataframe.columns:
-            # Group the data by 'chrom' and get the 'coverage' values for each group
-            grouped_data = sorted_dataframe.groupby('chrom')['coverage'].apply(list).reset_index()
+            # Create a lookup index for chromosomes
+            chrom_lookup = {chrom: idx for idx, chrom in enumerate(sorted_chroms)}
 
-            # Naturally sort the grouped data
-            grouped_data['chrom'] = pd.Categorical(grouped_data['chrom'],
-                                                   categories=natsort.natsorted(grouped_data['chrom'].unique()),
-                                                   ordered=True)
-            grouped_data = grouped_data.sort_values('chrom')
+            # Add the index column to the original DataFrame
+            dataframe['index'] = dataframe['chrom'].map(chrom_lookup)
 
-            # Prepare the dataset source for the boxplot
-            boxplot_data = []
-            for chrom, coverages in zip(grouped_data['chrom'], grouped_data['coverage']):
-                boxplot_data.append([chrom] + coverages)
+            # Aggregate the data by 'chrom'
+            aggregated_data = dataframe.groupby('chrom').agg(
+                min_coverage=('coverage', 'min'),
+                Q1_coverage=('coverage', lambda x: np.percentile(x, 25)),
+                median_coverage=('coverage', 'median'),
+                Q3_coverage=('coverage', lambda x: np.percentile(x, 75)),
+                max_coverage=('coverage', 'max'),
+                index=('index', 'first')  # Get the corresponding index for the chromosome
+            ).reset_index()
 
-            # Update the xAxis categories with chromosome names
-            self.target_boxplot.options["xAxis"]["data"] = grouped_data['chrom'].tolist()
+            # Format the result as required
+            result = [
+                         ['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'index']
+                     ] + aggregated_data.values.tolist()
 
-            # Update the dataset source for the boxplot
-            self.target_boxplot.options["dataset"][0]["source"] = boxplot_data
-
-            # Update the transform configuration with naturally sorted chromosome names
-            self.target_boxplot.options["dataset"][1]["transform"] = {
-                "type": "boxplot",
-                "config": {"itemNameFormatter": "{@[0]}"},
-            }
-
+            #print(result)
+            #print(self.target_boxplot.options["dataset"][1])
+            self.target_boxplot.options["dataset"][1]["source"] = result
+            #print (self.target_boxplot.options["dataset"][1]["source"])
             self.target_boxplot.update()
+
 
 
     def update_coverage_plot(self, covdf):
@@ -740,7 +781,7 @@ class TargetCoverage(BaseAnalysis):
                 os.path.join(watchfolder, "bed_coverage_main.csv")
             )
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
-            self.update_target_boxplot(self.bedcov_df_main)
+            #self.update_target_boxplot(self.bedcov_df_main)
         if os.path.isfile(os.path.join(watchfolder, "target_coverage.csv")):
             self.target_coverage_df = pd.read_csv(
                 os.path.join(watchfolder, "target_coverage.csv")
