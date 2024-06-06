@@ -22,6 +22,7 @@ import asyncio
 import tempfile
 import shutil
 import queue
+import subprocess
 
 from cnsmeth.subpages.SNPview import SNPview
 
@@ -64,16 +65,20 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
         # os.system(f"ls {workdirout}")
 
 
-def get_covdfs(bamfile):
+def get_covdfs(bamfile, output):
     """
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
-        newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{bamfile}")), sep="\t")
+        no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
+        command = f"samtools view -@2 -h -F 0x100 --write-index {bamfile} -o {no_secondary_bam}"
+        os.system(command)
+        newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{no_secondary_bam}")), sep="\t")
         newcovdf.drop(
             columns=["coverage", "meanbaseq", "meanmapq"],
             inplace=True,
         )
+
         bedcovdf = pd.read_csv(
             StringIO(
                 pysam.bedcov(
@@ -81,7 +86,7 @@ def get_covdfs(bamfile):
                         os.path.dirname(os.path.abspath(resources.__file__)),
                         "unique_genes.bed",
                     ),
-                    f"{bamfile}",
+                    f"{no_secondary_bam}",
                 )
             ),
             names=["chrom", "startpos", "endpos", "name", "bases"],
@@ -416,43 +421,43 @@ class TargetCoverage(BaseAnalysis):
     def update_target_boxplot(self, dataframe):
         """
         Replaces the data in the RapidCNS2 plot.
-        :param covdf: a pandas dataframe of
+        :param dataframe: a pandas dataframe of
         :return:
         """
-        # Group the data by 'chrom' and get the 'coverage' values for each group
-        grouped_data = dataframe.groupby('chrom')['coverage'].apply(list).reset_index()
+        # Naturally sort the dataframe by chromosome
+        sorted_dataframe = dataframe.sort_values(
+            by="chrom",
+            key=lambda x: np.argsort(natsort.index_natsorted(dataframe["chrom"]))
+        )
 
-        # Prepare the dataset source for the boxplot
-        boxplot_data = grouped_data['coverage'].tolist()
+        if "coverage" in sorted_dataframe.columns:
+            # Group the data by 'chrom' and get the 'coverage' values for each group
+            grouped_data = sorted_dataframe.groupby('chrom')['coverage'].apply(list).reset_index()
 
-        # Identify outliers
-        def find_outliers(data):
-            q1 = pd.Series(data).quantile(0.25)
-            q3 = pd.Series(data).quantile(0.75)
-            iqr = q3 - q1
-            lower_bound = q1 - 1.5 * iqr
-            upper_bound = q3 + 1.5 * iqr
-            outliers = [x for x in data if x < lower_bound or x > upper_bound]
-            return outliers
+            # Naturally sort the grouped data
+            grouped_data['chrom'] = pd.Categorical(grouped_data['chrom'],
+                                                   categories=natsort.natsorted(grouped_data['chrom'].unique()),
+                                                   ordered=True)
+            grouped_data = grouped_data.sort_values('chrom')
 
-        outliers = grouped_data.apply(lambda row: find_outliers(row['coverage']), axis=1)
+            # Prepare the dataset source for the boxplot
+            boxplot_data = []
+            for chrom, coverages in zip(grouped_data['chrom'], grouped_data['coverage']):
+                boxplot_data.append([chrom] + coverages)
 
-        # Prepare the outliers data
-        outliers_data = []
-        for i, chrom in enumerate(grouped_data['chrom']):
-            for outlier in outliers[i]:
-                name = dataframe[(dataframe['chrom'] == chrom) & (dataframe['coverage'] == outlier)]['name'].values[0]
-                outliers_data.append([i, outlier, name])
+            # Update the xAxis categories with chromosome names
+            self.target_boxplot.options["xAxis"]["data"] = grouped_data['chrom'].tolist()
 
-        self.target_boxplot.options["dataset"][0]["source"]=boxplot_data
-        #print (self.target_boxplot.options["dataset"][1])
-        self.target_boxplot.options["dataset"][1]["transform"]= {
-                            "type": "boxplot",
-                            "config": {"itemNameFormatter": grouped_data['chrom'].tolist()},
-                        }
-        print(self.target_boxplot.options["dataset"][1]["transform"])
+            # Update the dataset source for the boxplot
+            self.target_boxplot.options["dataset"][0]["source"] = boxplot_data
 
-        self.target_boxplot.update()
+            # Update the transform configuration with naturally sorted chromosome names
+            self.target_boxplot.options["dataset"][1]["transform"] = {
+                "type": "boxplot",
+                "config": {"itemNameFormatter": "{@[0]}"},
+            }
+
+            self.target_boxplot.update()
 
 
     def update_coverage_plot(self, covdf):
@@ -570,7 +575,7 @@ class TargetCoverage(BaseAnalysis):
         # loop = asyncio.get_event_loop()
         # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
 
-        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
+        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile, self.output)
 
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
         # await loop.run_in_executor(
@@ -615,7 +620,6 @@ class TargetCoverage(BaseAnalysis):
             # self.cov_df_main, self.bedcov_df_main = run_bedmerge(
             #    newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
             # )
-
         bases = self.cov_df_main["covbases"].sum()
         genome = self.cov_df_main["endpos"].sum()
         coverage = bases / genome
@@ -736,7 +740,6 @@ class TargetCoverage(BaseAnalysis):
                 os.path.join(watchfolder, "bed_coverage_main.csv")
             )
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
-            # print(self.bedcov_df_main)
             self.update_target_boxplot(self.bedcov_df_main)
         if os.path.isfile(os.path.join(watchfolder, "target_coverage.csv")):
             self.target_coverage_df = pd.read_csv(
@@ -749,12 +752,21 @@ class TargetCoverage(BaseAnalysis):
                     self.summary.clear()
                     with ui.row():
                         ui.label("Coverage Depths - ")
-                        ui.label(
-                            f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum() / self.cov_df_main['endpos'].sum()):.2f}x"
-                        )
-                        ui.label(
-                            f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum() / self.bedcov_df_main['length'].sum()):.2f}x"
-                        )
+                        if len(self.cov_df_main) > 0:
+                            ui.label(
+                                f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
+                            )
+                            if len(self.bedcov_df_main) > 0:
+                                ui.label(
+                                    f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
+                                )
+                            else:
+                                ui.label(
+                                    f"Targets Estimated Coverage: Calculating...."
+                                )
+                        else:
+                            ui.label("No data available")
+
         if os.path.isfile(f"{watchfolder}/clair3/snpsift_output.vcf"):
             self.SNPview.parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
         if os.path.isfile(f"{watchfolder}/clair3/snpsift_indel_output.vcf"):
