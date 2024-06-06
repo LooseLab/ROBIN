@@ -778,9 +778,10 @@ class BrainMeth:
             while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
                 self.nofiles = False
                 file = app.storage.general[self.mainuuid]["bam_count"]["file"].popitem()
+                print ("Processing popped file", file[0])
                 # ToDo: Check if the file is still being written to.
-                if file[1] > time.time() - 5:
-                    break
+                #if file[1] > time.time() - 5:
+                #    break
                 # ToDo: This function should be moved to a background task.
                 # self.check_bam(file[0])
                 self.bam_tracking.put(file[0])
