@@ -324,6 +324,8 @@ class BrainMeth:
     async def add_watchfolder(self, watchfolder):
         if not self.observer:
             self.watchfolder = watchfolder
+            if "file" not in app.storage.general[self.mainuuid]["bam_count"].keys():
+                app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
             self.event_handler = BamEventHandler(
                 app.storage.general[self.mainuuid]["bam_count"]
             )
