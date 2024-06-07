@@ -55,19 +55,28 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
     os.system(command)
 
 
-def run_samtools_sort(file, tomerge, sortfile, threads):
+def run_samtools_sort(file, tomerge, sortfile, threads, regions):
     pysam.cat("-o", file, *tomerge)
-    pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
+    #pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
+    intermediate_bam = tempfile.NamedTemporaryFile(suffix=".bam")
+    command = f"samtools sort -@{threads} --write-index -o {intermediate_bam.name} {file}"
+    os.system(command)
+    command2 = f"samtools view -b -L {regions} -o {sortfile} --write-index {intermediate_bam.name} "
+    os.system(command2)
 
-
-def run_modkit(bamfile, outbed, cpgs, threads):
+def run_modkit(bamfile, outbed, cpgs, threads, showerrors):
     """
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
-        os.system(
+        command = (
             f"modkit pileup -t {threads} --include-bed {cpgs} --filter-threshold 0.73 --combine-mods {bamfile} "
-            f"{outbed} --suppress-progress  >/dev/null 2>&1 "
+            f"{outbed} "
+        )
+        if not showerrors:
+            command += "--suppress-progress  >/dev/null 2>&1"
+        os.system(
+            command
         )
         # self.log("Done processing bam file")
     except Exception as e:
@@ -154,7 +163,7 @@ class RandomForest_object(BaseAnalysis):
             app.storage.general[self.mainuuid][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
-            if len(tomerge) > 50:
+            if len(tomerge) > 10:
                 break
 
         if len(tomerge) > 0:
@@ -163,39 +172,12 @@ class RandomForest_object(BaseAnalysis):
             tempbed = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bed")
             self.batch += 1
 
-            # async def load_samtoolssort():
-            #    loop = asyncio.get_event_loop()
-            # await loop.run_in_executor(None, sync_func)
-            #    await loop.run_in_executor(
-            #        None,
-            #        run_samtools_sort,
-            #        tempbam.name,
-            #        tomerge,
-            #        sortbam.name,
-            #        self.threads,
-            #    )
-
-            # await background_tasks.create(load_samtoolssort())
             await run.cpu_bound(
-                run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads
+                run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads,self.cpgs_file
             )  # , file, tomerge, sortfile, self.threads)
-            # await asyncio.sleep(0.1)
 
-            # async def load_modkit():
-            #    loop = asyncio.get_event_loop()
-            # await loop.run_in_executor(None, sync_func)
-            #    await loop.run_in_executor(
-            #        None,
-            #        run_modkit,
-            #        sortbam.name,
-            #        tempbed.name,
-            #        self.cpgs_file,
-            #        self.threads,
-            #    )
-
-            # await background_tasks.create(load_modkit())
             await run.cpu_bound(
-                run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads
+                run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads, self.showerrors
             )
             # await asyncio.sleep(0.1)
 
@@ -255,7 +237,6 @@ class RandomForest_object(BaseAnalysis):
                     merge_bedmethyl, bed_a, self.merged_bed_file
                 )
                 save_bedmethyl(self.merged_bed_file, f"{tempbed.name}")
-
             else:
                 self.merged_bed_file = pd.read_table(
                     f"{tempbed.name}",
@@ -306,19 +287,6 @@ class RandomForest_object(BaseAnalysis):
 
             tempDir = tempfile.TemporaryDirectory(dir=self.output)
 
-            # async def load_rcns2():
-            #    loop = asyncio.get_event_loop()
-            # await loop.run_in_executor(None, sync_func)
-            #    await loop.run_in_executor(
-            #        None,
-            #        run_rcns2,
-            #        tempDir.name,
-            #        self.batch,
-            #        tempbed.name,
-            #        self.threads,
-            #        self.showerrors,
-            #    )
-
             # await background_tasks.create(load_rcns2())
             await run.cpu_bound(
                 run_rcns2,
@@ -328,7 +296,6 @@ class RandomForest_object(BaseAnalysis):
                 self.threads,
                 self.showerrors,
             )
-            # await asyncio.sleep(0.1)
 
             if os.path.isfile(f"{tempDir.name}/live_{self.batch}_votes.tsv"):
                 scores = pd.read_table(

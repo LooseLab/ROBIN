@@ -15,25 +15,16 @@ def save_bedmethyl(result_df: pd.DataFrame, output_file: str) -> None:
     """
     Save a bedmethyl dataframe to a file.
 
-    Given a bedmethyl dataframe, save it to a file with specific formatting.
+    This code is only compatible with modkit >= 0.3.0
 
     Args:
         result_df (pd.DataFrame): The dataframe containing bedmethyl data.
         output_file (str): The path to the output file.
     """
-    # Combine columns up to the 9th as tab-separated values
-    tab_sep_cols = result_df.iloc[:, :9].astype(str).apply("\t".join, axis=1)
-
-    # Combine remaining columns as space-separated values
-    space_sep_cols = result_df.iloc[:, 9:].astype(str).apply(" ".join, axis=1)
-
-    # Combine both sets of columns into a single DataFrame
-    combined_df = pd.DataFrame({"tab_sep": tab_sep_cols, "space_sep": space_sep_cols})
-
     # Save the combined data to a file
     file_path = output_file
 
-    combined_df.to_csv(
+    result_df.to_csv(
         file_path,
         sep="\t",
         header=None,
@@ -44,7 +35,6 @@ def save_bedmethyl(result_df: pd.DataFrame, output_file: str) -> None:
     )
     logger.info(f"Saved bedmethyl data to {file_path}")
 
-    os.system(f"sed -i.bak 's/\t/\t/g' {file_path}")
     logger.info(f"Post-processed the file with sed: {file_path}")
 
 
