@@ -51,7 +51,7 @@ class BamEventHandler(FileSystemEventHandler):
         if event.src_path.endswith(".bam"):
             self.bam_count["counter"] += 1
             self.bam_count["file"][event.src_path] = time.time()
-            logger.debug(
+            logger.info(
                 f"New .bam file detected: {event.src_path}, total count: {self.bam_count['counter']}"
             )
 

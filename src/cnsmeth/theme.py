@@ -85,7 +85,7 @@ def frame(navtitle: str):
     """
     # Add custom HTML and CSS to the head of the page
     ui.add_head_html(HEADER_HTML + f"<style>{STYLE_CSS}</style>")
-
+    #ui.add_head_html(f'<script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts-simple-transform/dist/ecSimpleTransform.min.js"> </script>')
     # Create a persistent dialog for quitting the app
     with ui.dialog().props("persistent") as quitdialog, ui.card():
         ui.label(

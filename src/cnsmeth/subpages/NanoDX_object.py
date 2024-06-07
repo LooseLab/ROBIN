@@ -67,7 +67,7 @@ class NanoDX_object(BaseAnalysis):
             os.path.dirname(os.path.abspath(models.__file__)), self.model
         )
         self.nanodx_df_store = pd.DataFrame()
-        self.NN = NN_classifier(self.modelfile)
+        #self.NN = NN_classifier(self.modelfile)
         super().__init__(*args, **kwargs)
         self.nanodxfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".nanodx")
 
@@ -126,7 +126,7 @@ class NanoDX_object(BaseAnalysis):
             tomerge.append(file)
             # timestamp = filetime
 
-            if len(tomerge) > 50:
+            if len(tomerge) > 10:
                 break
         app.storage.general[self.mainuuid][self.name]["counters"][
             "bams_in_processing"
