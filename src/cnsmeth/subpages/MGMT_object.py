@@ -141,6 +141,7 @@ def run_modkit(tempmgmtdir, MGMTbamfile, threads):
         )
         cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress >/dev/null 2>&1"
         os.system(cmd)
+
         cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir, 'mgmt.bed')} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
         print(cmd)
         os.system(cmd)
@@ -163,7 +164,7 @@ class MGMT_Object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
         self.MGMTbamfile = None
         self.counter = 0
-        self.last_seen = None
+        self.last_seen = 0
         logger.debug("Initializing MGMT_Object")
         super().__init__(*args, **kwargs)
 
@@ -216,11 +217,6 @@ class MGMT_Object(BaseAnalysis):
 
         try:
             if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
-                ui.notify(
-                    "Running MGMT predictor - MGMT sites found.",
-                    type="positive",
-                    position="top",
-                )
                 if not self.MGMTbamfile:
                     self.MGMTbamfile = os.path.join(self.output, "mgmt.bam")
                     shutil.copy2(tempbamfile.name, self.MGMTbamfile)
@@ -322,7 +318,8 @@ class MGMT_Object(BaseAnalysis):
         logger.debug(f"Generating report from {watchfolder}")
         for file in natsort.natsorted(os.listdir(watchfolder)):
             if file.endswith("_mgmt.csv"):
-                if file != self.last_seen:
+                count = int(file.split('_')[0])
+                if count > self.last_seen:
                     results = pd.read_csv(os.path.join(watchfolder, file))
                     plot_out = os.path.join(watchfolder, file.replace(".csv", ".png"))
                     summary = f"Current MGMT status: {results['status'].values[0]}"
@@ -342,7 +339,9 @@ class MGMT_Object(BaseAnalysis):
         if not self.last_seen:
             for file in natsort.natsorted(os.listdir(watchfolder)):
                 if file.endswith("_mgmt.csv"):
-                    if file != self.last_seen:
+                    count = int(file.split('_')[0])
+
+                    if count > self.last_seen:
                         results = pd.read_csv(os.path.join(watchfolder, file))
                         plot_out = os.path.join(
                             watchfolder, file.replace(".csv", ".png")
@@ -360,7 +359,7 @@ class MGMT_Object(BaseAnalysis):
                                 ui.label(
                                     f"Current MGMT status: {results['status'].values[0]}"
                                 )
-                        self.last_seen = file
+                        self.last_seen = count
 
 
 def test_me(
