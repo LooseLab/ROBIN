@@ -1,51 +1,41 @@
 """
-This module defines the theme and layout for the entire application, ensuring a consistent look and feel across all pages. 
+Module: theme
+
+This module defines the theme and layout for the entire application, ensuring a consistent look and feel across all pages.
 
 It includes:
 
 - A context manager `frame` to create a custom page frame with navigation, header, and footer.
-
 - Utility functions to handle dark mode and remote access toggling.
-
 - Paths to external resources like images, HTML, and CSS files for styling.
 
 Functions:
 
 - frame(navtitle: str): Context manager for creating a consistent page layout with header, footer, and navigation.
-
 - cleanup_and_exit(): Handles cleanup operations before shutting down the application.
-
 - dark_mode(event: events.ValueChangeEventArguments): Toggles dark mode based on the event argument.
-
 - use_on_air(args: events.ValueChangeEventArguments): Toggles remote access based on the event argument.
 
 Constants:
 
 - IMAGEFILE: Path to the image file used in the header and footer.
-
 - HEADER_HTML: HTML content for the header.
-
 - STYLE_CSS: CSS styles for the application.
-
 
 External Dependencies:
 
 - contextlib.contextmanager
-
 - nicegui (ui, app, events, core, air)
-
 - pathlib.Path
-
 - cnsmeth.images
-
 - os
 
 Example usage::
 
     from theme import frame
 
-    with frame(“Home”):
-    ui.label(“Welcome to the Application”)
+    with frame("Home"):
+        ui.label("Welcome to the Application")
 
 """
 
@@ -71,7 +61,6 @@ HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
 # Read the CSS styles for the application
 STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 
-
 @contextmanager
 def frame(navtitle: str):
     """
@@ -82,6 +71,10 @@ def frame(navtitle: str):
 
     Yields:
         None
+
+    Example:
+        >>> with frame("Home"):
+        ...     ui.label("Welcome to the Application")
     """
     # Add custom HTML and CSS to the head of the page
     ui.add_head_html(HEADER_HTML + f"<style>{STYLE_CSS}</style>")
@@ -111,7 +104,7 @@ def frame(navtitle: str):
             with ui.row().classes("ml-auto align-top"):
                 with ui.button(icon="menu"):
                     with ui.menu() as menu:
-                        ui.menu_item("Home", lambda: ui.navigate.to("/"))
+                        ui.menu_item(f"Home", lambda: ui.navigate.to("/"))
                         ui.menu_item("Live Data", lambda: ui.navigate.to("/live"))
                         ui.menu_item(
                             "Browse Historic Data", lambda: ui.navigate.to("/browse")
@@ -164,7 +157,6 @@ def frame(navtitle: str):
 
     yield
 
-
 def cleanup_and_exit():
     """
     Handle any necessary cleanup operations before exiting the application and then shut down the application.
@@ -177,7 +169,6 @@ def cleanup_and_exit():
         None
     """
     app.shutdown()
-
 
 def dark_mode(event: events.ValueChangeEventArguments):
     """
@@ -198,7 +189,6 @@ def dark_mode(event: events.ValueChangeEventArguments):
         ui.dark_mode().enable()
     else:
         ui.dark_mode().disable()
-
 
 def use_on_air(args: events.ValueChangeEventArguments):
     """
@@ -221,3 +211,32 @@ def use_on_air(args: events.ValueChangeEventArguments):
         nicegui.air.connect()
     else:
         nicegui.air.disconnect()
+
+def main():
+    """
+    Main function to test the theme by creating a simple page using the frame context manager.
+
+    Example:
+        >>> main()
+        None
+    """
+    # Add some custom CSS because - why not!
+    ui.add_css(
+        """
+        .shadows-into light-regular {
+            font-family: "Shadows Into Light", cursive;
+            font-weight: 800;
+            font-style: normal;
+        }
+    """
+    )
+    # Register some fonts that we might need later on.
+    app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
+    with frame("Home"):
+        ui.label("Welcome to the Application")
+    ui.run()
+
+if __name__ in {"__main__", "__mp_main__"}:
+    #import doctest
+    #doctest.testmod()
+    main()

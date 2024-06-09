@@ -9,7 +9,7 @@ import logging
 from cnsmeth.utilities.bam_handler import BamEventHandler
 
 # Configure logging
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 
 class LocalFilePicker(ui.dialog):

@@ -64,7 +64,7 @@ import logging
 
 # Configure logging
 # logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 os.environ["CI"] = "1"
 
@@ -84,15 +84,15 @@ def run_methylartist(tempmgmtdir, plot_out):
     Returns:
         None
     """
-    logger.debug(
-        f"Running methylartist with tempmgmtdir={tempmgmtdir}, plot_out={plot_out}"
-    )
+    #logger.debug(
+    #    f"Running methylartist with tempmgmtdir={tempmgmtdir}, plot_out={plot_out}"
+    #)
     try:
         os.system(
             f"methylartist locus -i chr10:129466536-129467536 -b {os.path.join(tempmgmtdir, 'mgmt.bam')} -o {plot_out} --motif CG --mods m > /dev/null 2>&1"
         )
     except Exception as e:
-        logger.error(f"Error running methylartist: {e}")
+        #logger.error(f"Error running methylartist: {e}")
         raise
 
 
@@ -108,14 +108,14 @@ def run_bedtools(bamfile, MGMT_BED, tempbamfile):
     Returns:
         None
     """
-    logger.debug(
-        f"Running bedtools with bamfile={bamfile}, MGMT_BED={MGMT_BED}, tempbamfile={tempbamfile}"
-    )
+    #logger.debug(
+    #    f"Running bedtools with bamfile={bamfile}, MGMT_BED={MGMT_BED}, tempbamfile={tempbamfile}"
+    #)
     try:
         os.system(f"bedtools intersect -a {bamfile} -b {MGMT_BED} > {tempbamfile}")
         pysam.index(tempbamfile, f"{tempbamfile}.bai")
     except Exception as e:
-        logger.error(f"Error running bedtools: {e}")
+        #logger.error(f"Error running bedtools: {e}")
         raise
 
 
@@ -131,9 +131,9 @@ def run_modkit(tempmgmtdir, MGMTbamfile, threads):
     Returns:
         None
     """
-    logger.debug(
-        f"Running modkit with tempmgmtdir={tempmgmtdir}, MGMTbamfile={MGMTbamfile}, threads={threads}"
-    )
+    #logger.debug(
+    #    f"Running modkit with tempmgmtdir={tempmgmtdir}, MGMTbamfile={MGMTbamfile}, threads={threads}"
+    #)
     try:
         pysam.sort("-o", os.path.join(tempmgmtdir, "mgmt.bam"), MGMTbamfile)
         pysam.index(
@@ -146,7 +146,7 @@ def run_modkit(tempmgmtdir, MGMTbamfile, threads):
         print(cmd)
         os.system(cmd)
     except Exception as e:
-        logger.error(f"Error running modkit: {e}")
+        #logger.error(f"Error running modkit: {e}")
         raise
 
 
@@ -165,7 +165,7 @@ class MGMT_Object(BaseAnalysis):
         self.MGMTbamfile = None
         self.counter = 0
         self.last_seen = 0
-        logger.debug("Initializing MGMT_Object")
+        #logger.debug("Initializing MGMT_Object")
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
@@ -175,7 +175,7 @@ class MGMT_Object(BaseAnalysis):
         Returns:
             None
         """
-        logger.debug("Setting up UI")
+        #logger.debug("Setting up UI")
         with ui.card().style("width: 100%"):
             ui.label("MGMT Methylation").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
@@ -205,14 +205,14 @@ class MGMT_Object(BaseAnalysis):
         Returns:
             None
         """
-        logger.debug(f"Processing BAM file: {bamfile} at {timestamp}")
+        #logger.debug(f"Processing BAM file: {bamfile} at {timestamp}")
         MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
 
         try:
             await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
         except Exception as e:
-            logger.error(f"Error in process_bam: {e}")
+            #logger.error(f"Error in process_bam: {e}")
             return
 
         try:
@@ -253,11 +253,13 @@ class MGMT_Object(BaseAnalysis):
                         index=False,
                     )
                 except Exception as e:
-                    logger.error(f"Error processing results: {e}")
+                    #logger.error(f"Error processing results: {e}")
+                    raise
             else:
                 os.remove(f"{tempbamfile.name}.bai")
         except Exception as e:
-            logger.error(f"Error in BAM file processing: {e}")
+            #logger.error(f"Error in BAM file processing: {e}")
+            raise
         finally:
             await asyncio.sleep(0.1)
             self.running = False
@@ -272,7 +274,7 @@ class MGMT_Object(BaseAnalysis):
         Returns:
             None
         """
-        logger.debug("Tabulating results")
+        #logger.debug("Tabulating results")
         ui.aggrid.from_pandas(
             results,
             theme="material",
@@ -315,7 +317,7 @@ class MGMT_Object(BaseAnalysis):
         Returns:
             None
         """
-        logger.debug(f"Generating report from {watchfolder}")
+        #logger.debug(f"Generating report from {watchfolder}")
         for file in natsort.natsorted(os.listdir(watchfolder)):
             if file.endswith("_mgmt.csv"):
                 count = int(file.split('_')[0])
@@ -335,7 +337,7 @@ class MGMT_Object(BaseAnalysis):
         Returns:
             None
         """
-        logger.debug(f"Showing previous data from {watchfolder}")
+        #logger.debug(f"Showing previous data from {watchfolder}")
         if not self.last_seen:
             for file in natsort.natsorted(os.listdir(watchfolder)):
                 if file.endswith("_mgmt.csv"):
@@ -384,9 +386,9 @@ def test_me(
     Returns:
         None
     """
-    logger.debug(
-        f"Starting MGMT analysis application on port {port} with {threads} threads"
-    )
+    #logger.debug(
+    #    f"Starting MGMT analysis application on port {port} with {threads} threads"
+    #)
     my_connection = None
     with theme.frame("MGMT Data", my_connection):
         TestObject = MGMT_Object(threads, output, progress=True)
@@ -447,9 +449,9 @@ def main(port, threads, watchfolder, output, browse):
     Returns:
         None
     """
-    logger.debug(
-        f"Running main function with port={port}, threads={threads}, watchfolder={watchfolder}, output={output}, browse={browse}"
-    )
+    #logger.debug(
+    #    f"Running main function with port={port}, threads={threads}, watchfolder={watchfolder}, output={output}, browse={browse}"
+    #)
     if browse:
         click.echo("Browse mode is enabled. Only the output folder is required.")
         test_me(

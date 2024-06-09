@@ -240,13 +240,19 @@ class TargetCoverage(BaseAnalysis):
                     with ui.card().classes("w-full"):
                         self.create_coverage_plot_targets("Target Coverage")
         with ui.card().classes("w-full"):
+            ui.label("Target Outliers").style(
+                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ).tailwind("drop-shadow", "font-bold")
+            with ui.column().classes("w-full"):
+                with ui.card().classes("w-full"):
+                    self.create_target_boxplot()
+        with ui.card().classes("w-full"):
             ui.label("Coverage over time").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
-            #with ui.row().classes("w-full"):
-            #    self.target_boxplot()
-            with ui.row().classes("w-full"):
-                self.create_coverage_time_chart()
+            with ui.column().classes("w-full"):
+                with ui.card().classes("w-full"):
+                    self.create_coverage_time_chart()
         with ui.card().classes("w-full"):
             ui.label("Coverage over targets").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
@@ -274,6 +280,9 @@ class TargetCoverage(BaseAnalysis):
         self.echart3 = (
             ui.echart(
                 {
+                    "textStyle": {
+                        "fontFamily": "Fira Sans, Fira Mono"
+                    },
                     "grid": {"containLabel": True},
                     "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -300,6 +309,9 @@ class TargetCoverage(BaseAnalysis):
         self.echart4 = (
             ui.echart(
                 {
+                    "textStyle": {
+                        "fontFamily": "Fira Sans, Fira Mono"
+                    },
                     "grid": {"containLabel": True},
                     "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -326,6 +338,9 @@ class TargetCoverage(BaseAnalysis):
         self.coverage_time_chart = (
             ui.echart(
                 {
+                    "textStyle": {
+                        "fontFamily": "Fira Sans, Fira Mono"
+                    },
                     "grid": {"containLabel": True},
                     "title": {"text": "Coverage Over Time"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -358,7 +373,99 @@ class TargetCoverage(BaseAnalysis):
             .classes("border-double")
         )
 
-    def target_boxplot(self):
+    def create_target_boxplot(self):
+        self.target_boxplot = (
+            ui.echart(
+                {
+                    "textStyle": {
+                        "fontFamily": "Fira Sans, Fira Mono"
+                    },
+                    "title":[
+                        {
+                            "text": 'Target Coverage',
+                        },
+                    ],
+                    "dataset":[
+                        {
+                            "id": 'raw',
+                            "dimensions": ['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'chrom_index'],
+                            "source":[
+                                #['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'chrom_index'], ['chr1', 9.900380568614285, 12.356504739289363, 14.100950462251728, 15.904080575227479, 24.367119741100325, 0], ['chr2', 12.15211267605634, 14.4177614596097, 17.68534837627687, 19.767268987239973, 31.431818181818183, 1], ['chr3', 11.691279912701788, 14.751842063525142, 16.850141658196847, 18.346233380151332, 23.945544554455445, 2], ['chr4', 12.393793151368524, 16.678021379090286, 17.942222816206097, 21.39059356250752, 23.613259668508288, 3], ['chr5', 15.7482339849042, 16.30144151543359, 17.495463802999446, 18.067355596471685, 21.994475138121548, 4], ['chr6', 10.9530563184635, 15.982833520133271, 18.13845821598282, 18.955984025339657, 22.46955913226032, 5], ['chr7', 8.41747572815534, 13.506301610187435, 16.599710921226034, 17.778951201747997, 20.883977900552487, 6], ['chr8', 12.045803249097473, 16.29535839959965, 17.54406855098196, 19.054993012313254, 24.18232044198895, 7], ['chr9', 9.809722721600645, 15.441470283085978, 16.926202671856615, 17.637378235337167, 23.73803134719766, 8], ['chr10', 7.08858913071735, 10.813388029674336, 12.834016755297341, 14.882435332025462, 22.87292817679558, 9], ['chr11', 11.18742232165051, 15.386141314490471, 16.352096713260295, 18.34896012124902, 22.773480662983424, 10], ['chr12', 8.950276243093922, 15.214009667521267, 16.14931843108581, 18.70529770043792, 21.285129704055535, 11], ['chr13', 11.33265979123979, 16.16057177754086, 16.47979407979408, 20.621991293698237, 23.364640883977906, 12], ['chr14', 8.4194432451711, 10.818949209082831, 14.573763402880651, 17.70026753092693, 18.214843297584025, 13], ['chr15', 13.02747169199266, 15.936425934047888, 17.40972769239085, 18.153265571735446, 18.87292817679558, 14], ['chr16', 9.903608242104069, 12.121546961325969, 12.984198645598196, 15.710296742901413, 21.353591160220994, 15], ['chr17', 10.369693250737004, 14.582768569775531, 16.92839764553805, 18.262621653802057, 25.562784987723607, 16], ['chr18', 11.60061954434304, 13.756110877143897, 15.911602209944752, 16.462811119278527, 17.014020028612304, 17], ['chr19', 14.10322942993541, 15.926629806780277, 16.97395890664841, 17.69546326909658, 19.828729281767956, 18], ['chr20', 11.155294177420991, 13.634320109532078, 17.503811706434647, 20.613259668508288, 20.8121546961326, 19], ['chr21', 11.933701657458563, 12.435082872928177, 12.93646408839779, 13.437845303867402, 13.939226519337016, 20], ['chr22', 9.057065981285891, 14.260633874097561, 15.708014370260255, 19.44351262442722, 22.320441988950275, 21], ['chrX', 6.400259067357513, 7.759129995415302, 8.17109660989973, 9.881988151932887, 12.381642512077295, 22]
+                            ]
+                        },
+                        {
+                            "transform": {
+                                "type": 'sort',
+                                "config": [
+                                    {"dimension": 'chrom_index', "order": 'desc'}
+                                ]
+                            },
+                        }
+                    ],
+                    "tooltip": {
+                        "trigger": 'item',
+                        "axisPointer": {
+                            "type": 'shadow'
+                        }
+                    },
+                    "dataZoom":[
+                        {
+                            "type": 'inside'
+                        },
+                        {
+                            "type": 'slider',
+                            "yAxisIndex": 0,
+                        }
+                    ],
+                    "grid": {
+                        "left": '10%',
+                        "right": '10%',
+                        "bottom": '15%'
+                    },
+                    "xAxis": {
+                        "type": 'category',
+                        "name": 'Chromosome',
+                        "boundaryGap": True,
+                        "nameGap": 30,
+                        "splitArea": {
+                            "show": False
+                        },
+                        "splitLine": {
+                            "show": False
+                        }
+                    },
+                    "yAxis": {
+                        #"type": 'value',
+                        "name": 'Coverage',
+                        #"splitArea": {
+                        #    "show": True
+                        #}
+                    },
+                    "legend": {"data": ['boxplot']},
+                    "series":[
+                        {
+                            "name": 'boxplot',
+                            "type": 'boxplot',
+                            "datasetId": 'raw',
+                            "encode": {
+                                "y": ['min', 'Q1', 'median', 'Q3', 'max'],
+                                "x": 'chrom',
+                                "itemName": ['chrom'],
+                                "tooltip": ['min', 'Q1', 'median', 'Q3', 'max']
+                            }
+                        },
+                        #{
+                        #    "name": 'outlier',
+                        #    "type": 'scatter',
+                        #    "datasetIndex": 2
+                        #}
+                    ]
+                }
+            ).style("height: 500px")
+            .classes("border-double")
+        )
+
+    def target_boxplot_old(self):
         self.target_boxplot = (
             ui.echart(
                 {
@@ -369,14 +476,14 @@ class TargetCoverage(BaseAnalysis):
                         },
                         {
                             "id": 'coverage_data',
-                            "source": [],
+                            "source": [['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'index'], ['chr1', 9.900380568614285, 12.356504739289363, 14.100950462251728, 15.904080575227479, 24.367119741100325, 0], ['chr10', 7.08858913071735, 10.813388029674336, 12.834016755297341, 14.882435332025462, 22.87292817679558, 9], ['chr11', 11.18742232165051, 15.386141314490471, 16.352096713260295, 18.34896012124902, 22.773480662983424, 10], ['chr12', 8.950276243093922, 15.214009667521267, 16.14931843108581, 18.70529770043792, 21.285129704055535, 11], ['chr13', 11.33265979123979, 16.16057177754086, 16.47979407979408, 20.621991293698237, 23.364640883977906, 12], ['chr14', 8.4194432451711, 10.818949209082831, 14.573763402880651, 17.70026753092693, 18.214843297584025, 13], ['chr15', 13.02747169199266, 15.936425934047888, 17.40972769239085, 18.153265571735446, 18.87292817679558, 14], ['chr16', 9.903608242104069, 12.121546961325969, 12.984198645598196, 15.710296742901413, 21.353591160220994, 15], ['chr17', 10.369693250737004, 14.582768569775531, 16.92839764553805, 18.262621653802057, 25.562784987723607, 16], ['chr18', 11.60061954434304, 13.756110877143897, 15.911602209944752, 16.462811119278527, 17.014020028612304, 17], ['chr19', 14.10322942993541, 15.926629806780277, 16.97395890664841, 17.69546326909658, 19.828729281767956, 18], ['chr2', 12.15211267605634, 14.4177614596097, 17.68534837627687, 19.767268987239973, 31.431818181818183, 1], ['chr20', 11.155294177420991, 13.634320109532078, 17.503811706434647, 20.613259668508288, 20.8121546961326, 19], ['chr21', 11.933701657458563, 12.435082872928177, 12.93646408839779, 13.437845303867402, 13.939226519337016, 20], ['chr22', 9.057065981285891, 14.260633874097561, 15.708014370260255, 19.44351262442722, 22.320441988950275, 21], ['chr3', 11.691279912701788, 14.751842063525142, 16.850141658196847, 18.346233380151332, 23.945544554455445, 2], ['chr4', 12.393793151368524, 16.678021379090286, 17.942222816206097, 21.39059356250752, 23.613259668508288, 3], ['chr5', 15.7482339849042, 16.30144151543359, 17.495463802999446, 18.067355596471685, 21.994475138121548, 4], ['chr6', 10.9530563184635, 15.982833520133271, 18.13845821598282, 18.955984025339657, 22.46955913226032, 5], ['chr7', 8.41747572815534, 13.506301610187435, 16.599710921226034, 17.778951201747997, 20.883977900552487, 6], ['chr8', 12.045803249097473, 16.29535839959965, 17.54406855098196, 19.054993012313254, 24.18232044198895, 7], ['chr9', 9.809722721600645, 15.441470283085978, 16.926202671856615, 17.637378235337167, 23.73803134719766, 8], ['chrX', 6.400259067357513, 7.759129995415302, 8.17109660989973, 9.881988151932887, 12.381642512077295, 22]],
                             "transform": [
                                 {
-                                    "type": 'sort',
-                                    "config": {
-                                        "dimension": 'index',
-                                        "order": 'asc'
-                                    }
+                                    #"type": 'sort',
+                                    #"config": {
+                                    #    "dimension": 'index',
+                                    #    "order": 'asc'
+                                    #}
                                 }
                             ]
                         }
@@ -427,32 +534,32 @@ class TargetCoverage(BaseAnalysis):
                                 "tooltip":['min', 'Q1', 'median', 'Q3', 'max']
                             }
                         },
-                        {
-                            "name": 'Genes',
-                            "type": 'scatter',
-                            "datasetId": 'raw',
-                            "symbolSize": 6,
-                            "tooltip": {
-                                "trigger": 'item'
-                            },
-                            "label": {
-                                "show": True,
-                                "position": 'top',
-                                "align": 'left',
-                                "verticalAlign": 'middle',
-                                "fontSize": 12
-                            },
-                            "itemStyle": {
-                                "color": '#d00000'
-                            },
-                            "encode": {
-                                "y": 'coverage',
-                                "x": 'chrom',
-                                "label": 'name',
-                                "itemName": 'name',
-                                "tooltip":['chrom', 'name', 'coverage']
-                            }
-                        }
+                        #{
+                        #    "name": 'Genes',
+                        #    "type": 'scatter',
+                        #    "datasetId": 'raw',
+                        #    "symbolSize": 6,
+                        #    "tooltip": {
+                        #        "trigger": 'item'
+                        #    },
+                        #    "label": {
+                        #        "show": True,
+                        #        "position": 'top',
+                        #        "align": 'left',
+                        #        "verticalAlign": 'middle',
+                        #        "fontSize": 12
+                        #    },
+                        #    "itemStyle": {
+                        #        "color": '#d00000'
+                        #    },
+                        #    "encode": {
+                        #        "y": 'coverage',
+                        #        "x": 'chrom',
+                        #        "label": 'name',
+                        #        "itemName": 'name',
+                        #        "tooltip":['chrom', 'name', 'coverage']
+                        #    }
+                        #}
                     ]
                 }
             )
@@ -488,6 +595,12 @@ class TargetCoverage(BaseAnalysis):
                 index=('index', 'first')  # Get the corresponding index for the chromosome
             ).reset_index()
 
+            # Sort the aggregated data by 'chrom' naturally using natsort
+            aggregated_data['chrom'] = pd.Categorical(aggregated_data['chrom'],
+                                                      categories=natsort.natsorted(aggregated_data['chrom'].unique()),
+                                                      ordered=True)
+            aggregated_data = aggregated_data.sort_values('chrom').reset_index(drop=True)
+
             # Format the result as required
             result = [
                          ['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'index']
@@ -495,9 +608,9 @@ class TargetCoverage(BaseAnalysis):
 
             #print(result)
             #print(self.target_boxplot.options["dataset"][1])
-            self.target_boxplot.options["dataset"][1]["source"] = result
+            self.target_boxplot.options["dataset"][0]["source"] = result
             #print (self.target_boxplot.options["dataset"][1]["source"])
-            self.target_boxplot.update()
+            #self.target_boxplot.update()
 
 
 
@@ -781,7 +894,7 @@ class TargetCoverage(BaseAnalysis):
                 os.path.join(watchfolder, "bed_coverage_main.csv")
             )
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
-            #self.update_target_boxplot(self.bedcov_df_main)
+            self.update_target_boxplot(self.bedcov_df_main)
         if os.path.isfile(os.path.join(watchfolder, "target_coverage.csv")):
             self.target_coverage_df = pd.read_csv(
                 os.path.join(watchfolder, "target_coverage.csv")

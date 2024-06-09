@@ -67,9 +67,9 @@ from cnsmeth.subpages.base_analysis import BaseAnalysis
 import logging
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-)
+#logging.basicConfig(
+#    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+#)
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
@@ -85,7 +85,7 @@ def run_command(command: str) -> None:
     try:
         subprocess.run(command, shell=True, check=True)
     except subprocess.CalledProcessError as e:
-        logging.error(f"Command failed: {command}")
+        #logging.error(f"Command failed: {command}")
         raise e
 
 
@@ -165,7 +165,7 @@ def fusion_work(
                         fusion_candidates_all["diff"] > 1000
                     ]
     except Exception as e:
-        logging.error(f"Error during fusion work: {e}")
+        #logging.error(f"Error during fusion work: {e}")
         raise
 
     return fusion_candidates, fusion_candidates_all
@@ -237,7 +237,7 @@ def fusion_work_old(
                         fusion_candidates_all["diff"].gt(1000)
                     ]
     except Exception as e:
-        logging.error(f"Error in legacy fusion work: {e}")
+        #logging.error(f"Error in legacy fusion work: {e}")
         raise
     return fusion_candidates, fusion_candidates_all
 
@@ -306,10 +306,10 @@ class Fusion_object(BaseAnalysis):
                 )
             )
         else:
-            logging.info(
-                f"This looks like the first time you have run the {self.target_panel} panel."
-            )
-            logging.info("Parsing GFF3")
+            #logging.info(
+            #    f"This looks like the first time you have run the {self.target_panel} panel."
+            #)
+            #logging.info("Parsing GFF3")
             self.gene_table = gff3_parser.parse_gff3(
                 self.gene_gff3_2, verbose=False, parse_attributes=True
             )
@@ -876,7 +876,8 @@ class Fusion_object(BaseAnalysis):
             self.fusion_table_all()
 
         except Exception as e:
-            logging.error(f"Error processing BAM file: {e}")
+            #logging.error(f"Error processing BAM file: {e}")
+            raise
         finally:
             self.running = False
 
