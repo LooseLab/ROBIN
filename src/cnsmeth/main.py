@@ -462,9 +462,9 @@ def run_class(
         app.storage.general.clear()
     except Exception as e:
         print(e)
-    logger = logging.getLogger(__name__)
-    logger.info("Starting ROBIN.")
-    logger.debug("Starting DEBUG ROBIN")
+    #logger = logging.getLogger(__name__)
+    #logger.info("Starting ROBIN.")
+    #logger.debug("Starting DEBUG ROBIN")
     # Configure the icon for the GUI
     iconfile = os.path.join(
         os.path.dirname(os.path.abspath(images.__file__)), "favicon.ico"
@@ -631,7 +631,7 @@ def package_run(
     Entrypoint for when GUI is launched directly.
     :return: None
     """
-    setup_logging(log_level)
+    #setup_logging(log_level)
     if sequencing_summary:
         sequencing_summary = click.format_filename(sequencing_summary)
     if browse:

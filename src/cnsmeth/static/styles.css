@@ -57,7 +57,7 @@ a:active:not(.browser-window *) {
 }
 
 .q-header {
-  height: 70px;
+  height: 60px;
   background-color: #4F9153;
 }
 .q-header.fade {

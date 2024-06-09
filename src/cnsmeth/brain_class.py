@@ -127,7 +127,7 @@ import os
 
 # Configure logging
 # logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 
 def check_bam(bamfile):
@@ -173,7 +173,7 @@ class BrainMeth:
         self.observer = None
 
     async def init(self):
-        logger.debug("Init Brain Class")
+        #logger.debug("Init Brain Class")
         app.storage.general[self.mainuuid]["bam_count"] = {}
         app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
         app.storage.general[self.mainuuid]["bam_count"]["files"] = {}

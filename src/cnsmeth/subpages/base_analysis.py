@@ -100,7 +100,7 @@ from collections import Counter
 import logging
 
 # Configure logging
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 
 class BaseAnalysis:

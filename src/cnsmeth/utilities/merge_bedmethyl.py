@@ -8,7 +8,7 @@ import os
 import logging
 
 # Configure logging
-logger = logging.getLogger(__name__)
+#logger = logging.getLogger(__name__)
 
 
 def save_bedmethyl(result_df: pd.DataFrame, output_file: str) -> None:
@@ -33,9 +33,9 @@ def save_bedmethyl(result_df: pd.DataFrame, output_file: str) -> None:
         quotechar='"',
         escapechar="\\",
     )
-    logger.info(f"Saved bedmethyl data to {file_path}")
+    #logger.info(f"Saved bedmethyl data to {file_path}")
 
-    logger.info(f"Post-processed the file with sed: {file_path}")
+    #logger.info(f"Post-processed the file with sed: {file_path}")
 
 
 def collapse_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
@@ -103,7 +103,7 @@ def collapse_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
         "Nnocall",
     ]
     merged_df = result_df[column_order].sort_values(by=["chrom", "start_pos"])
-    logger.info("Collapsed and aggregated the bedmethyl data.")
+    #logger.info("Collapsed and aggregated the bedmethyl data.")
     return merged_df
 
 
@@ -122,5 +122,5 @@ def merge_bedmethyl(dfA: pd.DataFrame, dfB: pd.DataFrame) -> pd.DataFrame:
     """
     concat_df = pd.concat([dfA, dfB])
     merged_df = collapse_bedmethyl(concat_df)
-    logger.info("Merged two bedmethyl dataframes.")
+    #logger.info("Merged two bedmethyl dataframes.")
     return merged_df
