@@ -502,7 +502,7 @@ def run_class(
     app.on_startup(startup)
 
     # At last we can actually start ROBIN
-    ui.run(port=port, reload=reload, title="ROBIN", favicon=iconfile, on_air=False)
+    ui.run(port=port, reload=reload, title="ROBIN", favicon=iconfile, on_air=False, show=False)
 
 
 def configure(ctx, param, filename):

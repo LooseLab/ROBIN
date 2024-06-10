@@ -7,13 +7,13 @@ import numpy as np
 
 
 class SNPview:
-    def __init__(self):
+    def __init__(self, placeholder):
         super().__init__()
         self.snptable = None
         self.pathogenictable = None
+        self.placeholder = placeholder
 
     def renderme(self):
-        self.placeholder = ui.card().tight().classes("overflow-x-auto")
         with self.placeholder:
             ui.label(
                 "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
