@@ -13,7 +13,7 @@ class SNPview:
         self.pathogenictable = None
         self.placeholder = placeholder
 
-    def renderme(self):
+    async def renderme(self):
         with self.placeholder:
             ui.label(
                 "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
