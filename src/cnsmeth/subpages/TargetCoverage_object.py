@@ -51,18 +51,14 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
             f"{workdirout}/indel.vcf.gz", f"{workdirout}/output_indel_done.vcf.gz"
         )
 
-        # os.system(f"ls {workdirout}")
         command = f"snpEff hg38 {workdirout}/output_done.vcf.gz > {workdirout}/snpeff_output.vcf"
         os.system(command)
-        # os.system(f"ls {workdirout}")
         command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf"
         os.system(command)
         command = f"snpEff hg38 {workdirout}/output_indel_done.vcf.gz > {workdirout}/snpeff_indel_output.vcf"
         os.system(command)
-        # os.system(f"ls {workdirout}")
         command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} {workdirout}/snpeff_indel_output.vcf > {workdirout}/snpsift_indel_output.vcf"
         os.system(command)
-        # os.system(f"ls {workdirout}")
 
 
 def get_covdfs(bamfile, output):
@@ -212,14 +208,7 @@ class TargetCoverage(BaseAnalysis):
                 self.threads,
                 self.reference,
             )
-
-            # if os.path.isfile(f"{workdirout}/snpsift_output.vcf"):
-            #    self.SNPview.parse_vcf(f"{workdirout}/snpsift_output.vcf")
-            # if os.path.isfile(f"{workdirout}/snpsift_indel_output.vcf"):
-            #    self.INDELview.parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
-
             self.clair3running = False
-
         else:
             await asyncio.sleep(1)
         self.snp_timer.active = True
@@ -392,16 +381,25 @@ class TargetCoverage(BaseAnalysis):
                             "id": 'raw',
                             "dimensions": ['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'chrom_index'],
                             "source":[
-                                #['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'chrom_index'], ['chr1', 9.900380568614285, 12.356504739289363, 14.100950462251728, 15.904080575227479, 24.367119741100325, 0], ['chr2', 12.15211267605634, 14.4177614596097, 17.68534837627687, 19.767268987239973, 31.431818181818183, 1], ['chr3', 11.691279912701788, 14.751842063525142, 16.850141658196847, 18.346233380151332, 23.945544554455445, 2], ['chr4', 12.393793151368524, 16.678021379090286, 17.942222816206097, 21.39059356250752, 23.613259668508288, 3], ['chr5', 15.7482339849042, 16.30144151543359, 17.495463802999446, 18.067355596471685, 21.994475138121548, 4], ['chr6', 10.9530563184635, 15.982833520133271, 18.13845821598282, 18.955984025339657, 22.46955913226032, 5], ['chr7', 8.41747572815534, 13.506301610187435, 16.599710921226034, 17.778951201747997, 20.883977900552487, 6], ['chr8', 12.045803249097473, 16.29535839959965, 17.54406855098196, 19.054993012313254, 24.18232044198895, 7], ['chr9', 9.809722721600645, 15.441470283085978, 16.926202671856615, 17.637378235337167, 23.73803134719766, 8], ['chr10', 7.08858913071735, 10.813388029674336, 12.834016755297341, 14.882435332025462, 22.87292817679558, 9], ['chr11', 11.18742232165051, 15.386141314490471, 16.352096713260295, 18.34896012124902, 22.773480662983424, 10], ['chr12', 8.950276243093922, 15.214009667521267, 16.14931843108581, 18.70529770043792, 21.285129704055535, 11], ['chr13', 11.33265979123979, 16.16057177754086, 16.47979407979408, 20.621991293698237, 23.364640883977906, 12], ['chr14', 8.4194432451711, 10.818949209082831, 14.573763402880651, 17.70026753092693, 18.214843297584025, 13], ['chr15', 13.02747169199266, 15.936425934047888, 17.40972769239085, 18.153265571735446, 18.87292817679558, 14], ['chr16', 9.903608242104069, 12.121546961325969, 12.984198645598196, 15.710296742901413, 21.353591160220994, 15], ['chr17', 10.369693250737004, 14.582768569775531, 16.92839764553805, 18.262621653802057, 25.562784987723607, 16], ['chr18', 11.60061954434304, 13.756110877143897, 15.911602209944752, 16.462811119278527, 17.014020028612304, 17], ['chr19', 14.10322942993541, 15.926629806780277, 16.97395890664841, 17.69546326909658, 19.828729281767956, 18], ['chr20', 11.155294177420991, 13.634320109532078, 17.503811706434647, 20.613259668508288, 20.8121546961326, 19], ['chr21', 11.933701657458563, 12.435082872928177, 12.93646408839779, 13.437845303867402, 13.939226519337016, 20], ['chr22', 9.057065981285891, 14.260633874097561, 15.708014370260255, 19.44351262442722, 22.320441988950275, 21], ['chrX', 6.400259067357513, 7.759129995415302, 8.17109660989973, 9.881988151932887, 12.381642512077295, 22]
+                               ]
+                        },
+                        {
+                            "id": 'rawdata',
+                            "dimensions": ['chrom', 'coverage', 'name'],
+                            "source":[
+                        ]
+                        },
+                        {
+                            "id": 'outliers',
+                            "dimensions": ['chrom', 'coverage', 'name'],
+                            "source": [
                             ]
                         },
                         {
-                            "transform": {
-                                "type": 'sort',
-                                "config": [
-                                    {"dimension": 'chrom_index', "order": 'desc'}
-                                ]
-                            },
+                            "id": 'globaloutliers',
+                            "dimensions": ['chrom', 'coverage', 'name'],
+                            "source": [
+                            ]
                         }
                     ],
                     "tooltip": {
@@ -411,9 +409,6 @@ class TargetCoverage(BaseAnalysis):
                         }
                     },
                     "dataZoom":[
-                        {
-                            "type": 'inside'
-                        },
                         {
                             "type": 'slider',
                             "yAxisIndex": 0,
@@ -443,7 +438,7 @@ class TargetCoverage(BaseAnalysis):
                         #    "show": True
                         #}
                     },
-                    "legend": {"data": ['boxplot']},
+                    "legend": {"data": ['boxplot', 'raw data', 'outliers', 'global outliers']},
                     "series":[
                         {
                             "name": 'boxplot',
@@ -456,119 +451,68 @@ class TargetCoverage(BaseAnalysis):
                                 "tooltip": ['min', 'Q1', 'median', 'Q3', 'max']
                             }
                         },
-                        #{
-                        #    "name": 'outlier',
-                        #    "type": 'scatter',
-                        #    "datasetIndex": 2
-                        #}
+                        {
+                            "name": 'raw data',
+                            "type": 'scatter',
+                            "datasetId": 'rawdata',
+                            "encode": {
+                                "y": 'coverage',
+                                "x": 'chrom',
+                                "label": 'name',
+                                "itemName": 'name',
+                                "tooltip": ['chrom', 'name', 'coverage']
+                            },
+                            "label": {
+                                "show": True,
+                                "position": 'right',
+                                "itemName": 'name',
+                                "color": "black",
+                                "fontSize": 16,
+                            }
+                        },
+                        {
+                            "name": 'outliers',
+                            "type": 'scatter',
+                            "datasetId": 'outliers',
+                            "encode": {
+                                "y": 'coverage',
+                                "x": 'chrom',
+                                "label": 'name',
+                                "itemName": 'name',
+                                "tooltip": ['chrom', 'name', 'coverage']
+                            },
+                            "label": {
+                                "show": True,
+                                "position": 'right',
+                                "itemName": 'name',
+                                "color": "black",
+                                "fontSize": 16,
+                            }
+                        },
+                        {
+                            "name": 'global outliers',
+                            "type": 'scatter',
+                            "datasetId": 'globaloutliers',
+                            "encode": {
+                                "y": 'coverage',
+                                "x": 'chrom',
+                                "label": 'name',
+                                "itemName": 'name',
+                                "tooltip": ['chrom', 'name', 'coverage']
+                            },
+                            "label": {
+                                "show": True,
+                                "position": 'right',
+                                "itemName": 'name',
+                                "color": "black",
+                                "fontSize": 16,
+                            }
+                        }
                     ]
                 }
             ).style("height: 500px")
             .classes("border-double")
         )
-
-    def target_boxplot_old(self):
-        self.target_boxplot = (
-            ui.echart(
-                {
-                    "dataset":[
-                        {
-                            "id": 'raw',
-                            "source": []
-                        },
-                        {
-                            "id": 'coverage_data',
-                            "source": [['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'index'], ['chr1', 9.900380568614285, 12.356504739289363, 14.100950462251728, 15.904080575227479, 24.367119741100325, 0], ['chr10', 7.08858913071735, 10.813388029674336, 12.834016755297341, 14.882435332025462, 22.87292817679558, 9], ['chr11', 11.18742232165051, 15.386141314490471, 16.352096713260295, 18.34896012124902, 22.773480662983424, 10], ['chr12', 8.950276243093922, 15.214009667521267, 16.14931843108581, 18.70529770043792, 21.285129704055535, 11], ['chr13', 11.33265979123979, 16.16057177754086, 16.47979407979408, 20.621991293698237, 23.364640883977906, 12], ['chr14', 8.4194432451711, 10.818949209082831, 14.573763402880651, 17.70026753092693, 18.214843297584025, 13], ['chr15', 13.02747169199266, 15.936425934047888, 17.40972769239085, 18.153265571735446, 18.87292817679558, 14], ['chr16', 9.903608242104069, 12.121546961325969, 12.984198645598196, 15.710296742901413, 21.353591160220994, 15], ['chr17', 10.369693250737004, 14.582768569775531, 16.92839764553805, 18.262621653802057, 25.562784987723607, 16], ['chr18', 11.60061954434304, 13.756110877143897, 15.911602209944752, 16.462811119278527, 17.014020028612304, 17], ['chr19', 14.10322942993541, 15.926629806780277, 16.97395890664841, 17.69546326909658, 19.828729281767956, 18], ['chr2', 12.15211267605634, 14.4177614596097, 17.68534837627687, 19.767268987239973, 31.431818181818183, 1], ['chr20', 11.155294177420991, 13.634320109532078, 17.503811706434647, 20.613259668508288, 20.8121546961326, 19], ['chr21', 11.933701657458563, 12.435082872928177, 12.93646408839779, 13.437845303867402, 13.939226519337016, 20], ['chr22', 9.057065981285891, 14.260633874097561, 15.708014370260255, 19.44351262442722, 22.320441988950275, 21], ['chr3', 11.691279912701788, 14.751842063525142, 16.850141658196847, 18.346233380151332, 23.945544554455445, 2], ['chr4', 12.393793151368524, 16.678021379090286, 17.942222816206097, 21.39059356250752, 23.613259668508288, 3], ['chr5', 15.7482339849042, 16.30144151543359, 17.495463802999446, 18.067355596471685, 21.994475138121548, 4], ['chr6', 10.9530563184635, 15.982833520133271, 18.13845821598282, 18.955984025339657, 22.46955913226032, 5], ['chr7', 8.41747572815534, 13.506301610187435, 16.599710921226034, 17.778951201747997, 20.883977900552487, 6], ['chr8', 12.045803249097473, 16.29535839959965, 17.54406855098196, 19.054993012313254, 24.18232044198895, 7], ['chr9', 9.809722721600645, 15.441470283085978, 16.926202671856615, 17.637378235337167, 23.73803134719766, 8], ['chrX', 6.400259067357513, 7.759129995415302, 8.17109660989973, 9.881988151932887, 12.381642512077295, 22]],
-                            "transform": [
-                                {
-                                    #"type": 'sort',
-                                    #"config": {
-                                    #    "dimension": 'index',
-                                    #    "order": 'asc'
-                                    #}
-                                }
-                            ]
-                        }
-                    ],
-                    "title": {
-                        "text": 'Coverage by Targets Detail'
-                    },
-                    "tooltip": {
-                        "trigger": 'axis',
-                            "confine": True
-                    },
-                    "yAxis": {
-                        "name": 'Coverage',
-                        "nameLocation": 'middle',
-                        "nameGap": 30,
-                        "scale": True
-                    },
-                    "xAxis": {
-                        "type": 'category'
-                    },
-                    "grid": {
-                        "bottom": 100
-                    },
-                    "legend": {
-                        "selected": {"detail": False}
-                    },
-                    #"dataZoom":[
-                    #    {
-                    #        "type": 'inside'
-                    #    },
-                    #    {
-                    #        "type": 'slider',
-                    #        "yAxisIndex": 0,
-                    #    }
-                    #],
-                    "series":[
-                        {
-                            "name": 'boxplot',
-                            "type": 'boxplot',
-                            "datasetId": 'coverage_data',
-                            "itemStyle": {
-                                "color": '#b8c5f2'
-                               },
-                            "encode": {
-                                "y":['min', 'Q1', 'median', 'Q3', 'max'],
-                                "x": 'chrom',
-                                "itemName":['chrom'],
-                                "tooltip":['min', 'Q1', 'median', 'Q3', 'max']
-                            }
-                        },
-                        #{
-                        #    "name": 'Genes',
-                        #    "type": 'scatter',
-                        #    "datasetId": 'raw',
-                        #    "symbolSize": 6,
-                        #    "tooltip": {
-                        #        "trigger": 'item'
-                        #    },
-                        #    "label": {
-                        #        "show": True,
-                        #        "position": 'top',
-                        #        "align": 'left',
-                        #        "verticalAlign": 'middle',
-                        #        "fontSize": 12
-                        #    },
-                        #    "itemStyle": {
-                        #        "color": '#d00000'
-                        #    },
-                        #    "encode": {
-                        #        "y": 'coverage',
-                        #        "x": 'chrom',
-                        #        "label": 'name',
-                        #        "itemName": 'name',
-                        #        "tooltip":['chrom', 'name', 'coverage']
-                        #    }
-                        #}
-                    ]
-                }
-            )
-            .style("height: 400px")
-            .classes("border-double")
-        )
-
 
     def update_target_boxplot(self, dataframe):
         """
@@ -576,7 +520,6 @@ class TargetCoverage(BaseAnalysis):
         :param dataframe: a pandas dataframe of
         :return:
         """
-        #print (dataframe)
         if 'coverage' in dataframe.columns:
             # Naturally sort the unique chromosome values
             sorted_chroms = natsort.natsorted(dataframe['chrom'].unique())
@@ -608,11 +551,39 @@ class TargetCoverage(BaseAnalysis):
                          ['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'index']
                      ] + aggregated_data.values.tolist()
 
-            #print(result)
-            #print(self.target_boxplot.options["dataset"][1])
+            df = dataframe
+
+            # Function to identify outliers within each chromosome group
+            def identify_outliers_per_chromosome(df):
+                outliers = pd.DataFrame()
+                for chrom in df['chrom'].unique():
+                    chrom_data = df[df['chrom'] == chrom]
+                    Q1 = chrom_data['coverage'].quantile(0.25)
+                    Q3 = chrom_data['coverage'].quantile(0.75)
+                    IQR = Q3 - Q1
+                    lower_bound = Q1 - 1.5 * IQR
+                    upper_bound = Q3 + 1.5 * IQR
+                    chrom_outliers = chrom_data[
+                        (chrom_data['coverage'] < lower_bound) | (chrom_data['coverage'] > upper_bound)]
+                    outliers = pd.concat([outliers, chrom_outliers])
+                return outliers
+
+            def identify_outliers(df):
+                Q1 = df['coverage'].quantile(0.25)
+                Q3 = df['coverage'].quantile(0.75)
+                IQR = Q3 - Q1
+                lower_bound = Q1 - 1.5 * IQR
+                upper_bound = Q3 + 1.5 * IQR
+                return df[(df['coverage'] < lower_bound) | (df['coverage'] > upper_bound)]
+
+            outliers = identify_outliers_per_chromosome(df)
+            globaloutliers = identify_outliers(df)
+
             self.target_boxplot.options["dataset"][0]["source"] = result
-            #print (self.target_boxplot.options["dataset"][1]["source"])
-            #self.target_boxplot.update()
+            self.target_boxplot.options["dataset"][1]["source"] = dataframe[['chrom', 'coverage', 'name']].values.tolist()
+            self.target_boxplot.options["dataset"][2]["source"] = outliers[['chrom', 'coverage', 'name']].values.tolist()
+            self.target_boxplot.options["dataset"][3]["source"] = globaloutliers[['chrom', 'coverage', 'name']].values.tolist()
+            self.target_boxplot.update()
 
 
 
