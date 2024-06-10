@@ -114,20 +114,12 @@ class SNPview:
             self.vcf = pd.read_csv(vcf, delimiter="\t", comment="#", names=header)
             if len(self.vcf) > 0:
                 explodedvcf = []
-
-                # print(self.vcf.to_dict('records')[:10])
                 for record in self.vcf.to_dict("records"):
                     result, result2 = self.process_annotations(record)
                     if len(result) > 1:
-                        # print("original record\n",record)
-                        # print("Annotation Dictionary:\n",result)
-                        # print("Record Dictionary:\n",result2)
                         for res in result:
-                            # print(record)
                             dat = {**record, **result[res], **result2}
                             explodedvcf.append(dat)
-                            # print(dat)
-                            # sys.exit()
 
                 self.vcf = pd.DataFrame.from_records(explodedvcf)
                 if "INFO" in self.vcf.columns:
@@ -142,8 +134,6 @@ class SNPview:
                     return None
 
                 if len(self.vcf) > 0:
-                    # print (self.vcf)
-                    # Define shared columns
                     shared_columns = [
                         "CHROM",
                         "POS",
@@ -229,15 +219,7 @@ class SNPview:
                             ).bind_value(self.snptable, "filter").add_slot("append"):
                                 ui.icon("search")
 
-                        # with self.snptable.add_slot('top-left'):
-                        #    def toggle() -> None:
-                        #        self.snptable.toggle_fullscreen()
-                        #        button.props('icon=fullscreen_exit' if self.snptable.is_fullscreen else 'icon=fullscreen')
 
-                        #    button = ui.button('Toggle fullscreen', icon='fullscreen', on_click=toggle).props('flat')
-
-                    # else:
-                    #    self.snptable.update_rows(self.vcf.to_dict(orient='records'))
 
 
 def index_page() -> None:
