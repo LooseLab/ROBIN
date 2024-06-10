@@ -40,7 +40,7 @@ def run_modkit(file, temp, threads):
     try:
         os.system(
             f"modkit extract --ignore h -t {threads} {file} {temp} "
-            f"--force "#--suppress-progress >/dev/null 2>&1"
+            f"--force --suppress-progress >/dev/null 2>&1"
         )
         # self.log("Done processing bam file")
     except Exception as e:
@@ -52,7 +52,7 @@ def run_modkit(file, temp, threads):
 def run_sturgeon_predict(bedDir, dataDir, modelfile):
     os.system(
         f"sturgeon predict -i {bedDir} -o {dataDir} "
-        f"--model-files {modelfile} "#>/dev/null 2>&1"
+        f"--model-files {modelfile} >/dev/null 2>&1"
     )
 
 
