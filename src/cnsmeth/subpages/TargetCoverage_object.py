@@ -263,13 +263,15 @@ class TargetCoverage(BaseAnalysis):
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
-                self.SNPview = SNPview()
+                self.placeholder = ui.card().tight().classes("overflow-x-auto")
+                self.SNPview = SNPview(self.placeholder)
                 self.SNPview.renderme()
             ui.label("Candidate IN/DELs").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
-                self.INDELview = SNPview()
+                self.placeholder2 = ui.card().tight().classes("overflow-x-auto")
+                self.INDELview = SNPview(self.placeholder2)
                 self.INDELview.renderme()
         if self.browse:
             self.show_previous_data(self.output)
