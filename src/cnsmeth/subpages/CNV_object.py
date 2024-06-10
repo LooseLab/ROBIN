@@ -382,6 +382,9 @@ class CNVAnalysis(BaseAnalysis):
         return (
             ui.echart(
                 {
+                    "textStyle": {
+                        "fontFamily": "Fira Sans, Fira Mono"
+                    },
                     "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": f"{title}"},

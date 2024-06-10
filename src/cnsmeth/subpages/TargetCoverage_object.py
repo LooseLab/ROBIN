@@ -438,7 +438,14 @@ class TargetCoverage(BaseAnalysis):
                         #    "show": True
                         #}
                     },
-                    "legend": {"data": ['boxplot', 'raw data', 'outliers', 'global outliers']},
+                    "legend": {"data": ['boxplot', 'raw data', 'outliers', 'global outliers'],
+                               "selected": {
+                                   'boxplot': True,
+                                   'global outliers': True,
+                                   'raw data': False,
+                                   'outliers': False
+                               }
+                               },
                     "series":[
                         {
                             "name": 'boxplot',
@@ -507,8 +514,9 @@ class TargetCoverage(BaseAnalysis):
                                 "color": "black",
                                 "fontSize": 16,
                             }
-                        }
-                    ]
+                        },
+                    ],
+
                 }
             ).style("height: 500px")
             .classes("border-double")
