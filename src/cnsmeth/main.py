@@ -85,7 +85,7 @@ import uuid
 import logging
 
 from pathlib import Path
-from nicegui import ui, app
+from nicegui import ui, app, Client
 from cnsmeth import theme
 from cnsmeth import images
 from configparser import ConfigParser
@@ -144,6 +144,7 @@ async def index():
         reference=app.storage.general[UNIQUE_ID]["reference"],
         unique_id=UNIQUE_ID,
     )
+
     GUI.setup()
     await GUI.splash_screen()
 
@@ -169,6 +170,12 @@ async def live():
         unique_id=UNIQUE_ID,
     )
     GUI.setup()
+    def clean_up_handler(thingtokill):
+        print (f"Killing {thingtokill}")
+        del thingtokill
+        print(f"Killed")
+
+    ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
     await GUI.index_page()
 
 
@@ -193,6 +200,13 @@ async def test():
         unique_id=UNIQUE_ID,
     )
     GUI_browse.setup()
+
+    def clean_up_handler(thingtokill):
+        print (f"Killing {thingtokill}")
+        del thingtokill
+        print(f"Killed")
+
+    ui.context.client.on_disconnect(lambda: clean_up_handler(GUI_browse))
     await GUI_browse.browse_page()
 
 
@@ -500,6 +514,20 @@ def run_class(
     # We need to register things to do when the application actually starts up but
     # not when a new user connects to the website.
     app.on_startup(startup)
+
+    #def clean_up(client: Client):
+    #    """
+    #    This function will be called when the app is disconnected.
+    #    """
+    #    print(f"Client disconnect detected. {client}")
+    #    print(f"dir{dir(client)}")
+    #    print(f"dir{dir(app)}")
+        #print("Resetting Storage.")
+        # We have seen the app stop. Therefore we want to remove data important for this instance.
+        #app.storage.general.pop(UNIQUE_ID)
+        #app.shutdown()
+
+    #app.on_disconnect(clean_up)
 
     # At last we can actually start ROBIN
     ui.run(port=port, reload=reload, title="ROBIN", favicon=iconfile, on_air=False, show=False)
