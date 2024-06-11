@@ -148,7 +148,7 @@ async def index():
     await GUI.splash_screen()
 
 
-@ui.page("/live", response_timeout=10)
+@ui.page("/live", response_timeout=20)
 async def live():
     """
     This page is served at /live and is the interaction with live data from ROBIN.

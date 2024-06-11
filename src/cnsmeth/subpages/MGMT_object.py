@@ -192,7 +192,7 @@ class MGMT_Object(BaseAnalysis):
         if self.browse:
             self.show_previous_data(self.output)
         else:
-            ui.timer(5, lambda: self.show_previous_data(self.output))
+            ui.timer(30, lambda: self.show_previous_data(self.output))
 
     async def process_bam(self, bamfile, timestamp):
         """

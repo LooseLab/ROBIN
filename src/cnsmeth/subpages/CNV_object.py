@@ -376,7 +376,7 @@ class CNVAnalysis(BaseAnalysis):
         if self.browse:
             ui.timer(0.1, lambda: self.show_previous_data(self.output), once=True)
         else:
-            ui.timer(5, lambda: self.show_previous_data(self.output))
+            ui.timer(15, lambda: self.show_previous_data(self.output))
 
     def generate_chart(self, title=None, initmax=8, initmin=0, type="value"):
         return (

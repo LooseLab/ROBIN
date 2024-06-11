@@ -452,7 +452,7 @@ class Fusion_object(BaseAnalysis):
         if self.browse:
             self.show_previous_data(self.output)
         else:
-            ui.timer(5, lambda: self.show_previous_data(self.output))
+            ui.timer(30, lambda: self.show_previous_data(self.output))
 
     def fusion_table_all(self):
         """
