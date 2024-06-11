@@ -139,7 +139,7 @@ class Sturgeon_object(BaseAnalysis):
                 "bams_in_processing"
             ] += 1
             # self.bams_in_processing += 1
-            if len(tomerge) > 25:
+            if len(tomerge) > 5:
                 break
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(dir=self.output)
