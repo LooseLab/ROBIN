@@ -385,6 +385,73 @@ class BrainMeth:
             ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
                 "drop-shadow", "font-bold"
             )
+            with ui.row():
+                ui.label().bind_text_from(
+                    app.storage.general[self.mainuuid],
+                    "devices",
+                    backward=lambda n: [f"Devices: {str(item)}" for item in n],
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    app.storage.general[self.mainuuid],
+                    "basecall_models",
+                    backward=lambda n: [
+                        f"Basecall Models: {str(item)}" for item in n
+                    ],
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    app.storage.general[self.mainuuid],
+                    "flowcell_ids",
+                    backward=lambda n: [f"Flowcell IDs: {str(item)}" for item in n],
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    app.storage.general[self.mainuuid],
+                    "run_time",
+                    backward=lambda n: [
+                        f"Run Start Time: {datetime.fromisoformat(date).strftime('%Y-%m-%d %H:%M:%S %Z')}"
+                        for date in n
+                    ],
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+                ui.label().bind_text_from(
+                    app.storage.general[self.mainuuid],
+                    "sample_ids",
+                    backward=lambda n: [f"Sample ID: {str(item)}" for item in n],
+                ).style("color: #000000; font-size: 100%; font-weight: 300")
+
+            with ui.row():
+                ui.label("Results Summary").style(
+                    "color: #6E93D6; font-size: 125%; font-weight: 300"
+                ).tailwind("drop-shadow", "font-bold")
+
+            with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
+                if "sturgeon" not in self.exclude:
+                    sturgeonsummary = ui.column()
+                if "nanodx" not in self.exclude:
+                    nanodxsummary = ui.column()
+                if "forest" not in self.exclude:
+                    forestsummary = ui.column()
+            if "mgmt" not in self.exclude:
+                with ui.row().style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                ):
+                    mgmt = ui.column()
+            if "cnv" not in self.exclude:
+                with ui.row().style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                ):
+                    if "cnv" not in self.exclude:
+                        cnvsummary = ui.column()
+            if "fusion" not in self.exclude:
+                with ui.row().style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                ):
+                    if "fusion" not in self.exclude:
+                        fusions = ui.column()
+            if "coverage" not in self.exclude:
+                with ui.row().style(
+                    "color: #000000; font-size: 100%; font-weight: 300"
+                ):
+                    if "coverage" not in self.exclude:
+                        coverage = ui.column()
 
             with ui.expansion(icon="work").bind_text_from(
                 self, "watchfolder", backward=lambda n: f"Monitoring the path: {n}"
@@ -469,73 +536,6 @@ class BrainMeth:
                             "bamfornanodx",
                             backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
                         ).style("color: #000000; font-size: 100%; font-weight: 300")
-                with ui.row():
-                    ui.label().bind_text_from(
-                        app.storage.general[self.mainuuid],
-                        "devices",
-                        backward=lambda n: [f"Devices: {str(item)}" for item in n],
-                    ).style("color: #000000; font-size: 100%; font-weight: 300")
-                    ui.label().bind_text_from(
-                        app.storage.general[self.mainuuid],
-                        "basecall_models",
-                        backward=lambda n: [
-                            f"Basecall Models: {str(item)}" for item in n
-                        ],
-                    ).style("color: #000000; font-size: 100%; font-weight: 300")
-                    ui.label().bind_text_from(
-                        app.storage.general[self.mainuuid],
-                        "flowcell_ids",
-                        backward=lambda n: [f"Flowcell IDs: {str(item)}" for item in n],
-                    ).style("color: #000000; font-size: 100%; font-weight: 300")
-                    ui.label().bind_text_from(
-                        app.storage.general[self.mainuuid],
-                        "run_time",
-                        backward=lambda n: [
-                            f"Run Start Time: {datetime.fromisoformat(date).strftime('%Y-%m-%d %H:%M:%S %Z')}"
-                            for date in n
-                        ],
-                    ).style("color: #000000; font-size: 100%; font-weight: 300")
-                    ui.label().bind_text_from(
-                        app.storage.general[self.mainuuid],
-                        "sample_ids",
-                        backward=lambda n: [f"Sample ID: {str(item)}" for item in n],
-                    ).style("color: #000000; font-size: 100%; font-weight: 300")
-
-            with ui.row():
-                ui.label("Results Summary").style(
-                    "color: #6E93D6; font-size: 125%; font-weight: 300"
-                ).tailwind("drop-shadow", "font-bold")
-
-            with ui.row().style("color: #000000; font-size: 100%; font-weight: 300"):
-                if "sturgeon" not in self.exclude:
-                    sturgeonsummary = ui.column()
-                if "nanodx" not in self.exclude:
-                    nanodxsummary = ui.column()
-                if "forest" not in self.exclude:
-                    forestsummary = ui.column()
-            if "mgmt" not in self.exclude:
-                with ui.row().style(
-                    "color: #000000; font-size: 100%; font-weight: 300"
-                ):
-                    mgmt = ui.column()
-            if "cnv" not in self.exclude:
-                with ui.row().style(
-                    "color: #000000; font-size: 100%; font-weight: 300"
-                ):
-                    if "cnv" not in self.exclude:
-                        cnvsummary = ui.column()
-            if "fusion" not in self.exclude:
-                with ui.row().style(
-                    "color: #000000; font-size: 100%; font-weight: 300"
-                ):
-                    if "fusion" not in self.exclude:
-                        fusions = ui.column()
-            if "coverage" not in self.exclude:
-                with ui.row().style(
-                    "color: #000000; font-size: 100%; font-weight: 300"
-                ):
-                    if "coverage" not in self.exclude:
-                        coverage = ui.column()
 
         selectedtab = None
         with ui.tabs().classes("w-full") as tabs:
