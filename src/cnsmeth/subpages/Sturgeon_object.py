@@ -98,7 +98,7 @@ class Sturgeon_object(BaseAnalysis):
             ui.timer(5, lambda: self.show_previous_data(self.output))
 
     def show_previous_data(self, output):
-        if os.path.exists(os.path.join(output, "sturgeon_scores.csv")):
+        if self.check_file_time(os.path.join(output, "sturgeon_scores.csv")):
             self.sturgeon_df_store = pd.read_csv(
                 os.path.join(os.path.join(self.output, "sturgeon_scores.csv")),
                 index_col=0,

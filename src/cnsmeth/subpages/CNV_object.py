@@ -611,75 +611,74 @@ class CNVAnalysis(BaseAnalysis):
                 return plot_to_update
 
     async def show_previous_data(self, output):
-        if not os.path.exists(os.path.join(output, "CNV.npy")):
-            return
-        result = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
-        self.result = Result(result)
-        cnv_dict = np.load(
-            os.path.join(output, "CNV_dict.npy"), allow_pickle=True
-        ).item()
-        self.cnv_dict["bin_width"] = cnv_dict["bin_width"]
-        self.cnv_dict["variance"] = cnv_dict["variance"]
-        # self._update_cnv_plot()
-        # self._update_cnv_plot(
-        #    plot_to_update=self.scatter_echart, result=self.result, title="CNV"
-        # )
+        if self.check_file_time(os.path.join(output, "CNV.npy")):
+            result = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
+            self.result = Result(result)
+            cnv_dict = np.load(
+                os.path.join(output, "CNV_dict.npy"), allow_pickle=True
+            ).item()
+            self.cnv_dict["bin_width"] = cnv_dict["bin_width"]
+            self.cnv_dict["variance"] = cnv_dict["variance"]
+            # self._update_cnv_plot()
+            # self._update_cnv_plot(
+            #    plot_to_update=self.scatter_echart, result=self.result, title="CNV"
+            # )
 
-        # ToDo: We are recalculating the CNV data here. We should load the data from the output folder.
-        # If it does not exist already, we should calculate it and save it.
-        # This will reduce the burden when multiple people view the site.
+            # ToDo: We are recalculating the CNV data here. We should load the data from the output folder.
+            # If it does not exist already, we should calculate it and save it.
+            # This will reduce the burden when multiple people view the site.
 
-        r2_cnv, r2_bin, r2_var, self.ref_cnv_dict = await run.cpu_bound(
-            iterate_bam_bin,
-            None,
-            1,
-            60,
-            self.ref_cnv_dict,
-            int(logging.ERROR),
-            bin_width=self.cnv_dict["bin_width"],
-        )
+            r2_cnv, r2_bin, r2_var, self.ref_cnv_dict = await run.cpu_bound(
+                iterate_bam_bin,
+                None,
+                1,
+                60,
+                self.ref_cnv_dict,
+                int(logging.ERROR),
+                bin_width=self.cnv_dict["bin_width"],
+            )
 
-        self.result2 = Result(r2_cnv)
+            self.result2 = Result(r2_cnv)
 
-        # self.result2 = iterate_bam_file(
-        #    bam_file_path=None,
-        #    _threads=1,
-        #    mapq_filter=60,
-        #    copy_numbers=self.ref_cnv_dict,
-        #    log_level=int(logging.ERROR),
-        #    bin_width=self.cnv_dict["bin_width"],
-        # )
+            # self.result2 = iterate_bam_file(
+            #    bam_file_path=None,
+            #    _threads=1,
+            #    mapq_filter=60,
+            #    copy_numbers=self.ref_cnv_dict,
+            #    log_level=int(logging.ERROR),
+            #    bin_width=self.cnv_dict["bin_width"],
+            # )
 
-        for key in self.result.cnv.keys():
-            if key != "chrM":
-                # print(key, np.mean(self.result.cnv[key]))#[i for i in self.result.cnv[key] if i !=0]))
-                moving_avg_data1 = moving_average(self.result.cnv[key])
-                moving_avg_data2 = moving_average(r2_cnv[key])
-                self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
-                if len(self.result3.cnv[key]) > 20:
-                    algo_c = ruptures_plotting(self.result3.cnv[key])
-                    penalty_value = 5  # beta
+            for key in self.result.cnv.keys():
+                if key != "chrM":
+                    # print(key, np.mean(self.result.cnv[key]))#[i for i in self.result.cnv[key] if i !=0]))
+                    moving_avg_data1 = moving_average(self.result.cnv[key])
+                    moving_avg_data2 = moving_average(r2_cnv[key])
+                    self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
+                    # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
+                    if len(self.result3.cnv[key]) > 20:
+                        algo_c = ruptures_plotting(self.result3.cnv[key])
+                        penalty_value = 5  # beta
 
-                    result = algo_c.predict(pen=penalty_value)
-                    # print(key, result)
+                        result = algo_c.predict(pen=penalty_value)
+                        # print(key, result)
 
-        # self.estimate_XY()
-        self.update_plots()
-        if self.summary:
-            with self.summary:
-                self.summary.clear()
-                with ui.row():
-                    file = open(os.path.join(output, "XYestimate.pkl"), "rb")
-                    XYestimate = pickle.load(file)
-                    if XYestimate != "Unknown":
-                        if XYestimate == "XY":
-                            ui.icon("man").classes("text-4xl")
-                        else:
-                            ui.icon("woman").classes("text-4xl")
-                        ui.label(f"Estimated Genetic Sex: {XYestimate}")
-                    ui.label(f"Current Bin Width: {self.cnv_dict['bin_width']}")
-                    ui.label(f"Current Variance: {round(self.cnv_dict['variance'], 3)}")
+            # self.estimate_XY()
+            self.update_plots()
+            if self.summary:
+                with self.summary:
+                    self.summary.clear()
+                    with ui.row():
+                        file = open(os.path.join(output, "XYestimate.pkl"), "rb")
+                        XYestimate = pickle.load(file)
+                        if XYestimate != "Unknown":
+                            if XYestimate == "XY":
+                                ui.icon("man").classes("text-4xl")
+                            else:
+                                ui.icon("woman").classes("text-4xl")
+                            ui.label(f"Estimated Genetic Sex: {XYestimate}")
+                        ui.label(f"Current Bin Width: {self.cnv_dict['bin_width']}")
+                        ui.label(f"Current Variance: {round(self.cnv_dict['variance'], 3)}")
 
 
 def test_me(
