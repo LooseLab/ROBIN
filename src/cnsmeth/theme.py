@@ -104,12 +104,12 @@ def frame(navtitle: str):
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("ml-auto align-top"):
                 with ui.row().classes('items-center m-auto'):
-                    ui.label(f'cpu - {os.cpu_count()} cores')
+                    ui.label('cpu')
                     cpu_activity = ui.circular_progress(max=100)
                     ui.timer(1.0,
                              lambda: cpu_activity.set_value(f"{psutil.getloadavg()[1] / os.cpu_count() * 100:.1f}"))
                 with ui.row().classes('items-center m-auto'):
-                    ui.label(f'RAM - {psutil.virtual_memory().total/ (1024.0 ** 3)}Gb')
+                    ui.label('RAM')
                     ram_utilisation = ui.circular_progress(max=100)
                     ui.timer(1.0, lambda: ram_utilisation.set_value(f"{psutil.virtual_memory()[2]:.1f}"))
                 with ui.button(icon="menu"):

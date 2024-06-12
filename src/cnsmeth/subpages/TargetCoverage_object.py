@@ -161,7 +161,7 @@ def parse_vcf(vcf):
             )
 
             #vcf = result
-    if result:
+    if result is not None:
         result.to_csv(f'{vcf}.csv', index=False)
     #return vcf
 
