@@ -161,8 +161,13 @@ def parse_vcf(vcf_file):
             )
 
             vcf = result
-            pd.DataFrame.from_dict(vcf, orient='index').to_csv(f'{vcf_file}.csv', index=False)
-            print(f"VCF file saved as {vcf_file}.csv")
+
+            try:
+                vcf.to_csv(f'{vcf_file}.csv', index=False)
+                #print(f"VCF file saved as {vcf_file}.csv")
+            except Exception as e:
+                print (e)
+                sys.exit(1)
 
 
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
@@ -997,19 +1002,20 @@ class TargetCoverage(BaseAnalysis):
 
     def show_previous_data(self, watchfolder):
         # ToDo: This function needs to run in background threads.
-        if os.path.isfile(os.path.join(watchfolder, "coverage_main.csv")):
+        if self.check_file_time(os.path.join(watchfolder, "coverage_main.csv")):
+        #if os.path.isfile(os.path.join(watchfolder, "coverage_main.csv")):
             self.cov_df_main = pd.read_csv(
                 os.path.join(watchfolder, "coverage_main.csv")
             )
             self.update_coverage_plot(self.cov_df_main)
 
-        if os.path.isfile(os.path.join(watchfolder, "bed_coverage_main.csv")):
+        if self.check_file_time(os.path.join(watchfolder, "bed_coverage_main.csv")):
             self.bedcov_df_main = pd.read_csv(
                 os.path.join(watchfolder, "bed_coverage_main.csv")
             )
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
             self.update_target_boxplot(self.bedcov_df_main)
-        if os.path.isfile(os.path.join(watchfolder, "target_coverage.csv")):
+        if self.check_file_time(os.path.join(watchfolder, "target_coverage.csv")):
             self.target_coverage_df = pd.read_csv(
                 os.path.join(watchfolder, "target_coverage.csv")
             )
@@ -1035,7 +1041,7 @@ class TargetCoverage(BaseAnalysis):
                         else:
                             ui.label("No data available")
 
-        if os.path.isfile(f"{watchfolder}/clair3/snpsift_output.vcf.csv"):
+        if self.check_file_time(f"{watchfolder}/clair3/snpsift_output.vcf.csv"):
             vcf = pd.read_csv(f"{watchfolder}/clair3/snpsift_output.vcf.csv")#parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
             self.SNPplaceholder.clear()
             with self.SNPplaceholder:
@@ -1097,7 +1103,7 @@ class TargetCoverage(BaseAnalysis):
 
             #self.SNPview.parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
             pass
-        if os.path.isfile(f"{watchfolder}/clair3/snpsift_indel_output.vcf.csv"):
+        if self.check_file_time(f"{watchfolder}/clair3/snpsift_indel_output.vcf.csv"):
             vcfindel = pd.read_csv(f"{watchfolder}/clair3/snpsift_indel_output.vcf.csv")
             self.INDELplaceholder.clear()
             with self.INDELplaceholder:
