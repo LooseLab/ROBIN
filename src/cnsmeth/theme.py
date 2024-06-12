@@ -49,6 +49,7 @@ from pathlib import Path
 from cnsmeth import images
 
 import os
+import psutil
 
 # Define the path to the image file used in the header and footer
 IMAGEFILE = os.path.join(
@@ -102,6 +103,15 @@ def frame(navtitle: str):
                 "color: #FFFFFF; font-size: 200%; font-weight: 150"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("ml-auto align-top"):
+                with ui.row().classes('items-center m-auto'):
+                    ui.label('cpu')
+                    cpu_activity = ui.circular_progress(max=100)
+                    ui.timer(1.0,
+                             lambda: cpu_activity.set_value(f"{psutil.getloadavg()[1] / os.cpu_count() * 100:.1f}"))
+                with ui.row().classes('items-center m-auto'):
+                    ui.label('RAM')
+                    ram_utilisation = ui.circular_progress(max=100)
+                    ui.timer(1.0, lambda: ram_utilisation.set_value(f"{psutil.virtual_memory()[2]:.1f}"))
                 with ui.button(icon="menu"):
                     with ui.menu() as menu:
                         ui.menu_item(f"Home", lambda: ui.navigate.to("/"))
