@@ -184,11 +184,11 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
             f"{workdirout}/indel.vcf.gz", f"{workdirout}/output_indel_done.vcf.gz"
         )
 
-        command = f"snpEff hg38 {workdirout}/output_done.vcf.gz > {workdirout}/snpeff_output.vcf"
+        command = f"snpEff -q hg38 {workdirout}/output_done.vcf.gz > {workdirout}/snpeff_output.vcf"
         os.system(command)
         command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf"
         os.system(command)
-        command = f"snpEff hg38 {workdirout}/output_indel_done.vcf.gz > {workdirout}/snpeff_indel_output.vcf"
+        command = f"snpEff -q hg38 {workdirout}/output_indel_done.vcf.gz > {workdirout}/snpeff_indel_output.vcf"
         os.system(command)
         command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} {workdirout}/snpeff_indel_output.vcf > {workdirout}/snpsift_indel_output.vcf"
         os.system(command)
