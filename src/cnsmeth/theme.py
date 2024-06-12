@@ -50,6 +50,7 @@ from cnsmeth import images
 
 import os
 import psutil
+import platform
 
 # Define the path to the image file used in the header and footer
 IMAGEFILE = os.path.join(
@@ -99,36 +100,37 @@ def frame(navtitle: str):
     # Create a header with navigation title and menu
     with ui.header(elevated=True).classes("items-center duration-200 p-0 px-4 no-wrap"):
         with ui.grid(columns=2).style("width: 100%"):
-            ui.html(navtitle).classes("shadows-into").style(
-                "color: #FFFFFF; font-size: 200%; font-weight: 150"
-            ).tailwind("drop-shadow", "font-bold")
+            with ui.row().classes('items-center align-left'): #.classes('items-left m-auto'):
+                ui.html(navtitle).classes("shadows-into").style(
+                    "color: #FFFFFF; font-size: 200%; font-weight: 200"
+                ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("ml-auto align-top"):
                 with ui.row().classes('items-center m-auto'):
-                    ui.label('cpu')
+                    ui.label(f"Viewing: {platform.node()}")
+                    ui.label('CPU')
                     cpu_activity = ui.circular_progress(max=100)
                     ui.timer(1.0,
                              lambda: cpu_activity.set_value(f"{psutil.getloadavg()[1] / os.cpu_count() * 100:.1f}"))
-                with ui.row().classes('items-center m-auto'):
                     ui.label('RAM')
                     ram_utilisation = ui.circular_progress(max=100)
                     ui.timer(1.0, lambda: ram_utilisation.set_value(f"{psutil.virtual_memory()[2]:.1f}"))
-                with ui.button(icon="menu"):
-                    with ui.menu() as menu:
-                        ui.menu_item(f"Home", lambda: ui.navigate.to("/"))
-                        ui.menu_item("Live Data", lambda: ui.navigate.to("/live"))
-                        ui.menu_item(
-                            "Browse Historic Data", lambda: ui.navigate.to("/browse")
-                        )
-                        ui.separator()
-                        ui.switch(
-                            "allow remote access", value=False, on_change=use_on_air
-                        ).classes("ml-4 bg-transparent").props('color="black"')
-                        ui.switch("Dark Mode", on_change=dark_mode).classes(
-                            "ml-4 bg-transparent"
-                        ).props('color="black"')
-                        ui.separator()
-                        ui.menu_item("Close", menu.close)
-                ui.image(IMAGEFILE).style("width: 50px")
+                    with ui.button(icon="menu"):
+                        with ui.menu() as menu:
+                            ui.menu_item(f"Home", lambda: ui.navigate.to("/"))
+                            ui.menu_item("Live Data", lambda: ui.navigate.to("/live"))
+                            ui.menu_item(
+                                "Browse Historic Data", lambda: ui.navigate.to("/browse")
+                            )
+                            ui.separator()
+                            ui.switch(
+                                "allow remote access", value=False, on_change=use_on_air
+                            ).classes("ml-4 bg-transparent").props('color="black"')
+                            ui.switch("Dark Mode", on_change=dark_mode).classes(
+                                "ml-4 bg-transparent"
+                            ).props('color="black"')
+                            ui.separator()
+                            ui.menu_item("Close", menu.close)
+                    ui.image(IMAGEFILE).style("width: 50px")
 
     # Create a footer with useful information and quit button
     with ui.footer().style("background-color: #4F9153"):

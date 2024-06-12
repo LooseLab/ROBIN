@@ -109,9 +109,9 @@ def process_annotations(record: dict) -> dict:
                 rec_dict[mykey] = myvalue
     return ann_dict, rec_dict
 
-def parse_vcf(vcf):
+def parse_vcf(vcf_file):
     header = "CHROM POS ID REF ALT QUAL FILTER INFO FORMAT GT".split()
-    vcf = pd.read_csv(vcf, delimiter="\t", comment="#", names=header)
+    vcf = pd.read_csv(vcf_file, delimiter="\t", comment="#", names=header)
     result = None
     if len(vcf) > 0:
         explodedvcf = []
@@ -160,10 +160,11 @@ def parse_vcf(vcf):
                 .reset_index()
             )
 
-            #vcf = result
+            vcf = result
     if result is not None:
-        result.to_csv(f'{vcf}.csv', index=False)
-    #return vcf
+        pd.DataFrame.from_dict(vcf, orient='index').to_csv(f'{vcf_file}.csv', index=False)
+        print(f"VCF file saved as {vcf_file}.csv")
+
 
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
     # ToDo: handle any platform
