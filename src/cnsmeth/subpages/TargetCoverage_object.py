@@ -112,6 +112,7 @@ def process_annotations(record: dict) -> dict:
 def parse_vcf(vcf):
     header = "CHROM POS ID REF ALT QUAL FILTER INFO FORMAT GT".split()
     vcf = pd.read_csv(vcf, delimiter="\t", comment="#", names=header)
+    result = None
     if len(vcf) > 0:
         explodedvcf = []
         for record in vcf.to_dict("records"):
@@ -159,8 +160,10 @@ def parse_vcf(vcf):
                 .reset_index()
             )
 
-            vcf = result
-    return vcf
+            #vcf = result
+    if result:
+        result.to_csv(f'{vcf}.csv', index=False)
+    #return vcf
 
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
     # ToDo: handle any platform
@@ -177,6 +180,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
             f"--threads {threads} "
             f"--platform ont_r10_guppy_hac_5khz "
             f"--output_dir {workdirout} -b {bedfile}"
+            #f" >/dev/null 2>&1"
         )
         os.system(runcommand)
         shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
@@ -192,6 +196,8 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
         os.system(command)
         command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} {workdirout}/snpeff_indel_output.vcf > {workdirout}/snpsift_indel_output.vcf"
         os.system(command)
+        parse_vcf(f"{workdirout}/snpsift_output.vcf")
+        parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
 
 
 def get_covdfs(bamfile, output):
@@ -1029,8 +1035,8 @@ class TargetCoverage(BaseAnalysis):
                         else:
                             ui.label("No data available")
 
-        if os.path.isfile(f"{watchfolder}/clair3/snpsift_output.vcf"):
-            vcf = parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
+        if os.path.isfile(f"{watchfolder}/clair3/snpsift_output.vcf.csv"):
+            vcf = pd.read_csv(f"{watchfolder}/clair3/snpsift_output.vcf.csv")#parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
             self.SNPplaceholder.clear()
             with self.SNPplaceholder:
                 self.snptable = (
@@ -1091,8 +1097,8 @@ class TargetCoverage(BaseAnalysis):
 
             #self.SNPview.parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
             pass
-        if os.path.isfile(f"{watchfolder}/clair3/snpsift_indel_output.vcf"):
-            vcfindel = parse_vcf(f"{watchfolder}/clair3/snpsift_indel_output.vcf")
+        if os.path.isfile(f"{watchfolder}/clair3/snpsift_indel_output.vcf.csv"):
+            vcfindel = pd.read_csv(f"{watchfolder}/clair3/snpsift_indel_output.vcf.csv")
             self.INDELplaceholder.clear()
             with self.INDELplaceholder:
                 self.indeltable = (
