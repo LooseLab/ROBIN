@@ -97,6 +97,7 @@ import pandas as pd
 import time
 import threading
 from collections import Counter
+import os
 import logging
 
 # Configure logging
@@ -147,12 +148,36 @@ class BaseAnalysis:
         self.summary = summary
         self.browse = browse
         self.progress = progress
+        # Dictionary to track files and their last modification times
+        self.file_mod_times = {}
+
         if self.name not in app.storage.general.get(self.mainuuid, {}):
             app.storage.general.setdefault(self.mainuuid, {})[self.name] = {
                 "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
             }
         self.running = False
         self.threads = max(1, threads // 2)
+
+    def check_file_time(self, file_path):
+        """Check if the file exists and whether it has been modified since last seen."""
+        if not os.path.exists(file_path):
+            # File does not exist
+            return False
+
+        current_mod_time = os.path.getmtime(file_path)
+
+        if file_path not in self.file_mod_times:
+            # File exists and hasn't been seen before
+            self.file_mod_times[file_path] = current_mod_time
+            return True
+
+        if self.file_mod_times[file_path] == current_mod_time:
+            # File exists but hasn't been modified
+            return False
+
+        # File exists and has been modified
+        self.file_mod_times[file_path] = current_mod_time
+        return True
 
     async def render_ui(self) -> None:
         """
