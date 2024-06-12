@@ -184,13 +184,16 @@ class Sturgeon_object(BaseAnalysis):
                     self.dataDir.name,
                     self.modelfile,
                 )
-
-                mydf = pd.read_csv(
-                    os.path.join(
-                        self.dataDir.name,
-                        "final_merged_probes_methyl_calls_general.csv",
+                if os.path.exists(os.path.join(self.dataDir.name,
+                        "final_merged_probes_methyl_calls_general.csv")):
+                    mydf = pd.read_csv(
+                        os.path.join(
+                            self.dataDir.name,
+                            "final_merged_probes_methyl_calls_general.csv",
+                        )
                     )
-                )
+                else:
+                    break
 
                 self.st_num_probes = mydf.iloc[-1]["number_probes"]
                 lastrow = mydf.iloc[-1].drop("number_probes")
