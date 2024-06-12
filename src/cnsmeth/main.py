@@ -146,6 +146,12 @@ async def index():
     )
 
     GUI.setup()
+    def clean_up_handler(thingtokill):
+        print (f"Killing {thingtokill}")
+        del thingtokill
+        print(f"Killed")
+
+    ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
     await GUI.splash_screen()
 
 
