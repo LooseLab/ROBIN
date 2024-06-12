@@ -87,7 +87,7 @@ class NanoDX_object(BaseAnalysis):
             ui.timer(5, lambda: self.show_previous_data(self.output))
 
     def show_previous_data(self, output):
-        if os.path.exists(os.path.join(output, "nanoDX_scores.csv")):
+        if self.check_file_time(os.path.join(output, "nanoDX_scores.csv")):
             self.nanodx_df_store = pd.read_csv(
                 os.path.join(os.path.join(self.output, "nanoDX_scores.csv")),
                 index_col=0,

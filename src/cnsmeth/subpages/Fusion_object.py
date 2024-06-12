@@ -932,7 +932,7 @@ class Fusion_object(BaseAnalysis):
         Returns:
             None
         """
-        if os.path.isfile(os.path.join(output, "fusion_candidates_master.csv")):
+        if self.check_file_time(os.path.join(output, "fusion_candidates_master.csv")):
             fusion_candidates = pd.read_csv(
                 os.path.join(output, "fusion_candidates_master.csv"),
                 dtype=str,
@@ -941,7 +941,7 @@ class Fusion_object(BaseAnalysis):
                 skiprows=1,
             )
             self.update_fusion_table(fusion_candidates)
-        if os.path.isfile(os.path.join(output, "fusion_candidates_all.csv")):
+        if self.check_file_time(os.path.join(output, "fusion_candidates_all.csv")):
             fusion_candidates_all = pd.read_csv(
                 os.path.join(output, "fusion_candidates_all.csv"),
                 dtype=str,
