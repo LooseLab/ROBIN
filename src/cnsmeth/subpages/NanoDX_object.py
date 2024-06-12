@@ -44,7 +44,7 @@ def classification(modelfile, test_df):
     except Exception as e:
         print(e)
         test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
-        sys.exit(1)
+        #sys.exit(1)
     return predictions, class_labels, n_features
 
 
