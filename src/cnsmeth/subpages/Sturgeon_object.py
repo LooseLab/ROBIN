@@ -193,7 +193,8 @@ class Sturgeon_object(BaseAnalysis):
                         )
                     )
                 else:
-                    break
+                    self.running = False
+                    return
 
                 self.st_num_probes = mydf.iloc[-1]["number_probes"]
                 lastrow = mydf.iloc[-1].drop("number_probes")
