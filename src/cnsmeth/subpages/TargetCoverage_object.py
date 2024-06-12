@@ -161,9 +161,8 @@ def parse_vcf(vcf_file):
             )
 
             vcf = result
-    if result is not None:
-        pd.DataFrame.from_dict(vcf, orient='index').to_csv(f'{vcf_file}.csv', index=False)
-        print(f"VCF file saved as {vcf_file}.csv")
+            pd.DataFrame.from_dict(vcf, orient='index').to_csv(f'{vcf_file}.csv', index=False)
+            print(f"VCF file saved as {vcf_file}.csv")
 
 
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
@@ -349,8 +348,8 @@ class TargetCoverage(BaseAnalysis):
                 self.reference,
             )
             self.clair3running = False
-        else:
-            await asyncio.sleep(1)
+        #else:
+        #    await asyncio.sleep(1)
         self.snp_timer.active = True
 
     def setup_ui(self):
@@ -993,7 +992,7 @@ class TargetCoverage(BaseAnalysis):
         # ToDo: Reinstate this line later.
         # self.update_target_coverage_table()
 
-        await asyncio.sleep(0.5)
+        #await asyncio.sleep(0.5)
         self.running = False
 
     def show_previous_data(self, watchfolder):
