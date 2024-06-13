@@ -538,6 +538,7 @@ class BrainMeth:
                         ).style("color: #000000; font-size: 100%; font-weight: 300")
 
         selectedtab = None
+        await ui.context.client.connected()
         with ui.tabs().classes("w-full") as tabs:
             if not (set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))):
                 methylationtab = ui.tab("Methylation Classification")
