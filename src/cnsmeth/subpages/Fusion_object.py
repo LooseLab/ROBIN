@@ -35,7 +35,7 @@ Functions:
     - fusion_work_old(threads, bamfile, gene_bed, all_gene_bed, tempreadfile, tempbamfile, tempmappings, tempallmappings): Legacy function for identifying fusion candidates.
 
 Classes:
-    - Fusion_object(BaseAnalysis): Manages the gene fusion identification process, including setting up the GUI and handling BAM file processing.
+    - FusionObject(BaseAnalysis): Manages the gene fusion identification process, including setting up the GUI and handling BAM file processing.
 
 Command-line Interface:
     - main(port, threads, watchfolder, output, browse): CLI entry point for running the app, using Click for argument parsing.
@@ -59,17 +59,13 @@ from cnsmeth import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
 import matplotlib
+from cnsmeth.subpages.base_analysis import BaseAnalysis
 
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
-from cnsmeth.subpages.base_analysis import BaseAnalysis
-
-import logging
 
 # Configure logging
-#logging.basicConfig(
-#    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
-#)
+# logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
@@ -85,7 +81,7 @@ def run_command(command: str) -> None:
     try:
         subprocess.run(command, shell=True, check=True)
     except subprocess.CalledProcessError as e:
-        #logging.error(f"Command failed: {command}")
+        # logging.error(f"Command failed: {command}")
         raise e
 
 
@@ -165,22 +161,22 @@ def fusion_work(
                         fusion_candidates_all["diff"] > 1000
                     ]
     except Exception as e:
-        #logging.error(f"Error during fusion work: {e}")
+        # logging.error(f"Error during fusion work: {e}")
         raise
 
     return fusion_candidates, fusion_candidates_all
 
 
 def fusion_work_old(
-    threads,
-    bamfile,
-    gene_bed,
-    all_gene_bed,
-    tempreadfile,
-    tempbamfile,
-    tempmappings,
-    tempallmappings,
-):
+    threads: int,
+    bamfile: str,
+    gene_bed: str,
+    all_gene_bed: str,
+    tempreadfile: str,
+    tempbamfile: str,
+    tempmappings: str,
+    tempallmappings: str,
+) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Legacy function for identifying fusion candidates from BAM files.
 
@@ -197,8 +193,8 @@ def fusion_work_old(
     Returns:
         Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]: DataFrames with fusion candidates and all fusion candidates.
     """
-    fusion_candidates = None
-    fusion_candidates_all = None
+    fusion_candidates: Optional[pd.DataFrame] = None
+    fusion_candidates_all: Optional[pd.DataFrame] = None
     try:
         os.system(
             f"samtools view -@{threads} -L {gene_bed} -d SA {bamfile} | cut -f1 > {tempreadfile}"
@@ -216,41 +212,41 @@ def fusion_work_old(
                 )
                 if os.path.getsize(tempmappings) > 0:
                     fusion_candidates = pd.read_csv(tempmappings, sep="\t", header=None)
-                    fusion_candidates = fusion_candidates[fusion_candidates[8].gt(50)]
+                    fusion_candidates = fusion_candidates[fusion_candidates[8] > 50]
                     fusion_candidates["diff"] = (
                         fusion_candidates[6] - fusion_candidates[5]
                     )
                     fusion_candidates = fusion_candidates[
-                        fusion_candidates["diff"].gt(1000)
+                        fusion_candidates["diff"] > 1000
                     ]
                 if os.path.getsize(tempallmappings) > 0:
                     fusion_candidates_all = pd.read_csv(
                         tempallmappings, sep="\t", header=None
                     )
                     fusion_candidates_all = fusion_candidates_all[
-                        fusion_candidates_all[8].gt(59)
+                        fusion_candidates_all[8] > 59
                     ]
                     fusion_candidates_all["diff"] = (
                         fusion_candidates_all[6] - fusion_candidates_all[5]
                     )
                     fusion_candidates_all = fusion_candidates_all[
-                        fusion_candidates_all["diff"].gt(1000)
+                        fusion_candidates_all["diff"] > 1000
                     ]
     except Exception as e:
-        #logging.error(f"Error in legacy fusion work: {e}")
+        # logging.error(f"Error in legacy fusion work: {e}")
         raise
     return fusion_candidates, fusion_candidates_all
 
 
-class Fusion_object(BaseAnalysis):
+class FusionObject(BaseAnalysis):
     """
-    Fusion_object handles the gene fusion identification process, including setting up the GUI
+    FusionObject handles the gene fusion identification process, including setting up the GUI
     and processing BAM files asynchronously.
 
     Attributes:
         target_panel (str): Name of the target panel.
-        fusion_candidates (DataFrame): DataFrame with fusion candidates.
-        fusion_candidates_all (DataFrame): DataFrame with all fusion candidates.
+        fusion_candidates (pd.DataFrame): DataFrame with fusion candidates.
+        fusion_candidates_all (pd.DataFrame): DataFrame with all fusion candidates.
         fstable_all (ui.Table): UI table for displaying all fusion candidates.
         fstable (ui.Table): UI table for displaying fusion candidates.
         fstable_all_row_count (int): Row count for all fusion candidates table.
@@ -260,8 +256,8 @@ class Fusion_object(BaseAnalysis):
         gene_gff3_2 (str): Path to the GFF3 file with gene annotations.
         gene_bed (str): Path to the gene BED file.
         all_gene_bed (str): Path to the BED file with all genes.
-        gene_table (DataFrame): DataFrame with gene annotations.
-        gene_table_small (DataFrame): Filtered DataFrame with gene annotations.
+        gene_table (pd.DataFrame): DataFrame with gene annotations.
+        gene_table_small (pd.DataFrame): Filtered DataFrame with gene annotations.
     """
 
     def __init__(self, *args, target_panel=None, **kwargs):
@@ -306,10 +302,10 @@ class Fusion_object(BaseAnalysis):
                 )
             )
         else:
-            #logging.info(
+            # logging.info(
             #    f"This looks like the first time you have run the {self.target_panel} panel."
-            #)
-            #logging.info("Parsing GFF3")
+            # )
+            # logging.info("Parsing GFF3")
             self.gene_table = gff3_parser.parse_gff3(
                 self.gene_gff3_2, verbose=False, parse_attributes=True
             )
@@ -352,12 +348,9 @@ class Fusion_object(BaseAnalysis):
             self.gene_table = self.gene_table_small
         super().__init__(*args, **kwargs)
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
         """
         Sets up the user interface for the Fusion Panel. This function creates the UI elements for the Fusion Panel.
-
-        Returns:
-            None
         """
         if self.summary:
             with self.summary:
@@ -454,12 +447,9 @@ class Fusion_object(BaseAnalysis):
         else:
             ui.timer(30, lambda: self.show_previous_data(self.output))
 
-    def fusion_table_all(self):
+    def fusion_table_all(self) -> None:
         """
         Displays all fusion candidates in a table format.
-
-        Returns:
-            None
         """
         if not self.fusion_candidates_all.empty:
             uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)
@@ -471,15 +461,12 @@ class Fusion_object(BaseAnalysis):
             )
             # self.update_fusion_table_all(result_all)
 
-    def update_fusion_table_all(self, result_all):
+    def update_fusion_table_all(self, result_all: pd.DataFrame) -> None:
         """
         Updates the UI table with all fusion candidates.
 
         Args:
-            result_all (DataFrame): DataFrame with all fusion candidates.
-
-        Returns:
-            None
+            result_all (pd.DataFrame): DataFrame with all fusion candidates.
         """
         if result_all.shape[0] > self.fstable_all_row_count:
             self.fstable_all_row_count = result_all.shape[0]
@@ -647,12 +634,9 @@ class Fusion_object(BaseAnalysis):
                                                 ax=ax, with_ruler=False, draw_line=True
                                             )
 
-    def fusion_table(self):
+    def fusion_table(self) -> None:
         """
         Displays fusion candidates in a table format.
-
-        Returns:
-            None
         """
         if not self.fusion_candidates.empty:
             uniques = self.fusion_candidates[7].duplicated(keep=False)
@@ -664,15 +648,12 @@ class Fusion_object(BaseAnalysis):
             )
         # self.update_fusion_table(result)
 
-    def update_fusion_table(self, result):
+    def update_fusion_table(self, result: pd.DataFrame) -> None:
         """
         Updates the UI table with fusion candidates.
 
         Args:
-            result (DataFrame): DataFrame with fusion candidates.
-
-        Returns:
-            None
+            result (pd.DataFrame): DataFrame with fusion candidates.
         """
         if result.shape[0] > self.fstable_row_count:
             self.fstable_row_count = result.shape[0]
@@ -754,16 +735,13 @@ class Fusion_object(BaseAnalysis):
                                     ],
                                 )
 
-    def create_fusion_plot(self, title, reads):
+    def create_fusion_plot(self, title: str, reads: pd.DataFrame) -> None:
         """
         Creates a fusion plot to illustrate the alignments of reads to each region of the genome.
 
         Args:
             title (str): Title of the plot.
-            reads (DataFrame): DataFrame with reads to be plotted.
-
-        Returns:
-            None
+            reads (pd.DataFrame): DataFrame with reads to be plotted.
         """
         with ui.card().classes("no-shadow border-[2px]"):
             with ui.pyplot(figsize=(16, 2)):
@@ -827,16 +805,13 @@ class Fusion_object(BaseAnalysis):
                 )
                 record.plot(ax=ax, with_ruler=False, draw_line=True)
 
-    async def process_bam(self, bamfile, timestamp):
+    async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
         Processes a BAM file and identifies fusion candidates.
 
         Args:
             bamfile (str): Path to the BAM file to process.
             timestamp (str): Timestamp for the analysis.
-
-        Returns:
-            None
         """
         tempreadfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
@@ -876,12 +851,12 @@ class Fusion_object(BaseAnalysis):
             self.fusion_table_all()
 
         except Exception as e:
-            #logging.error(f"Error processing BAM file: {e}")
+            # logging.error(f"Error processing BAM file: {e}")
             raise
         finally:
             self.running = False
 
-    def _generate_random_color(self):
+    def _generate_random_color(self) -> str:
         """
         Generates a random color for use in plotting.
 
@@ -890,15 +865,15 @@ class Fusion_object(BaseAnalysis):
         """
         return "#{:06x}".format(random.randint(0, 0xFFFFFF))
 
-    def _annotate_results(self, result):
+    def _annotate_results(self, result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
         """
         Annotates the result DataFrame with tags and colors.
 
         Args:
-            result (DataFrame): DataFrame with fusion candidates.
+            result (pd.DataFrame): DataFrame with fusion candidates.
 
         Returns:
-            Tuple[DataFrame, Series]: Annotated DataFrame and a boolean Series indicating good pairs.
+            Tuple[pd.DataFrame, pd.Series]: Annotated DataFrame and a boolean Series indicating good pairs.
         """
         result_copy = result.copy()
         lookup = result_copy.groupby(7)[3].agg(lambda x: ",".join(set(x)))
@@ -910,27 +885,12 @@ class Fusion_object(BaseAnalysis):
         goodpairs = result.groupby("tag")[7].transform("nunique") > 1
         return result, goodpairs
 
-    def count_shared_values(self, group):
-        """
-        Counts the number of unique values in the group for the specified column.
-
-        Args:
-            group (DataFrame): Grouped DataFrame.
-
-        Returns:
-            int: Number of unique values in the group.
-        """
-        return group[7].nunique()
-
-    def show_previous_data(self, output):
+    def show_previous_data(self, output: str) -> None:
         """
         Displays previously analyzed data from the specified output folder.
 
         Args:
             output (str): Path to the output folder.
-
-        Returns:
-            None
         """
         if self.check_file_time(os.path.join(output, "fusion_candidates_master.csv")):
             fusion_candidates = pd.read_csv(
@@ -959,7 +919,7 @@ def test_me(
     output: str,
     reload: bool = False,
     browse: bool = False,
-):
+) -> None:
     """
     Sets up and runs the gene fusion identification application.
 
@@ -970,13 +930,10 @@ def test_me(
         output (str): Path to the output directory.
         reload (bool): Flag to reload the application on changes.
         browse (bool): Flag to enable browsing historic data.
-
-    Returns:
-        None
     """
     my_connection = None
     with theme.frame("Fusion Gene Identification.", my_connection):
-        TestObject = Fusion_object(threads, output, progress=True)
+        TestObject = FusionObject(threads, output, progress=True)
     if not browse:
         path = watchfolder
         searchdirectory = os.fsencode(path)
@@ -1020,7 +977,7 @@ def test_me(
     default=False,
     help="Browse Historic Data.",
 )
-def main(port, threads, watchfolder, output, browse):
+def main(port, threads, watchfolder, output, browse) -> None:
     """
     CLI entry point for running the gene fusion identification app.
 
@@ -1030,9 +987,6 @@ def main(port, threads, watchfolder, output, browse):
         watchfolder (str): Directory to watch for new BAM files.
         output (str): Directory to save output files.
         browse (bool): Enable browsing historic data.
-
-    Returns:
-        None
     """
     if browse:
         click.echo("Browse mode is enabled. Only the output folder is required.")

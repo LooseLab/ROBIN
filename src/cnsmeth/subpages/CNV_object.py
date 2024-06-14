@@ -6,83 +6,50 @@ This module provides functionality for analyzing copy number variations (CNVs) f
 Key Components:
 
 1. **Result Class**:
-
    - A simple class to store CNV results.
 
 2. **Helper Functions**:
-
    - `iterate_bam`: Iterates over a BAM file and returns CNV data and associated metrics.
-
    - `iterate_bam_bin`: Iterates over a BAM file with specified bin width and returns CNV data and associated metrics.
-
    - `reduce_list`: Reduces the length of a list to a specified maximum length by subsampling.
-
    - `moving_average`: Calculates the moving average of a given data array.
-
    - `pad_arrays`: Pads two arrays to the same length with a specified value.
-
    - `ruptures_plotting`: Applies the Kernel Change Point Detection (CPD) algorithm to identify change points in data.
 
 3. **CNVAnalysis Class**:
-
    - Inherits from `BaseAnalysis` and provides specific methods for CNV analysis.
-
    - Initializes with specific target panel information and loads reference data.
-
    - Implements methods to estimate genetic sex (XX or XY) based on CNV data.
-
    - Processes BAM files to extract CNV data and updates visualizations.
-
    - Provides a user interface for visualizing CNV data using NiceGUI.
 
 4. **User Interface and Visualization**:
-
    - `setup_ui`: Sets up the user interface for CNV analysis, including selection controls and plots.
-
    - `generate_chart`: Generates ECharts objects for displaying CNV scatter plots and difference plots.
-
    - `_update_cnv_plot`: Updates CNV plots with new data and annotations based on selected chromosomes and genes.
-
    - `show_previous_data`: Loads and displays previously computed CNV data.
 
 5. **Command-Line Interface**:
-
    - Uses Click for defining command-line options and arguments to run the CNV analysis application.
-
    - `test_me`: Helper function to initialize and run the CNV analysis application.
-
    - `main`: Entry point for the command-line interface to start the CNV analysis application.
 
 Dependencies:
-
 - `cnv_from_bam.iterate_bam_file`
-
 - `cnsmeth.subpages.base_analysis.BaseAnalysis`
-
 - `natsort`
-
 - `pandas`
-
 - `logging`
-
 - `numpy`
-
 - `os`
-
 - `sys`
-
 - `nicegui` (ui, app, run)
-
 - `click`
-
 - `pathlib.Path`
-
 - `pickle`
-
 - `ruptures`
 
 Example usage::
-
     @click.command()
     @click.option("--port", default=12345, help="Port for GUI")
     @click.option("--threads", default=4, help="Number of threads available.")
@@ -94,9 +61,8 @@ Example usage::
         # Run the CNV analysis application
         pass
 
-if name in {"main", "mp_main"}:
+if __name__ in {"__main__", "__mp_main__"}:
     main()
-
 """
 
 from cnv_from_bam import iterate_bam_file
@@ -113,16 +79,33 @@ import click
 from pathlib import Path
 import pickle
 import ruptures as rpt
+from typing import Optional, Tuple, List, BinaryIO
 
 os.environ["CI"] = "1"
 
 
 class Result:
-    def __init__(self, cnv_dict):
+    """
+    A class to store CNV results.
+    """
+    def __init__(self, cnv_dict: dict) -> None:
         self.cnv = cnv_dict
 
 
-def iterate_bam(bamfile, _threads, mapq_filter, copy_numbers, log_level):
+def iterate_bam(bamfile, _threads: int, mapq_filter: int, copy_numbers: dict, log_level: int) -> Tuple[dict, int, float, dict]:
+    """
+    Iterate over a BAM file and return CNV data and associated metrics.
+
+    Args:
+        bamfile (BinaryIO): The BAM file to process.
+        _threads (int): Number of threads to use.
+        mapq_filter (int): MAPQ filter value.
+        copy_numbers (dict): Dictionary to store copy number data.
+        log_level (int): Logging level.
+
+    Returns:
+        Tuple[dict, int, float, dict]: CNV data, bin width, variance, and updated copy numbers.
+    """
     result = iterate_bam_file(
         bamfile,
         _threads=_threads,
@@ -133,7 +116,21 @@ def iterate_bam(bamfile, _threads, mapq_filter, copy_numbers, log_level):
     return result.cnv, result.bin_width, result.variance, copy_numbers
 
 
-def iterate_bam_bin(bamfile, _threads, mapq_filter, copy_numbers, log_level, bin_width):
+def iterate_bam_bin(bamfile: BinaryIO, _threads: int, mapq_filter: int, copy_numbers: dict, log_level: int, bin_width: int) -> Tuple[dict, int, float, dict]:
+    """
+    Iterate over a BAM file with specified bin width and return CNV data and associated metrics.
+
+    Args:
+        bamfile (BinaryIO): The BAM file to process.
+        _threads (int): Number of threads to use.
+        mapq_filter (int): MAPQ filter value.
+        copy_numbers (dict): Dictionary to store copy number data.
+        log_level (int): Logging level.
+        bin_width (int): Bin width for CNV calculation.
+
+    Returns:
+        Tuple[dict, int, float, dict]: CNV data, bin width, variance, and updated copy numbers.
+    """
     result = iterate_bam_file(
         bamfile,
         _threads=_threads,
@@ -145,22 +142,56 @@ def iterate_bam_bin(bamfile, _threads, mapq_filter, copy_numbers, log_level, bin
     return result.cnv, result.bin_width, result.variance, copy_numbers
 
 
-def reduce_list(lst, max_length=1000):
+def reduce_list(lst: List, max_length: int = 1000) -> List:
+    """
+    Reduce the length of a list to a specified maximum length by subsampling.
+
+    Args:
+        lst (List): The list to reduce.
+        max_length (int): The maximum length of the list.
+
+    Returns:
+        List: The reduced list.
+    """
     while len(lst) > max_length:
         lst = lst[::2]
     return lst
 
 
 class CNV_Difference:
-    def __init__(self, *args, **kwargs):
+    """
+    A class to store CNV difference data.
+    """
+    def __init__(self, *args, **kwargs) -> None:
         self.cnv = {}
 
 
-def moving_average(data, n=3):
+def moving_average(data: np.ndarray, n: int = 3) -> np.ndarray:
+    """
+    Calculate the moving average of a given data array.
+
+    Args:
+        data (np.ndarray): The data array.
+        n (int): The window size for the moving average.
+
+    Returns:
+        np.ndarray: The array of moving averages.
+    """
     return np.convolve(data, np.ones(n) / n, mode="same")
 
 
-def pad_arrays(arr1, arr2, pad_value=0):
+def pad_arrays(arr1: np.ndarray, arr2: np.ndarray, pad_value: int = 0) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Pad two arrays to the same length with a specified value.
+
+    Args:
+        arr1 (np.ndarray): The first array.
+        arr2 (np.ndarray): The second array.
+        pad_value (int): The value to pad with.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: The padded arrays.
+    """
     len_diff = abs(len(arr1) - len(arr2))
     if len(arr1) < len(arr2):
         arr1 = np.pad(arr1, (0, len_diff), mode="constant", constant_values=pad_value)
@@ -169,26 +200,37 @@ def pad_arrays(arr1, arr2, pad_value=0):
     return arr1, arr2
 
 
-def ruptures_plotting(data):
-    x_coords = range(0, (data.size + 1))  # * 10, bin_slice * 10, )
+def ruptures_plotting(data: np.ndarray) -> rpt.KernelCPD:
+    """
+    Apply the Kernel Change Point Detection (CPD) algorithm to identify change points in data.
+
+    Args:
+        data (np.ndarray): The data array.
+
+    Returns:
+        rpt.KernelCPD: The change point detection algorithm object.
+    """
+    x_coords = range(0, (data.size + 1))
     signal = np.array(list(zip(x_coords, data)))
 
-    algo_c = rpt.KernelCPD(kernel="linear", min_size=10).fit(signal)  # [:, 1]
+    algo_c = rpt.KernelCPD(kernel="linear", min_size=10).fit(signal)
 
     return algo_c
 
 
 class CNVAnalysis(BaseAnalysis):
-    def __init__(self, *args, target_panel=None, **kwargs):
+    """
+    Class for analyzing copy number variations (CNVs) from BAM files.
+
+    Inherits from `BaseAnalysis` and provides specific methods for CNV analysis.
+    """
+    def __init__(self, *args, target_panel: Optional[str] = None, **kwargs) -> None:
         self.file_list = []
-        self.cnv_dict = {}
-        self.cnv_dict["bin_width"] = 0
-        self.cnv_dict["variance"] = 0
+        self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.update_cnv_dict = {}
         self.result = None
         self.result2 = None
         self.result3 = CNV_Difference()
-
         self.XYestimate = "Unknown"
 
         with open(
@@ -211,32 +253,46 @@ class CNVAnalysis(BaseAnalysis):
                 "AML_panel_name_uniq.bed",
             )
         self.gene_bed = pd.read_table(
-            os.path.join(self.gene_bed_file),
+            self.gene_bed_file,
             names=["chrom", "start_pos", "end_pos", "gene"],
             header=None,
             sep="\s+",
         )
         super().__init__(*args, **kwargs)
 
-    def estimate_XY(self):
-        # We remove zero points as they are likely centromeric.
+    def estimate_XY(self) -> None:
+        """
+        Estimate genetic sex (XX or XY) based on CNV data.
+        """
         X = round(np.average([i for i in self.result3.cnv["chrX"] if i != 0]), 2)
         Y = round(np.average([i for i in self.result3.cnv["chrY"] if i != 0]), 2)
-        # print (f"X={X},Y={Y}")
         if X >= 0.1 and Y <= 0.1:
             self.XYestimate = "XX"
         elif X <= 0.1 and Y >= -0.2:
             self.XYestimate = "XY"
         else:
             self.XYestimate = "Unknown"
-        file = open(os.path.join(self.output, "XYestimate.pkl"), "wb")
-        pickle.dump(self.XYestimate, file)
+        with open(os.path.join(self.output, "XYestimate.pkl"), "wb") as file:
+            pickle.dump(self.XYestimate, file)
 
-    async def process_bam(self, bamfile, timestamp):
+    async def process_bam(self, bamfile: BinaryIO, timestamp: float) -> None:
+        """
+        Process a BAM file to extract CNV data.
+
+        Args:
+            bamfile (BinaryIO): The BAM file to process.
+            timestamp (float): The timestamp indicating when the file was generated.
+        """
         self.file_list.append(bamfile)
         await self.do_cnv_work(bamfile)
 
-    async def do_cnv_work(self, bamfile):
+    async def do_cnv_work(self, bamfile: BinaryIO) -> None:
+        """
+        Perform CNV analysis on a BAM file.
+
+        Args:
+            bamfile (BinaryIO): The BAM file to process.
+        """
         r_cnv, r_bin, r_var, self.update_cnv_dict = await run.cpu_bound(
             iterate_bam,
             bamfile,
@@ -246,8 +302,8 @@ class CNVAnalysis(BaseAnalysis):
             int(logging.ERROR),
         )
 
-        self.cnv_dict["bin_width"] = r_bin  # self.result.bin_width
-        self.cnv_dict["variance"] = r_var  # self.result.variance
+        self.cnv_dict["bin_width"] = r_bin
+        self.cnv_dict["variance"] = r_var
         r2_cnv, r2_bin, r2_var, self.ref_cnv_dict = await run.cpu_bound(
             iterate_bam_bin,
             bamfile,
@@ -257,15 +313,6 @@ class CNVAnalysis(BaseAnalysis):
             int(logging.ERROR),
             bin_width=self.cnv_dict["bin_width"],
         )
-        # self.result2 = iterate_bam_file(
-        #    bam_file_path=None,
-        #    _threads=self.threads,
-        #    mapq_filter=60,
-        #    copy_numbers=self.ref_cnv_dict,
-        #    log_level=int(logging.ERROR),
-        #    bin_width=self.cnv_dict["bin_width"],
-        # )
-        # await asyncio.sleep(0)
 
         for key in r_cnv.keys():
             if key != "chrM":
@@ -275,14 +322,6 @@ class CNVAnalysis(BaseAnalysis):
                     pad_arrays, moving_avg_data1, moving_avg_data2
                 )
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
-                # if len(self.result3.cnv[key]) > 20:
-                #    algo_c = ruptures_plotting(self.result3.cnv[key])
-                #    penalty_value = 5  # beta
-                #    result = algo_c.predict(pen=penalty_value)
-                # print(key, result)
-
-        # await asyncio.sleep(0)
 
         self.estimate_XY()
 
@@ -291,7 +330,13 @@ class CNVAnalysis(BaseAnalysis):
 
         self.running = False
 
-    def update_plots(self, gene_target=None):
+    def update_plots(self, gene_target: Optional[str] = None) -> None:
+        """
+        Update CNV plots with new data and annotations.
+
+        Args:
+            gene_target (Optional[str]): Target gene for updating plots.
+        """
         if not gene_target:
             self._update_cnv_plot(
                 plot_to_update=self.scatter_echart, result=self.result, title="CNV"
@@ -327,15 +372,16 @@ class CNVAnalysis(BaseAnalysis):
                 title="Difference CNV",
                 min="dataMin",
             )
-            # ui.update(self.scatter_echart)
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
+        """
+        Set up the user interface for CNV analysis.
+        """
         self.display_row = ui.row()
         if self.summary:
             with self.summary:
                 ui.label("No CNV data available.")
         with self.display_row:
-            # self.progrock.visible = False
             ui.label("Copy Number Variation").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
@@ -360,14 +406,13 @@ class CNVAnalysis(BaseAnalysis):
                 self.cnv_dict, "bin_width", backward=lambda n: f"Bin Width: {n}"
             )
             ui.label().bind_text_from(
-                self.cnv_dict, "variance", backward=lambda n: f"Variance: {round(n,3)}"
+                self.cnv_dict, "variance", backward=lambda n: f"Variance: {round(n, 3)}"
             )
 
         self.scatter_echart = self.generate_chart(title="CNV Scatter Plot")
-
         self.difference_scatter_echart = self.generate_chart(
             title="Difference Plot", initmin=-2, initmax=2
-        )  # , type="log")
+        )
 
         with ui.expansion("See Reference DataSet", icon="loupe").classes("w-full"):
             self.reference_scatter_echart = self.generate_chart(
@@ -378,7 +423,19 @@ class CNVAnalysis(BaseAnalysis):
         else:
             ui.timer(15, lambda: self.show_previous_data(self.output))
 
-    def generate_chart(self, title=None, initmax=8, initmin=0, type="value"):
+    def generate_chart(self, title: Optional[str] = None, initmax: int = 8, initmin: int = 0, type: str = "value") -> ui.echart:
+        """
+        Generate an ECharts object for displaying CNV scatter plots.
+
+        Args:
+            title (Optional[str]): Title of the chart.
+            initmax (int): Initial maximum value for the y-axis.
+            initmin (int): Initial minimum value for the y-axis.
+            type (str): Type of the x-axis.
+
+        Returns:
+            ui.echart: The ECharts object configured for the scatter plot.
+        """
         return (
             ui.echart(
                 {
@@ -407,8 +464,6 @@ class CNVAnalysis(BaseAnalysis):
                             "startValue": initmin,
                             "endValue": initmax,
                         },
-                        # {"type": "inside", "xAxisIndex": 0, "filterMode": "none"},
-                        # {"type": "inside", "yAxisIndex": 0, "filterMode": "none"},
                     ],
                     "series": [
                         {
@@ -425,13 +480,24 @@ class CNVAnalysis(BaseAnalysis):
 
     def _update_cnv_plot(
         self,
-        plot_to_update=None,
-        result=None,
-        gene_target=None,
-        title=None,
-        min=0,
-        ui_mode=True,
-    ):
+        plot_to_update: ui.echart,
+        result: Optional[Result] = None,
+        gene_target: Optional[str] = None,
+        title: Optional[str] = None,
+        min: Optional[float] = 0,
+        ui_mode: bool = True,
+    ) -> None:
+        """
+        Update CNV plots with new data and annotations.
+
+        Args:
+            plot_to_update (ui.echart): The ECharts object to update.
+            result (Optional[Result]): The CNV result data.
+            gene_target (Optional[str]): Target gene for updating plots.
+            title (Optional[str]): Title of the plot.
+            min (Optional[float]): Minimum value for the x-axis.
+            ui_mode (bool): Flag to indicate if in UI mode.
+        """
         if result or self.result:
             total = 0
             valueslist = {"All": "All"}
@@ -548,7 +614,6 @@ class CNVAnalysis(BaseAnalysis):
                             if contig == chrom:
                                 self.chrom_filter = counter
                                 break
-                        # self.update_plot(gene_target=[start_pos, end_pos])
 
                         min = start_pos - 10 * self.cnv_dict["bin_width"]
                         max = end_pos + 10 * self.cnv_dict["bin_width"]
@@ -610,7 +675,13 @@ class CNVAnalysis(BaseAnalysis):
             else:
                 return plot_to_update
 
-    async def show_previous_data(self, output):
+    async def show_previous_data(self, output: str) -> None:
+        """
+        Load and display previously computed CNV data.
+
+        Args:
+            output (str): The directory containing previous CNV data.
+        """
         if self.check_file_time(os.path.join(output, "CNV.npy")):
             result = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
             self.result = Result(result)
@@ -619,14 +690,6 @@ class CNVAnalysis(BaseAnalysis):
             ).item()
             self.cnv_dict["bin_width"] = cnv_dict["bin_width"]
             self.cnv_dict["variance"] = cnv_dict["variance"]
-            # self._update_cnv_plot()
-            # self._update_cnv_plot(
-            #    plot_to_update=self.scatter_echart, result=self.result, title="CNV"
-            # )
-
-            # ToDo: We are recalculating the CNV data here. We should load the data from the output folder.
-            # If it does not exist already, we should calculate it and save it.
-            # This will reduce the burden when multiple people view the site.
 
             r2_cnv, r2_bin, r2_var, self.ref_cnv_dict = await run.cpu_bound(
                 iterate_bam_bin,
@@ -640,79 +703,71 @@ class CNVAnalysis(BaseAnalysis):
 
             self.result2 = Result(r2_cnv)
 
-            # self.result2 = iterate_bam_file(
-            #    bam_file_path=None,
-            #    _threads=1,
-            #    mapq_filter=60,
-            #    copy_numbers=self.ref_cnv_dict,
-            #    log_level=int(logging.ERROR),
-            #    bin_width=self.cnv_dict["bin_width"],
-            # )
-
             for key in self.result.cnv.keys():
                 if key != "chrM":
-                    # print(key, np.mean(self.result.cnv[key]))#[i for i in self.result.cnv[key] if i !=0]))
                     moving_avg_data1 = moving_average(self.result.cnv[key])
                     moving_avg_data2 = moving_average(r2_cnv[key])
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                    # print(key, np.mean(self.result3.cnv[key]), np.mean([i for i in self.result3.cnv[key] if i !=0]))
                     if len(self.result3.cnv[key]) > 20:
                         algo_c = ruptures_plotting(self.result3.cnv[key])
-                        penalty_value = 5  # beta
-
+                        penalty_value = 5
                         result = algo_c.predict(pen=penalty_value)
-                        # print(key, result)
 
-            # self.estimate_XY()
             self.update_plots()
             if self.summary:
                 with self.summary:
                     self.summary.clear()
                     with ui.row():
-                        file = open(os.path.join(output, "XYestimate.pkl"), "rb")
-                        XYestimate = pickle.load(file)
-                        if XYestimate != "Unknown":
-                            if XYestimate == "XY":
-                                ui.icon("man").classes("text-4xl")
-                            else:
-                                ui.icon("woman").classes("text-4xl")
-                            ui.label(f"Estimated Genetic Sex: {XYestimate}")
-                        ui.label(f"Current Bin Width: {self.cnv_dict['bin_width']}")
-                        ui.label(f"Current Variance: {round(self.cnv_dict['variance'], 3)}")
+                        with open(os.path.join(output, "XYestimate.pkl"), "rb") as file:
+                            XYestimate = pickle.load(file)
+                            if XYestimate != "Unknown":
+                                if XYestimate == "XY":
+                                    ui.icon("man").classes("text-4xl")
+                                else:
+                                    ui.icon("woman").classes("text-4xl")
+                                ui.label(f"Estimated Genetic Sex: {XYestimate}")
+                            ui.label(f"Current Bin Width: {self.cnv_dict['bin_width']}")
+                            ui.label(f"Current Variance: {round(self.cnv_dict['variance'], 3)}")
 
 
 def test_me(
     port: int,
     threads: int,
-    watchfolder: str,
+    watchfolder: Optional[str],
     output: str,
     reload: bool = False,
     browse: bool = False,
     target_panel: str = "rCNS2",
-):
-    # my_connection = None
+) -> None:
+    """
+    Helper function to run the CNV analysis application for testing purposes.
+
+    Args:
+        port (int): The port to serve the app on.
+        threads (int): Number of threads to use.
+        watchfolder (Optional[str]): The directory containing BAM files to process.
+        output (str): The directory to store output files.
+        reload (bool): Flag to indicate if the app should reload on changes.
+        browse (bool): Flag to enable browsing of results.
+        target_panel (str): The target gene panel for analysis.
+    """
     app.add_static_files("/fonts", str(Path(__file__).parent / "../fonts"))
     with theme.frame("Copy Number Variation Testing."):
         TestObject = CNVAnalysis(
             threads,
             output,
             progress=True,
-            # bamqueue=self.bamforcnv,
-            # summary=cnvsummary,
             target_panel=target_panel,
         )
-        # TestObject = CNVAnalysis(threads, output, progress=True)
     if not browse:
-        path = watchfolder
-        searchdirectory = os.fsencode(path)
-        for root, d_names, f_names in os.walk(searchdirectory):
+        searchdirectory = os.fsencode(watchfolder)
+        for root, _, f_names in os.walk(searchdirectory):
             directory = os.fsdecode(root)
             for f in f_names:
                 filename = os.fsdecode(f)
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
     else:
-        # print("Browse mode not implemented.")
         TestObject.progress_trackers.visible = False
         TestObject.show_previous_data(output)
     ui.run(port=port, reload=reload)
@@ -756,31 +811,29 @@ def test_me(
         case_sensitive=True,
     ),
 )
-def main(port, threads, watchfolder, output, browse, target_panel):
+def main(port: int, threads: int, watchfolder: str, output: str, browse: bool, target_panel: str) -> None:
     """
-    Helper function to run the app.
-    :param port: The port to serve the app on.
-    :param reload: Should we reload the app on changes.
-    :return:
+    Entry point for the command-line interface to start the CNV analysis application.
+
+    Args:
+        port (int): The port to serve the app on.
+        threads (int): Number of threads to use.
+        watchfolder (str): The directory containing BAM files to process.
+        output (str): The directory to store output files.
+        browse (bool): Flag to enable browsing of results.
+        target_panel (str): The target gene panel for analysis.
     """
     if browse:
-        # Handle the case when --browse is set
         click.echo("Browse mode is enabled. Only the output folder is required.")
         test_me(
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,
             watchfolder=None,
             output=watchfolder,
-            # sequencing_summary=sequencing_summary,
-            # showerrors=showerrors,
             browse=browse,
-            # exclude=exclude,
         )
-        # Your logic for browse mode
     else:
-        # Handle the case when --browse is not set
         click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
         if watchfolder is None or output is None:
             click.echo("Watchfolder and output are required when --browse is not set.")
@@ -789,14 +842,10 @@ def main(port, threads, watchfolder, output, browse, target_panel):
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,
             watchfolder=watchfolder,
             output=output,
-            # sequencing_summary=sequencing_summary,
-            # showerrors=showerrors,
             browse=browse,
             target_panel=target_panel,
-            # exclude=exclude,
         )
 
 

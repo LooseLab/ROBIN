@@ -1,80 +1,52 @@
 """
-Main Page for Setting Up the ROBIN Real-Time Application
+ROBIN Real-Time Application Setup
 
 This module initializes and configures the ROBIN real-time application using the NiceGUI framework (https://nicegui.io/). The application ensures that all long-running processes operate in the background, preventing the main thread from being blocked.
 
 The app creates an instance of the `run` class for each specific run, taking arguments from either the command line or a configuration file. Shared arguments are stored in `nicegui.app.storage.general` for accessibility across the application.
 
 Key Components:
-
 1. **Run Class**:
-
    - Sets up the application.
-
    - Shares arguments across the app through `app.storage.general`.
 
 2. **Methnice Class**:
-
    - Processes data in the background.
-
    - Each user connecting to the site gets individual instances for data visualization without running analysis.
 
 3. **Pages**:
-
    - `index`: Main page displaying the splash screen and navigation options.
-
    - `live`: Page for live data interaction.
-
    - `test`: Placeholder for browsing historic data (to be implemented).
 
 4. **Utility Functions**:
-
    - `setup_logging(level)`: Configures global logging level.
-
    - `clean_up()`: Cleans up stored data at the end of a run.
-
    - `startup()`: Starts data processing in the main application loop.
 
 5. **Configuration**:
-
    - Uses `click` for command-line interface options.
-
    - Loads configuration from `config.ini` or specified file.
 
 Constants:
-
 - `DEFAULT_CFG`: Default path to the configuration file.
-
 - `UNIQUE_ID`: Unique identifier for each run, used as an access key in `app.storage.general`.
 
 Dependencies:
-
 - `click`
-
 - `os`
-
 - `sys`
-
 - `signal`
-
 - `uuid`
-
 - `logging`
-
 - `pathlib.Path`
-
 - `nicegui` (ui, app)
-
 - `cnsmeth.theme`
-
 - `cnsmeth.images`
-
 - `configparser.ConfigParser`
 
 Example usage::
-
     python main.py --config config.ini --port 8081 --threads 4 --log-level INFO
-
 """
 
 import click
@@ -85,7 +57,8 @@ import uuid
 import logging
 
 from pathlib import Path
-from nicegui import ui, app, Client
+from nicegui import ui, app, events, core, Client
+import nicegui.air
 from cnsmeth import theme
 from cnsmeth import images
 from configparser import ConfigParser
@@ -93,23 +66,21 @@ from configparser import ConfigParser
 from cnsmeth.brain_class import BrainMeth
 from cnsmeth.minknow_info.minknow_panel import MinKNOWFish
 
-### The location for a default config file.
-# ToDo: Confirm if this actually works!!!
-DEFAULT_CFG = "config.ini"
 
-### This ID provides an access key for this specific run of NiceGUI.
-### Data will be written to the general store using this key.
-# ToDo: Confirm if multiple instances of ROBIN can run in the same folder.
-UNIQUE_ID = str(uuid.uuid4())
+DEFAULT_CFG: str = "config.ini"
+UNIQUE_ID: str = str(uuid.uuid4())
 
 
-def setup_logging(level):
-    """Configure global logging level."""
+def setup_logging(level: str) -> None:
+    """
+    Configure global logging level.
+
+    :param level: Logging level as a string (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+    """
     numeric_level = getattr(logging, level.upper(), None)
     if numeric_level is None:
         raise ValueError(f"Invalid log level: {level}")
 
-    # Clear any existing handlers to ensure basicConfig can set up the new configuration
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
 
@@ -117,19 +88,17 @@ def setup_logging(level):
         level=numeric_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     )
-
-    # Logging a message after configuration to check the level
     logging.info(f"Logging configured to level: {level}")
     logging.debug("Debug logging enabled.")
 
+def clean_up_handler(thingtokill):
+    del thingtokill
 
 @ui.page("/", response_timeout=10)
-async def index():
+async def index() -> None:
     """
-    This function defines the main index page for the ROBIN site.
-    We setup an instance of Methnice which will provide the user with
-    the "splash screen" and allow them to choose which pages to browse
-    to.
+    Main index page for the ROBIN site.
+    Sets up an instance of Methnice for the splash screen and navigation.
     """
     GUI = Methnice(
         threads=app.storage.general[UNIQUE_ID]["threads"],
@@ -144,21 +113,37 @@ async def index():
         reference=app.storage.general[UNIQUE_ID]["reference"],
         unique_id=UNIQUE_ID,
     )
-
     GUI.setup()
-    def clean_up_handler(thingtokill):
-        del thingtokill
-        
+    def use_on_air():
+        """
+        Enable or disable remote access based on the value of the general argument.
+
+        Example:
+            >>> args = events.ValueChangeEventArguments(value=True)
+            >>> use_on_air(args)
+            None
+        """
+        if 'use_on_air' in app.storage.general.keys():
+            if app.storage.general['use_on_air']:
+                if any("on-air" in url for url in app.urls):
+                    pass
+                else:
+                    if core.air is None:
+                        core.ai = nicegui.air.Air("")
+                    nicegui.air.connect()
+            else:
+                nicegui.air.disconnect()
+
+    ui.timer(10, use_on_air)
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
     await GUI.splash_screen()
 
 
 @ui.page("/live", response_timeout=20)
-async def live():
+async def live() -> None:
     """
-    This page is served at /live and is the interaction with live data from ROBIN.
-    This page is created for every user who visits.
-    #ToDo: Many of the variables being passed to Methnice are most likely redundant.
+    Page for live data interaction.
+    Sets up an instance of Methnice for live data visualization.
     """
     GUI = Methnice(
         threads=app.storage.general[UNIQUE_ID]["threads"],
@@ -174,63 +159,47 @@ async def live():
         unique_id=UNIQUE_ID,
     )
     GUI.setup()
-    def clean_up_handler(thingtokill):
-        del thingtokill
-
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
     await GUI.index_page()
 
 
 @ui.page("/browse", response_timeout=10)
-async def test():
+async def test() -> None:
     """
-    #ToDo: This code is to be implemented.
-    The idea is that we will implement the browse functions that allow someone
-    to explore previous data even when a live run is in progress.
+    Placeholder for browsing historic data.
     """
     GUI_browse = Methnice(
-        threads=1,  # app.storage.general[UNIQUE_ID]["threads"],
-        simtime=False,  # app.storage.general[UNIQUE_ID]["simtime"],
-        watchfolder=None,  # app.storage.general[UNIQUE_ID]["watchfolder"],
-        output=None,  # app.storage.general[UNIQUE_ID]["output"],
-        sequencing_summary=None,  # app.storage.general[UNIQUE_ID]["sequencing_summary"],
+        threads=1,
+        simtime=False,
+        watchfolder=None,
+        output=None,
+        sequencing_summary=None,
         target_panel=app.storage.general[UNIQUE_ID]["target_panel"],
         showerrors=app.storage.general[UNIQUE_ID]["showerrors"],
-        browse=True,  # app.storage.general[UNIQUE_ID]["browse"],
+        browse=True,
         exclude=app.storage.general[UNIQUE_ID]["exclude"],
         reference=app.storage.general[UNIQUE_ID]["reference"],
         unique_id=UNIQUE_ID,
     )
     GUI_browse.setup()
-
-    def clean_up_handler(thingtokill):
-        del thingtokill
-
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI_browse))
     await GUI_browse.browse_page()
 
 
-def clean_up():
+def clean_up() -> None:
     """
-    This function serves to clean up the stored data at the end of a run.
-    #ToDo: We should wait to pop the data until after all the subrunning processes have
-    been wound up.
+    Clean up stored data at the end of a run.
     """
     print("App shutdown detected.")
     print("Resetting Storage.")
-    # We have seen the app stop. Therefore we want to remove data important for this instance.
     app.storage.general.pop(UNIQUE_ID)
     app.shutdown()
 
 
-async def startup():
+async def startup() -> None:
     """
-    This function starts data processing in the main application loop.
-    The function is only started once. It must not be run more than once!
+    Start data processing in the main application loop.
     """
-    # loop = asyncio.get_running_loop()
-    # loop.set_debug(True)
-    # loop.slow_callback_duration = 0.2
     print(f"Setting up {UNIQUE_ID}.")
     MAINPAGE = Methnice(
         threads=app.storage.general[UNIQUE_ID]["threads"],
@@ -248,8 +217,6 @@ async def startup():
     MAINPAGE.setup()
     await MAINPAGE.start_analysis()
 
-    # handle any occasions when a user stops with a ctrl-c
-    # ToDo: surely this can be replaced by the clean_up funtion itself.
     def handler(*args):
         clean_up()
 
@@ -259,8 +226,6 @@ async def startup():
 class Methnice:
     """
     This class handles configuration of all the pages and page contents.
-
-    #ToDo: See if we can reduce or remove this.
     """
 
     def __init__(
@@ -276,7 +241,6 @@ class Methnice:
         exclude: list,
         reference: Path,
         unique_id: str,
-        # minknow_connection,
     ):
         self.MAINID = unique_id
         self.threads = threads
@@ -290,29 +254,43 @@ class Methnice:
         self.exclude = exclude
         self.reference = reference
         self.minknow_connection = None
-        # self.timer = ui.timer(1, self._worker)
 
     @property
-    def watchfolder(self):
+    def watchfolder(self) -> Path:
+        """
+        Getter for watchfolder property.
+        """
         return self._watchfolder
 
     @watchfolder.setter
-    def watchfolder(self, value):
+    def watchfolder(self, value: Path) -> None:
+        """
+        Setter for watchfolder property.
+        Triggers on_watchfolder_changed when watchfolder is set.
+        """
         self._watchfolder = value
         self.on_watchfolder_changed()
 
-    def _worker(self):
+    def _worker(self) -> None:
+        """
+        Worker method to handle background tasks.
+        """
         if hasattr(self.minknow_connection, "minKNOW_display"):
             if self.minknow_connection.minKNOW_display.watchfolder != self.watchfolder:
                 self.watchfolder = self.minknow_connection.minKNOW_display.watchfolder
 
-    async def on_watchfolder_changed(self):
-        # define your function here
+    async def on_watchfolder_changed(self) -> None:
+        """
+        Async method to handle changes to the watchfolder.
+        """
         if self.watchfolder:
             print(f"watchfolder value has been changed! {self.watchfolder}")
             await self.robin.add_watchfolder(self.watchfolder)
 
-    def setup(self):
+    def setup(self) -> None:
+        """
+        Setup method for initializing BrainMeth.
+        """
         self.robin = BrainMeth(
             mainuuid=self.MAINID,
             threads=self.threads,
@@ -328,13 +306,17 @@ class Methnice:
             reference=self.reference,
         )
 
-    async def start_analysis(self):
+    async def start_analysis(self) -> None:
+        """
+        Async method to start analysis.
+        """
         self.timer = ui.timer(1, self._worker)
-
         await self.robin.init()
 
-    # @ui.page("/browse_page")
-    async def browse_page(self):
+    async def browse_page(self) -> None:
+        """
+        Async method for rendering the browse page.
+        """
         with theme.frame(
             "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
         ):
@@ -359,6 +341,9 @@ class Methnice:
                 await self.robin_browse.render_ui()
 
     async def splash_screen(self) -> None:
+        """
+        Async method for rendering the splash screen.
+        """
         with theme.frame(
             "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
         ):
@@ -394,6 +379,9 @@ class Methnice:
                     ).classes("rounded-full w-16 h-16 ml-4")
 
     async def index_page(self) -> None:
+        """
+        Async method for rendering the index page.
+        """
         with theme.frame(
             "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
         ):
@@ -468,37 +456,42 @@ def run_class(
     browse: bool,
     exclude: list,
     reference: Path,
-    # minknow_connection,
-):
-    # Make sure no previous data are in the repository.
-    # ToDo: This will delete everything for any run of cnsmeth.
+) -> None:
+    """
+    Set up and run the ROBIN application.
+
+    :param port: Port for the GUI.
+    :param reload: Boolean indicating if the server should reload on changes.
+    :param threads: Number of threads available.
+    :param simtime: Boolean indicating if simulation mode is enabled.
+    :param watchfolder: Path to the watchfolder.
+    :param output: Path to the output directory.
+    :param sequencing_summary: Path to the sequencing summary file.
+    :param target_panel: Analysis gene panel.
+    :param showerrors: Boolean indicating if errors should be displayed.
+    :param browse: Boolean indicating if browse mode is enabled.
+    :param exclude: List of analysis types to exclude.
+    :param reference: Path to the reference genome and index.
+    """
     try:
         app.storage.general.clear()
     except Exception as e:
         print(e)
-    #logger = logging.getLogger(__name__)
-    #logger.info("Starting ROBIN.")
-    #logger.debug("Starting DEBUG ROBIN")
-    # Configure the icon for the GUI
     iconfile = os.path.join(
         os.path.dirname(os.path.abspath(images.__file__)), "favicon.ico"
     )
-
-    # Here is where we do anything which we want done once and once only.
-    # create a custom storage area for this run
-    app.storage.general[UNIQUE_ID] = dict()
-    app.storage.general[UNIQUE_ID]["threads"] = threads
-    app.storage.general[UNIQUE_ID]["simtime"] = simtime
-    app.storage.general[UNIQUE_ID]["watchfolder"] = watchfolder
-    app.storage.general[UNIQUE_ID]["output"] = output
-    app.storage.general[UNIQUE_ID]["sequencing_summary"] = sequencing_summary
-    app.storage.general[UNIQUE_ID]["target_panel"] = target_panel
-    app.storage.general[UNIQUE_ID]["showerrors"] = showerrors
-    app.storage.general[UNIQUE_ID]["browse"] = browse
-    app.storage.general[UNIQUE_ID]["exclude"] = exclude
-    app.storage.general[UNIQUE_ID]["reference"] = reference
-
-    # Add some custom CSS because - why not!
+    app.storage.general[UNIQUE_ID] = {
+        "threads": threads,
+        "simtime": simtime,
+        "watchfolder": watchfolder,
+        "output": output,
+        "sequencing_summary": sequencing_summary,
+        "target_panel": target_panel,
+        "showerrors": showerrors,
+        "browse": browse,
+        "exclude": exclude,
+        "reference": reference,
+    }
     ui.add_css(
         """
         .shadows-into light-regular {
@@ -508,32 +501,19 @@ def run_class(
         }
     """
     )
-    # Register some fonts that we might need later on.
     app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
-
-    # We need to register things to do when the application actually starts up but
-    # not when a new user connects to the website.
     app.on_startup(startup)
-
-    #def clean_up(client: Client):
-    #    """
-    #    This function will be called when the app is disconnected.
-    #    """
-    #    print(f"Client disconnect detected. {client}")
-    #    print(f"dir{dir(client)}")
-    #    print(f"dir{dir(app)}")
-        #print("Resetting Storage.")
-        # We have seen the app stop. Therefore we want to remove data important for this instance.
-        #app.storage.general.pop(UNIQUE_ID)
-        #app.shutdown()
-
-    #app.on_disconnect(clean_up)
-
-    # At last we can actually start ROBIN
-    ui.run(port=port, reload=reload, title="ROBIN", favicon=iconfile, on_air=False, show=False)
+    ui.run(port=port, reload=reload, title="ROBIN", favicon=iconfile, on_air=False, show=False, storage_secret=f"UNIQUE_ID")
 
 
-def configure(ctx, param, filename):
+def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None:
+    """
+    Configure the application based on the provided INI file.
+
+    :param ctx: Click context.
+    :param param: Click parameter.
+    :param filename: Path to the configuration file.
+    """
     cfg = ConfigParser()
     cfg.read(filename)
     try:
@@ -642,28 +622,25 @@ def configure(ctx, param, filename):
     required=False,
 )
 def package_run(
-    port,
-    threads,
-    log_level,
-    simtime,
-    showerrors,
-    sequencing_summary,
-    target_panel,
-    watchfolder,
-    output,
-    browse,
-    exclude,
-    reference,
-):  # , threads, simtime, watchfolder, output, sequencing_summary):
+    port: int,
+    threads: int,
+    log_level: str,
+    simtime: bool,
+    showerrors: bool,
+    sequencing_summary: Path,
+    target_panel: str,
+    watchfolder: Path,
+    output: Path,
+    browse: bool,
+    exclude: list,
+    reference: Path,
+) -> None:
     """
     Entrypoint for when GUI is launched directly.
-    :return: None
     """
-    #setup_logging(log_level)
     if sequencing_summary:
         sequencing_summary = click.format_filename(sequencing_summary)
     if browse:
-        # Handle the case when --browse is set
         click.echo("Browse mode is enabled. Watchfolder and output are not required.")
         run_class(
             port=port,
@@ -680,7 +657,6 @@ def package_run(
             reference=click.format_filename(reference),
         )
     else:
-        # Handle the case when --browse is not set
         click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
         if output is None:
             click.echo("Output is required when --browse is not set.")
@@ -701,7 +677,6 @@ def package_run(
             browse=browse,
             exclude=exclude,
             reference=click.format_filename(reference),
-            # minknow_connection=minknow_connection,
         )
 
 
