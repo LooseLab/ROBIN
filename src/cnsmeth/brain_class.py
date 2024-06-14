@@ -35,7 +35,7 @@ Key Components:
 
    - `TargetCoverage`
 
-   - `Fusion_object`
+   - `FusionObject`
 
 4. **Utility Functions**:
 
@@ -73,7 +73,7 @@ Dependencies:
 
 - `cnsmeth.utilities.bam_handler.BamEventHandler`
 
-- `cnsmeth.subpages` (MGMT_Object, Sturgeon_object, NanoDX_object, RandomForest_object, CNVAnalysis, TargetCoverage, Fusion_object)
+- `cnsmeth.subpages` (MGMT_Object, Sturgeon_object, NanoDX_object, RandomForest_object, CNVAnalysis, TargetCoverage, FusionObject)
 
 - `cnsmeth.utilities.local_file_picker.LocalFilePicker`
 
@@ -108,7 +108,7 @@ from cnsmeth.subpages.RandomForest_object import RandomForest_object
 
 from cnsmeth.subpages.CNV_object import CNVAnalysis
 from cnsmeth.subpages.TargetCoverage_object import TargetCoverage
-from cnsmeth.subpages.Fusion_object import Fusion_object
+from cnsmeth.subpages.Fusion_object import FusionObject
 from cnsmeth.utilities.local_file_picker import LocalFilePicker
 from cnsmeth.utilities.ReadBam import ReadBam
 
@@ -289,7 +289,7 @@ class BrainMeth:
             self.MGMT_panel.process_data()
 
         if "fusion" not in self.exclude:
-            self.Fusion_panel = Fusion_object(
+            self.Fusion_panel = FusionObject(
                 self.threads,
                 self.output,
                 "FUSION",
@@ -655,7 +655,7 @@ class BrainMeth:
             if "fusion" not in self.exclude:
                 with ui.tab_panel(fusionstab).classes("w-full"):
                     with ui.card().classes("w-full"):
-                        self.Fusion_panel = Fusion_object(
+                        self.Fusion_panel = FusionObject(
                             self.threads,
                             self.output,
                             "FUSION",

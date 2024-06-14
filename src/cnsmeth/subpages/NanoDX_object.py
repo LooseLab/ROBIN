@@ -1,6 +1,52 @@
+"""
+NanoDX Analysis Module
+
+This module provides functionality for analyzing NanoDX methylation data. The primary
+components include running external tools to extract and process methylation sites from BAM files,
+visualizing the results using a GUI, and managing the process asynchronously.
+
+Dependencies:
+    - pandas: Data manipulation and analysis.
+    - os: Interaction with the operating system.
+    - sys: System-specific parameters and functions.
+    - time: Time-related functions.
+    - nicegui: GUI creation.
+    - pysam: BAM file processing.
+    - shutil: File operations.
+    - tempfile: Temporary file creation.
+    - click: Command-line interface creation.
+    - pathlib: File system paths.
+    - typing: Type hinting.
+    - cnsmeth: Custom modules for the specific workflow.
+
+Modules:
+    - subpages.base_analysis: BaseAnalysis class from cnsmeth.subpages.base_analysis.
+    - theme: cnsmeth theme module.
+    - resources: cnsmeth resources module.
+    - NN_model: NN_classifier class from cnsmeth.submodules.nanoDX.workflow.scripts.NN_model.
+    - merge_bedmethyl: Functions for merging, saving, and collapsing bed methylation data.
+
+Environment Variables:
+    - CI: Set to "1".
+
+Functions:
+    - run_modkit: Executes modkit to extract methylation data from a BAM file.
+    - run_samtools_sort: Sorts BAM files using Samtools.
+    - classification: Runs classification on the extracted data using a neural network model.
+
+Classes:
+    - NanoDX_object: Manages the NanoDX analysis process, including setting up the GUI and handling BAM file processing.
+
+Command-line Interface:
+    - run_main: CLI entry point for running the app, using Click for argument parsing.
+
+Usage:
+    The module can be run as a script to start the GUI for NanoDX analysis, specifying
+    options like the port, number of threads, watch folder, and output directory.
+"""
+
 from __future__ import annotations
 from cnsmeth.subpages.base_analysis import BaseAnalysis
-
 from nicegui import ui, app, run
 import time
 import os
@@ -18,11 +64,20 @@ from cnsmeth.utilities.merge_bedmethyl import (
     save_bedmethyl,
     collapse_bedmethyl,
 )
+from typing import List, Tuple, Optional, Dict, Any
 
 
-def run_modkit(cpgs, sortfile, temp, threads):
+
+
+def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
     """
-    This function runs modkit on a bam file and extracts the methylation data.
+    Executes modkit on a bam file and extracts the methylation data.
+
+    Args:
+        cpgs (str): Path to the CpG BED file.
+        sortfile (str): Path to the sorted BAM file.
+        temp (str): Path to the temporary output file.
+        threads (int): Number of threads to use.
     """
     try:
         os.system(
@@ -32,24 +87,59 @@ def run_modkit(cpgs, sortfile, temp, threads):
         print(e)
 
 
-def run_samtools_sort(file, tomerge, sortfile, threads):
+def run_samtools_sort(file: str, tomerge: List[str], sortfile: str, threads: int) -> None:
+    """
+    Sorts BAM files using Samtools.
+
+    Args:
+        file (str): Path to the output BAM file.
+        tomerge (List[str]): List of BAM files to merge.
+        sortfile (str): Path to the sorted BAM file.
+        threads (int): Number of threads to use.
+    """
     pysam.cat("-o", file, *tomerge)
     pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
 
 
-def classification(modelfile, test_df):
+def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, int]:
+    """
+    Runs classification on the extracted data using a neural network model.
+
+    Args:
+        modelfile (str): Path to the neural network model file.
+        test_df (pd.DataFrame): DataFrame containing the test data.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, int]: Predictions, class labels, and number of features.
+    """
     NN = NN_classifier(modelfile)
     try:
         predictions, class_labels, n_features = NN.predict(test_df)
     except Exception as e:
         print(e)
         test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
-        #sys.exit(1)
+        # sys.exit(1)
     return predictions, class_labels, n_features
 
 
 class NanoDX_object(BaseAnalysis):
-    def __init__(self, *args, model="Capper_et_al_NN.pkl", **kwargs):
+    """
+    NanoDX_object handles the NanoDX analysis process, including setting up the GUI
+    and processing BAM files asynchronously.
+
+    Attributes:
+        cpgs_file (str): Path to the CpG BED file.
+        cpgs (pd.DataFrame): DataFrame containing CpG data.
+        model (str): Name of the neural network model file.
+        threshold (float): Threshold for classification confidence.
+        nanodx_bam_count (int): Counter for the number of BAM files processed.
+        not_first_run (bool): Flag indicating whether it's the first run.
+        modelfile (str): Path to the neural network model file.
+        nanodx_df_store (pd.DataFrame): DataFrame for storing NanoDX results.
+        nanodxfile (tempfile.NamedTemporaryFile): Temporary file for NanoDX results.
+    """
+
+    def __init__(self, *args, model: str = "Capper_et_al_NN.pkl", **kwargs) -> None:
         self.cpgs_file = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "hglft_genome_260e9_91a970_clean.bed",
@@ -67,11 +157,13 @@ class NanoDX_object(BaseAnalysis):
             os.path.dirname(os.path.abspath(models.__file__)), self.model
         )
         self.nanodx_df_store = pd.DataFrame()
-        #self.NN = NN_classifier(self.modelfile)
         super().__init__(*args, **kwargs)
         self.nanodxfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".nanodx")
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
+        """
+        Sets up the user interface for the NanoDX analysis.
+        """
         with ui.card().style("width: 100%"):
             with ui.grid(columns=8).classes("w-full h-auto"):
                 with ui.card().classes("col-span-3"):
@@ -86,7 +178,13 @@ class NanoDX_object(BaseAnalysis):
         else:
             ui.timer(5, lambda: self.show_previous_data(self.output))
 
-    def show_previous_data(self, output):
+    def show_previous_data(self, output: str) -> None:
+        """
+        Displays previously analyzed data from the specified output folder.
+
+        Args:
+            output (str): Path to the folder containing previous analysis results.
+        """
         if self.check_file_time(os.path.join(output, "nanoDX_scores.csv")):
             self.nanodx_df_store = pd.read_csv(
                 os.path.join(os.path.join(self.output, "nanoDX_scores.csv")),
@@ -116,15 +214,19 @@ class NanoDX_object(BaseAnalysis):
                 self.nanodx_df_store.iloc[-1]["number_probes"],
             )
 
-    async def process_bam(self, bamfile):
-        tomerge = []
-        # timestamp = None
+    async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
+        """
+        Processes the BAM files and performs the NanoDX analysis.
+
+        Args:
+            bamfile (List[Tuple[str, float]]): List of BAM files with their timestamps.
+        """
+        tomerge: List[str] = []
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop()
             self.nanodx_bam_count += 1
             tomerge.append(file)
-            # timestamp = filetime
 
             if len(tomerge) > 5:
                 break
@@ -199,7 +301,6 @@ class NanoDX_object(BaseAnalysis):
                     },
                     header=None,
                     sep="\s+",
-                    # delim_whitespace=True,
                 )
                 self.merged_bed_file = await run.cpu_bound(
                     merge_bedmethyl, bed_a, self.merged_bed_file
@@ -251,10 +352,9 @@ class NanoDX_object(BaseAnalysis):
                     },
                     header=None,
                     sep="\s+",
-                    # delim_whitespace=True,
                 )
-
                 self.not_first_run = True
+
             self.merged_bed_file = await run.cpu_bound(
                 collapse_bedmethyl, self.merged_bed_file
             )
@@ -275,20 +375,9 @@ class NanoDX_object(BaseAnalysis):
                 classification, self.modelfile, test_df
             )
 
-            # try:
-            #    predictions, class_labels, n_features = self.NN.predict(test_df)
-            # except Exception as e:
-            #    print(e)
-            #    test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
-            #    # self.nanodx_status_txt["message"] = "Error generating predictions."
-            #    sys.exit(1)
             nanoDX_df = pd.DataFrame({"class": class_labels, "score": predictions})
-
             nanoDX_save = nanoDX_df.set_index("class").T
             nanoDX_save["number_probes"] = n_features
-            # if timestamp:
-            #    nanoDX_save["timestamp"] = timestamp * 1000
-            # else:
             nanoDX_save["timestamp"] = time.time() * 1000
 
             self.nanodx_df_store = pd.concat(
@@ -305,17 +394,24 @@ class NanoDX_object(BaseAnalysis):
             ] -= len(tomerge)
         self.running = False
 
-    def create_nanodx_chart(self, title):
+    def create_nanodx_chart(self, title: str) -> None:
+        """
+        Creates the NanoDX chart.
+
+        Args:
+            title (str): Title of the chart.
+        """
         self.nanodxchart = self.create_chart(title)
 
-    def update_nanodx_plot(self, x, y, count, n_features):
+    def update_nanodx_plot(self, x: List[str], y: List[float], count: int, n_features: int) -> None:
         """
-        Replaces the data in the RapidCNS2 plot.
-        :param x: list of tumour types
-        :param y: confidence scores for each tumour type
-        :param count: the number of bams used to generate the plot
-        :param n_feature: the number of features detected during data analysis
-        :return:
+        Updates the NanoDX plot with new data.
+
+        Args:
+            x (List[str]): List of tumor types.
+            y (List[float]): Confidence scores for each tumor type.
+            count (int): Number of BAM files used to generate the plot.
+            n_features (int): Number of features detected during data analysis.
         """
         self.nanodxchart.options["title"][
             "text"
@@ -326,20 +422,25 @@ class NanoDX_object(BaseAnalysis):
         ]
         self.nanodxchart.update()
 
-    def create_nanodx_time_chart(self, title):
+    def create_nanodx_time_chart(self, title: str) -> None:
+        """
+        Creates the NanoDX time series chart.
+
+        Args:
+            title (str): Title of the chart.
+        """
         self.nanodx_time_chart = self.create_time_chart(title)
 
-    def update_nanodx_time_chart(self, datadf):
+    def update_nanodx_time_chart(self, datadf: pd.DataFrame) -> None:
         """
+        Updates the NanoDX time series chart with new data.
 
-        :param datadf: the data to plot
-        :return:
+        Args:
+            datadf (pd.DataFrame): DataFrame containing the data to plot.
         """
         self.nanodx_time_chart.options["series"] = []
         for series, data in datadf.to_dict().items():
-            # print(series)
             data_list = [[key, value] for key, value in data.items()]
-            # print(data_list)
             if series != "number_probes":
                 self.nanodx_time_chart.options["series"].append(
                     {
@@ -369,12 +470,21 @@ def test_me(
     output: str,
     reload: bool = False,
     browse: bool = False,
-):
-    # if __name__ == '__mp_main__':
-    my_connection = None
+) -> None:
+    """
+    Sets up and runs the NanoDX analysis application.
+
+    Args:
+        port (int): Port number for the server.
+        threads (int): Number of threads to use for processing.
+        watchfolder (str): Path to the folder to watch for new BAM files.
+        output (str): Path to the output directory.
+        reload (bool): Flag to reload the application on changes.
+        browse (bool): Flag to enable browsing historic data.
+    """
+    my_connection: Optional[Dict[str, Any]] = None
     with theme.frame("Target Coverage Data", my_connection):
         TestObject = NanoDX_object(threads, output, progress=True, batch=True)
-        # TestObject = MGMT_Object(threads, output, progress=True)
     if not browse:
         path = watchfolder
         searchdirectory = os.fsencode(path)
@@ -384,11 +494,10 @@ def test_me(
                 filename = os.fsdecode(f)
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
-                    # break
     else:
         TestObject.progress_trackers.visible = False
         TestObject.show_previous_data(output)
-    ui.run(port=port, reload=False)
+    ui.run(port=port, reload=reload)
 
 
 @click.command()
@@ -419,31 +528,28 @@ def test_me(
     default=False,
     help="Browse Historic Data.",
 )
-def run_main(port, threads, watchfolder, output, browse):
+def run_main(port: int, threads: int, watchfolder: str, output: str, browse: bool) -> None:
     """
-    Helper function to run the app.
-    :param port: The port to serve the app on.
-    :param reload: Should we reload the app on changes.
-    :return:
+    CLI entry point for running the NanoDX analysis app.
+
+    Args:
+        port (int): The port to serve the app on.
+        threads (int): Number of threads available for processing.
+        watchfolder (str): Directory to watch for new BAM files.
+        output (str): Directory to save output files.
+        browse (bool): Enable browsing historic data.
     """
     if browse:
-        # Handle the case when --browse is set
         click.echo("Browse mode is enabled. Only the output folder is required.")
         test_me(
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,
             watchfolder=None,
             output=watchfolder,
-            # sequencing_summary=sequencing_summary,
-            # showerrors=showerrors,
             browse=browse,
-            # exclude=exclude,
         )
-        # Your logic for browse mode
     else:
-        # Handle the case when --browse is not set
         click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
         if watchfolder is None or output is None:
             click.echo("Watchfolder and output are required when --browse is not set.")
@@ -452,13 +558,9 @@ def run_main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,
             watchfolder=watchfolder,
             output=output,
-            # sequencing_summary=sequencing_summary,
-            # showerrors=showerrors,
             browse=browse,
-            # exclude=exclude,
         )
 
 

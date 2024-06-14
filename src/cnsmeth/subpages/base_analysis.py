@@ -6,69 +6,43 @@ This module provides a base class (`BaseAnalysis`) for the analysis of BAM files
 Key Components:
 
 1. **BaseAnalysis Class**:
-
    - Initializes analysis parameters and sets up queues for BAM file processing.
-
    - Provides methods to process BAM files either in batch mode or continuous mode.
-
    - Includes user interface elements for displaying progress and results.
 
 2. **Queue Handling**:
-
    - `bamqueue`: Queue for holding BAM files to be processed.
-
    - `_worker`: Background worker function for processing BAM files.
-
    - `_batch_worker`: Batch processing worker function for handling multiple BAM files.
 
 3. **Progress Tracking**:
-
    - Properties (`_progress`, `_progress2`, `_not_analysed`) for tracking the progress of BAM file processing.
-
    - `progress_bars`: Method to render progress bars in the user interface.
 
 4. **Playback Mode**:
-
    - `playback`: Simulates the processing of BAM files from a pandas DataFrame.
-
    - `playback_bams`: Handles the playback of BAM files to simulate real-time processing.
 
 5. **User Interface**:
-
    - `render_ui`: Sets up the user interface and displays progress bars.
-
    - `create_time_chart`: Creates a time-based chart for visualization.
-
    - `create_chart`: Creates a categorical chart for visualization.
 
 6. **Abstract Methods**:
-
    - `process_bam`: Must be implemented by subclasses to define how BAM files are processed.
-
    - `setup_ui`: Must be implemented by subclasses to set up the user interface for the analysis.
-
    - `cleanup`: Optional method for cleaning up resources when the app is closed.
-
    - `check_resources`: Optional method for checking required resources for the analysis.
 
 Dependencies:
-
 - `queue`
-
 - `nicegui` (ui, app)
-
 - `typing` (BinaryIO, Optional, List, Tuple)
-
 - `pandas`
-
 - `time`
-
 - `asyncio`
-
 - `threading`
-
 - `collections.Counter`
-
 - `logging`
 
 Example usage::
@@ -83,7 +57,6 @@ Example usage::
         def setup_ui(self):
             # Implement custom UI setup logic
             pass
-
 
     analysis = CustomAnalysis(threads=4, outputfolder='/path/to/output', analysis_name='ExampleAnalysis')
     analysis.process_data()
@@ -101,7 +74,7 @@ import os
 import logging
 
 # Configure logging
-#logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 class BaseAnalysis:
@@ -148,7 +121,6 @@ class BaseAnalysis:
         self.summary = summary
         self.browse = browse
         self.progress = progress
-        # Dictionary to track files and their last modification times
         self.file_mod_times = {}
 
         if self.name not in app.storage.general.get(self.mainuuid, {}):
@@ -158,24 +130,28 @@ class BaseAnalysis:
         self.running = False
         self.threads = max(1, threads // 2)
 
-    def check_file_time(self, file_path):
-        """Check if the file exists and whether it has been modified since last seen."""
+    def check_file_time(self, file_path: str) -> bool:
+        """
+        Check if the file exists and whether it has been modified since last seen.
+
+        Args:
+            file_path (str): Path to the file.
+
+        Returns:
+            bool: True if the file exists and has been modified, False otherwise.
+        """
         if not os.path.exists(file_path):
-            # File does not exist
             return False
 
         current_mod_time = os.path.getmtime(file_path)
 
         if file_path not in self.file_mod_times:
-            # File exists and hasn't been seen before
             self.file_mod_times[file_path] = current_mod_time
             return True
 
         if self.file_mod_times[file_path] == current_mod_time:
-            # File exists but hasn't been modified
             return False
 
-        # File exists and has been modified
         self.file_mod_times[file_path] = current_mod_time
         return True
 
@@ -218,9 +194,7 @@ class BaseAnalysis:
             if not timestamp:
                 timestamp = time.time()
             await self.process_bam(bamfile, timestamp)
-            app.storage.general[self.mainuuid][self.name]["counters"][
-                "bam_processed"
-            ] += 1
+            app.storage.general[self.mainuuid][self.name]["counters"]["bam_processed"] += 1
 
         self.timer.active = True
 

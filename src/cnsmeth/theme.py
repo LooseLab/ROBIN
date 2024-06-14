@@ -122,12 +122,15 @@ def frame(navtitle: str):
                                 "Browse Historic Data", lambda: ui.navigate.to("/browse")
                             )
                             ui.separator()
-                            ui.switch(
-                                "allow remote access", value=False, on_change=use_on_air
-                            ).classes("ml-4 bg-transparent").props('color="black"')
-                            ui.switch("Dark Mode", on_change=dark_mode).classes(
-                                "ml-4 bg-transparent"
-                            ).props('color="black"')
+                            ui.switch("Allow Remote Access").classes("ml-4 bg-transparent").props('color="black"').bind_value(app.storage.general, "use_on_air")
+                            #ui.switch(
+                            #    "allow remote access", value=False, on_change=use_on_air
+                            #).classes("ml-4 bg-transparent").props('color="black"')
+                            #ui.switch("Dark Mode", on_change=dark_mode).classes(
+                            #    "ml-4 bg-transparent"
+                            #).props('color="black"')
+                            ui.switch("Dark Mode").classes("ml-4 bg-transparent").props('color="black"').bind_value(app.storage.browser, "dark_mode")
+                            ui.dark_mode().bind_value(app.storage.browser, "dark_mode")
                             ui.separator()
                             ui.menu_item("Close", menu.close)
                     ui.image(IMAGEFILE).style("width: 50px")
@@ -182,26 +185,6 @@ def cleanup_and_exit():
     """
     app.shutdown()
 
-def dark_mode(event: events.ValueChangeEventArguments):
-    """
-    Toggle dark mode for the interface based on the value of the event argument.
-
-    Args:
-        event (events.ValueChangeEventArguments): The event argument containing the value for dark mode toggle.
-
-    Returns:
-        None
-
-    Example:
-        >>> event = events.ValueChangeEventArguments(value=True)
-        >>> dark_mode(event)
-        None
-    """
-    if event.value:
-        ui.dark_mode().enable()
-    else:
-        ui.dark_mode().disable()
-
 def use_on_air(args: events.ValueChangeEventArguments):
     """
     Enable or disable remote access based on the value of the event argument.
@@ -224,6 +207,11 @@ def use_on_air(args: events.ValueChangeEventArguments):
     else:
         nicegui.air.disconnect()
 
+@ui.page("/")
+def my_page():
+    with frame("Home"):
+        ui.label("Welcome to the Application")
+
 def main():
     """
     Main function to test the theme by creating a simple page using the frame context manager.
@@ -244,9 +232,9 @@ def main():
     )
     # Register some fonts that we might need later on.
     app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
-    with frame("Home"):
-        ui.label("Welcome to the Application")
-    ui.run()
+
+
+    ui.run(storage_secret="cnsmeth")
 
 if __name__ in {"__main__", "__mp_main__"}:
     #import doctest

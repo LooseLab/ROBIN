@@ -31,15 +31,15 @@ Constants:
     - HVPATH: Path to the 'hv_rapidCNS2' directory in the submodules.
 
 Functions:
-    - run_methylartist(tempmgmtdir, plot_out): Executes the methylartist tool to generate plots.
-    - run_bedtools(bamfile, MGMT_BED, tempbamfile): Extracts MGMT sites from BAM files using bedtools.
-    - run_modkit(tempmgmtdir, MGMTbamfile, threads): Processes BAM files with modkit and runs an R script for MGMT prediction.
+    - run_methylartist(tempmgmtdir: str, plot_out: str) -> None: Executes the methylartist tool to generate plots.
+    - run_bedtools(bamfile: str, MGMT_BED: str, tempbamfile: str) -> None: Extracts MGMT sites from BAM files using bedtools.
+    - run_modkit(tempmgmtdir: str, MGMTbamfile: str, threads: int) -> None: Processes BAM files with modkit and runs an R script for MGMT prediction.
 
 Classes:
     - MGMT_Object(BaseAnalysis): Manages the MGMT analysis process, including setting up the GUI and handling BAM file processing.
 
 Command-line Interface:
-    - main(port, threads, watchfolder, output, browse): CLI entry point for running the app, using Click for argument parsing.
+    - main(port: int, threads: int, watchfolder: str, output: str, browse: bool) -> None: CLI entry point for running the app, using Click for argument parsing.
 
 Usage:
     The module can be run as a script to start the GUI for MGMT analysis, specifying
@@ -61,6 +61,7 @@ from pathlib import Path
 import natsort
 import tempfile
 import logging
+from typing import Optional, Tuple, List
 
 # Configure logging
 # logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -73,7 +74,7 @@ HVPATH = os.path.join(
 )
 
 
-def run_methylartist(tempmgmtdir, plot_out):
+def run_methylartist(tempmgmtdir: str, plot_out: str) -> None:
     """
     Executes the methylartist tool to generate plots for the given BAM file.
 
@@ -96,7 +97,7 @@ def run_methylartist(tempmgmtdir, plot_out):
         raise
 
 
-def run_bedtools(bamfile, MGMT_BED, tempbamfile):
+def run_bedtools(bamfile: str, MGMT_BED: str, tempbamfile: str) -> None:
     """
     Extracts the MGMT sites from the BAM file using bedtools.
 
@@ -119,7 +120,7 @@ def run_bedtools(bamfile, MGMT_BED, tempbamfile):
         raise
 
 
-def run_modkit(tempmgmtdir, MGMTbamfile, threads):
+def run_modkit(tempmgmtdir: str, MGMTbamfile: str, threads: int) -> None:
     """
     Processes the BAM file with modkit and runs an R script for MGMT prediction.
 
@@ -156,19 +157,19 @@ class MGMT_Object(BaseAnalysis):
     and processing BAM files asynchronously.
 
     Attributes:
-        MGMTbamfile (str): Path to the MGMT BAM file.
+        MGMTbamfile (Optional[str]): Path to the MGMT BAM file.
         counter (int): Counter for the number of analyses.
-        last_seen (str): Last seen CSV file for analysis.
+        last_seen (int): Last seen timestamp for analysis.
     """
 
     def __init__(self, *args, **kwargs):
-        self.MGMTbamfile = None
-        self.counter = 0
-        self.last_seen = 0
+        self.MGMTbamfile: Optional[str] = None
+        self.counter: int = 0
+        self.last_seen: int = 0
         #logger.debug("Initializing MGMT_Object")
         super().__init__(*args, **kwargs)
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
         """
         Sets up the user interface for the MGMT analysis.
 
@@ -194,7 +195,7 @@ class MGMT_Object(BaseAnalysis):
         else:
             ui.timer(30, lambda: self.show_previous_data(self.output))
 
-    async def process_bam(self, bamfile, timestamp):
+    async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
         Processes the BAM file to extract and analyze MGMT sites.
 
@@ -206,7 +207,7 @@ class MGMT_Object(BaseAnalysis):
             None
         """
         #logger.debug(f"Processing BAM file: {bamfile} at {timestamp}")
-        MGMT_BED = f"{HVPATH}/bin/mgmt_hg38.bed"
+        MGMT_BED: str = f"{HVPATH}/bin/mgmt_hg38.bed"
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
 
         try:
@@ -264,12 +265,12 @@ class MGMT_Object(BaseAnalysis):
             await asyncio.sleep(0.1)
             self.running = False
 
-    def tabulate(self, results):
+    def tabulate(self, results: pd.DataFrame) -> None:
         """
         Displays the results in a tabular format.
 
         Args:
-            results (DataFrame): DataFrame containing the analysis results.
+            results (pd.DataFrame): DataFrame containing the analysis results.
 
         Returns:
             None
@@ -307,7 +308,7 @@ class MGMT_Object(BaseAnalysis):
             },
         ).classes("w-full").style("height: 200px")
 
-    def get_report(self, watchfolder):
+    def get_report(self, watchfolder: str) -> Tuple[pd.DataFrame, str, str]:
         """
         Generates a report from the analysis results.
 
@@ -315,9 +316,12 @@ class MGMT_Object(BaseAnalysis):
             watchfolder (str): Path to the folder containing previous analysis results.
 
         Returns:
-            None
+            Tuple[pd.DataFrame, str, str]: DataFrame with results, path to plot, and summary string.
         """
         #logger.debug(f"Generating report from {watchfolder}")
+        results = pd.DataFrame()
+        plot_out = ""
+        summary = ""
         for file in natsort.natsorted(os.listdir(watchfolder)):
             if file.endswith("_mgmt.csv"):
                 count = int(file.split('_')[0])
@@ -327,7 +331,7 @@ class MGMT_Object(BaseAnalysis):
                     summary = f"Current MGMT status: {results['status'].values[0]}"
         return results, plot_out, summary
 
-    def show_previous_data(self, watchfolder):
+    def show_previous_data(self, watchfolder: str) -> None:
         """
         Displays previously analyzed data from the specified watch folder.
 
@@ -371,7 +375,7 @@ def test_me(
     output: str,
     reload: bool = False,
     browse: bool = False,
-):
+) -> None:
     """
     Sets up and runs the MGMT analysis application.
 
@@ -435,15 +439,15 @@ def test_me(
     default=False,
     help="Browse Historic Data.",
 )
-def main(port, threads, watchfolder, output, browse):
+def main(port: int, threads: int, watchfolder: Optional[str], output: Optional[str], browse: bool) -> None:
     """
     CLI entry point for running the MGMT analysis app.
 
     Args:
         port (int): The port to serve the app on.
         threads (int): Number of threads available for processing.
-        watchfolder (str): Directory to watch for new BAM files.
-        output (str): Directory to save output files.
+        watchfolder (Optional[str]): Directory to watch for new BAM files.
+        output (Optional[str]): Directory to save output files.
         browse (bool): Enable browsing historic data.
 
     Returns:
