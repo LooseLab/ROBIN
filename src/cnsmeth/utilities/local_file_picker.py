@@ -1,27 +1,47 @@
 import platform
 from pathlib import Path
 from typing import Optional
+from collections import defaultdict
 
 from nicegui import events, ui
+import logging
+
+from cnsmeth.utilities.bam_handler import BamEventHandler
+
+# Configure logging
+#logger = logging.getLogger(__name__)
 
 
-class local_file_picker(ui.dialog):
+class LocalFilePicker(ui.dialog):
+    """
+    A class to create a local file picker dialog using NiceGUI.
+
+    This class provides a user interface to select files from the local filesystem.
+
+    Attributes:
+        path (Path): The current directory path.
+        upper_limit (Optional[Path]): The directory limit up to which navigation is allowed.
+        show_hidden_files (bool): Whether to show hidden files in the file picker.
+        grid (Any): The grid UI component displaying the files and directories.
+        drives_toggle (Optional[Any]): The toggle UI component for selecting drives (Windows only).
+    """
+
     def __init__(
         self,
         directory: str,
         *,
-        upper_limit: Optional[str] = ...,
+        upper_limit: Optional[str] = None,
         multiple: bool = False,
         show_hidden_files: bool = False,
     ) -> None:
-        """Local File Picker
+        """
+        Initializes the LocalFilePicker with specified parameters.
 
-        This is a simple file picker that allows you to select a file from the local filesystem where NiceGUI is running.
-
-        :param directory: The directory to start in.
-        :param upper_limit: The directory to stop at (None: no limit, default: same as the starting directory).
-        :param multiple: Whether to allow multiple files to be selected.
-        :param show_hidden_files: Whether to show hidden files.
+        Args:
+            directory (str): The directory to start in.
+            upper_limit (Optional[str]): The directory to stop at (None: no limit, default: same as the starting directory).
+            multiple (bool): Whether to allow multiple files to be selected.
+            show_hidden_files (bool): Whether to show hidden files.
         """
         super().__init__()
 
@@ -30,7 +50,7 @@ class local_file_picker(ui.dialog):
             self.upper_limit = None
         else:
             self.upper_limit = Path(
-                directory if upper_limit == ... else upper_limit
+                directory if upper_limit == "..." else upper_limit
             ).expanduser()
         self.show_hidden_files = show_hidden_files
 
@@ -52,7 +72,10 @@ class local_file_picker(ui.dialog):
                 ui.button("Ok", on_click=self._handle_ok)
         self.update_grid()
 
-    def add_drives_toggle(self):
+    def add_drives_toggle(self) -> None:
+        """
+        Adds a toggle for selecting drives if the platform is Windows.
+        """
         if platform.system() == "Windows":
             import win32api
 
@@ -61,11 +84,18 @@ class local_file_picker(ui.dialog):
                 drives, value=drives[0], on_change=self.update_drive
             )
 
-    def update_drive(self):
+    def update_drive(self) -> None:
+        """
+        Updates the current path based on the selected drive and refreshes the grid.
+        """
         self.path = Path(self.drives_toggle.value).expanduser()
         self.update_grid()
 
     def update_grid(self) -> None:
+        """
+        Updates the grid to display the contents of the current directory.
+        Filters hidden files if the option is set.
+        """
         paths = list(self.path.glob("*"))
         if not self.show_hidden_files:
             paths = [p for p in paths if not p.name.startswith(".")]
@@ -95,23 +125,34 @@ class local_file_picker(ui.dialog):
         self.grid.update()
 
     def handle_double_click(self, e: events.GenericEventArguments) -> None:
+        """
+        Handles double-click events on the grid.
+
+        If a directory is double-clicked, navigates into the directory and updates the grid.
+        If a file is double-clicked, submits the selected file.
+
+        Args:
+            e (events.GenericEventArguments): The event arguments from the double-click event.
+        """
         self.path = Path(e.args["data"]["path"])
         if self.path.is_dir():
             self.update_grid()
         else:
             self.submit([str(self.path)])
 
-    async def _handle_ok(self):
+    async def _handle_ok(self) -> None:
+        """
+        Handles the OK button click event.
+
+        Submits the selected file(s) from the grid.
+        """
         rows = await ui.run_javascript(
             f"getElement({self.grid.id}).gridOptions.api.getSelectedRows()"
         )
         self.submit([r["path"] for r in rows])
 
 
-# async def pick_file() -> None:
-#    result = await local_file_picker('~', multiple=True)
-#    ui.notify(f'You chose {result}')
-
-# ui.button('Choose file', on_click=pick_file, icon='folder')
-
-# ui.run()
+# Example of how to initialize and use LocalFilePicker
+if __name__ == "__main__":
+    bam_count = defaultdict(lambda: {"counter": 0, "file": {}})
+    event_handler = BamEventHandler(bam_count=bam_count)

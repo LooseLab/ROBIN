@@ -57,12 +57,12 @@ a:active:not(.browser-window *) {
 }
 
 .q-header {
-  height: 70px;
+  height: 60px;
   background-color: #4F9153;
 }
 .q-header.fade {
-  padding-top: 20px;
-  transform: translateY(-20px);
+  //padding-top: 20px;
+  //transform: translateY(-20px);
   background-color: #4F9153d0;
   backdrop-filter: blur(5px);
 }

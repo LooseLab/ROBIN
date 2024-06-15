@@ -1,147 +1,304 @@
 """
-This file provides a base class for analysis of bam files output during a sequencing run.
-The base class provides a queue to receive bam files and a background thread to process the data.
+Base Class for Analysis of BAM Files Output During a Sequencing Run
+
+This module provides a base class (`BaseAnalysis`) for the analysis of BAM files generated during a sequencing run. The class includes a queue to receive BAM files and a background thread for data processing. It also features a render pipeline for displaying progress and results.
+
+Key Components:
+
+1. **BaseAnalysis Class**:
+   - Initializes analysis parameters and sets up queues for BAM file processing.
+   - Provides methods to process BAM files either in batch mode or continuous mode.
+   - Includes user interface elements for displaying progress and results.
+
+2. **Queue Handling**:
+   - `bamqueue`: Queue for holding BAM files to be processed.
+   - `_worker`: Background worker function for processing BAM files.
+   - `_batch_worker`: Batch processing worker function for handling multiple BAM files.
+
+3. **Progress Tracking**:
+   - Properties (`_progress`, `_progress2`, `_not_analysed`) for tracking the progress of BAM file processing.
+   - `progress_bars`: Method to render progress bars in the user interface.
+
+4. **Playback Mode**:
+   - `playback`: Simulates the processing of BAM files from a pandas DataFrame.
+   - `playback_bams`: Handles the playback of BAM files to simulate real-time processing.
+
+5. **User Interface**:
+   - `render_ui`: Sets up the user interface and displays progress bars.
+   - `create_time_chart`: Creates a time-based chart for visualization.
+   - `create_chart`: Creates a categorical chart for visualization.
+
+6. **Abstract Methods**:
+   - `process_bam`: Must be implemented by subclasses to define how BAM files are processed.
+   - `setup_ui`: Must be implemented by subclasses to set up the user interface for the analysis.
+   - `cleanup`: Optional method for cleaning up resources when the app is closed.
+   - `check_resources`: Optional method for checking required resources for the analysis.
+
+Dependencies:
+- `queue`
+- `nicegui` (ui, app)
+- `typing` (BinaryIO, Optional, List, Tuple)
+- `pandas`
+- `time`
+- `asyncio`
+- `threading`
+- `collections.Counter`
+- `logging`
+
+Example usage::
+
+    from base_analysis import BaseAnalysis
+
+    class CustomAnalysis(BaseAnalysis):
+        def process_bam(self, bamfile, timestamp):
+            # Implement custom BAM file processing logic
+            pass
+
+        def setup_ui(self):
+            # Implement custom UI setup logic
+            pass
+
+    analysis = CustomAnalysis(threads=4, outputfolder='/path/to/output', analysis_name='ExampleAnalysis')
+    analysis.process_data()
+
 """
 
 import queue
-from nicegui import ui
-from typing import BinaryIO
+from nicegui import ui, app
+from typing import BinaryIO, Optional, List, Tuple
 import pandas as pd
 import time
-import asyncio
 import threading
+from collections import Counter
+import os
+import logging
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 class BaseAnalysis:
+    """
+    A base class for analysis of BAM files output during a sequencing run.
+
+    This class provides a queue to receive BAM files and a background thread to process the data.
+    It also provides a render pipeline for displaying progress and results.
+
+    Args:
+        threads (int): Number of threads to use for processing.
+        outputfolder (str): Directory to store output files.
+        analysis_name (str): Name of the analysis.
+        summary (Optional[str]): Summary of the analysis.
+        bamqueue (Optional[queue.Queue]): Queue to hold BAM files.
+        progress (bool): Flag to display progress bars.
+        batch (bool): Flag to enable batch processing.
+        start_time (Optional[float]): Start time of the analysis.
+        browse (bool): Flag to enable browsing of results.
+        uuid (Optional[str]): Unique identifier for the analysis instance.
+    """
+
     def __init__(
-            self,
-            threads,
-            outputfolder,
-            summary=None,
-            bamqueue=None,
-            progress=False,
-            batch=False,
-            start_time=None,
-            *args,
-            **kwargs,
-    ):
-        if bamqueue:
-            self.bamqueue = bamqueue
-        else:
-            self.bamqueue = queue.Queue()
+        self,
+        threads: int,
+        outputfolder: str,
+        analysis_name: str,
+        summary: Optional[str] = None,
+        bamqueue: Optional[queue.Queue] = None,
+        progress: bool = False,
+        batch: bool = False,
+        start_time: Optional[float] = None,
+        browse: bool = False,
+        uuid: Optional[str] = None,
+        *args,
+        **kwargs,
+    ) -> None:
+        self.mainuuid = uuid
+        self.bamqueue = bamqueue if bamqueue else queue.Queue()
+        self.name = analysis_name
         self.start_time = start_time
         self.batch = batch
         self.output = outputfolder
         self.summary = summary
-        self.setup_ui()
-        if progress:
-            self.progress()
-        self.bam_count = 0
-        self.bam_processed = 0
-        self.bams_in_processing = 0
+        self.browse = browse
+        self.progress = progress
+        self.file_mod_times = {}
+
+        if self.name not in app.storage.general.get(self.mainuuid, {}):
+            app.storage.general.setdefault(self.mainuuid, {})[self.name] = {
+                "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
+            }
         self.running = False
-        if threads > 1:
-            self.threads = int(threads / 2)
-        else:
-            self.threads = threads
-        if batch:
-            self.bams = []
+        self.threads = max(1, threads // 2)
+
+    def check_file_time(self, file_path: str) -> bool:
+        """
+        Check if the file exists and whether it has been modified since last seen.
+
+        Args:
+            file_path (str): Path to the file.
+
+        Returns:
+            bool: True if the file exists and has been modified, False otherwise.
+        """
+        if not os.path.exists(file_path):
+            return False
+
+        current_mod_time = os.path.getmtime(file_path)
+
+        if file_path not in self.file_mod_times:
+            self.file_mod_times[file_path] = current_mod_time
+            return True
+
+        if self.file_mod_times[file_path] == current_mod_time:
+            return False
+
+        self.file_mod_times[file_path] = current_mod_time
+        return True
+
+    async def render_ui(self) -> None:
+        """
+        Set up the user interface for the analysis and display progress bars if enabled.
+        """
+        self.setup_ui()
+        if self.progress and not self.browse:
+            self.progress_bars()
+
+    def process_data(self) -> None:
+        """
+        Start processing BAM files either in batch mode or in a continuous timer mode.
+        """
+        if self.batch:
+            self.bams: List[Tuple[BinaryIO, Optional[float]]] = []
             self.batch_timer_run()
         else:
             self.timer_run()
 
-    def timer_run(self):
-        self.timer = ui.timer(0.1, self._worker)
-
-    async def _worker(self):
+    def timer_run(self) -> None:
         """
+        Set up a timer to periodically run the _worker method for processing BAM files.
+        """
+        self.timer = ui.timer(1, self._worker)
+
+    async def _worker(self) -> None:
+        """
+        Process BAM files from the queue in the background.
+
         This function takes reads from the queue and adds them to the background thread for processing.
         """
         self.timer.active = False
         if not self.bamqueue.empty() and not self.running:
             self.running = True
             bamfile, timestamp = self.bamqueue.get()
-            self.bam_count += 1
+            app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += 1
+
             if not timestamp:
                 timestamp = time.time()
-            # print (bamfile,timestamp)
             await self.process_bam(bamfile, timestamp)
-            self.bam_processed += 1
-        else:
-            await asyncio.sleep(1)
+            app.storage.general[self.mainuuid][self.name]["counters"]["bam_processed"] += 1
+
         self.timer.active = True
 
-    def add_bam(self, bamfile: BinaryIO, timestamp=None):
+    def add_bam(self, bamfile: BinaryIO, timestamp: Optional[float] = None) -> None:
         """
-        Adds a bam file to the queue for processing.
-        :param bamfile: The path to the bam file to process.
-        :return:
-        """
-        self.bamqueue.put([bamfile, timestamp])
-        # self.bam_count += 1
+        Adds a BAM file to the queue for processing.
 
-    def batch_timer_run(self):
-        self.timer = ui.timer(1, self._batch_worker)
-
-    async def _batch_worker(self):
+        Args:
+            bamfile (BinaryIO): The BAM file to process.
+            timestamp (Optional[float]): The timestamp indicating when the file was generated.
         """
-        This function takes bam files from a queue in batches and adds them to a background thread for processing.
+        self.bamqueue.put((bamfile, timestamp))
+
+    def batch_timer_run(self) -> None:
+        """
+        Set up a timer to periodically run the _batch_worker method for batch processing of BAM files.
+        """
+        self.timer = ui.timer(5, self._batch_worker)
+
+    async def _batch_worker(self) -> None:
+        """
+        Process BAM files from the queue in batches in the background.
+
+        This function takes BAM files from a queue in batches and adds them to a background thread for processing.
         """
         self.timer.active = False
+        count = 0
         while self.bamqueue.qsize() > 0:
-            self.bams.append((self.bamqueue.get()))
-            self.bam_count += 1
-            # self.bams_in_processing += 1
-        if not self.running and len(self.bams) > 0:
+            self.bams.append(self.bamqueue.get())
+            count += 1
+            if count >= 200:
+                break
+        app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += count
+
+        if not self.running and self.bams:
             self.running = True
             await self.process_bam(self.bams)
-        else:
-            await asyncio.sleep(1)
+
         self.timer.active = True
 
     @property
-    def _progress(self):
+    def _progress(self) -> float:
         """
-        This property generates a progress bar indicating the number of files that have been successfully processed.
+        Calculate the progress of BAM file processing.
+
+        Returns:
+            float: The progress as a fraction of processed files over total files.
         """
-        if self.bam_count == 0:
-            return 0
-        return (self.bam_processed) / self.bam_count
+        counters = app.storage.general[self.mainuuid][self.name]["counters"]
+        if counters["bam_count"] == 0:
+            return 0.0
+        return counters["bam_processed"] / counters["bam_count"]
 
     @property
-    def _progress2(self):
-        if self.bam_count == 0:
-            return 0
-        return (self.bams_in_processing) / self.bam_count
+    def _progress2(self) -> float:
+        """
+        Calculate the progress of BAM files currently being processed.
+
+        Returns:
+            float: The progress as a fraction of files being processed over total files.
+        """
+        counters = app.storage.general[self.mainuuid][self.name]["counters"]
+        if counters["bam_count"] == 0:
+            return 0.0
+        return counters["bams_in_processing"] / counters["bam_count"]
 
     @property
-    def _not_analysed(self):
-        if self.bam_count == 0:
-            return 0
+    def _not_analysed(self) -> float:
+        """
+        Calculate the fraction of BAM files not yet analysed.
+
+        Returns:
+            float: The fraction of files not yet processed over total files.
+        """
+        counters = app.storage.general[self.mainuuid][self.name]["counters"]
+        if counters["bam_count"] == 0:
+            return 0.0
         return (
-                self.bam_count - self.bams_in_processing - self.bam_processed
-        ) / self.bam_count
+            counters["bam_count"]
+            - counters["bams_in_processing"]
+            - counters["bam_processed"]
+        ) / counters["bam_count"]
 
-    def progress(self):
+    def progress_bars(self) -> None:
         """
-        Show a progress bar for the number of bam files processed.
-        :return:
+        Show a progress bar for the number of BAM files processed.
         """
         self.progress_trackers = ui.card().classes("w-full")
         with self.progress_trackers:
             with ui.row():
                 ui.label("File Tracker").tailwind("drop-shadow", "font-bold")
                 ui.label().bind_text_from(
-                    self, "bam_count", backward=lambda n: f"Bam files seen: {n}"
+                    app.storage.general[self.mainuuid][self.name]["counters"],
+                    "bam_count",
+                    backward=lambda n: f"Bam files seen: {n}",
                 )
                 if self.batch:
                     ui.label().bind_text_from(
-                        self,
+                        app.storage.general[self.mainuuid][self.name]["counters"],
                         "bams_in_processing",
                         backward=lambda n: f"Bam files being processed: {n}",
                     )
                 ui.label().bind_text_from(
-                    self,
+                    app.storage.general[self.mainuuid][self.name]["counters"],
                     "bam_processed",
                     backward=lambda n: f"Bam files processed: {n}",
                 )
@@ -182,29 +339,45 @@ class BaseAnalysis:
             )
             ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
 
-    def playback(self, data: pd.DataFrame, step_size=2, start_time=None):
-        self.data = data
-        playback = threading.Thread(target=self.playback_bams, args=([step_size, start_time]))
-        playback.daemon = True
-        playback.start()
-
-    def playback_bams(self, step_size=2, start_time=None):
+    def playback(
+        self, data: pd.DataFrame, step_size: int = 2, start_time: Optional[float] = None
+    ) -> None:
         """
-        This function plays back the processing of bam files from a pandas dataframe.
-        To simulate the behaviour of a run it adds files to the queue in the order in which they were produced.
-        The run time for each individual processing loop is monitored and the reads are added to the queue
-        accounting for this delay.
-        The delay is calculated by the offset parameter which starts as 0.
+        Simulate the processing of BAM files from a dataframe in playback mode.
 
+        Args:
+            data (pd.DataFrame): The dataframe containing BAM file information.
+            step_size (int): The step size for the playback.
+            start_time (Optional[float]): The start time of the playback.
+        """
+        self.data = data
+        playback_thread = threading.Thread(
+            target=self.playback_bams, args=(step_size, start_time)
+        )
+        playback_thread.daemon = True
+        playback_thread.start()
+
+    def playback_bams(
+        self, step_size: int = 2, start_time: Optional[float] = None
+    ) -> None:
+        """
+        Simulate the processing of BAM files from a pandas dataframe.
+
+        This function plays back the processing of BAM files from a pandas dataframe.
+        To simulate the behavior of a run, it adds files to the queue in the order in which they were produced.
+        The run time for each individual processing loop is monitored, and the reads are added to the queue
+        accounting for this delay. The delay is calculated by the offset parameter which starts as 0.
+
+        Args:
+            step_size (int): The step size for the playback.
+            start_time (Optional[float]): The start time of the playback.
         """
         latest_timestamps = self.data
         self.offset = 0
-        #print (start_time)
         playback_start_time = time.time()
         for index, row in latest_timestamps.iterrows():
             elapsed_time = (time.time() - playback_start_time) + self.offset
-            time_diff = row["file_produced"] #- elapsed_time
-            #print (elapsed_time, time_diff, row["file_produced"])
+            time_diff = row["file_produced"]
             if self.offset == 0:
                 self.offset = time_diff
                 time_diff = 0
@@ -216,45 +389,112 @@ class BaseAnalysis:
                     time.sleep(1)
                     self.offset += step_size
                     elapsed_time += self.offset
-            #print("out the loop")
-            #print (f"elapsed time now {elapsed_time}")
             if len(row["full_path"]) > 0:
                 # Here we check that the path to the bam file absolutely exists.
-                self.add_bam(row["full_path"], playback_start_time+row["file_produced"])
+                self.add_bam(
+                    row["full_path"], playback_start_time + row["file_produced"]
+                )
 
-    def process_bam(self, bamfile, timestamp):
+    def create_time_chart(self, title: str) -> ui.echart:
         """
-        Process a bam file.
-        :param bamfile: The path to the bam file to process.
-        :param timestamp: A time stamp indicating when the file was generated.
-        :return:
+        Create a time chart for visualizing data.
+
+        Args:
+            title (str): The title of the chart.
+
+        Returns:
+            ui.echart: The Echarts object configured for time series data.
+        """
+        return (
+            ui.echart(
+                {
+                    "textStyle": {
+                        "fontFamily": "Fira Sans, Fira Mono"
+                    },
+                    "animation": False,
+                    "grid": {"containLabel": True},
+                    "title": {"text": title},
+                    "toolbox": {
+                        "show": True,
+                        "feature": {
+                            "dataZoom": {"yAxisIndex": "none"},
+                            "restore": {},
+                            "saveAsImage": {},
+                        },
+                    },
+                    "xAxis": {"type": "time"},
+                    "yAxis": {"type": "value", "data": [], "inverse": False},
+                    "series": [],
+                }
+            )
+            .style("height: 350px")
+            .classes("border-double")
+        )
+
+    def create_chart(self, title: str) -> ui.echart:
+        """
+        Create a categorical chart for visualizing data.
+
+        Args:
+            title (str): The title of the chart.
+
+        Returns:
+            ui.echart: The Echarts object configured for categorical data.
+        """
+        return (
+            ui.echart(
+                {
+                    "textStyle": {
+                        "fontFamily": "Fira Sans, Fira Mono"
+                    },
+                    "animation": False,
+                    "grid": {"containLabel": True},
+                    "title": {"text": title},
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
+                    "xAxis": {"type": "value", "max": 1},
+                    "yAxis": {"type": "category", "data": [], "inverse": True},
+                    "series": [],
+                }
+            )
+            .style("color: #6E93D6; font-size: 150%; font-weight: 300; height: 350px")
+            .classes("border-double")
+        )
+
+    def process_bam(self, bamfile: BinaryIO, timestamp: float) -> None:
+        """
+        Process a BAM file.
+
+        Args:
+            bamfile (BinaryIO): The BAM file to process.
+            timestamp (float): A timestamp indicating when the file was generated.
         """
         raise NotImplementedError("Subclasses must implement this method.")
 
-    def setup_ui(self):
+    def setup_ui(self) -> None:
         """
         Set up the user interface for the analysis.
+
         This function should be overridden by subclasses to create the user interface for the analysis.
         It should create the necessary widgets and add them to the display.
         The function should do no work of its own. That should all be done in the process_bam method.
         The function may call other methods to trigger updates to the display.
-        :return:
         """
         raise NotImplementedError("Subclasses must implement this method.")
 
-
-    def cleanup(self):
+    def cleanup(self) -> None:
         """
+        Clean up any resources used by the analysis.
+
         This function is called when the app is closed.
         It should be overridden by subclasses to clean up any resources used by the analysis.
-        :return:
         """
         pass
 
-    def check_resources(self):
+    def check_resources(self) -> None:
         """
+        Check the resources required for the analysis.
+
         This function is called to check the resources required for the analysis are present.
         It should be overridden by subclasses to check the resources required for the analysis are present.
-        :return:
         """
         pass

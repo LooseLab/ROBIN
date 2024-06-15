@@ -9,14 +9,24 @@ dependencies:
   - bioconda::bioconductor-genomicranges
   - bioconda::snpsift
   - bioconda::snpeff
+  - bioconda::samtools
+  - bioconda::bedtools
+  - bioconda::ont-modkit==0.3.0
   - r-optparse
   - r-data.table
   - conda-forge::r-ranger
   - r-matrixStats
   - r-glmnet
+  - ruptures
   - python >=3.9.0,<3.10
   - pip
   - pip:
     - readfish
     - ont-pyguppy-client-lib
+    - scikit-learn==1.0.2
+    - scipy==1.12.0
+    - psutil
     #- git+https://github.com/LooseLab/cnsmeth
+variables:
+  _JAVA_OPTIONS: -Xmx8g
+

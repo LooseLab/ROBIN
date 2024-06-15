@@ -27,7 +27,7 @@ dependencies = [
   "niceGUI",
   "click",
   "flet",
-  "cnv_from_bam==0.4.4b1",
+  "cnv_from_bam",
   "watchdog",
   "pysam",
   "pandas",
@@ -38,15 +38,19 @@ dependencies = [
   "gff3_parser",
   "dna_features_viewer",
   "natsort",
+  "reportlab",
+  "icecream",
+  "psutil",
+  "ruptures",
   "pywebview",
   "torch",
-  "scikit-learn==1.0.2",
+  "scikit-learn",
   "yappi",
   "tabulate",
 ]
 
 [project.scripts]
-cnsmeth = "cnsmeth.CNSstartup:package_run"
+cnsmeth = "cnsmeth.main:package_run"
 
 [project.urls]
 Documentation = "https://github.com/unknown/cnsmeth#readme"
