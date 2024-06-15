@@ -37,6 +37,20 @@ class ReadBam:
         else:
             self.state = "fail"
 
+    def summary(self) -> Dict[str, Any]:
+        """
+        Returns a summary of the BAM file.
+
+        Returns:
+            A dictionary containing the number of mapped and unmapped reads.
+        """
+        return {
+            "mapped_reads": self.mapped_reads,
+            "unmapped_reads": self.unmapped_reads,
+            "yield_tracking": self.yield_tracking,
+            "state": self.state,
+        }
+
     def get_rg_tags(
         self,
     ) -> Optional[

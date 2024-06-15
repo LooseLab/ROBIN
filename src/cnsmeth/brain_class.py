@@ -138,8 +138,9 @@ def check_bam(bamfile):
     :return:
     """
     pysam.index(bamfile)
-    bamdata = ReadBam(bamfile)
-    baminfo = bamdata.process_reads()
+    bam = ReadBam(bamfile)
+    baminfo = bam.process_reads()
+    bamdata = bam.summary()
     return baminfo, bamdata
 
 
@@ -680,40 +681,37 @@ class BrainMeth:
 
     async def _bam_worker(self):
         self.bam_tracker.active = False
-        print (f"bam worker {self.mainuuid}")
         if not self.bam_tracking.empty():
             while not self.bam_tracking.empty():
                 file = self.bam_tracking.get()
-                #loop = asyncio.get_running_loop()
-                #baminfo, bamdata = await loop.run_in_executor(None, check_bam, file)
-                baminfo, bamdata = check_bam(file)
+                baminfo, bamdata = await run.cpu_bound(check_bam, file)
                 if baminfo["state"] == "pass":
                     app.storage.general[self.mainuuid]["file_counters"][
                         "bam_passed"
                     ] += 1
                     app.storage.general[self.mainuuid]["file_counters"][
                         "pass_mapped_count"
-                    ] += bamdata.mapped_reads
+                    ] += bamdata['mapped_reads']
                     app.storage.general[self.mainuuid]["file_counters"][
                         "pass_unmapped_count"
-                    ] += bamdata.unmapped_reads
+                    ] += bamdata['unmapped_reads']
                     app.storage.general[self.mainuuid]["file_counters"][
                         "pass_bases_count"
-                    ] += bamdata.yield_tracking
+                    ] += bamdata['yield_tracking']
                 else:
                     app.storage.general[self.mainuuid]["file_counters"][
                         "bam_failed"
                     ] += 1
                     app.storage.general[self.mainuuid]["file_counters"][
                         "fail_mapped_count"
-                    ] += bamdata.mapped_reads
+                    ] += bamdata['mapped_reads']
                     app.storage.general[self.mainuuid]["file_counters"][
                         "fail_unmapped_count"
-                    ] += bamdata.unmapped_reads
+                    ] += bamdata['unmapped_reads']
                     app.storage.general[self.mainuuid]["file_counters"][
                         "fail_bases_count"
-                    ] += bamdata.yield_tracking
-                # self.basecall_models.add(baminfo["basecall_model"])
+                    ] += bamdata['yield_tracking']
+                    # self.basecall_models.add(baminfo["basecall_model"])
                 if (
                     baminfo["device_position"]
                     not in app.storage.general[self.mainuuid]["devices"]
@@ -754,13 +752,13 @@ class BrainMeth:
                 # self.run_time.add(baminfo["time_of_run"])
                 app.storage.general[self.mainuuid]["file_counters"][
                     "mapped_count"
-                ] += bamdata.mapped_reads
+                ] += bamdata['mapped_reads']
                 app.storage.general[self.mainuuid]["file_counters"][
                     "unmapped_count"
-                ] += bamdata.unmapped_reads
+                ] += bamdata['unmapped_reads']
                 app.storage.general[self.mainuuid]["file_counters"][
                     "bases_count"
-                ] += bamdata.yield_tracking
+                ] += bamdata['yield_tracking']
 
                 mydf = pd.DataFrame.from_dict(app.storage.general)
 
@@ -778,7 +776,6 @@ class BrainMeth:
         :param self:
         :return:
         """
-        print(f"Processing bams {self.mainuuid}")
         self.process_bams_tracker.active = False
         counter = 0
         # while True:
