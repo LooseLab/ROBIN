@@ -675,7 +675,7 @@ class BrainMeth:
 
     async def background_process_bams(self):
         await asyncio.sleep(5)
-        self.process_bams_tracker = ui.timer(5, self.process_bams)
+        self.process_bams_tracker = ui.timer(30, self.process_bams)
         self.bam_tracker = ui.timer(0.1, self._bam_worker)
 
     async def _bam_worker(self):
@@ -812,7 +812,7 @@ class BrainMeth:
                     self.bamforfusions.put([file[0], file[1]])
                 # if counter > 25:
                 #    break
-                await asyncio.sleep(0)
+                #await asyncio.sleep(0)
             self.nofiles = True
         self.process_bams_tracker.active = True
 
