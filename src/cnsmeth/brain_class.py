@@ -196,9 +196,7 @@ class BrainMeth:
         app.storage.general[self.mainuuid]["run_time"] = []  # set()
         app.storage.general[self.mainuuid]["flowcell_ids"] = []  # set()
         app.storage.general[self.mainuuid]["sample_ids"] = []  # set()
-        if self.watchfolder:
-            print(f"Adding a watchfolder {self.watchfolder}")
-            await self.add_watchfolder(self.watchfolder)
+
         self.bam_tracking = Queue()
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
@@ -207,6 +205,10 @@ class BrainMeth:
         self.bamfortargetcoverage = Queue()
         self.bamformgmt = Queue()
         self.bamforfusions = Queue()
+
+        if self.watchfolder:
+            print(f"Adding a watchfolder {self.watchfolder}")
+            await self.add_watchfolder(self.watchfolder)
 
         if "sturgeon" not in self.exclude:
             self.Sturgeon = Sturgeon_object(
@@ -677,7 +679,7 @@ class BrainMeth:
         self.bam_tracker = ui.timer(0.1, self._bam_worker)
 
     async def _bam_worker(self):
-        self.bam_tracker.deactivate()
+        self.bam_tracker.active = False
         if not self.bam_tracking.empty():
             while not self.bam_tracking.empty():
                 file = self.bam_tracking.get()
@@ -761,7 +763,7 @@ class BrainMeth:
                 mydf = pd.DataFrame.from_dict(app.storage.general)
 
                 mydf.to_csv(os.path.join(self.output, "master.csv"))
-        self.bam_tracker.activate()
+        self.bam_tracker.active = True
 
                 # self.check_bam(file)
                 # await asyncio.sleep(0)
@@ -774,7 +776,7 @@ class BrainMeth:
         :param self:
         :return:
         """
-        self.process_bams_tracker.deactivate()
+        self.process_bams_tracker.active = False
         counter = 0
         # while True:
         # print(f"We're processing a bam man - {self.mainuuid}")
@@ -809,7 +811,7 @@ class BrainMeth:
                 #    break
                 await asyncio.sleep(0)
             self.nofiles = True
-        self.process_bams_tracker.activate()
+        self.process_bams_tracker.active = True
 
     async def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
