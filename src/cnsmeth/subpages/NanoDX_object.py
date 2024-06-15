@@ -65,6 +65,7 @@ from cnsmeth.utilities.merge_bedmethyl import (
     collapse_bedmethyl,
 )
 from typing import List, Tuple, Optional, Dict, Any
+from icecream import ic
 
 
 
@@ -114,7 +115,7 @@ def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, n
     """
     NN = NN_classifier(modelfile)
     try:
-        predictions, class_labels, n_features = NN.predict(test_df)
+        predictions, class_labels, n_features = ic(NN.predict(test_df))
     except Exception as e:
         print(e)
         test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
@@ -364,13 +365,15 @@ class NanoDX_object(BaseAnalysis):
                 left_on=["chrom", "start_pos"],
                 right_on=[0, 1],
             )
+            ic(test_df)
             test_df.rename(
                 columns={3: "probe_id", "fraction": "methylation_call"},
                 inplace=True,
             )
+            ic(test_df)
             test_df.loc[test_df["methylation_call"] < 60, "methylation_call"] = -1
             test_df.loc[test_df["methylation_call"] >= 60, "methylation_call"] = 1
-
+            ic(test_df)
             predictions, class_labels, n_features = await run.cpu_bound(
                 classification, self.modelfile, test_df
             )
