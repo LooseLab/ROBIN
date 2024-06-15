@@ -173,7 +173,7 @@ class BrainMeth:
         self.reference = reference
         self.observer = None
 
-    async def init(self):
+    async def start_background(self):
         #logger.debug("Init Brain Class")
         app.storage.general[self.mainuuid]["bam_count"] = {}
         app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)

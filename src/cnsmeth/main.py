@@ -310,8 +310,8 @@ class Methnice:
         """
         Async method to start analysis.
         """
-        self.timer = ui.timer(1, self._worker)
-        await self.robin.init()
+        #self.timer = ui.timer(1, self._worker)
+        await self.robin.start_background()
 
     async def browse_page(self) -> None:
         """
