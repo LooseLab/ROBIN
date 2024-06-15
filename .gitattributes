@@ -1,4 +1,4 @@
 src/methnicegui/models/general.zip filter=lfs diff=lfs merge=lfs -text
 src/methnicegui/resources/subset_gencode.v45.annotation.gff3 filter=lfs diff=lfs merge=lfs -text
-src/cnsmeth/models/Capper_et_al_NN.pkl filter=lfs diff=lfs merge=lfs -text
-src/cnsmeth/resources/clinvar.vcf filter=lfs diff=lfs merge=lfs -text
+src/robin/models/Capper_et_al_NN.pkl filter=lfs diff=lfs merge=lfs -text
+src/robin/resources/clinvar.vcf filter=lfs diff=lfs merge=lfs -text
