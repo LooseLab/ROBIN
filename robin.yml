@@ -6,12 +6,12 @@ channels:
 dependencies:
   - git-lfs
   - r-base
-  - bioconda::bioconductor-genomicranges
+#  - bioconductor-genomicranges
   - bioconda::snpsift
   - bioconda::snpeff
-  - bioconda::samtools
-  - bioconda::bedtools
-  - bioconda::ont-modkit==0.3.0
+#  - bioconda::samtools
+#  - bioconda::bedtools
+#  - bioconda::ont-modkit==0.3.0
   - r-optparse
   - r-data.table
   - conda-forge::r-ranger
