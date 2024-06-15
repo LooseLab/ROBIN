@@ -680,8 +680,9 @@ class BrainMeth:
         if not self.bam_tracking.empty():
             while not self.bam_tracking.empty():
                 file = self.bam_tracking.get()
-                loop = asyncio.get_event_loop()
-                baminfo, bamdata = await loop.run_in_executor(None, check_bam, file)
+                #loop = asyncio.get_event_loop()
+                #baminfo, bamdata = await loop.run_in_executor(None, check_bam, file)
+                baminfo, bamdata = await ui.timer(0.1, check_bam, file, once=True)
                 if baminfo["state"] == "pass":
                     app.storage.general[self.mainuuid]["file_counters"][
                         "bam_passed"
