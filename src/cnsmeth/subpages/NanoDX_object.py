@@ -81,9 +81,12 @@ def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
         threads (int): Number of threads to use.
     """
     try:
+        #print (f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp}")
         os.system(
-            f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp} --suppress-progress >/dev/null 2>&1"
+                f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp} --suppress-progress >/dev/null 2>&1"
         )
+        #shutil.copy(f"{sortfile}","modkit.bam")
+        #shutil.copy(f"{temp}", "modkitoutput.bed")
     except Exception as e:
         print(e)
 
@@ -101,6 +104,11 @@ def run_samtools_sort(file: str, tomerge: List[str], sortfile: str, threads: int
     pysam.cat("-o", file, *tomerge)
     pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
 
+modelfile = os.path.join(
+            os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
+        )
+
+NN = NN_classifier(modelfile)
 
 def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, int]:
     """
@@ -113,11 +121,11 @@ def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, n
     Returns:
         Tuple[np.ndarray, np.ndarray, int]: Predictions, class labels, and number of features.
     """
-    NN = NN_classifier(modelfile)
+    #NN = NN_classifier(modelfile)
     try:
-        predictions, class_labels, n_features = ic(NN.predict(test_df))
+        predictions, class_labels, n_features = NN.predict(test_df)
     except Exception as e:
-        print(e)
+        ic(e)
         test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
         # sys.exit(1)
     return predictions, class_labels, n_features
@@ -365,15 +373,12 @@ class NanoDX_object(BaseAnalysis):
                 left_on=["chrom", "start_pos"],
                 right_on=[0, 1],
             )
-            ic(test_df)
             test_df.rename(
                 columns={3: "probe_id", "fraction": "methylation_call"},
                 inplace=True,
             )
-            ic(test_df)
             test_df.loc[test_df["methylation_call"] < 60, "methylation_call"] = -1
             test_df.loc[test_df["methylation_call"] >= 60, "methylation_call"] = 1
-            ic(test_df)
             predictions, class_labels, n_features = await run.cpu_bound(
                 classification, self.modelfile, test_df
             )
