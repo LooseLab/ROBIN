@@ -4,6 +4,3 @@
 [submodule "src/robin/submodules/nanoDX"]
 	path = src/robin/submodules/nanoDX
 	url = https://gitlab.com/pesk/nanoDx.git
-[submodule "src/cnsmeth/submodules/nanoDX"]
-	path = src/cnsmeth/submodules/nanoDX
-	url = https://gitlab.com/pesk/nanoDx.git
