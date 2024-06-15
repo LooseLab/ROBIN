@@ -673,10 +673,11 @@ class BrainMeth:
 
     async def background_process_bams(self):
         await asyncio.sleep(5)
-        ui.timer(5, self.process_bams)
+        self.process_bams_tracker = ui.timer(5, self.process_bams)
         self.bam_tracker = ui.timer(0.1, self._bam_worker)
 
     async def _bam_worker(self):
+        self.bam_tracker.deactivate()
         if not self.bam_tracking.empty():
             while not self.bam_tracking.empty():
                 file = self.bam_tracking.get()
@@ -760,6 +761,7 @@ class BrainMeth:
                 mydf = pd.DataFrame.from_dict(app.storage.general)
 
                 mydf.to_csv(os.path.join(self.output, "master.csv"))
+        self.bam_tracker.activate()
 
                 # self.check_bam(file)
                 # await asyncio.sleep(0)
@@ -772,6 +774,7 @@ class BrainMeth:
         :param self:
         :return:
         """
+        self.process_bams_tracker.deactivate()
         counter = 0
         # while True:
         # print(f"We're processing a bam man - {self.mainuuid}")
@@ -806,6 +809,7 @@ class BrainMeth:
                 #    break
                 await asyncio.sleep(0)
             self.nofiles = True
+        self.process_bams_tracker.activate()
 
     async def check_existing_bams(self, sequencing_summary=None):
         file_endings = {".bam"}
