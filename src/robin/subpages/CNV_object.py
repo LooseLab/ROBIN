@@ -36,7 +36,7 @@ Key Components:
 
 Dependencies:
 - `cnv_from_bam.iterate_bam_file`
-- `cnsmeth.subpages.base_analysis.BaseAnalysis`
+- `robin.subpages.base_analysis.BaseAnalysis`
 - `natsort`
 - `pandas`
 - `logging`
@@ -66,9 +66,9 @@ if __name__ in {"__main__", "__mp_main__"}:
 """
 
 from cnv_from_bam import iterate_bam_file
-from cnsmeth.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis
 import natsort
-from cnsmeth import theme, resources
+from robin import theme, resources
 import pandas as pd
 import logging
 import numpy as np

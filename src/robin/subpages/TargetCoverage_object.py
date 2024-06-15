@@ -5,9 +5,9 @@ This code has the following known issues:
 
 """
 
-from cnsmeth.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis
 import natsort
-from cnsmeth import theme, resources
+from robin import theme, resources
 import pandas as pd
 import numpy as np
 import os
@@ -24,7 +24,7 @@ import shutil
 import queue
 import subprocess
 
-from cnsmeth.subpages.SNPview import SNPview
+from robin.subpages.SNPview import SNPview
 
 os.environ["CI"] = "1"
 

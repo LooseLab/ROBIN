@@ -26,7 +26,7 @@ from datetime import datetime
 import base64
 import pickle
 
-from cnsmeth.subpages.CNV_object import Result
+from robin.subpages.CNV_object import Result
 
 
 def convert_to_space_separated_string(array):
@@ -98,7 +98,7 @@ class HeaderFooterCanvas(canvas.Canvas):
         header3.drawOn(self, inch, height - h - inch + 12)
 
         # Add logo to the top right corner of the header
-        logo_path = "src/cnsmeth/images/MethBrain_small.png"  # Replace with the path to your logo
+        logo_path = "src/robin/images/MethBrain_small.png"  # Replace with the path to your logo
         max_logo_size = 40  # Maximum width and height in pixels
         self.drawImage(
             logo_path,
@@ -773,10 +773,10 @@ if __name__ == "__main__":
     # Create a sample plot
     # Register the custom fonts
     pdfmetrics.registerFont(
-        TTFont("FiraSans", "src/cnsmeth/fonts/fira-sans-v16-latin-regular.ttf")
+        TTFont("FiraSans", "src/robin/fonts/fira-sans-v16-latin-regular.ttf")
     )
     pdfmetrics.registerFont(
-        TTFont("FiraSans-Bold", "src/cnsmeth/fonts/fira-sans-v16-latin-700.ttf")
+        TTFont("FiraSans-Bold", "src/robin/fonts/fira-sans-v16-latin-700.ttf")
     )  # Assuming this is the path for the bold version
 
     # Update styles to use the custom font

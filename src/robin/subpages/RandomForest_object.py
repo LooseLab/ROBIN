@@ -1,12 +1,12 @@
-from cnsmeth.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis
 import os
 import tempfile
 import time
 import pandas as pd
 from nicegui import ui, app, run
-from cnsmeth import theme, resources
+from robin import theme, resources
 import pysam
-from cnsmeth import models
+from robin import models
 from sturgeon.callmapping import (
     merge_probes_methyl_calls,
     probes_methyl_calls_to_bed,
@@ -16,9 +16,9 @@ import yappi
 import tabulate
 
 import asyncio
-from cnsmeth import submodules
+from robin import submodules
 
-from cnsmeth.utilities.merge_bedmethyl import (
+from robin.utilities.merge_bedmethyl import (
     merge_bedmethyl,
     save_bedmethyl,
 )

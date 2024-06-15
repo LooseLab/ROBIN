@@ -71,13 +71,13 @@ Dependencies:
 
 - `nicegui` (ui, app)
 
-- `cnsmeth.utilities.bam_handler.BamEventHandler`
+- `robin.utilities.bam_handler.BamEventHandler`
 
-- `cnsmeth.subpages` (MGMT_Object, Sturgeon_object, NanoDX_object, RandomForest_object, CNVAnalysis, TargetCoverage, FusionObject)
+- `robin.subpages` (MGMT_Object, Sturgeon_object, NanoDX_object, RandomForest_object, CNVAnalysis, TargetCoverage, FusionObject)
 
-- `cnsmeth.utilities.local_file_picker.LocalFilePicker`
+- `robin.utilities.local_file_picker.LocalFilePicker`
 
-- `cnsmeth.utilities.ReadBam.ReadBam`
+- `robin.utilities.ReadBam.ReadBam`
 
 - `watchdog.observers.Observer`
 
@@ -99,18 +99,18 @@ Dependencies:
 
 from nicegui import ui, app, run
 
-from cnsmeth.utilities.bam_handler import BamEventHandler
+from robin.utilities.bam_handler import BamEventHandler
 
-from cnsmeth.subpages.MGMT_object import MGMT_Object
-from cnsmeth.subpages.Sturgeon_object import Sturgeon_object
-from cnsmeth.subpages.NanoDX_object import NanoDX_object
-from cnsmeth.subpages.RandomForest_object import RandomForest_object
+from robin.subpages.MGMT_object import MGMT_Object
+from robin.subpages.Sturgeon_object import Sturgeon_object
+from robin.subpages.NanoDX_object import NanoDX_object
+from robin.subpages.RandomForest_object import RandomForest_object
 
-from cnsmeth.subpages.CNV_object import CNVAnalysis
-from cnsmeth.subpages.TargetCoverage_object import TargetCoverage
-from cnsmeth.subpages.Fusion_object import FusionObject
-from cnsmeth.utilities.local_file_picker import LocalFilePicker
-from cnsmeth.utilities.ReadBam import ReadBam
+from robin.subpages.CNV_object import CNVAnalysis
+from robin.subpages.TargetCoverage_object import TargetCoverage
+from robin.subpages.Fusion_object import FusionObject
+from robin.utilities.local_file_picker import LocalFilePicker
+from robin.utilities.ReadBam import ReadBam
 
 from watchdog.observers import Observer
 from pathlib import Path

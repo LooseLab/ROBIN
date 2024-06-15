@@ -20,9 +20,9 @@ Dependencies:
     - logging: Logging for debugging and monitoring.
 
 Modules:
-    - subpages.base_analysis: BaseAnalysis class from cnsmeth.subpages.base_analysis.
-    - theme: cnsmeth theme module.
-    - submodules: cnsmeth submodules.
+    - subpages.base_analysis: BaseAnalysis class from robin.subpages.base_analysis.
+    - theme: robin theme module.
+    - submodules: robin submodules.
 
 Environment Variables:
     - CI: Set to "1".
@@ -46,9 +46,9 @@ Usage:
     options like the port, number of threads, watch folder, and output directory.
 """
 
-from cnsmeth.subpages.base_analysis import BaseAnalysis
-from cnsmeth import theme
-from cnsmeth import submodules
+from robin.subpages.base_analysis import BaseAnalysis
+from robin import theme
+from robin import submodules
 import pandas as pd
 import os
 import sys

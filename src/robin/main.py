@@ -41,8 +41,8 @@ Dependencies:
 - `logging`
 - `pathlib.Path`
 - `nicegui` (ui, app)
-- `cnsmeth.theme`
-- `cnsmeth.images`
+- `robin.theme`
+- `robin.images`
 - `configparser.ConfigParser`
 
 Example usage::
@@ -59,12 +59,12 @@ import logging
 from pathlib import Path
 from nicegui import ui, app, events, core, Client
 import nicegui.air
-from cnsmeth import theme
-from cnsmeth import images
+from robin import theme
+from robin import images
 from configparser import ConfigParser
 
-from cnsmeth.brain_class import BrainMeth
-from cnsmeth.minknow_info.minknow_panel import MinKNOWFish
+from robin.brain_class import BrainMeth
+from robin.minknow_info.minknow_panel import MinKNOWFish
 
 
 DEFAULT_CFG: str = "config.ini"

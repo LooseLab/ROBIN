@@ -1,5 +1,5 @@
-from cnsmeth.subpages.base_analysis import BaseAnalysis
-from cnsmeth import theme
+from robin.subpages.base_analysis import BaseAnalysis
+from robin import theme
 import os
 import sys
 from nicegui import ui, app

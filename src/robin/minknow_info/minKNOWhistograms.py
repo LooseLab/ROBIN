@@ -7,7 +7,7 @@ import threading
 import time
 
 
-from cnsmeth import theme
+from robin import theme
 
 from minknow_api.manager import Manager
 import minknow_api.manager_pb2 as manager_pb2

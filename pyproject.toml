@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "cnsmeth"
+name = "robin"
 dynamic = ["version"]
 description = ''
 readme = "README.md"
@@ -50,15 +50,15 @@ dependencies = [
 ]
 
 [project.scripts]
-cnsmeth = "cnsmeth.main:package_run"
+robin = "robin.main:package_run"
 
 [project.urls]
-Documentation = "https://github.com/unknown/cnsmeth#readme"
-Issues = "https://github.com/unknown/cnsmeth/issues"
-Source = "https://github.com/unknown/cnsmeth"
+Documentation = "https://github.com/unknown/robin#readme"
+Issues = "https://github.com/unknown/robin/issues"
+Source = "https://github.com/unknown/robin"
 
 [tool.hatch.version]
-path = "src/cnsmeth/__about__.py"
+path = "src/robin/__about__.py"
 
 [tool.hatch.metadata]
 allow-direct-references=true
@@ -92,19 +92,19 @@ dependencies = [
   "mypy>=1.0.0",
 ]
 [tool.hatch.envs.types.scripts]
-check = "mypy --install-types --non-interactive {args:src/cnsmeth tests}"
+check = "mypy --install-types --non-interactive {args:src/robin tests}"
 
 [tool.coverage.run]
-source_pkgs = ["cnsmeth", "tests"]
+source_pkgs = ["robin", "tests"]
 branch = true
 parallel = true
 omit = [
-  "src/cnsmeth/__about__.py",
+  "src/robin/__about__.py",
 ]
 
 [tool.coverage.paths]
-cnsmeth = ["src/cnsmeth", "*/cnsmeth/src/cnsmeth"]
-tests = ["tests", "*/cnsmeth/tests"]
+robin = ["src/robin", "*/robin/src/robin"]
+tests = ["tests", "*/robin/tests"]
 
 [tool.coverage.report]
 exclude_lines = [

@@ -1,14 +1,14 @@
 # Python imports.
 from __future__ import annotations
 from nicegui import ui
-from cnsmeth import images
+from robin import images
 
 import threading
 
 from datetime import datetime
 
 
-from cnsmeth import theme
+from robin import theme
 
 from minknow_api.manager import Manager
 

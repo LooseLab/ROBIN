@@ -19,9 +19,9 @@ Dependencies:
     - click
 
 Modules:
-    - subpages.base_analysis: BaseAnalysis class from cnsmeth.subpages.base_analysis
-    - theme: cnsmeth theme module
-    - resources: cnsmeth resources module
+    - subpages.base_analysis: BaseAnalysis class from robin.subpages.base_analysis
+    - theme: robin theme module
+    - resources: robin resources module
 
 Environment Variables:
     - CI: Set to "1"
@@ -55,11 +55,11 @@ import pandas as pd
 import click
 from typing import Optional, Tuple
 from nicegui import ui, run
-from cnsmeth import theme, resources
+from robin import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
 import matplotlib
-from cnsmeth.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis
 
 matplotlib.use("agg")
 from matplotlib import pyplot as plt

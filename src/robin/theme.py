@@ -27,7 +27,7 @@ External Dependencies:
 - contextlib.contextmanager
 - nicegui (ui, app, events, core, air)
 - pathlib.Path
-- cnsmeth.images
+- robin.images
 - os
 
 Example usage::
@@ -46,8 +46,8 @@ import nicegui.air
 
 from pathlib import Path
 
-from cnsmeth import images
-from cnsmeth import __about__
+from robin import images
+from robin import __about__
 
 import os
 import psutil
@@ -143,7 +143,7 @@ def frame(navtitle: str):
                 "text-2xl font-bold font-italic drop-shadow"
             )
             ui.separator()
-            ui.link("Code on GitHub", "https://github.com/looselab/cnsmeth")
+            ui.link("Code on GitHub", "https://github.com/looselab/robin")
             ui.link(
                 "Rapid CNS2 Paper",
                 "https://link.springer.com/article/10.1007/s00401-022-02415-6",
@@ -236,7 +236,7 @@ def main():
     app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
 
 
-    ui.run(storage_secret="cnsmeth")
+    ui.run(storage_secret="robin")
 
 if __name__ in {"__main__", "__mp_main__"}:
     #import doctest

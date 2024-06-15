@@ -1,4 +1,4 @@
-# ![MethBrain_small.png](src/cnsmeth/images/MethBrain_small.png)CNSmeth
+# ![MethBrain_small.png](src/robin/images/MethBrain_small.png)ROBIN
 
 [![PyPI - Version](https://img.shields.io/pypi/v/methnicegui.svg)](https://pypi.org/project/methnicegui)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/methnicegui.svg)](https://pypi.org/project/methnicegui)
@@ -15,16 +15,16 @@
 
 ## Installation
 
-We recommend installing 'CNSmeth' using the following conda yml file included in the repository: [cnsmeth.yml](cnsmeth.yml)
+We recommend installing 'robin' using the following conda yml file included in the repository: [robin.yml](robin.yml)
 
 This will install all the required dependencies including R and Python packages as well as readfish and ont-pyguppy-client-lib.
 
-However, in this version of cnsmeth, you will need to install the tool from source. See below for installation details.
+However, in this version of robin, you will need to install the tool from source. See below for installation details.
 
 The contents of this file are:
 
 ```console
-name: cnsmeth
+name: robin
 channels:
   - bioconda
   - conda-forge
@@ -43,26 +43,26 @@ dependencies:
   - pip:
     - readfish
     - ont-pyguppy-client-lib
-    #- git+https://github.com/LooseLab/cnsmeth
+    #- git+https://github.com/LooseLab/robin
 
 ```
 then to create the environment:
 
 ```console
-conda env create -f cnsmeth.yml
+conda env create -f robin.yml
 ```
 
 To activate the environment:
 
 ```console
-conda activate cnsmeth
+conda activate robin
 ```
 
 To install the tool from source:
 
 ```console
-git clone https://github.com/LooseLab/cnsmeth/
-cd cnsmeth
+git clone https://github.com/LooseLab/robin/
+cd robin
 git lfs install
 git lfs pull
 git submodule update --init --recursive
@@ -73,8 +73,8 @@ pip install .
 ## Usage
 
 ```console
-❯ cnsmeth --help
-Usage: cnsmeth [OPTIONS] [WATCHFOLDER] [OUTPUT]
+❯ robin --help
+Usage: robin [OPTIONS] [WATCHFOLDER] [OUTPUT]
 
   Entrypoint for when GUI is launched directly. :return: None
 
@@ -106,7 +106,7 @@ Optional flags include:
 
 - --port: The port to run the GUI on.
 - --threads: The number of threads to use for analysis. This will be the number of threads used by each tool. You should set this with care. On a system with a limited number of cores you should set this to 1. On systems with more CPU cores available you can use more cores. #ToDo: Sensibly manage cores between processes.
-- --simtime: This introduces a delay in the adding of bam files to the pipeline and can be used if pointing cnsmeth at historic data.
+- --simtime: This introduces a delay in the adding of bam files to the pipeline and can be used if pointing robin at historic data.
 - --showerrors: This will display all errors in R. This is useful for debugging. it should be explicitly set - i.e --showerros True
 - --sequencing_summary: This is the path to a sequencing summary file. If provided, timestamps will be taken from this file and data will be loaded based on this file. 
 - --browse: This will allow you to browse historic data. This feature is currently incomplete. #ToDo: Complete this feature!
@@ -116,7 +116,7 @@ Optional flags include:
 A typical command line would look like this:
 
 ```console
-cnsmeth --threads 4  /path/to/watchfolder /path/to/output
+robin --threads 4  /path/to/watchfolder /path/to/output
 ```
 
 Upon launch, the GUI will open in your default browser. It should look something like this:
@@ -181,4 +181,4 @@ This software is provided "as is", and is for research use only.
 
 ## License
 
-`CNSmeth` is distributed under the terms of the [MIT](https://spdx.org/licenses/MIT.html) license.
+`robin` is distributed under the terms of the [MIT](https://spdx.org/licenses/MIT.html) license.

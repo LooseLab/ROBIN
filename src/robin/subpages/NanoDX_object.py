@@ -17,13 +17,13 @@ Dependencies:
     - click: Command-line interface creation.
     - pathlib: File system paths.
     - typing: Type hinting.
-    - cnsmeth: Custom modules for the specific workflow.
+    - robin: Custom modules for the specific workflow.
 
 Modules:
-    - subpages.base_analysis: BaseAnalysis class from cnsmeth.subpages.base_analysis.
-    - theme: cnsmeth theme module.
-    - resources: cnsmeth resources module.
-    - NN_model: NN_classifier class from cnsmeth.submodules.nanoDX.workflow.scripts.NN_model.
+    - subpages.base_analysis: BaseAnalysis class from robin.subpages.base_analysis.
+    - theme: robin theme module.
+    - resources: robin resources module.
+    - NN_model: NN_classifier class from robin.submodules.nanoDX.workflow.scripts.NN_model.
     - merge_bedmethyl: Functions for merging, saving, and collapsing bed methylation data.
 
 Environment Variables:
@@ -46,7 +46,7 @@ Usage:
 """
 
 from __future__ import annotations
-from cnsmeth.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis
 from nicegui import ui, app, run
 import time
 import os
@@ -57,9 +57,9 @@ import pysam
 import pandas as pd
 import shutil
 import tempfile
-from cnsmeth import models, theme, resources
-from cnsmeth.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
-from cnsmeth.utilities.merge_bedmethyl import (
+from robin import models, theme, resources
+from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
+from robin.utilities.merge_bedmethyl import (
     merge_bedmethyl,
     save_bedmethyl,
     collapse_bedmethyl,

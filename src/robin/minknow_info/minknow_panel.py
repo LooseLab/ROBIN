@@ -12,8 +12,8 @@ from minknow_api.manager import Manager
 import minknow_api.manager_pb2 as manager_pb2
 from minknow_api.protocol_pb2 import ProtocolPhase
 from readfish._utils import get_device
-from cnsmeth.minknow_info.minKNOWhistograms import MinknowHistograms
-from cnsmeth.minknow_info.minknow_info import Minknow_Info
+from robin.minknow_info.minKNOWhistograms import MinknowHistograms
+from robin.minknow_info.minknow_info import Minknow_Info
 
 
 @contextmanager

@@ -1,4 +1,4 @@
-from cnsmeth.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis
 import os
 import sys
 import tempfile
@@ -6,9 +6,9 @@ import time
 import shutil
 import pandas as pd
 from nicegui import ui, app, run
-from cnsmeth import theme
+from robin import theme
 import pysam
-from cnsmeth import models
+from robin import models
 from sturgeon.callmapping import (
     merge_probes_methyl_calls,
     probes_methyl_calls_to_bed,

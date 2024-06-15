@@ -6,7 +6,7 @@ from collections import defaultdict
 from nicegui import events, ui
 import logging
 
-from cnsmeth.utilities.bam_handler import BamEventHandler
+from robin.utilities.bam_handler import BamEventHandler
 
 # Configure logging
 #logger = logging.getLogger(__name__)
