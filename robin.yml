@@ -1,4 +1,4 @@
-name: cnsmeth_snp
+name: robin_snp
 channels:
   - bioconda
   - conda-forge
@@ -26,7 +26,7 @@ dependencies:
     - scikit-learn==1.0.2
     - scipy==1.12.0
     - psutil
-    #- git+https://github.com/LooseLab/cnsmeth
+    #- git+https://github.com/LooseLab/robin
 variables:
   _JAVA_OPTIONS: -Xmx8g
 
