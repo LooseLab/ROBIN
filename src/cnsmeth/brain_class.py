@@ -680,6 +680,7 @@ class BrainMeth:
 
     async def _bam_worker(self):
         self.bam_tracker.active = False
+        print (f"bam worker {self.mainuuid}")
         if not self.bam_tracking.empty():
             while not self.bam_tracking.empty():
                 file = self.bam_tracking.get()
@@ -776,6 +777,7 @@ class BrainMeth:
         :param self:
         :return:
         """
+        print(f"Processing bams {self.mainuuid}")
         self.process_bams_tracker.active = False
         counter = 0
         # while True:
