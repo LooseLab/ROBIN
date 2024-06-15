@@ -55,7 +55,7 @@ import platform
 
 # Define the path to the image file used in the header and footer
 IMAGEFILE = os.path.join(
-    os.path.dirname(os.path.abspath(images.__file__)), "MethBrain_small.png"
+    os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
 )
 
 # Read the HTML content for the header
