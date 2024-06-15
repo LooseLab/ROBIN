@@ -672,6 +672,12 @@ class BrainMeth:
         # ui.button("Generate Report", on_click=lambda: create_pdf("test.pdf", CNV_data=self.CNV))
 
     async def background_process_bams(self):
+        def ensure_event_loop():
+            try:
+                asyncio.get_event_loop()
+            except RuntimeError:
+                asyncio.set_event_loop(asyncio.new_event_loop())
+        ensure_event_loop()
         await asyncio.sleep(5)
         ui.timer(5, self.process_bams)
         self.bam_tracker = ui.timer(0.1, self._bam_worker)
