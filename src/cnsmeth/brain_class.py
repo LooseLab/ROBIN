@@ -117,6 +117,7 @@ from pathlib import Path
 from queue import Queue
 import pandas as pd
 import asyncio
+import pysam
 import logging
 from collections import Counter
 
@@ -136,7 +137,7 @@ def check_bam(bamfile):
     :param bamfile:
     :return:
     """
-    # print("Check BAMS")
+    pysam.index(bamfile)
     bamdata = ReadBam(bamfile)
     baminfo = bamdata.process_reads()
     return baminfo, bamdata
