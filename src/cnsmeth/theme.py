@@ -47,6 +47,7 @@ import nicegui.air
 from pathlib import Path
 
 from cnsmeth import images
+from cnsmeth import __about__
 
 import os
 import psutil
@@ -138,7 +139,7 @@ def frame(navtitle: str):
     # Create a footer with useful information and quit button
     with ui.footer().style("background-color: #4F9153"):
         with ui.dialog() as dialog, ui.card():
-            ui.label("Useful Information.").tailwind(
+            ui.label("Useful Information").tailwind(
                 "text-2xl font-bold font-italic drop-shadow"
             )
             ui.separator()
@@ -158,6 +159,7 @@ def frame(navtitle: str):
             ui.link("Oxford Nanopore", "https://nanoporetech.com/")
             ui.link("epi2me labs", "https://labs.epi2me.io/")
             ui.link("Looselab", "https://looselab.github.io/")
+            ui.label("Version: " + __about__.__version__)
             ui.button("Close", on_click=dialog.close)
         ui.image(IMAGEFILE).style("width: 30px")
         ui.colors(primary="#555")
