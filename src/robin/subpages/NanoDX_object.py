@@ -169,6 +169,8 @@ class NanoDX_object(BaseAnalysis):
         super().__init__(*args, **kwargs)
         self.nanodxfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".nanodx")
 
+    def __del__(self):
+        self.nanodxfile.close()
     def setup_ui(self) -> None:
         """
         Sets up the user interface for the NanoDX analysis.
@@ -237,7 +239,7 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_bam_count += 1
             tomerge.append(file)
 
-            if len(tomerge) > 5:
+            if len(tomerge) > 25:
                 break
         app.storage.general[self.mainuuid][self.name]["counters"][
             "bams_in_processing"
