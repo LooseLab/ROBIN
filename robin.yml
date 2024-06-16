@@ -1,4 +1,4 @@
-name: robin_snp
+name: robin
 channels:
   - bioconda
   - conda-forge
