@@ -346,7 +346,7 @@ class Methnice:
         Async method for rendering the splash screen.
         """
         with theme.frame(
-            "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
+            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>"
         ):
             self.frontpage = ui.card().classes("w-full")
             with self.frontpage:
@@ -384,7 +384,7 @@ class Methnice:
         Async method for rendering the index page.
         """
         with theme.frame(
-            "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
+            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>"
         ):
             await ui.context.client.connected()
             with ui.column().classes("w-full"):
