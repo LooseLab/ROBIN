@@ -205,15 +205,15 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
         parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
 
 
-def get_covdfs(bamfile, output):
+def get_covdfs(bamfile):
     """
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
-        no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
-        command = f"samtools view -@2 -h -F 0x100 --write-index {bamfile} -o {no_secondary_bam}"
-        os.system(command)
-        newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{no_secondary_bam}")), sep="\t")
+        #no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
+        #command = f"samtools view -@2 -h -F 0x100 --write-index {bamfile} -o {no_secondary_bam}"
+        #os.system(command)
+        newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{bamfile}")), sep="\t")
         newcovdf.drop(
             columns=["coverage", "meanbaseq", "meanmapq"],
             inplace=True,
@@ -226,7 +226,7 @@ def get_covdfs(bamfile, output):
                         os.path.dirname(os.path.abspath(resources.__file__)),
                         "unique_genes.bed",
                     ),
-                    f"{no_secondary_bam}",
+                    f"{bamfile}",
                 )
             ),
             names=["chrom", "startpos", "endpos", "name", "bases"],
@@ -245,6 +245,7 @@ def subset_bam(bamfile, targets, output):
 def sort_bam(bamfile, output, threads):
     pysam.sort(f"-@{threads}", "-o", output, bamfile)
     pysam.index(f"{output}", f"{output}.bai")
+    print (f"Sorted bam file saved as {output}")
 
 
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
@@ -863,7 +864,7 @@ class TargetCoverage(BaseAnalysis):
         # loop = asyncio.get_event_loop()
         # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
 
-        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile, self.output)
+        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
 
         tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
         # await loop.run_in_executor(
@@ -892,6 +893,11 @@ class TargetCoverage(BaseAnalysis):
                     pass
         else:
             os.remove(f"{tempbamfile.name}.bai")
+
+        try:
+            os.remove(f"{tempbamfile.name}.bai")  # Ensure removal of .bai file if exists
+        except FileNotFoundError:
+            pass
 
         if self.cov_df_main.empty:
             self.cov_df_main = newcovdf
@@ -994,6 +1000,7 @@ class TargetCoverage(BaseAnalysis):
                             ),
                         ]
                     )
+
         # ToDo: Reinstate this line later.
         # self.update_target_coverage_table()
 
