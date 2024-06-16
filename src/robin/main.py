@@ -47,13 +47,13 @@ Dependencies:
 
 Example usage::
     python main.py --config config.ini --port 8081 --threads 4 --log-level INFO
-"""
 
+"""
+import uuid
 import click
 import os
 import sys
 import signal
-import uuid
 import logging
 
 from pathlib import Path
@@ -65,6 +65,7 @@ from configparser import ConfigParser
 
 from robin.brain_class import BrainMeth
 from robin.minknow_info.minknow_panel import MinKNOWFish
+
 
 
 DEFAULT_CFG: str = "config.ini"
@@ -318,7 +319,7 @@ class Methnice:
         Async method for rendering the browse page.
         """
         with theme.frame(
-            "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>"
+            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>"
         ):
             self.analysis_tab_pane = ui.row().classes("w-full")
             self.robin_browse = BrainMeth(
@@ -364,7 +365,7 @@ class Methnice:
                     ui.image(
                         os.path.join(
                             os.path.dirname(os.path.abspath(images.__file__)),
-                            "favicon.ico",
+                            "ROBIN_logo_small.png",
                         )
                     ).classes("rounded-full w-16 h-16 ml-4")
                 with ui.button(on_click=lambda: ui.navigate.to("/browse")).props(
@@ -374,7 +375,7 @@ class Methnice:
                     ui.image(
                         os.path.join(
                             os.path.dirname(os.path.abspath(images.__file__)),
-                            "favicon.ico",
+                            "ROBIN_logo_small.png",
                         )
                     ).classes("rounded-full w-16 h-16 ml-4")
 
@@ -679,7 +680,6 @@ def package_run(
             reference=click.format_filename(reference),
         )
 
-
 if __name__ in {"__main__", "__mp_main__"}:
     print("GUI launched by auto-reload function.")
-    package_run()
+    #package_run()

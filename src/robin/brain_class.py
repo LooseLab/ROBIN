@@ -459,7 +459,7 @@ class BrainMeth:
 
             with ui.expansion(icon="work").bind_text_from(
                 self, "watchfolder", backward=lambda n: f"Monitoring the path: {n}"
-            ).classes("w-full"):
+            ).classes(""):
                 with ui.row():
                     ui.label().bind_text_from(
                         self,

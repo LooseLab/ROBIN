@@ -55,7 +55,7 @@ import platform
 
 # Define the path to the image file used in the header and footer
 IMAGEFILE = os.path.join(
-    os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
+    os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo2_small.png"
 )
 
 # Read the HTML content for the header
@@ -103,7 +103,7 @@ def frame(navtitle: str):
         with ui.grid(columns=2).style("width: 100%"):
             with ui.row().classes('items-center align-left'): #.classes('items-left m-auto'):
                 ui.html(navtitle).classes("shadows-into").style(
-                    "color: #FFFFFF; font-size: 200%; font-weight: 200"
+                    "color: #FFFFFF; font-size: 200%; font-weight: 300"
                 ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("ml-auto align-top"):
                 with ui.row().classes('items-center m-auto'):
@@ -211,7 +211,7 @@ def use_on_air(args: events.ValueChangeEventArguments):
 
 @ui.page("/")
 def my_page():
-    with frame("Home"):
+    with frame("<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>"):
         ui.label("Welcome to the Application")
 
 def main():
