@@ -268,9 +268,7 @@ class NanoDX_object(BaseAnalysis):
             except FileNotFoundError:
                 pass
 
-            print ("modkit done")
             if self.not_first_run:
-                print ("not first run")
                 bed_a = pd.read_table(
                     f"{temp.name}",
                     names=[
@@ -316,15 +314,11 @@ class NanoDX_object(BaseAnalysis):
                     header=None,
                     sep="\s+",
                 )
-                print ("merging bed file")
                 self.merged_bed_file = await run.cpu_bound(
                     merge_bedmethyl, bed_a, self.merged_bed_file
                 )
-                print ("saving bed file")
                 save_bedmethyl(self.merged_bed_file, self.nanodxfile.name)
-                print ("not first run done")
             else:
-                print ("first run")
                 shutil.copy(f"{temp.name}", self.nanodxfile.name)
                 self.merged_bed_file = pd.read_table(
                     self.nanodxfile.name,
@@ -372,8 +366,6 @@ class NanoDX_object(BaseAnalysis):
                     sep="\s+",
                 )
                 self.not_first_run = True
-                print ("first run done")
-            print ("collapsing bed file")
             self.merged_bed_file = await run.cpu_bound(
                 collapse_bedmethyl, self.merged_bed_file
             )
@@ -389,11 +381,9 @@ class NanoDX_object(BaseAnalysis):
             )
             test_df.loc[test_df["methylation_call"] < 60, "methylation_call"] = -1
             test_df.loc[test_df["methylation_call"] >= 60, "methylation_call"] = 1
-            print ("Attempting classification")
             predictions, class_labels, n_features = await run.cpu_bound(
                 classification, self.modelfile, test_df
             )
-            print ("Classification done")
             nanoDX_df = pd.DataFrame({"class": class_labels, "score": predictions})
             nanoDX_save = nanoDX_df.set_index("class").T
             nanoDX_save["number_probes"] = n_features
