@@ -15,6 +15,8 @@
 
 ## Installation
 
+ROBIN requires docker to be available on the system it is running on. This is because it uses a number of third party tools that are run in docker containers.
+
 We recommend installing 'robin' using the following conda yml file included in the repository: [robin.yml](robin.yml)
 
 This will install all the required dependencies including R and Python packages as well as readfish and ont-pyguppy-client-lib.
