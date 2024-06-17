@@ -108,7 +108,7 @@ modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
         )
 
-NN = NN_classifier(modelfile)
+
 
 def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, int]:
     """
@@ -122,8 +122,7 @@ def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, n
         Tuple[np.ndarray, np.ndarray, int]: Predictions, class labels, and number of features.
     """
     #NN = NN_classifier(modelfile)
-    global NN
-    print(NN)
+    NN = NN_classifier(modelfile)
     try:
         predictions, class_labels, n_features = NN.predict(test_df)
     except Exception as e:
