@@ -108,7 +108,7 @@ modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
         )
 
-global NN = NN_classifier(modelfile)
+NN = NN_classifier(modelfile)
 
 def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, int]:
     """
