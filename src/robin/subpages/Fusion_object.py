@@ -54,7 +54,7 @@ import random
 import pandas as pd
 import click
 from typing import Optional, Tuple
-from nicegui import ui, run
+from nicegui import ui, run, app
 from robin import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
@@ -443,9 +443,9 @@ class FusionObject(BaseAnalysis):
                                 "color: #000000; font-size: 125%; font-weight: 300"
                             )
         if self.browse:
-            self.show_previous_data(self.output)
+            self.show_previous_data()
         else:
-            ui.timer(30, lambda: self.show_previous_data(self.output))
+            ui.timer(30, lambda: self.show_previous_data())
 
     def fusion_table_all(self) -> None:
         """
@@ -457,7 +457,7 @@ class FusionObject(BaseAnalysis):
             counts_all = doubles_all.groupby(7)[3].transform("nunique")
             result_all = doubles_all[counts_all > 1]
             result_all.to_csv(
-                os.path.join(self.output, "fusion_candidates_all.csv"), index=False
+                os.path.join(self.check_and_create_folder(self.output, self.sampleID), "fusion_candidates_all.csv"), index=False
             )
             # self.update_fusion_table_all(result_all)
 
@@ -644,7 +644,7 @@ class FusionObject(BaseAnalysis):
             counts = doubles.groupby(7)[3].transform("nunique")
             result = doubles[counts > 1]
             result.to_csv(
-                os.path.join(self.output, "fusion_candidates_master.csv"), index=False
+                os.path.join(self.check_and_create_folder(self.output, self.sampleID), "fusion_candidates_master.csv"), index=False
             )
         # self.update_fusion_table(result)
 
@@ -813,10 +813,10 @@ class FusionObject(BaseAnalysis):
             bamfile (str): Path to the BAM file to process.
             timestamp (str): Timestamp for the analysis.
         """
-        tempreadfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
-        tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
-        tempmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
-        tempallmappings = tempfile.NamedTemporaryFile(dir=self.output, suffix=".txt")
+        tempreadfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt")
+        tempbamfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
+        tempmappings = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt")
+        tempallmappings = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt")
 
         try:
             fusion_candidates, fusion_candidates_all = await run.cpu_bound(
@@ -885,13 +885,19 @@ class FusionObject(BaseAnalysis):
         goodpairs = result.groupby("tag")[7].transform("nunique") > 1
         return result, goodpairs
 
-    def show_previous_data(self, output: str) -> None:
+    def show_previous_data(self) -> None:
         """
         Displays previously analyzed data from the specified output folder.
 
         Args:
             output (str): Path to the output folder.
         """
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == 'sample_ids':
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+        output = self.check_and_create_folder(self.output, self.sampleID)
         if self.check_file_time(os.path.join(output, "fusion_candidates_master.csv")):
             fusion_candidates = pd.read_csv(
                 os.path.join(output, "fusion_candidates_master.csv"),

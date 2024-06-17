@@ -122,6 +122,7 @@ class BaseAnalysis:
         self.browse = browse
         self.progress = progress
         self.file_mod_times = {}
+        self.sampleID = None
 
         if self.name not in app.storage.general.get(self.mainuuid, {}):
             app.storage.general.setdefault(self.mainuuid, {})[self.name] = {
@@ -154,6 +155,22 @@ class BaseAnalysis:
 
         self.file_mod_times[file_path] = current_mod_time
         return True
+
+    def check_and_create_folder(self, path, folder_name=None):
+        # Check if the path exists
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"The specified path does not exist: {path}")
+
+        # If folder_name is provided
+        if folder_name:
+            full_path = os.path.join(path, folder_name)
+            # Create the folder if it doesn't exist
+            if not os.path.exists(full_path):
+                os.makedirs(full_path)
+            return full_path
+        else:
+            return path
+
 
     async def render_ui(self) -> None:
         """
@@ -188,7 +205,8 @@ class BaseAnalysis:
         self.timer.active = False
         if not self.bamqueue.empty() and not self.running:
             self.running = True
-            bamfile, timestamp = self.bamqueue.get()
+            bamfile, timestamp, sampleID = self.bamqueue.get()
+            self.sampleID = sampleID
             app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += 1
 
             if not timestamp:
@@ -223,7 +241,9 @@ class BaseAnalysis:
         self.timer.active = False
         count = 0
         while self.bamqueue.qsize() > 0:
-            self.bams.append(self.bamqueue.get())
+            bamfile, timestamp, sampleID = self.bamqueue.get()
+            self.sampleID = sampleID
+            self.bams.append((bamfile, timestamp))
             count += 1
             if count >= 200:
                 break

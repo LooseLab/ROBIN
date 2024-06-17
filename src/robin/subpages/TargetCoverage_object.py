@@ -15,7 +15,7 @@ import sys
 import click
 import time
 from pathlib import Path
-from nicegui import ui, run  # , background_tasks
+from nicegui import ui, run, app  # , background_tasks
 from io import StringIO
 import pysam
 import asyncio
@@ -205,15 +205,15 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
         parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
 
 
-def get_covdfs(bamfile, output):
+def get_covdfs(bamfile):
     """
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
-        no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
-        command = f"samtools view -@2 -h -F 0x100 --write-index {bamfile} -o {no_secondary_bam}"
-        os.system(command)
-        newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{no_secondary_bam}")), sep="\t")
+        #no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
+        #command = f"samtools view -@2 -h -F 0x100 --write-index {bamfile} -o {no_secondary_bam}"
+        #os.system(command)
+        newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{bamfile}")), sep="\t")
         newcovdf.drop(
             columns=["coverage", "meanbaseq", "meanmapq"],
             inplace=True,
@@ -226,7 +226,7 @@ def get_covdfs(bamfile, output):
                         os.path.dirname(os.path.abspath(resources.__file__)),
                         "unique_genes.bed",
                     ),
-                    f"{no_secondary_bam}",
+                    f"{bamfile}",
                 )
             ),
             names=["chrom", "startpos", "endpos", "name", "bases"],
@@ -245,6 +245,7 @@ def subset_bam(bamfile, targets, output):
 def sort_bam(bamfile, output, threads):
     pysam.sort(f"-@{threads}", "-o", output, bamfile)
     pysam.index(f"{output}", f"{output}.bai")
+    print (f"Sorted bam file saved as {output}")
 
 
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
@@ -337,7 +338,7 @@ class TargetCoverage(BaseAnalysis):
             while not self.SNPqueue.empty():
                 gene_list, bamfile, bedfile = self.SNPqueue.get()
 
-            workdirout = os.path.join(self.output, "clair3")
+            workdirout = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "clair3")
             if not os.path.exists(workdirout):
                 os.mkdir(workdirout)
             # bamfile, bedfile, workdir, workdirout, threads
@@ -347,7 +348,7 @@ class TargetCoverage(BaseAnalysis):
                 run_clair3,
                 f"{bamfile}",
                 f"{bedfile}2",
-                self.output,
+                self.check_and_create_folder(self.output, self.sampleID),
                 workdirout,
                 self.threads,
                 self.reference,
@@ -416,9 +417,9 @@ class TargetCoverage(BaseAnalysis):
                 #self.INDELview = SNPview(self.INDELplaceholder)
                 #ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
         if self.browse:
-            self.show_previous_data(self.output)
+            ui.timer(0.1, callback=self.show_previous_data,once=True)
         else:
-            ui.timer(10, lambda: self.show_previous_data(self.output))
+            ui.timer(10, lambda: self.show_previous_data())
 
     def create_coverage_plot(self, title):
         self.echart3 = (
@@ -814,9 +815,9 @@ class TargetCoverage(BaseAnalysis):
         self.echart4.update()
 
     def update_coverage_time_plot(self):
-        if os.path.isfile(os.path.join(self.output, "coverage_time_chart.npy")):
+        if os.path.isfile(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_time_chart.npy")):
             self.coverage_over_time = np.load(
-                os.path.join(self.output, "coverage_time_chart.npy")
+                os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_time_chart.npy")
             )
             self.coverage_time_chart.options["series"][0][
                 "data"
@@ -863,9 +864,9 @@ class TargetCoverage(BaseAnalysis):
         # loop = asyncio.get_event_loop()
         # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
 
-        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile, self.output)
+        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
 
-        tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+        tempbamfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
         # await loop.run_in_executor(
         #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
         # )
@@ -875,12 +876,12 @@ class TargetCoverage(BaseAnalysis):
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if not self.targetbamfile:
-                self.targetbamfile = os.path.join(self.output, "target.bam")
+                self.targetbamfile = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "target.bam")
                 shutil.copy2(tempbamfile.name, self.targetbamfile)
                 os.remove(f"{tempbamfile.name}.bai")
             else:
                 tempbamholder = tempfile.NamedTemporaryFile(
-                    dir=self.output, suffix=".bam"
+                    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
                 )
                 pysam.cat(
                     "-o", tempbamholder.name, self.targetbamfile, tempbamfile.name
@@ -892,6 +893,11 @@ class TargetCoverage(BaseAnalysis):
                     pass
         else:
             os.remove(f"{tempbamfile.name}.bai")
+
+        try:
+            os.remove(f"{tempbamfile.name}.bai")  # Ensure removal of .bai file if exists
+        except FileNotFoundError:
+            pass
 
         if self.cov_df_main.empty:
             self.cov_df_main = newcovdf
@@ -919,18 +925,18 @@ class TargetCoverage(BaseAnalysis):
             [self.coverage_over_time, [(currenttime, coverage)]]
         )
         np.save(
-            os.path.join(self.output, "coverage_time_chart.npy"),
+            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_time_chart.npy"),
             self.coverage_over_time,
         )
 
         self.cov_df_main.to_csv(
-            os.path.join(self.output, "coverage_main.csv"), index=False
+            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_main.csv"), index=False
         )
         # await asyncio.sleep(0.01)
 
         # self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
         self.bedcov_df_main.to_csv(
-            os.path.join(self.output, "bed_coverage_main.csv"), index=False
+            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "bed_coverage_main.csv"), index=False
         )
         # await asyncio.sleep(0.01)
         # self.update_coverage_time_plot(self.cov_df_main, timestamp)
@@ -944,7 +950,7 @@ class TargetCoverage(BaseAnalysis):
             self.target_coverage_df["bases"] / self.target_coverage_df["length"]
         )
         self.target_coverage_df.to_csv(
-            os.path.join(self.output, "target_coverage.csv"), index=False
+            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "target_coverage.csv"), index=False
         )
         if self.summary:
             with self.summary:
@@ -968,12 +974,12 @@ class TargetCoverage(BaseAnalysis):
             ):
                 self.targets_exceeding_threshold = len(run_list)
                 run_list[["chrom", "startpos", "endpos"]].to_csv(
-                    os.path.join(self.output, "targets_exceeding_threshold.bed"),
+                    os.path.join(self.check_and_create_folder(self.output, self.sampleID), "targets_exceeding_threshold.bed"),
                     sep="\t",
                     header=None,
                     index=None,
                 )
-                clair3workdir = os.path.join(self.output, "clair3")
+                clair3workdir = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "clair3")
                 if not os.path.exists(clair3workdir):
                     os.mkdir(clair3workdir)
 
@@ -990,34 +996,40 @@ class TargetCoverage(BaseAnalysis):
                             run_list,
                             os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
                             os.path.join(
-                                self.output, "targets_exceeding_threshold.bed"
+                                self.check_and_create_folder(self.output, self.sampleID), "targets_exceeding_threshold.bed"
                             ),
                         ]
                     )
+
         # ToDo: Reinstate this line later.
         # self.update_target_coverage_table()
 
         #await asyncio.sleep(0.5)
         self.running = False
 
-    def show_previous_data(self, watchfolder):
+    def show_previous_data(self):
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == 'sample_ids':
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+        output = self.check_and_create_folder(self.output, self.sampleID)
         # ToDo: This function needs to run in background threads.
-        if self.check_file_time(os.path.join(watchfolder, "coverage_main.csv")):
-        #if os.path.isfile(os.path.join(watchfolder, "coverage_main.csv")):
+        if self.check_file_time(os.path.join(output, "coverage_main.csv")):
             self.cov_df_main = pd.read_csv(
-                os.path.join(watchfolder, "coverage_main.csv")
+                os.path.join(output, "coverage_main.csv")
             )
             self.update_coverage_plot(self.cov_df_main)
 
-        if self.check_file_time(os.path.join(watchfolder, "bed_coverage_main.csv")):
+        if self.check_file_time(os.path.join(output, "bed_coverage_main.csv")):
             self.bedcov_df_main = pd.read_csv(
-                os.path.join(watchfolder, "bed_coverage_main.csv")
+                os.path.join(output, "bed_coverage_main.csv")
             )
             self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
             self.update_target_boxplot(self.bedcov_df_main)
-        if self.check_file_time(os.path.join(watchfolder, "target_coverage.csv")):
+        if self.check_file_time(os.path.join(output, "target_coverage.csv")):
             self.target_coverage_df = pd.read_csv(
-                os.path.join(watchfolder, "target_coverage.csv")
+                os.path.join(output, "target_coverage.csv")
             )
             self.update_target_coverage_table()
             self.update_coverage_time_plot()
@@ -1041,8 +1053,8 @@ class TargetCoverage(BaseAnalysis):
                         else:
                             ui.label("No data available")
 
-        if self.check_file_time(f"{watchfolder}/clair3/snpsift_output.vcf.csv"):
-            vcf = pd.read_csv(f"{watchfolder}/clair3/snpsift_output.vcf.csv")#parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
+        if self.check_file_time(f"{output}/clair3/snpsift_output.vcf.csv"):
+            vcf = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv")
             self.SNPplaceholder.clear()
             with self.SNPplaceholder:
                 self.snptable = (
@@ -1101,10 +1113,9 @@ class TargetCoverage(BaseAnalysis):
                     ).bind_value(self.snptable, "filter").add_slot("append"):
                         ui.icon("search")
 
-            #self.SNPview.parse_vcf(f"{watchfolder}/clair3/snpsift_output.vcf")
-            pass
-        if self.check_file_time(f"{watchfolder}/clair3/snpsift_indel_output.vcf.csv"):
-            vcfindel = pd.read_csv(f"{watchfolder}/clair3/snpsift_indel_output.vcf.csv")
+
+        if self.check_file_time(f"{output}/clair3/snpsift_indel_output.vcf.csv"):
+            vcfindel = pd.read_csv(f"{output}/clair3/snpsift_indel_output.vcf.csv")
             self.INDELplaceholder.clear()
             with self.INDELplaceholder:
                 self.indeltable = (
@@ -1162,8 +1173,7 @@ class TargetCoverage(BaseAnalysis):
                             "type=search"
                     ).bind_value(self.indeltable, "filter").add_slot("append"):
                         ui.icon("search")
-            #self.INDELview.parse_vcf(f"{watchfolder}/clair3/snpsift_indel_output.vcf")
-            pass
+
 
 
 def test_me(

@@ -173,6 +173,8 @@ class BrainMeth:
         self.minknow_connection = minknow_connection
         self.reference = reference
         self.observer = None
+        if self.browse:
+            self.runsfolder = self.output
 
     async def start_background(self):
         #logger.debug("Init Brain Class")
@@ -339,7 +341,7 @@ class BrainMeth:
 
             ui.timer(1, callback=self.background_process_bams, once=True)
 
-            ui.timer(1, self.check_existing_bams, once=True)
+            ui.timer(1, callback=self.check_existing_bams, once=True)
 
             print("watchfolder setup and added")
 
@@ -348,8 +350,7 @@ class BrainMeth:
         await self.minknow_connection.access_device.clicked()
 
     async def pick_file(self) -> None:
-        result = await LocalFilePicker(".", multiple=True)
-        # print(result)
+        result = await LocalFilePicker(f"{self.runsfolder}", multiple=True)
         if result:
             ui.notify(f"You selected {result}")
             self.content.clear()
@@ -676,15 +677,48 @@ class BrainMeth:
 
     async def background_process_bams(self):
         await asyncio.sleep(5)
-        self.process_bams_tracker = ui.timer(30, self.process_bams)
-        self.bam_tracker = ui.timer(0.1, self._bam_worker)
+        self.process_bams_tracker = ui.timer(10, self.process_bams)
 
-    async def _bam_worker(self):
-        self.bam_tracker.active = False
-        if not self.bam_tracking.empty():
-            while not self.bam_tracking.empty():
-                file = self.bam_tracking.get()
-                baminfo, bamdata = await run.cpu_bound(check_bam, file)
+    def check_and_create_folder(self, path, folder_name=None):
+        # Check if the path exists
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"The specified path does not exist: {path}")
+
+        # If folder_name is provided
+        if folder_name:
+            full_path = os.path.join(path, folder_name)
+            # Create the folder if it doesn't exist
+            if not os.path.exists(full_path):
+                os.makedirs(full_path)
+            return full_path
+        else:
+            return path
+
+    async def process_bams(self) -> None:
+        """
+        This function processes the bam files and adds them to the bamforcns and bamforsturgeon lists.
+        These lists are then processed by the rapid_cns2 and sturgeon functions.
+        #ToDo: switch to using threadsafe queues.
+        :param self:
+        :return:
+        """
+        self.process_bams_tracker.active = False
+        counter = 0
+        # while True:
+        # print(f"We're processing a bam man - {self.mainuuid}")
+        if "file" in app.storage.general[self.mainuuid]["bam_count"]:
+            # print (app.storage.general[self.mainuuid]['bam_count']["file"])
+            while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
+                self.nofiles = False
+                file = app.storage.general[self.mainuuid]["bam_count"]["file"].popitem()
+                # ToDo: Check if the file is still being written to.
+                #if file[1] > time.time() - 5:
+                #    break
+                # ToDo: This function should be moved to a background task.
+                # self.check_bam(file[0])
+                #self.bam_tracking.put(file[0])
+
+                baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
                 if baminfo["state"] == "pass":
                     app.storage.general[self.mainuuid]["file_counters"][
                         "bam_passed"
@@ -713,36 +747,36 @@ class BrainMeth:
                     ] += bamdata['yield_tracking']
                     # self.basecall_models.add(baminfo["basecall_model"])
                 if (
-                    baminfo["device_position"]
-                    not in app.storage.general[self.mainuuid]["devices"]
+                        baminfo["device_position"]
+                        not in app.storage.general[self.mainuuid]["devices"]
                 ):
                     app.storage.general[self.mainuuid]["devices"].append(
                         baminfo["device_position"]
                     )
                 if (
-                    baminfo["basecall_model"]
-                    not in app.storage.general[self.mainuuid]["basecall_models"]
+                        baminfo["basecall_model"]
+                        not in app.storage.general[self.mainuuid]["basecall_models"]
                 ):
                     app.storage.general[self.mainuuid]["basecall_models"].append(
                         baminfo["basecall_model"]
                     )
                 if (
-                    baminfo["sample_id"]
-                    not in app.storage.general[self.mainuuid]["sample_ids"]
+                        baminfo["sample_id"]
+                        not in app.storage.general[self.mainuuid]["sample_ids"]
                 ):
                     app.storage.general[self.mainuuid]["sample_ids"].append(
                         baminfo["sample_id"]
                     )
                 if (
-                    baminfo["flow_cell_id"]
-                    not in app.storage.general[self.mainuuid]["flowcell_ids"]
+                        baminfo["flow_cell_id"]
+                        not in app.storage.general[self.mainuuid]["flowcell_ids"]
                 ):
                     app.storage.general[self.mainuuid]["flowcell_ids"].append(
                         baminfo["flow_cell_id"]
                     )
                 if (
-                    baminfo["time_of_run"]
-                    not in app.storage.general[self.mainuuid]["run_time"]
+                        baminfo["time_of_run"]
+                        not in app.storage.general[self.mainuuid]["run_time"]
                 ):
                     app.storage.general[self.mainuuid]["run_time"].append(
                         baminfo["time_of_run"]
@@ -762,54 +796,26 @@ class BrainMeth:
 
                 mydf = pd.DataFrame.from_dict(app.storage.general)
 
-                mydf.to_csv(os.path.join(self.output, "master.csv"))
-        self.bam_tracker.active = True
+                mydf.to_csv(os.path.join(self.check_and_create_folder(self.output,baminfo["sample_id"]), "master.csv"))
 
-                # self.check_bam(file)
-                # await asyncio.sleep(0)
 
-    async def process_bams(self) -> None:
-        """
-        This function processes the bam files and adds them to the bamforcns and bamforsturgeon lists.
-        These lists are then processed by the rapid_cns2 and sturgeon functions.
-        #ToDo: switch to using threadsafe queues.
-        :param self:
-        :return:
-        """
-        self.process_bams_tracker.active = False
-        counter = 0
-        # while True:
-        # print(f"We're processing a bam man - {self.mainuuid}")
-        if "file" in app.storage.general[self.mainuuid]["bam_count"]:
-            # print (app.storage.general[self.mainuuid]['bam_count']["file"])
-            while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
-                self.nofiles = False
-                file = app.storage.general[self.mainuuid]["bam_count"]["file"].popitem()
-                # ToDo: Check if the file is still being written to.
-                #if file[1] > time.time() - 5:
-                #    break
-                # ToDo: This function should be moved to a background task.
-                # self.check_bam(file[0])
-                self.bam_tracking.put(file[0])
 
                 counter += 1
                 if "forest" not in self.exclude:
-                    self.bamforcns.put([file[0], file[1]])
+                    self.bamforcns.put([file[0], file[1],baminfo["sample_id"]])
                 if "sturgeon" not in self.exclude:
-                    self.bamforsturgeon.put([file[0], file[1]])
+                    self.bamforsturgeon.put([file[0], file[1],baminfo["sample_id"]])
                 if "nanodx" not in self.exclude:
-                    self.bamfornanodx.put([file[0], file[1]])
+                    self.bamfornanodx.put([file[0], file[1],baminfo["sample_id"]])
                 if "cnv" not in self.exclude:
-                    self.bamforcnv.put([file[0], file[1]])
+                    self.bamforcnv.put([file[0], file[1],baminfo["sample_id"]])
                 if "coverage" not in self.exclude:
-                    self.bamfortargetcoverage.put([file[0], file[1]])
+                    self.bamfortargetcoverage.put([file[0], file[1],baminfo["sample_id"]])
                 if "mgmt" not in self.exclude:
-                    self.bamformgmt.put([file[0], file[1]])
+                    self.bamformgmt.put([file[0], file[1],baminfo["sample_id"]])
                 if "fusion" not in self.exclude:
-                    self.bamforfusions.put([file[0], file[1]])
-                # if counter > 25:
-                #    break
-                #await asyncio.sleep(0)
+                    self.bamforfusions.put([file[0], file[1],baminfo["sample_id"]])
+
             self.nofiles = True
         self.process_bams_tracker.active = True
 

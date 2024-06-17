@@ -173,7 +173,7 @@ async def test() -> None:
         threads=1,
         simtime=False,
         watchfolder=None,
-        output=None,
+        output=app.storage.general[UNIQUE_ID]["output"],
         sequencing_summary=None,
         target_panel=app.storage.general[UNIQUE_ID]["target_panel"],
         showerrors=app.storage.general[UNIQUE_ID]["showerrors"],
@@ -336,7 +336,7 @@ class Methnice:
                 minknow_connection=self.minknow_connection,
                 reference=self.reference,
             )
-            await self.robin_browse.init()
+            #await self.robin_browse.init()
 
             with self.analysis_tab_pane:
                 await self.robin_browse.render_ui()
@@ -675,7 +675,7 @@ def package_run(
             sequencing_summary=sequencing_summary,
             target_panel=target_panel,
             showerrors=showerrors,
-            browse=browse,
+            browse=browse ,
             exclude=exclude,
             reference=click.format_filename(reference),
         )

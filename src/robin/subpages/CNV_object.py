@@ -272,7 +272,7 @@ class CNVAnalysis(BaseAnalysis):
             self.XYestimate = "XY"
         else:
             self.XYestimate = "Unknown"
-        with open(os.path.join(self.output, "XYestimate.pkl"), "wb") as file:
+        with open(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "XYestimate.pkl"), "wb") as file:
             pickle.dump(self.XYestimate, file)
 
     async def process_bam(self, bamfile: BinaryIO, timestamp: float) -> None:
@@ -325,8 +325,8 @@ class CNVAnalysis(BaseAnalysis):
 
         self.estimate_XY()
 
-        np.save(os.path.join(self.output, "CNV.npy"), r_cnv)
-        np.save(os.path.join(self.output, "CNV_dict.npy"), self.cnv_dict)
+        np.save(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV.npy"), r_cnv)
+        np.save(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV_dict.npy"), self.cnv_dict)
 
         self.running = False
 
@@ -377,6 +377,11 @@ class CNVAnalysis(BaseAnalysis):
         """
         Set up the user interface for CNV analysis.
         """
+        #if not self.browse:
+        #    for item in app.storage.general[self.mainuuid]:
+        #        if item == 'sample_ids':
+        #            for run in app.storage.general[self.mainuuid][item]:
+        #                self.sampleID = run
         self.display_row = ui.row()
         if self.summary:
             with self.summary:
@@ -419,9 +424,9 @@ class CNVAnalysis(BaseAnalysis):
                 title="Reference CNV Scatter Plot"
             )
         if self.browse:
-            ui.timer(0.1, lambda: self.show_previous_data(self.output), once=True)
+            ui.timer(0.1, lambda: self.show_previous_data(), once=True)
         else:
-            ui.timer(15, lambda: self.show_previous_data(self.output))
+            ui.timer(15, lambda: self.show_previous_data())
 
     def generate_chart(self, title: Optional[str] = None, initmax: int = 8, initmin: int = 0, type: str = "value") -> ui.echart:
         """
@@ -675,13 +680,19 @@ class CNVAnalysis(BaseAnalysis):
             else:
                 return plot_to_update
 
-    async def show_previous_data(self, output: str) -> None:
+    async def show_previous_data(self) -> None:
         """
         Load and display previously computed CNV data.
 
         Args:
             output (str): The directory containing previous CNV data.
         """
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == 'sample_ids':
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+        output = self.check_and_create_folder(self.output, self.sampleID)
         if self.check_file_time(os.path.join(output, "CNV.npy")):
             result = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
             self.result = Result(result)
