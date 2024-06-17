@@ -83,7 +83,7 @@ def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
     try:
         #print (f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp}")
         os.system(
-                f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp} --suppress-progress >/dev/null 2>&1"
+                f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --mixed-delim -t {threads} {sortfile} {temp} --suppress-progress >/dev/null 2>&1"
         )
         #shutil.copy(f"{sortfile}","modkit.bam")
         #shutil.copy(f"{temp}", "modkitoutput.bed")
@@ -108,7 +108,7 @@ modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
         )
 
-NN = NN_classifier(modelfile)
+global NN = NN_classifier(modelfile)
 
 def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, int]:
     """
@@ -122,6 +122,7 @@ def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, n
         Tuple[np.ndarray, np.ndarray, int]: Predictions, class labels, and number of features.
     """
     #NN = NN_classifier(modelfile)
+    global NN
     try:
         predictions, class_labels, n_features = NN.predict(test_df)
     except Exception as e:
@@ -267,7 +268,9 @@ class NanoDX_object(BaseAnalysis):
             except FileNotFoundError:
                 pass
 
+            print ("modkit done")
             if self.not_first_run:
+                print ("not first run")
                 bed_a = pd.read_table(
                     f"{temp.name}",
                     names=[
@@ -313,11 +316,15 @@ class NanoDX_object(BaseAnalysis):
                     header=None,
                     sep="\s+",
                 )
+                print ("merging bed file")
                 self.merged_bed_file = await run.cpu_bound(
                     merge_bedmethyl, bed_a, self.merged_bed_file
                 )
+                print ("saving bed file")
                 save_bedmethyl(self.merged_bed_file, self.nanodxfile.name)
+                print ("not first run done")
             else:
+                print ("first run")
                 shutil.copy(f"{temp.name}", self.nanodxfile.name)
                 self.merged_bed_file = pd.read_table(
                     self.nanodxfile.name,
@@ -365,7 +372,8 @@ class NanoDX_object(BaseAnalysis):
                     sep="\s+",
                 )
                 self.not_first_run = True
-
+                print ("first run done")
+            print ("collapsing bed file")
             self.merged_bed_file = await run.cpu_bound(
                 collapse_bedmethyl, self.merged_bed_file
             )
@@ -381,6 +389,7 @@ class NanoDX_object(BaseAnalysis):
             )
             test_df.loc[test_df["methylation_call"] < 60, "methylation_call"] = -1
             test_df.loc[test_df["methylation_call"] >= 60, "methylation_call"] = 1
+            print ("Attempting classification")
             predictions, class_labels, n_features = await run.cpu_bound(
                 classification, self.modelfile, test_df
             )

@@ -677,7 +677,7 @@ class BrainMeth:
     async def background_process_bams(self):
         await asyncio.sleep(5)
         self.process_bams_tracker = ui.timer(30, self.process_bams)
-        self.bam_tracker = ui.timer(0.1, self._bam_worker)
+        #self.bam_tracker = ui.timer(0.1, self._bam_worker)
 
     async def _bam_worker(self):
         self.bam_tracker.active = False
@@ -790,7 +790,89 @@ class BrainMeth:
                 #    break
                 # ToDo: This function should be moved to a background task.
                 # self.check_bam(file[0])
-                self.bam_tracking.put(file[0])
+                #self.bam_tracking.put(file[0])
+
+                baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
+                if baminfo["state"] == "pass":
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "bam_passed"
+                    ] += 1
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "pass_mapped_count"
+                    ] += bamdata['mapped_reads']
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "pass_unmapped_count"
+                    ] += bamdata['unmapped_reads']
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "pass_bases_count"
+                    ] += bamdata['yield_tracking']
+                else:
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "bam_failed"
+                    ] += 1
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "fail_mapped_count"
+                    ] += bamdata['mapped_reads']
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "fail_unmapped_count"
+                    ] += bamdata['unmapped_reads']
+                    app.storage.general[self.mainuuid]["file_counters"][
+                        "fail_bases_count"
+                    ] += bamdata['yield_tracking']
+                    # self.basecall_models.add(baminfo["basecall_model"])
+                if (
+                        baminfo["device_position"]
+                        not in app.storage.general[self.mainuuid]["devices"]
+                ):
+                    app.storage.general[self.mainuuid]["devices"].append(
+                        baminfo["device_position"]
+                    )
+                if (
+                        baminfo["basecall_model"]
+                        not in app.storage.general[self.mainuuid]["basecall_models"]
+                ):
+                    app.storage.general[self.mainuuid]["basecall_models"].append(
+                        baminfo["basecall_model"]
+                    )
+                if (
+                        baminfo["sample_id"]
+                        not in app.storage.general[self.mainuuid]["sample_ids"]
+                ):
+                    app.storage.general[self.mainuuid]["sample_ids"].append(
+                        baminfo["sample_id"]
+                    )
+                if (
+                        baminfo["flow_cell_id"]
+                        not in app.storage.general[self.mainuuid]["flowcell_ids"]
+                ):
+                    app.storage.general[self.mainuuid]["flowcell_ids"].append(
+                        baminfo["flow_cell_id"]
+                    )
+                if (
+                        baminfo["time_of_run"]
+                        not in app.storage.general[self.mainuuid]["run_time"]
+                ):
+                    app.storage.general[self.mainuuid]["run_time"].append(
+                        baminfo["time_of_run"]
+                    )
+                # self.sample_ids.add(baminfo["sample_id"])
+                # self.flowcell_ids.add(baminfo["flow_cell_id"])
+                # self.run_time.add(baminfo["time_of_run"])
+                app.storage.general[self.mainuuid]["file_counters"][
+                    "mapped_count"
+                ] += bamdata['mapped_reads']
+                app.storage.general[self.mainuuid]["file_counters"][
+                    "unmapped_count"
+                ] += bamdata['unmapped_reads']
+                app.storage.general[self.mainuuid]["file_counters"][
+                    "bases_count"
+                ] += bamdata['yield_tracking']
+
+                mydf = pd.DataFrame.from_dict(app.storage.general)
+
+                mydf.to_csv(os.path.join(self.output, "master.csv"))
+
+
 
                 counter += 1
                 if "forest" not in self.exclude:
