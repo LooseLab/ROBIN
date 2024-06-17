@@ -242,17 +242,18 @@ class MGMT_Object(BaseAnalysis):
                 )
 
                 try:
-                    results = pd.read_csv(
-                        os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
-                    )
-                    self.counter += 1
-                    plot_out = os.path.join(self.output, f"{self.counter}_mgmt.png")
+                    if os.path.exists(os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")):
+                        results = pd.read_csv(
+                            os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
+                        )
+                        self.counter += 1
+                        plot_out = os.path.join(self.output, f"{self.counter}_mgmt.png")
 
-                    await run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
-                    results.to_csv(
-                        os.path.join(self.output, f"{self.counter}_mgmt.csv"),
-                        index=False,
-                    )
+                        await run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
+                        results.to_csv(
+                            os.path.join(self.output, f"{self.counter}_mgmt.csv"),
+                            index=False,
+                        )
                 except Exception as e:
                     #logger.error(f"Error processing results: {e}")
                     raise
