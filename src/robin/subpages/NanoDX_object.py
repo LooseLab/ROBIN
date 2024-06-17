@@ -167,11 +167,15 @@ class NanoDX_object(BaseAnalysis):
             os.path.dirname(os.path.abspath(models.__file__)), self.model
         )
         self.nanodx_df_store = pd.DataFrame()
+        self.nanodxfile=None
         super().__init__(*args, **kwargs)
-        self.nanodxfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".nanodx")
+
 
     def __del__(self):
-        self.nanodxfile.close()
+        if self.nanodxfile:
+            self.nanodxfile.close()
+
+
     def setup_ui(self) -> None:
         """
         Sets up the user interface for the NanoDX analysis.
@@ -186,20 +190,26 @@ class NanoDX_object(BaseAnalysis):
             with self.summary:
                 ui.label("NanoDX classification: Unknown")
         if self.browse:
-            self.show_previous_data(self.output)
+            self.show_previous_data()
         else:
-            ui.timer(5, lambda: self.show_previous_data(self.output))
+            ui.timer(5, lambda: self.show_previous_data())
 
-    def show_previous_data(self, output: str) -> None:
+    def show_previous_data(self) -> None:
         """
         Displays previously analyzed data from the specified output folder.
 
         Args:
             output (str): Path to the folder containing previous analysis results.
         """
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == 'sample_ids':
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+        output = self.check_and_create_folder(self.output, self.sampleID)
         if self.check_file_time(os.path.join(output, "nanoDX_scores.csv")):
             self.nanodx_df_store = pd.read_csv(
-                os.path.join(os.path.join(self.output, "nanoDX_scores.csv")),
+                os.path.join(os.path.join(output, "nanoDX_scores.csv")),
                 index_col=0,
             )
             columns_greater_than_threshold = (
@@ -233,6 +243,9 @@ class NanoDX_object(BaseAnalysis):
         Args:
             bamfile (List[Tuple[str, float]]): List of BAM files with their timestamps.
         """
+        if not self.nanodxfile:
+            self.nanodxfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID),
+                                                      suffix=".nanodx")
         tomerge: List[str] = []
         while len(bamfile) > 0:
             self.running = True
@@ -247,11 +260,11 @@ class NanoDX_object(BaseAnalysis):
         ] += len(tomerge)
 
         if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
-            sorttempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+            tempbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
+            sorttempbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
             file = tempbam.name
 
-            temp = tempfile.NamedTemporaryFile(dir=self.output)
+            temp = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID))
 
             sortfile = sorttempbam.name
 
@@ -393,7 +406,7 @@ class NanoDX_object(BaseAnalysis):
                 [self.nanodx_df_store, nanoDX_save.set_index("timestamp")]
             )
 
-            self.nanodx_df_store.to_csv(os.path.join(self.output, "nanoDX_scores.csv"))
+            self.nanodx_df_store.to_csv(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "nanoDX_scores.csv"))
 
             app.storage.general[self.mainuuid][self.name]["counters"][
                 "bam_processed"

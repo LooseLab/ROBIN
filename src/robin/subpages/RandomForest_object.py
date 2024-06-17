@@ -100,9 +100,10 @@ class RandomForest_object(BaseAnalysis):
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
+        self.dataDir = None
+        self.bedDir = None
         super().__init__(*args, **kwargs)
-        self.dataDir = tempfile.TemporaryDirectory(dir=self.output)
-        self.bedDir = tempfile.TemporaryDirectory(dir=self.output)
+
 
     def setup_ui(self):
         self.card = ui.card().style("width: 100%")
@@ -116,15 +117,21 @@ class RandomForest_object(BaseAnalysis):
             with self.summary:
                 ui.label("Forest classification: Unknown")
         if self.browse:
-            self.show_previous_data(self.output)
+            self.show_previous_data()
         else:
-            ui.timer(5, lambda: self.show_previous_data(self.output))
+            ui.timer(5, lambda: self.show_previous_data())
 
-    def show_previous_data(self, output):
+    def show_previous_data(self):
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == 'sample_ids':
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+        output = self.check_and_create_folder(self.output, self.sampleID)
         try:
-            if self.check_file_time(os.path.join(self.output, "random_forest_scores.csv")):
+            if self.check_file_time(os.path.join(output, "random_forest_scores.csv")):
                 self.rcns2_df_store = pd.read_csv(
-                        os.path.join(self.output, "random_forest_scores.csv"),
+                        os.path.join(output, "random_forest_scores.csv"),
                     index_col=0,
                 )
                 columns_greater_than_threshold = (
@@ -153,6 +160,10 @@ class RandomForest_object(BaseAnalysis):
             pass
 
     async def process_bam(self, bamfile):
+        if not self.dataDir:
+            self.dataDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
+        if not self.bedDir:
+            self.bedDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
         tomerge = []
         # timestamp = None
 
@@ -164,13 +175,13 @@ class RandomForest_object(BaseAnalysis):
             app.storage.general[self.mainuuid][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
-            if len(tomerge) > 5:
+            if len(tomerge) > 25:
                 break
 
         if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
-            sortbam = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
-            tempbed = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bed")
+            tempbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
+            sortbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
+            tempbed = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bed")
             self.batch += 1
 
             await run.cpu_bound(
@@ -286,7 +297,7 @@ class RandomForest_object(BaseAnalysis):
                 )
                 self.first_run = False
 
-            tempDir = tempfile.TemporaryDirectory(dir=self.output)
+            tempDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
 
             # await background_tasks.create(load_rcns2())
             await run.cpu_bound(
@@ -315,7 +326,7 @@ class RandomForest_object(BaseAnalysis):
                 )
 
                 self.rcns2_df_store.to_csv(
-                    os.path.join(self.output, "random_forest_scores.csv")
+                    os.path.join(self.check_and_create_folder(self.output, self.sampleID), "random_forest_scores.csv")
                 )
 
                 app.storage.general[self.mainuuid][self.name]["counters"][
@@ -359,8 +370,6 @@ class RandomForest_object(BaseAnalysis):
             else:
                 pass
                 # ui.notify("Random Forest Complete by no data.")
-
-        await asyncio.sleep(5)
         self.running = False
 
     def create_rcns2_chart(self, title):

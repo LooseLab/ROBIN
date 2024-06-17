@@ -53,7 +53,7 @@ import pandas as pd
 import os
 import sys
 import asyncio
-from nicegui import ui, run
+from nicegui import ui, run, app
 import pysam
 import shutil
 import click
@@ -191,9 +191,9 @@ class MGMT_Object(BaseAnalysis):
             with self.summary:
                 ui.label("Current MGMT status: Unknown")
         if self.browse:
-            self.show_previous_data(self.output)
+            self.show_previous_data()
         else:
-            ui.timer(30, lambda: self.show_previous_data(self.output))
+            ui.timer(30, lambda: self.show_previous_data())
 
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
@@ -208,7 +208,7 @@ class MGMT_Object(BaseAnalysis):
         """
         #logger.debug(f"Processing BAM file: {bamfile} at {timestamp}")
         MGMT_BED: str = f"{HVPATH}/bin/mgmt_hg38.bed"
-        tempbamfile = tempfile.NamedTemporaryFile(dir=self.output, suffix=".bam")
+        tempbamfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
 
         try:
             await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
@@ -219,12 +219,12 @@ class MGMT_Object(BaseAnalysis):
         try:
             if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
                 if not self.MGMTbamfile:
-                    self.MGMTbamfile = os.path.join(self.output, "mgmt.bam")
+                    self.MGMTbamfile = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "mgmt.bam")
                     shutil.copy2(tempbamfile.name, self.MGMTbamfile)
                     os.remove(f"{tempbamfile.name}.bai")
                 else:
                     tempbamholder = tempfile.NamedTemporaryFile(
-                        dir=self.output, suffix=".bam"
+                        dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
                     )
                     pysam.cat(
                         "-o", tempbamholder.name, self.MGMTbamfile, tempbamfile.name
@@ -235,7 +235,7 @@ class MGMT_Object(BaseAnalysis):
                         os.remove(f"{tempbamfile.name}.bai")
                     except FileNotFoundError:
                         pass
-                tempmgmtdir = tempfile.TemporaryDirectory(dir=self.output)
+                tempmgmtdir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
 
                 await run.cpu_bound(
                     run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
@@ -246,11 +246,11 @@ class MGMT_Object(BaseAnalysis):
                         os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
                     )
                     self.counter += 1
-                    plot_out = os.path.join(self.output, f"{self.counter}_mgmt.png")
+                    plot_out = os.path.join(self.check_and_create_folder(self.output, self.sampleID), f"{self.counter}_mgmt.png")
 
                     await run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
                     results.to_csv(
-                        os.path.join(self.output, f"{self.counter}_mgmt.csv"),
+                        os.path.join(self.check_and_create_folder(self.output, self.sampleID), f"{self.counter}_mgmt.csv"),
                         index=False,
                     )
                 except Exception as e:
@@ -331,7 +331,7 @@ class MGMT_Object(BaseAnalysis):
                     summary = f"Current MGMT status: {results['status'].values[0]}"
         return results, plot_out, summary
 
-    def show_previous_data(self, watchfolder: str) -> None:
+    def show_previous_data(self) -> None:
         """
         Displays previously analyzed data from the specified watch folder.
 
@@ -342,15 +342,20 @@ class MGMT_Object(BaseAnalysis):
             None
         """
         #logger.debug(f"Showing previous data from {watchfolder}")
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == 'sample_ids':
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+        output = self.check_and_create_folder(self.output, self.sampleID)
         if not self.last_seen:
-            for file in natsort.natsorted(os.listdir(watchfolder)):
+            for file in natsort.natsorted(os.listdir(output)):
                 if file.endswith("_mgmt.csv"):
                     count = int(file.split('_')[0])
-
                     if count > self.last_seen:
-                        results = pd.read_csv(os.path.join(watchfolder, file))
+                        results = pd.read_csv(os.path.join(output, file))
                         plot_out = os.path.join(
-                            watchfolder, file.replace(".csv", ".png")
+                            output, file.replace(".csv", ".png")
                         )
                         self.mgmtable.clear()
                         with self.mgmtable:
