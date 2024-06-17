@@ -123,10 +123,11 @@ def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, n
     """
     #NN = NN_classifier(modelfile)
     global NN
+    print(NN)
     try:
         predictions, class_labels, n_features = NN.predict(test_df)
     except Exception as e:
-        ic(e)
+        print(e)
         test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
         # sys.exit(1)
     return predictions, class_labels, n_features
@@ -393,7 +394,7 @@ class NanoDX_object(BaseAnalysis):
             predictions, class_labels, n_features = await run.cpu_bound(
                 classification, self.modelfile, test_df
             )
-
+            print ("Classification done")
             nanoDX_df = pd.DataFrame({"class": class_labels, "score": predictions})
             nanoDX_save = nanoDX_df.set_index("class").T
             nanoDX_save["number_probes"] = n_features
