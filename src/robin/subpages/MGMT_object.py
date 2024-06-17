@@ -142,10 +142,10 @@ def run_modkit(tempmgmtdir: str, MGMTbamfile: str, threads: int) -> None:
         )
         cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress >/dev/null 2>&1"
         os.system(cmd)
-
-        cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir, 'mgmt.bed')} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
-        print(cmd)
-        os.system(cmd)
+        if os.path.exists(os.path.join(tempmgmtdir, "mgmt.bed")):
+            cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir, 'mgmt.bed')} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
+            #print(cmd)
+            os.system(cmd)
     except Exception as e:
         #logger.error(f"Error running modkit: {e}")
         raise
@@ -242,17 +242,18 @@ class MGMT_Object(BaseAnalysis):
                 )
 
                 try:
-                    results = pd.read_csv(
-                        os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
-                    )
-                    self.counter += 1
-                    plot_out = os.path.join(self.check_and_create_folder(self.output, self.sampleID), f"{self.counter}_mgmt.png")
+                    if os.path.exists(os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")):
+                      results = pd.read_csv(
+                          os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
+                      )
+                      self.counter += 1
+                      plot_out = os.path.join(self.check_and_create_folder(self.output, self.sampleID), f"{self.counter}_mgmt.png")
 
-                    await run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
-                    results.to_csv(
-                        os.path.join(self.check_and_create_folder(self.output, self.sampleID), f"{self.counter}_mgmt.csv"),
-                        index=False,
-                    )
+                      await run.cpu_bound(run_methylartist, tempmgmtdir.name, plot_out)
+                      results.to_csv(
+                          os.path.join(self.check_and_create_folder(self.output, self.sampleID), f"{self.counter}_mgmt.csv"),
+                          index=False,
+                      )
                 except Exception as e:
                     #logger.error(f"Error processing results: {e}")
                     raise
