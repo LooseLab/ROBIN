@@ -30,6 +30,7 @@ import pickle
 from robin.subpages.CNV_object import Result
 
 from robin import fonts
+from robin import images
 
 
 pdfmetrics.registerFont(
@@ -127,7 +128,10 @@ class HeaderFooterCanvas(canvas.Canvas):
         header3.drawOn(self, inch, height - h - inch + 12)
 
         # Add logo to the top right corner of the header
-        logo_path = "src/robin/images/Robin_logo_small.png"  # Replace with the path to your logo
+        logo_path = os.path.join(
+            os.path.dirname(os.path.abspath(images.__file__)), "Robin_logo_small.png"
+        )
+        #logo_path = "src/robin/images/Robin_logo_small.png"  # Replace with the path to your logo
         max_logo_size = 50  # Maximum width and height in pixels
         self.drawImage(
             logo_path,
