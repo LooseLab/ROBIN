@@ -683,7 +683,19 @@ class BrainMeth:
                 if item == 'sample_ids':
                     for sample in app.storage.general[self.mainuuid][item]:
                         self.sampleID = sample
-        ui.button("Generate Report", on_click=lambda: create_pdf(f"{self.sampleID}_run_report.pdf", self.check_and_create_folder(self.output,self.sampleID)))
+
+        async def download_report():
+            ui.notify("Generating Report")
+            if not self.browse:
+                for item in app.storage.general[self.mainuuid]:
+                    if item == 'sample_ids':
+                        for sample in app.storage.general[self.mainuuid][item]:
+                            self.sampleID = sample
+            myfile = await run.io_bound(create_pdf, f"{self.sampleID}_run_report.pdf", self.check_and_create_folder(self.output,self.sampleID))
+            #myfile = run.io_bound(create_pdf(f"{self.sampleID}_run_report.pdf", self.check_and_create_folder(self.output,self.sampleID))
+            ui.download(myfile)
+            ui.notify("Report Downloaded")
+        ui.button("Generate Report", on_click=download_report, icon="download")
 
     async def background_process_bams(self):
         await asyncio.sleep(5)

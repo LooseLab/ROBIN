@@ -882,7 +882,7 @@ def create_pdf(filename, output):
     # Add sections
 
     doc.multiBuild(elements, canvasmaker=header_footer_canvas_factory(sample_id))
-
+    print(f"PDF created: {filename}")
     return filename
 
 
