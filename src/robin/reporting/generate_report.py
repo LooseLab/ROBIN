@@ -26,15 +26,17 @@ from datetime import datetime
 import base64
 import pickle
 
+
 from robin.subpages.CNV_object import Result
 
+from robin import
 
 
 pdfmetrics.registerFont(
-    TTFont("FiraSans", "src/robin/fonts/fira-sans-v16-latin-regular.ttf")
+    TTFont("FiraSans",  os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-regular.ttf"))
 )
 pdfmetrics.registerFont(
-    TTFont("FiraSans-Bold", "src/robin/fonts/fira-sans-v16-latin-700.ttf")
+    TTFont("FiraSans-Bold", os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-700.ttf"))
 )  # Assuming this is the path for the bold version
 
 # Update styles to use the custom font
@@ -410,11 +412,13 @@ def create_pdf(filename, output):
     print (f"Creating PDF {filename} in {output}")
 
     pdfmetrics.registerFont(
-        TTFont("FiraSans", "src/robin/fonts/fira-sans-v16-latin-regular.ttf")
+        TTFont("FiraSans",
+               os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-regular.ttf"))
     )
     pdfmetrics.registerFont(
-        TTFont("FiraSans-Bold", "src/robin/fonts/fira-sans-v16-latin-700.ttf")
-    )  # Assuming this is the path for the bold version
+        TTFont("FiraSans-Bold",
+               os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-700.ttf"))
+    )
 
     # Update styles to use the custom font
     styles = getSampleStyleSheet()
@@ -882,11 +886,13 @@ if __name__ == "__main__":
     # Create a sample plot
     # Register the custom fonts
     pdfmetrics.registerFont(
-        TTFont("FiraSans", "src/robin/fonts/fira-sans-v16-latin-regular.ttf")
+        TTFont("FiraSans",
+               os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-regular.ttf"))
     )
     pdfmetrics.registerFont(
-        TTFont("FiraSans-Bold", "src/robin/fonts/fira-sans-v16-latin-700.ttf")
-    )  # Assuming this is the path for the bold version
+        TTFont("FiraSans-Bold",
+               os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-700.ttf"))
+    )
 
     # Update styles to use the custom font
     styles = getSampleStyleSheet()
