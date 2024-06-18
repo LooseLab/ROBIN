@@ -126,6 +126,7 @@ from collections import Counter
 
 import time
 from datetime import datetime
+from dateutil import parser
 import pytz
 import os
 
@@ -416,7 +417,7 @@ class BrainMeth:
                     app.storage.general[self.mainuuid],
                     "run_time",
                     backward=lambda n: [
-                        f"Run Start Time: {datetime.strptime(date.replace('Z', ''), '%Y-%m-%dT%H:%M:%S').replace(tzinfo=pytz.UTC).strftime('%Y-%m-%d %H:%M:%S %Z')}"
+                        f"Run Start Time: {parser.parse(date).astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S %Z')}"
                         for date in n
                     ],
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
