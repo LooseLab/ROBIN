@@ -123,7 +123,7 @@ class BaseAnalysis:
         self.progress = progress
         self.file_mod_times = {}
         self.sampleID = None
-
+        self.MENU_BREAKPOINT = 520
         if self.name not in app.storage.general.get(self.mainuuid, {}):
             app.storage.general.setdefault(self.mainuuid, {})[self.name] = {
                 "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)

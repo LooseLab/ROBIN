@@ -182,9 +182,9 @@ class NanoDX_object(BaseAnalysis):
         """
         with ui.card().style("width: 100%"):
             with ui.grid(columns=8).classes("w-full h-auto"):
-                with ui.card().classes("col-span-3"):
+                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
                     self.create_nanodx_chart("NanoDX")
-                with ui.card().classes("col-span-5"):
+                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
                     self.create_nanodx_time_chart("NanoDX Time Series")
         if self.summary:
             with self.summary:

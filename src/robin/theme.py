@@ -55,8 +55,11 @@ import platform
 
 # Define the path to the image file used in the header and footer
 IMAGEFILE = os.path.join(
-    os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo2_small.png"
+    os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
 )
+
+
+MENU_BREAKPOINT = 520
 
 # Read the HTML content for the header
 HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
@@ -65,7 +68,7 @@ HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
 STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 
 @contextmanager
-def frame(navtitle: str):
+def frame(navtitle: str, smalltitle=None):
     """
     Context manager to create a custom page frame with consistent styling and behavior across all pages.
 
@@ -101,19 +104,23 @@ def frame(navtitle: str):
     # Create a header with navigation title and menu
     with ui.header(elevated=True).classes("items-center duration-200 p-0 px-4 no-wrap"):
         with ui.grid(columns=2).style("width: 100%"):
-            with ui.row().classes('items-center align-left'): #.classes('items-left m-auto'):
-                ui.html(navtitle).classes("shadows-into").style(
-                    "color: #FFFFFF; font-size: 200%; font-weight: 300"
+            with ui.row().classes(f'max-[{MENU_BREAKPOINT}px]:hidden items-center align-left'): #.classes('items-left m-auto'):
+                ui.html(navtitle).classes('shadows-into').style(
+                    "color: #FFFFFF; font-size: 150%; font-weight: 300"
+                ).tailwind("drop-shadow", "font-bold")
+            with ui.row().classes(f'min-[{MENU_BREAKPOINT+1}px]:hidden items-center align-left'):
+                ui.html(smalltitle).style(
+                    "color: #FFFFFF; font-size: 150%; font-weight: 300"
                 ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("ml-auto align-top"):
                 with ui.row().classes('items-center m-auto'):
-                    ui.label(f"Viewing: {platform.node()}")
-                    ui.label('CPU')
-                    cpu_activity = ui.circular_progress(max=100)
+                    ui.label(f"Viewing: {platform.node()}").classes(f'max-[{MENU_BREAKPOINT}px]:hidden')
+                    ui.label('CPU').classes(f'max-[{MENU_BREAKPOINT}px]:hidden')
+                    cpu_activity = ui.circular_progress(max=100).classes(f'max-[{MENU_BREAKPOINT}px]:hidden')
                     ui.timer(1.0,
                              lambda: cpu_activity.set_value(f"{psutil.getloadavg()[1] / os.cpu_count() * 100:.1f}"))
-                    ui.label('RAM')
-                    ram_utilisation = ui.circular_progress(max=100)
+                    ui.label('RAM').classes(f'max-[{MENU_BREAKPOINT}px]:hidden')
+                    ram_utilisation = ui.circular_progress(max=100).classes(f'max-[{MENU_BREAKPOINT}px]:hidden')
                     ui.timer(1.0, lambda: ram_utilisation.set_value(f"{psutil.virtual_memory()[2]:.1f}"))
                     with ui.button(icon="menu"):
                         with ui.menu() as menu:
@@ -124,6 +131,7 @@ def frame(navtitle: str):
                             )
                             ui.separator()
                             ui.switch("Allow Remote Access").classes("ml-4 bg-transparent").props('color="black"').bind_value(app.storage.general, "use_on_air")
+                            ui.separator()
                             #ui.switch(
                             #    "allow remote access", value=False, on_change=use_on_air
                             #).classes("ml-4 bg-transparent").props('color="black"')
@@ -134,12 +142,14 @@ def frame(navtitle: str):
                             ui.dark_mode().bind_value(app.storage.browser, "dark_mode")
                             ui.separator()
                             ui.menu_item("Close", menu.close)
+                            ui.button("Quit", icon="logout", on_click=quitdialog.open)
                     ui.image(IMAGEFILE).style("width: 50px")
+
 
     # Create a footer with useful information and quit button
     with ui.footer().style("background-color: #4F9153"):
         with ui.dialog() as dialog, ui.card():
-            ui.label("Useful Information").tailwind(
+            ui.label("Links").tailwind(
                 "text-2xl font-bold font-italic drop-shadow"
             )
             ui.separator()
@@ -159,18 +169,26 @@ def frame(navtitle: str):
             ui.link("Oxford Nanopore", "https://nanoporetech.com/")
             ui.link("epi2me labs", "https://labs.epi2me.io/")
             ui.link("Looselab", "https://looselab.github.io/")
-            ui.label("Version: " + __about__.__version__)
             ui.button("Close", on_click=dialog.close)
-        ui.image(IMAGEFILE).style("width: 30px")
+        ui.image(IMAGEFILE).style("width: 40px")
         ui.colors(primary="#555")
-        ui.button("More Information", on_click=dialog.open)
-        ui.button("Quit", icon="logout", on_click=quitdialog.open)
-        ui.label().bind_text_from(
-            app, "urls", backward=lambda n: f"Available urls: {n}"
-        )
+        ui.button("Links", on_click=dialog.open)
+
+        with ui.button(icon="info"):
+            with ui.menu() as menu:
+                ui.label().bind_text_from(
+                    app, "urls", backward=lambda n: f"Available urls: {n}"
+                )
+                ui.label("Version: " + __about__.__version__)
         ui.label(
             "Some aspects of this application are ©Looselab - all analyses provided for research use only."
-        ).tailwind("text-sm font-italic")
+        ).classes(f'max-[{MENU_BREAKPOINT}px]:hidden').tailwind("text-sm font-italic")
+        ui.label(
+            "©Looselab"
+        ).classes(f'min-[{MENU_BREAKPOINT+1}px]:hidden').tailwind("text-sm font-italic")
+        ui.label(
+            "Not for diagnostic use."
+        ).classes(f'min-[{MENU_BREAKPOINT+1}px]:hidden').tailwind("text-sm font-italic")
 
     yield
 
@@ -211,8 +229,9 @@ def use_on_air(args: events.ValueChangeEventArguments):
 
 @ui.page("/")
 def my_page():
-    with frame("<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>"):
+    with frame("<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>", smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>"):
         ui.label("Welcome to the Application")
+
 
 def main():
     """

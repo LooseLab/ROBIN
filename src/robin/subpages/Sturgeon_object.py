@@ -69,6 +69,7 @@ def run_sturgeon_inputtobed(temp, temp2):
         pass
 
 
+
 class Sturgeon_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
         self.sturgeon_df_store = pd.DataFrame()
@@ -86,9 +87,9 @@ class Sturgeon_object(BaseAnalysis):
         self.card = ui.card().style("width: 100%")
         with self.card:
             with ui.grid(columns=8).classes("w-full h-auto"):
-                with ui.card().classes("col-span-3"):
+                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
                     self.create_sturgeon_chart("Sturgeon")
-                with ui.card().classes("col-span-5"):
+                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
                     self.create_sturgeon_time_chart("Sturgeon Time Series")
         if self.summary:
             with self.summary:

@@ -385,7 +385,7 @@ class BrainMeth:
             return 0
 
     async def information_panel(self):
-        self.frontpage = ui.card().classes("w-screen")
+        self.frontpage = ui.card().classes("w-full")
         with self.frontpage:
             ui.label("CNS Tumour Methylation Classification").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
@@ -465,7 +465,7 @@ class BrainMeth:
 
             with ui.expansion(icon="work").bind_text_from(
                 self, "watchfolder", backward=lambda n: f"Monitoring the path: {n}"
-            ).classes(""):
+            ).classes("w-full"):
                 with ui.row():
                     ui.label().bind_text_from(
                         self,

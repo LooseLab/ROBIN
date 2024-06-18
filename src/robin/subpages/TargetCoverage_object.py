@@ -367,12 +367,12 @@ class TargetCoverage(BaseAnalysis):
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.grid(columns=2).classes("w-full h-auto"):
-                with ui.column():
-                    with ui.card().classes("w-full"):
-                        self.create_coverage_plot("Chromosome Coverage")
-                with ui.column():
-                    with ui.card().classes("w-full"):
-                        self.create_coverage_plot_targets("Target Coverage")
+
+                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2'):
+                    self.create_coverage_plot("Chromosome Coverage")
+
+                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2'):
+                    self.create_coverage_plot_targets("Target Coverage")
         with ui.card().classes("w-full"):
             ui.label("Target Outliers").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
