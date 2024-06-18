@@ -902,7 +902,8 @@ class FusionObject(BaseAnalysis):
             fusion_candidates = pd.read_csv(
                 os.path.join(output, "fusion_candidates_master.csv"),
                 dtype=str,
-                names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                #names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                names=[ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
                 header=None,
                 skiprows=1,
             )
@@ -911,7 +912,8 @@ class FusionObject(BaseAnalysis):
             fusion_candidates_all = pd.read_csv(
                 os.path.join(output, "fusion_candidates_all.csv"),
                 dtype=str,
-                names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                #names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
                 header=None,
                 skiprows=1,
             )
