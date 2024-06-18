@@ -29,14 +29,14 @@ import pickle
 
 from robin.subpages.CNV_object import Result
 
-from robin import
+from robin import fonts
 
 
 pdfmetrics.registerFont(
-    TTFont("FiraSans",  os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-regular.ttf"))
+    TTFont("FiraSans",  os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-regular.ttf"))
 )
 pdfmetrics.registerFont(
-    TTFont("FiraSans-Bold", os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-700.ttf"))
+    TTFont("FiraSans-Bold", os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-700.ttf"))
 )  # Assuming this is the path for the bold version
 
 # Update styles to use the custom font
@@ -413,11 +413,11 @@ def create_pdf(filename, output):
 
     pdfmetrics.registerFont(
         TTFont("FiraSans",
-               os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-regular.ttf"))
+               os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-regular.ttf"))
     )
     pdfmetrics.registerFont(
         TTFont("FiraSans-Bold",
-               os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-700.ttf"))
+               os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-700.ttf"))
     )
 
     # Update styles to use the custom font
@@ -887,11 +887,11 @@ if __name__ == "__main__":
     # Register the custom fonts
     pdfmetrics.registerFont(
         TTFont("FiraSans",
-               os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-regular.ttf"))
+               os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-regular.ttf"))
     )
     pdfmetrics.registerFont(
         TTFont("FiraSans-Bold",
-               os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "fira-sans-v16-latin-700.ttf"))
+               os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-700.ttf"))
     )
 
     # Update styles to use the custom font
