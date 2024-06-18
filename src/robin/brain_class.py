@@ -111,6 +111,7 @@ from robin.subpages.TargetCoverage_object import TargetCoverage
 from robin.subpages.Fusion_object import FusionObject
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.ReadBam import ReadBam
+from robin.reporting.generate_report import create_pdf
 
 from watchdog.observers import Observer
 from pathlib import Path
@@ -122,8 +123,10 @@ import logging
 from collections import Counter
 
 
+
 import time
 from datetime import datetime
+import pytz
 import os
 
 # Configure logging
@@ -175,6 +178,7 @@ class BrainMeth:
         self.observer = None
         if self.browse:
             self.runsfolder = self.output
+        self.sampleID=None
 
     async def start_background(self):
         #logger.debug("Init Brain Class")
@@ -412,7 +416,7 @@ class BrainMeth:
                     app.storage.general[self.mainuuid],
                     "run_time",
                     backward=lambda n: [
-                        f"Run Start Time: {datetime.fromisoformat(date).strftime('%Y-%m-%d %H:%M:%S %Z')}"
+                        f"Run Start Time: {datetime.strptime(date.replace('Z', ''), '%Y-%m-%dT%H:%M:%S').replace(tzinfo=pytz.UTC).strftime('%Y-%m-%d %H:%M:%S %Z')}"
                         for date in n
                     ],
                 ).style("color: #000000; font-size: 100%; font-weight: 300")
@@ -673,7 +677,12 @@ class BrainMeth:
                         )
                         await self.Fusion_panel.render_ui()
 
-        # ui.button("Generate Report", on_click=lambda: create_pdf("test.pdf", CNV_data=self.CNV))
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == 'sample_ids':
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+        ui.button("Generate Report", on_click=lambda: create_pdf(f"{self.sampleID}_run_report.pdf", self.check_and_create_folder(self.output,self.sampleID)))
 
     async def background_process_bams(self):
         await asyncio.sleep(5)

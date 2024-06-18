@@ -29,6 +29,33 @@ import pickle
 from robin.subpages.CNV_object import Result
 
 
+
+pdfmetrics.registerFont(
+    TTFont("FiraSans", "src/robin/fonts/fira-sans-v16-latin-regular.ttf")
+)
+pdfmetrics.registerFont(
+    TTFont("FiraSans-Bold", "src/robin/fonts/fira-sans-v16-latin-700.ttf")
+)  # Assuming this is the path for the bold version
+
+# Update styles to use the custom font
+styles = getSampleStyleSheet()
+for style_name in styles.byName:
+    styles[style_name].fontName = "FiraSans"
+
+# Define a smaller style for the header date
+smaller_style = ParagraphStyle(name="Smaller", parent=styles["Normal"], fontSize=8)
+
+# Define a bold style for the first header line
+bold_style = ParagraphStyle(
+    name="Bold", parent=styles["Normal"], fontName="FiraSans-Bold"
+)
+
+# Define an underlined style for section headings
+underline_style = ParagraphStyle(
+    name="Underline", parent=styles["Heading1"], underline=True
+)
+
+
 def convert_to_space_separated_string(array):
     import ast
 
@@ -98,8 +125,8 @@ class HeaderFooterCanvas(canvas.Canvas):
         header3.drawOn(self, inch, height - h - inch + 12)
 
         # Add logo to the top right corner of the header
-        logo_path = "src/robin/images/MethBrain_small.png"  # Replace with the path to your logo
-        max_logo_size = 40  # Maximum width and height in pixels
+        logo_path = "src/robin/images/Robin_logo_small.png"  # Replace with the path to your logo
+        max_logo_size = 50  # Maximum width and height in pixels
         self.drawImage(
             logo_path,
             width - max_logo_size - inch,
@@ -380,6 +407,33 @@ def dataframe_to_table(df):
 
 # Create PDF
 def create_pdf(filename, output):
+    print (f"Creating PDF {filename} in {output}")
+
+    pdfmetrics.registerFont(
+        TTFont("FiraSans", "src/robin/fonts/fira-sans-v16-latin-regular.ttf")
+    )
+    pdfmetrics.registerFont(
+        TTFont("FiraSans-Bold", "src/robin/fonts/fira-sans-v16-latin-700.ttf")
+    )  # Assuming this is the path for the bold version
+
+    # Update styles to use the custom font
+    styles = getSampleStyleSheet()
+    for style_name in styles.byName:
+        styles[style_name].fontName = "FiraSans"
+
+    # Define a smaller style for the header date
+    smaller_style = ParagraphStyle(name="Smaller", parent=styles["Normal"], fontSize=8)
+
+    # Define a bold style for the first header line
+    bold_style = ParagraphStyle(
+        name="Bold", parent=styles["Normal"], fontName="FiraSans-Bold"
+    )
+
+    # Define an underlined style for section headings
+    underline_style = ParagraphStyle(
+        name="Underline", parent=styles["Heading1"], underline=True
+    )
+
     doc = SimpleDocTemplate(filename, pagesize=A4)
     elements = []
 
@@ -398,10 +452,6 @@ def create_pdf(filename, output):
     else:
         sample_id = None
 
-    import pprint
-
-    pprint.pprint(masterdf)
-
     elements.append(Paragraph("Classification Summary", styles["Heading1"]))
 
     elements.append(Spacer(1, 12))
@@ -409,6 +459,7 @@ def create_pdf(filename, output):
     elements.append(
         Paragraph("This sample has the following classifications:", styles["BodyText"])
     )
+    elements.append(Spacer(1, 12))
     threshold = 0.05
     if os.path.exists(os.path.join(output, "sturgeon_scores.csv")):
         sturgeon_df_store = pd.read_csv(
@@ -427,7 +478,7 @@ def create_pdf(filename, output):
         elements.append(
             Paragraph(
                 f"Sturgeon classification: {Sturgeonlastrow_plot_top.index[0]} - {Sturgeonlastrow_plot_top.values[0]:.2f}",
-                styles["BodyText"],
+                bold_style,
             )
         )
 
@@ -452,7 +503,7 @@ def create_pdf(filename, output):
         elements.append(
             Paragraph(
                 f"NanoDX classification: {NanoDXlastrow_plot_top.index[0]} - {NanoDXlastrow_plot_top.values[0]:.2f}",
-                styles["BodyText"],
+                bold_style,
             )
         )
     else:
@@ -477,7 +528,7 @@ def create_pdf(filename, output):
         elements.append(
             Paragraph(
                 f"Forest classification: {Forestlastrow_plot_top.index[0]} - {Forestlastrow_plot_top.values[0]:.2f}",
-                styles["BodyText"],
+                bold_style,
             )
         )
     else:
@@ -494,7 +545,7 @@ def create_pdf(filename, output):
         file = open(os.path.join(output, "XYestimate.pkl"), "rb")
         XYestimate = pickle.load(file)
         elements.append(
-            Paragraph(f"Estimated Genetic Sex: {XYestimate}", styles["BodyText"])
+            Paragraph(f"Estimated sex chromosome composition: {XYestimate}", styles["BodyText"])
         )
 
     if os.path.exists(os.path.join(output, "coverage_main.csv")):
@@ -517,23 +568,32 @@ def create_pdf(filename, output):
             styles["BodyText"],
         )
     )
-
+    elements.append(Spacer(1, 12))
     if masterdf is not None and isinstance(masterdf, pd.DataFrame):
-        elements.append(Paragraph("Run Data Summary", styles["Heading1"]))
+        elements.append(Paragraph("Run Data Summary", styles["Heading2"]))
         start_time = "Placeholder"
         elements.append(
             Paragraph(
                 f"Sample ID: {sample_id}<br/>"
                 f"Run Start: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'run_time')][1].values)}<br/>"
-                f"Run Folder: {masterdf.loc[(masterdf.index == 'watchfolder')][1].values}<br/>"
-                f"Output Folder: {masterdf.loc[(masterdf.index == 'output')][1].values}<br/>"
-                f"Target Panel: {masterdf.loc[(masterdf.index == 'target_panel')][1].values}<br/>"
-                f"Reference: {masterdf.loc[(masterdf.index == 'reference')][1].values}<br/>"
+                f"Run Folder: {' '.join(masterdf.loc[(masterdf.index == 'watchfolder')][1].values)}<br/>"
+                f"Output Folder: {' '.join(masterdf.loc[(masterdf.index == 'output')][1].values)}<br/>"
+                f"Target Panel: {' '.join(masterdf.loc[(masterdf.index == 'target_panel')][1].values)}<br/>"
+                f"Reference: {' '.join(masterdf.loc[(masterdf.index == 'reference')][1].values)}<br/>"
                 f"Sequencing Device: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'devices')][1].values)}<br/>"
                 f"Flowcell ID: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'flowcell_ids')][1].values)}<br/>"
-                f"Basecalling Model: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'basecall_models')][1].values)}<br/>"
-                f"Files Seen: {masterdf.loc[(masterdf.index == 'file_counters')][1].values}<br/>",
-                styles["BodyText"],
+                f"Basecalling Model: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'basecall_models')][1].values)}<br/>",
+                #f"Files Seen: {masterdf.loc[(masterdf.index == 'file_counters')][1].values}<br/>",
+                smaller_style,
+            )
+        )
+        formatted_lines = "".join(
+            (f"{k}: {v}<br/>" for k, v in eval(masterdf.loc[(masterdf.index == 'file_counters')][1]['file_counters']).items())
+        )
+        elements.append(
+            Paragraph(
+                f"{formatted_lines}",
+                smaller_style,
             )
         )
 
@@ -571,8 +631,8 @@ def create_pdf(filename, output):
                 ("ALIGN", (0, 0), (-1, -1), "CENTER"),  # Center align all cells
                 ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),  # Header font
                 ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),  # Body font
-                ("FONTSIZE", (0, 0), (-1, 0), 8),  # Header font size
-                ("FONTSIZE", (0, 1), (-1, -1), 8),  # Body font size
+                ("FONTSIZE", (0, 0), (-1, 0), 7),  # Header font size
+                ("FONTSIZE", (0, 1), (-1, -1), 6),  # Body font size
                 ("BOTTOMPADDING", (0, 0), (-1, 0), 1),  # Header padding
                 ("BACKGROUND", (0, 1), (-1, -1), colors.white),  # Body background white
                 ("GRID", (0, 0), (-1, -1), 1, colors.black),  # Grid lines
@@ -583,6 +643,7 @@ def create_pdf(filename, output):
 
         elements.append(table)
         elements.append(Spacer(1, 12))
+        elements.append(PageBreak())
 
     if os.path.exists(os.path.join(output, "nanoDX_scores.csv")):
         elements.append(Paragraph("NanoDX Classification", styles["Heading3"]))
@@ -610,8 +671,8 @@ def create_pdf(filename, output):
                 ("ALIGN", (0, 0), (-1, -1), "CENTER"),  # Center align all cells
                 ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),  # Header font
                 ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),  # Body font
-                ("FONTSIZE", (0, 0), (-1, 0), 8),  # Header font size
-                ("FONTSIZE", (0, 1), (-1, -1), 8),  # Body font size
+                ("FONTSIZE", (0, 0), (-1, 0), 7),  # Header font size
+                ("FONTSIZE", (0, 1), (-1, -1), 6),  # Body font size
                 ("BOTTOMPADDING", (0, 0), (-1, 0), 1),  # Header padding
                 ("BACKGROUND", (0, 1), (-1, -1), colors.white),  # Body background white
                 ("GRID", (0, 0), (-1, -1), 1, colors.black),  # Grid lines
@@ -622,6 +683,7 @@ def create_pdf(filename, output):
 
         elements.append(table)
         elements.append(Spacer(1, 12))
+        elements.append(PageBreak())
 
     if os.path.exists(os.path.join(output, "random_forest_scores.csv")):
         elements.append(Paragraph("Forest Classification", styles["Heading3"]))
@@ -651,8 +713,8 @@ def create_pdf(filename, output):
                 ("ALIGN", (0, 0), (-1, -1), "CENTER"),  # Center align all cells
                 ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),  # Header font
                 ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),  # Body font
-                ("FONTSIZE", (0, 0), (-1, 0), 8),  # Header font size
-                ("FONTSIZE", (0, 1), (-1, -1), 8),  # Body font size
+                ("FONTSIZE", (0, 0), (-1, 0), 7),  # Header font size
+                ("FONTSIZE", (0, 1), (-1, -1), 6),  # Body font size
                 ("BOTTOMPADDING", (0, 0), (-1, 0), 1),  # Header padding
                 ("BACKGROUND", (0, 1), (-1, -1), colors.white),  # Body background white
                 ("GRID", (0, 0), (-1, -1), 1, colors.black),  # Grid lines
@@ -663,6 +725,7 @@ def create_pdf(filename, output):
 
         elements.append(table)
         elements.append(Spacer(1, 12))
+        elements.append(PageBreak())
 
     elements.append(Spacer(1, 12))
 
@@ -693,6 +756,7 @@ def create_pdf(filename, output):
         )
 
         elements.append(Spacer(1, 12))
+        elements.append(PageBreak())
 
     elements.append(Paragraph("Target Coverage", underline_style))
     if os.path.isfile(os.path.join(output, "coverage_main.csv")):
@@ -738,8 +802,8 @@ def create_pdf(filename, output):
                 ("ALIGN", (0, 0), (-1, -1), "CENTER"),  # Center align all cells
                 ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),  # Header font
                 ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),  # Body font
-                ("FONTSIZE", (0, 0), (-1, 0), 8),  # Header font size
-                ("FONTSIZE", (0, 1), (-1, -1), 8),  # Body font size
+                ("FONTSIZE", (0, 0), (-1, 0),7),  # Header font size
+                ("FONTSIZE", (0, 1), (-1, -1), 6),  # Body font size
                 ("BOTTOMPADDING", (0, 0), (-1, 0), 1),  # Header padding
                 ("BACKGROUND", (0, 1), (-1, -1), colors.white),  # Body background white
                 ("GRID", (0, 0), (-1, -1), 1, colors.black),  # Grid lines
@@ -749,6 +813,7 @@ def create_pdf(filename, output):
         table.setStyle(style)
 
         elements.append(table)
+        elements.append(PageBreak())
 
     elements.append(Spacer(1, 12))
 
@@ -756,11 +821,55 @@ def create_pdf(filename, output):
 
     elements.append(Spacer(1, 12))
 
-    elements.append(Paragraph("MGMT Promoter Methylation", underline_style))
+    last_seen = 0
+    if not last_seen:
+        for file in natsort.natsorted(os.listdir(output)):
+            if file.endswith("_mgmt.csv"):
+                count = int(file.split('_')[0])
+                if count > last_seen:
+                    results = pd.read_csv(os.path.join(output, file))
+                    plot_out = os.path.join(
+                        output, file.replace(".csv", ".png")
+                    )
+                    last_seen = count
 
-    elements.append(Spacer(1, 12))
+    if last_seen > 0:
+        elements.append(Paragraph("MGMT Promoter Methylation", underline_style))
+        image = Image(plot_out, 6 * inch, 4 * inch)  # Adjust the size as needed
+        elements.append(image)
 
-    elements.append(Spacer(1, 12))
+        data_list = [results.columns.values.tolist()] + results.values.tolist()
+
+        table = Table(data_list)
+
+        style = TableStyle(
+            [
+                (
+                    "BACKGROUND",
+                    (0, 0),
+                    (-1, -1),
+                    colors.white,
+                ),  # Set background to white
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),  # Header text color
+                ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),  # Body text color
+                ("ALIGN", (0, 0), (-1, -1), "CENTER"),  # Center align all cells
+                ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),  # Header font
+                ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),  # Body font
+                ("FONTSIZE", (0, 0), (-1, 0), 7),  # Header font size
+                ("FONTSIZE", (0, 1), (-1, -1), 6),  # Body font size
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 1),  # Header padding
+                ("BACKGROUND", (0, 1), (-1, -1), colors.white),  # Body background white
+                ("GRID", (0, 0), (-1, -1), 1, colors.black),  # Grid lines
+            ]
+        )
+        table.setStyle(style)
+
+        elements.append(table)
+
+        elements.append(Spacer(1, 12))
+        elements.append(PageBreak())
+
+
 
     # Add sections
 
@@ -797,4 +906,4 @@ if __name__ == "__main__":
         name="Underline", parent=styles["Heading1"], underline=True
     )
     # Generate the PDF
-    create_pdf("sample_report.pdf", "run2")
+    create_pdf("sample_report.pdf", "/private/tmp/run2/ds1305_Intraop0047_b")
