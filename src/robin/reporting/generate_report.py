@@ -129,7 +129,7 @@ class HeaderFooterCanvas(canvas.Canvas):
 
         # Add logo to the top right corner of the header
         logo_path = os.path.join(
-            os.path.dirname(os.path.abspath(images.__file__)), "Robin_logo_small.png"
+            os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
         )
         #logo_path = "src/robin/images/Robin_logo_small.png"  # Replace with the path to your logo
         max_logo_size = 50  # Maximum width and height in pixels
