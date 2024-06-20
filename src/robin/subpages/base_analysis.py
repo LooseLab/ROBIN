@@ -99,9 +99,9 @@ class BaseAnalysis:
 
     def __init__(
         self,
-        threads: int,
-        outputfolder: str,
-        analysis_name: str,
+        threads: int = 1,
+        output: str = None,
+        analysis_name: str = None,
         summary: Optional[str] = None,
         bamqueue: Optional[queue.Queue] = None,
         progress: bool = False,
@@ -109,6 +109,7 @@ class BaseAnalysis:
         start_time: Optional[float] = None,
         browse: bool = False,
         uuid: Optional[str] = None,
+        force_sampleid: Optional[str] = None,
         *args,
         **kwargs,
     ) -> None:
@@ -117,7 +118,7 @@ class BaseAnalysis:
         self.name = analysis_name
         self.start_time = start_time
         self.batch = batch
-        self.output = outputfolder
+        self.output = output
         self.summary = summary
         self.browse = browse
         self.progress = progress
@@ -129,6 +130,7 @@ class BaseAnalysis:
                 "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
             }
         self.running = False
+        self.force_sampleid = force_sampleid
         self.threads = max(1, threads // 2)
 
     def check_file_time(self, file_path: str) -> bool:
@@ -160,6 +162,9 @@ class BaseAnalysis:
         # Check if the path exists
         if not os.path.exists(path):
             raise FileNotFoundError(f"The specified path does not exist: {path}")
+
+        if self.force_sampleid:
+            folder_name = self.force_sampleid
 
         # If folder_name is provided
         if folder_name:

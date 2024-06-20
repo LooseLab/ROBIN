@@ -102,6 +102,7 @@ async def index() -> None:
     Sets up an instance of Methnice for the splash screen and navigation.
     """
     GUI = Methnice(
+        force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
         threads=app.storage.general[UNIQUE_ID]["threads"],
         simtime=app.storage.general[UNIQUE_ID]["simtime"],
         watchfolder=app.storage.general[UNIQUE_ID]["watchfolder"],
@@ -147,6 +148,7 @@ async def live() -> None:
     Sets up an instance of Methnice for live data visualization.
     """
     GUI = Methnice(
+        force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
         threads=app.storage.general[UNIQUE_ID]["threads"],
         simtime=app.storage.general[UNIQUE_ID]["simtime"],
         watchfolder=app.storage.general[UNIQUE_ID]["watchfolder"],
@@ -171,6 +173,7 @@ async def test() -> None:
     """
     GUI_browse = Methnice(
         threads=1,
+        force_sampleid=None,
         simtime=False,
         watchfolder=None,
         output=app.storage.general[UNIQUE_ID]["output"],
@@ -203,6 +206,7 @@ async def startup() -> None:
     """
     print(f"Setting up {UNIQUE_ID}.")
     MAINPAGE = Methnice(
+        force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
         threads=app.storage.general[UNIQUE_ID]["threads"],
         simtime=app.storage.general[UNIQUE_ID]["simtime"],
         watchfolder=app.storage.general[UNIQUE_ID]["watchfolder"],
@@ -231,6 +235,7 @@ class Methnice:
 
     def __init__(
         self,
+        force_sampleid: str,
         threads: int,
         simtime: bool,
         watchfolder: Path,
@@ -243,6 +248,7 @@ class Methnice:
         reference: Path,
         unique_id: str,
     ):
+        self.force_sampleid = force_sampleid
         self.MAINID = unique_id
         self.threads = threads
         self.simtime = simtime
@@ -293,6 +299,7 @@ class Methnice:
         Setup method for initializing BrainMeth.
         """
         self.robin = BrainMeth(
+            force_sampleid=self.force_sampleid,
             mainuuid=self.MAINID,
             threads=self.threads,
             simtime=self.simtime,
@@ -323,6 +330,7 @@ class Methnice:
         ):
             self.analysis_tab_pane = ui.row().classes("w-full")
             self.robin_browse = BrainMeth(
+                force_sampleid=self.force_sampleid,
                 mainuuid=self.MAINID,
                 threads=self.threads,
                 simtime=self.simtime,
@@ -446,6 +454,7 @@ class Methnice:
 
 def run_class(
     port: int,
+    force_sampleid: str,
     reload: bool,
     threads: int,
     simtime: bool,
@@ -483,6 +492,7 @@ def run_class(
     )
     app.storage.general[UNIQUE_ID] = {
         "threads": threads,
+        "force_sampleid": force_sampleid,
         "simtime": simtime,
         "watchfolder": watchfolder,
         "output": output,
@@ -540,6 +550,9 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     "--port",
     default=8081,
     help="Port for GUI",
+)
+@click.option(
+    "--force_sampleid", default=None, help="Force a specific sampleID.", required=False, type=str
 )
 @click.option(
     "--threads", default=4, help="Number of threads available.", required=True
@@ -624,6 +637,7 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
 )
 def package_run(
     port: int,
+    force_sampleid: str,
     threads: int,
     log_level: str,
     simtime: bool,
@@ -645,6 +659,7 @@ def package_run(
         click.echo("Browse mode is enabled. Watchfolder and output are not required.")
         run_class(
             port=port,
+            force_sampleid=force_sampleid,
             reload=False,
             threads=threads,
             simtime=simtime,
@@ -665,6 +680,7 @@ def package_run(
 
         run_class(
             port=port,
+            force_sampleid=force_sampleid,
             reload=False,
             threads=threads,
             simtime=simtime,

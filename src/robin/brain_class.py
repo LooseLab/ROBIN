@@ -152,6 +152,7 @@ class BrainMeth:
     def __init__(
         self,
         threads=4,
+        force_sampleid=None,
         simtime=False,
         watchfolder=None,
         output=None,
@@ -165,6 +166,7 @@ class BrainMeth:
         mainuuid=None,
     ):
         self.mainuuid = mainuuid
+        self.force_sampleid = force_sampleid
         self.threads = threads
         self.simtime = simtime
         self.watchfolder = watchfolder
@@ -218,97 +220,78 @@ class BrainMeth:
             print(f"Adding a watchfolder {self.watchfolder}")
             await self.add_watchfolder(self.watchfolder)
 
+        common_args = {
+            "threads":self.threads,
+            "output":self.output,
+            "progress":True,
+            "browse":self.browse,
+            "uuid":self.mainuuid,
+            "force_sampleid":self.force_sampleid,
+        }
+
         if "sturgeon" not in self.exclude:
             self.Sturgeon = Sturgeon_object(
-                self.threads,
-                self.output,
-                "STURGEON",
-                progress=True,
+                analysis_name = "STURGEON",
                 batch=True,
                 bamqueue=self.bamforsturgeon,
-                browse=self.browse,
-                uuid=self.mainuuid,
+                **common_args
             )
             self.Sturgeon.process_data()
 
         if "nanodx" not in self.exclude:
             self.NanoDX = NanoDX_object(
-                self.threads,
-                self.output,
-                "NANODX",
-                progress=True,
+                analysis_name = "NANODX",
                 batch=True,
                 bamqueue=self.bamfornanodx,
-                browse=self.browse,
-                uuid=self.mainuuid,
+                **common_args
             )
             self.NanoDX.process_data()
 
         if "forest" not in self.exclude:
             self.RandomForest = RandomForest_object(
-                self.threads,
-                self.output,
-                "FOREST",
-                progress=True,
+                analysis_name="FOREST",
                 batch=True,
                 showerrors=self.showerrors,
                 bamqueue=self.bamforcns,
-                browse=self.browse,
-                uuid=self.mainuuid,
+                **common_args
             )
             self.RandomForest.process_data()
 
         if "cnv" not in self.exclude:
             self.CNV = CNVAnalysis(
-                self.threads,
-                self.output,
-                "CNV",
-                progress=True,
+                analysis_name="CNV",
                 bamqueue=self.bamforcnv,
                 # summary=cnvsummary,
                 target_panel=self.target_panel,
-                browse=self.browse,
-                uuid=self.mainuuid,
+                **common_args
             )
             self.CNV.process_data()
 
         if "coverage" not in self.exclude:
             self.Target_Coverage = TargetCoverage(
-                self.threads,
-                self.output,
-                "COVERAGE",
-                progress=True,
+                analysis_name="COVERAGE",
                 bamqueue=self.bamfortargetcoverage,
                 #    summary=coverage,
                 target_panel=self.target_panel,
                 reference=self.reference,
-                browse=self.browse,
-                uuid=self.mainuuid,
+                **common_args
             )
             self.Target_Coverage.process_data()
 
         if "mgmt" not in self.exclude:
             self.MGMT_panel = MGMT_Object(
-                self.threads,
-                self.output,
-                "MGMT",
-                progress=True,
+                analysis_name="MGMT",
                 bamqueue=self.bamformgmt,
-                browse=self.browse,
-                uuid=self.mainuuid,
+                **common_args
             )
             self.MGMT_panel.process_data()
 
         if "fusion" not in self.exclude:
             self.Fusion_panel = FusionObject(
-                self.threads,
-                self.output,
-                "FUSION",
-                progress=True,
+                analysis_name="FUSION",
                 bamqueue=self.bamforfusions,
-                browse=self.browse,
                 target_panel=self.target_panel,
-                uuid=self.mainuuid,
+                **common_args
             )
             self.Fusion_panel.process_data()
 
@@ -571,6 +554,15 @@ class BrainMeth:
                 if not selectedtab:
                     selectedtab = fusionstab
         with ui.tab_panels(tabs, value=selectedtab).classes("w-screen"):
+            display_args = {
+                "threads": self.threads,
+                "output": self.output,
+                "progress": True,
+                "browse": self.browse,
+                "bamqueue": None,
+                "uuid": self.mainuuid,
+                "force_sampleid": self.force_sampleid,
+            }
             if not (set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))):
                 with ui.tab_panel(methylationtab).classes("w-full"):
                     with ui.card().style("width: 100%"):
@@ -579,102 +571,67 @@ class BrainMeth:
                         ).tailwind("drop-shadow", "font-bold")
                         if "sturgeon" not in self.exclude:
                             self.Sturgeon = Sturgeon_object(
-                                self.threads,
-                                self.output,
-                                "STURGEON",
-                                progress=True,
+                                analysis_name="STURGEON",
                                 batch=True,
-                                bamqueue=None,
                                 summary=sturgeonsummary,
-                                browse=self.browse,
-                                uuid=self.mainuuid,
+                                **display_args
                             )
                             await self.Sturgeon.render_ui()
                         if "nanodx" not in self.exclude:
                             self.NanoDX = NanoDX_object(
-                                self.threads,
-                                self.output,
-                                "NANODX",
-                                progress=True,
+                                analysis_name="NANODX",
                                 batch=True,
-                                bamqueue=None,
                                 summary=nanodxsummary,
-                                browse=self.browse,
-                                uuid=self.mainuuid,
+                                **display_args
                             )
                             await self.NanoDX.render_ui()
                         if "forest" not in self.exclude:
                             self.RandomForest = RandomForest_object(
-                                self.threads,
-                                self.output,
-                                "FOREST",
-                                progress=True,
+                                analysis_name="FOREST",
                                 batch=True,
-                                bamqueue=None,
                                 summary=forestsummary,
                                 showerrors=self.showerrors,
-                                browse=self.browse,
-                                uuid=self.mainuuid,
+                                **display_args
                             )
                             await self.RandomForest.render_ui()
             if "cnv" not in self.exclude:
                 with ui.tab_panel(copy_numbertab).classes("w-full"):
                     with ui.card().classes("w-full"):
                         self.CNV = CNVAnalysis(
-                            self.threads,
-                            self.output,
-                            "CNV",
-                            progress=True,
-                            bamqueue=None,  # self.bamforcnv,
+                            analysis_name="CNV",
                             summary=cnvsummary,
                             target_panel=self.target_panel,
-                            browse=self.browse,
-                            uuid=self.mainuuid,
+                            **display_args
                         )
                         await self.CNV.render_ui()
             if "coverage" not in self.exclude:
                 with ui.tab_panel(coveragetab).classes("w-full"):
                     with ui.card().classes("w-full"):
                         self.Target_Coverage = TargetCoverage(
-                            self.threads,
-                            self.output,
-                            "COVERAGE",
-                            progress=True,
-                            bamqueue=None,  # self.bamfortargetcoverage,
+                            analysis_name="COVERAGE",
                             summary=coverage,
                             target_panel=self.target_panel,
                             reference=self.reference,
-                            browse=self.browse,
-                            uuid=self.mainuuid,
+                            **display_args
                         )
                         await self.Target_Coverage.render_ui()
             if "mgmt" not in self.exclude:
                 with ui.tab_panel(mgmttab).classes("w-full"):
                     with ui.card().classes("w-full"):
                         self.MGMT_panel = MGMT_Object(
-                            self.threads,
-                            self.output,
-                            "MGMT",
-                            progress=True,
-                            bamqueue=None,
+                            analysis_name="MGMT",
                             summary=mgmt,
-                            browse=self.browse,
-                            uuid=self.mainuuid,
+                            **display_args
                         )
                         await self.MGMT_panel.render_ui()
             if "fusion" not in self.exclude:
                 with ui.tab_panel(fusionstab).classes("w-full"):
                     with ui.card().classes("w-full"):
                         self.Fusion_panel = FusionObject(
-                            self.threads,
-                            self.output,
-                            "FUSION",
-                            progress=True,
-                            bamqueue=None,
+                            analysis_name="FUSION",
                             summary=fusions,
                             target_panel=self.target_panel,
-                            browse=self.browse,
-                            uuid=self.mainuuid,
+                            **display_args
                         )
                         await self.Fusion_panel.render_ui()
 
@@ -705,6 +662,9 @@ class BrainMeth:
         # Check if the path exists
         if not os.path.exists(path):
             raise FileNotFoundError(f"The specified path does not exist: {path}")
+
+        if self.force_sampleid:
+            folder_name = self.force_sampleid
 
         # If folder_name is provided
         if folder_name:
@@ -782,12 +742,21 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["basecall_models"].append(
                         baminfo["basecall_model"]
                     )
-                if (
-                        baminfo["sample_id"]
-                        not in app.storage.general[self.mainuuid]["sample_ids"]
-                ):
-                    app.storage.general[self.mainuuid]["sample_ids"].append(
-                        baminfo["sample_id"]
+                if not self.force_sampleid:
+                    if (
+                            baminfo["sample_id"]
+                            not in app.storage.general[self.mainuuid]["sample_ids"]
+                    ):
+                        app.storage.general[self.mainuuid]["sample_ids"].append(
+                            baminfo["sample_id"]
+                        )
+                else:
+                    if (
+                            self.force_sampleid
+                            not in app.storage.general[self.mainuuid]["sample_ids"]
+                    ):
+                        app.storage.general[self.mainuuid]["sample_ids"].append(
+                            self.force_sampleid
                     )
                 if (
                         baminfo["flow_cell_id"]
@@ -817,8 +786,11 @@ class BrainMeth:
                 ] += bamdata['yield_tracking']
 
                 mydf = pd.DataFrame.from_dict(app.storage.general)
-
-                mydf.to_csv(os.path.join(self.check_and_create_folder(self.output,baminfo["sample_id"]), "master.csv"))
+                if not self.force_sampleid:
+                    sample_id = baminfo["sample_id"]
+                else:
+                    sample_id = self.force_sampleid
+                mydf.to_csv(os.path.join(self.check_and_create_folder(self.output,sample_id), "master.csv"))
 
 
 
