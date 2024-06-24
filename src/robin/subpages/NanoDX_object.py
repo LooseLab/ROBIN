@@ -65,9 +65,6 @@ from robin.utilities.merge_bedmethyl import (
     collapse_bedmethyl,
 )
 from typing import List, Tuple, Optional, Dict, Any
-from icecream import ic
-
-
 
 
 def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
@@ -81,17 +78,19 @@ def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
         threads (int): Number of threads to use.
     """
     try:
-        #print (f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp}")
+        # print (f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp}")
         os.system(
-                f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --mixed-delim -t {threads} {sortfile} {temp} --suppress-progress >/dev/null 2>&1"
+            f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --mixed-delim -t {threads} {sortfile} {temp} --suppress-progress >/dev/null 2>&1"
         )
-        #shutil.copy(f"{sortfile}","modkit.bam")
-        #shutil.copy(f"{temp}", "modkitoutput.bed")
+        # shutil.copy(f"{sortfile}","modkit.bam")
+        # shutil.copy(f"{temp}", "modkitoutput.bed")
     except Exception as e:
         print(e)
 
 
-def run_samtools_sort(file: str, tomerge: List[str], sortfile: str, threads: int) -> None:
+def run_samtools_sort(
+    file: str, tomerge: List[str], sortfile: str, threads: int
+) -> None:
     """
     Sorts BAM files using Samtools.
 
@@ -104,13 +103,15 @@ def run_samtools_sort(file: str, tomerge: List[str], sortfile: str, threads: int
     pysam.cat("-o", file, *tomerge)
     pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
 
+
 modelfile = os.path.join(
-            os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
-        )
+    os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
+)
 
 
-
-def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, np.ndarray, int]:
+def classification(
+    modelfile: str, test_df: pd.DataFrame
+) -> Tuple[np.ndarray, np.ndarray, int]:
     """
     Runs classification on the extracted data using a neural network model.
 
@@ -121,7 +122,7 @@ def classification(modelfile: str, test_df: pd.DataFrame) -> Tuple[np.ndarray, n
     Returns:
         Tuple[np.ndarray, np.ndarray, int]: Predictions, class labels, and number of features.
     """
-    #NN = NN_classifier(modelfile)
+    # NN = NN_classifier(modelfile)
     NN = NN_classifier(modelfile)
     try:
         predictions, class_labels, n_features = NN.predict(test_df)
@@ -167,14 +168,12 @@ class NanoDX_object(BaseAnalysis):
             os.path.dirname(os.path.abspath(models.__file__)), self.model
         )
         self.nanodx_df_store = pd.DataFrame()
-        self.nanodxfile=None
+        self.nanodxfile = None
         super().__init__(*args, **kwargs)
-
 
     def __del__(self):
         if self.nanodxfile:
             self.nanodxfile.close()
-
 
     def setup_ui(self) -> None:
         """
@@ -182,9 +181,13 @@ class NanoDX_object(BaseAnalysis):
         """
         with ui.card().style("width: 100%"):
             with ui.grid(columns=8).classes("w-full h-auto"):
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                ):
                     self.create_nanodx_chart("NanoDX")
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                ):
                     self.create_nanodx_time_chart("NanoDX Time Series")
         if self.summary:
             with self.summary:
@@ -203,10 +206,12 @@ class NanoDX_object(BaseAnalysis):
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
-                if item == 'sample_ids':
+                if item == "sample_ids":
                     for sample in app.storage.general[self.mainuuid][item]:
                         self.sampleID = sample
-        output = self.check_and_create_folder(self.output, self.sampleID)
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
         if self.check_file_time(os.path.join(output, "nanoDX_scores.csv")):
             self.nanodx_df_store = pd.read_csv(
                 os.path.join(os.path.join(output, "nanoDX_scores.csv")),
@@ -244,8 +249,10 @@ class NanoDX_object(BaseAnalysis):
             bamfile (List[Tuple[str, float]]): List of BAM files with their timestamps.
         """
         if not self.nanodxfile:
-            self.nanodxfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID),
-                                                      suffix=".nanodx")
+            self.nanodxfile = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID),
+                suffix=".nanodx",
+            )
         tomerge: List[str] = []
         while len(bamfile) > 0:
             self.running = True
@@ -255,16 +262,24 @@ class NanoDX_object(BaseAnalysis):
 
             if len(tomerge) > 25:
                 break
-        app.storage.general[self.mainuuid][self.name]["counters"][
+        app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
             "bams_in_processing"
         ] += len(tomerge)
 
         if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
-            sorttempbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
+            tempbam = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID),
+                suffix=".bam",
+            )
+            sorttempbam = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID),
+                suffix=".bam",
+            )
             file = tempbam.name
 
-            temp = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID))
+            temp = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID)
+            )
 
             sortfile = sorttempbam.name
 
@@ -406,12 +421,17 @@ class NanoDX_object(BaseAnalysis):
                 [self.nanodx_df_store, nanoDX_save.set_index("timestamp")]
             )
 
-            self.nanodx_df_store.to_csv(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "nanoDX_scores.csv"))
+            self.nanodx_df_store.to_csv(
+                os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "nanoDX_scores.csv",
+                )
+            )
 
-            app.storage.general[self.mainuuid][self.name]["counters"][
+            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                 "bam_processed"
             ] += len(tomerge)
-            app.storage.general[self.mainuuid][self.name]["counters"][
+            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] -= len(tomerge)
         self.running = False
@@ -425,7 +445,9 @@ class NanoDX_object(BaseAnalysis):
         """
         self.nanodxchart = self.create_chart(title)
 
-    def update_nanodx_plot(self, x: List[str], y: List[float], count: int, n_features: int) -> None:
+    def update_nanodx_plot(
+        self, x: List[str], y: List[float], count: int, n_features: int
+    ) -> None:
         """
         Updates the NanoDX plot with new data.
 
@@ -550,7 +572,9 @@ def test_me(
     default=False,
     help="Browse Historic Data.",
 )
-def run_main(port: int, threads: int, watchfolder: str, output: str, browse: bool) -> None:
+def run_main(
+    port: int, threads: int, watchfolder: str, output: str, browse: bool
+) -> None:
     """
     CLI entry point for running the NanoDX analysis app.
 

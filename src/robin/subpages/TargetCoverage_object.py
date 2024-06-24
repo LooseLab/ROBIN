@@ -18,15 +18,13 @@ from pathlib import Path
 from nicegui import ui, run, app  # , background_tasks
 from io import StringIO
 import pysam
-import asyncio
 import tempfile
 import shutil
 import queue
-import subprocess
 
-from robin.subpages.SNPview import SNPview
 
 os.environ["CI"] = "1"
+
 
 def process_annotations(record: dict) -> dict:
     """
@@ -67,9 +65,7 @@ def process_annotations(record: dict) -> dict:
                             ann_dict[count]["CDS.pos / CDS.length"] = myvalues[12]
                             ann_dict[count]["AA.pos / AA.length"] = myvalues[13]
                             ann_dict[count]["Distance"] = myvalues[14]
-                            ann_dict[count]["ERRORS / WARNINGS / INFO"] = myvalues[
-                                15
-                            ]
+                            ann_dict[count]["ERRORS / WARNINGS / INFO"] = myvalues[15]
                         except Exception as e:
                             print(f"Error: {e}")
                             sys.exit()
@@ -90,17 +86,13 @@ def process_annotations(record: dict) -> dict:
                                 ann_dict[count]["Rank"] = myvalues[8]
                                 ann_dict[count]["HGVS.c"] = myvalues[9]
                                 ann_dict[count]["HGVS.p"] = myvalues[10]
-                                ann_dict[count]["cDNA.pos / cDNA.length"] = (
-                                    myvalues[11]
-                                )
-                                ann_dict[count]["CDS.pos / CDS.length"] = myvalues[
-                                    12
-                                ]
+                                ann_dict[count]["cDNA.pos / cDNA.length"] = myvalues[11]
+                                ann_dict[count]["CDS.pos / CDS.length"] = myvalues[12]
                                 ann_dict[count]["AA.pos / AA.length"] = myvalues[13]
                                 ann_dict[count]["Distance"] = myvalues[14]
-                                ann_dict[count]["ERRORS / WARNINGS / INFO"] = (
-                                    myvalues[15]
-                                )
+                                ann_dict[count]["ERRORS / WARNINGS / INFO"] = myvalues[
+                                    15
+                                ]
                                 count += 1
                             except Exception as e:
                                 print(f"Error: {e}")
@@ -108,6 +100,7 @@ def process_annotations(record: dict) -> dict:
             else:
                 rec_dict[mykey] = myvalue
     return ann_dict, rec_dict
+
 
 def parse_vcf(vcf_file):
     header = "CHROM POS ID REF ALT QUAL FILTER INFO FORMAT GT".split()
@@ -163,10 +156,10 @@ def parse_vcf(vcf_file):
             vcf = result
 
             try:
-                vcf.to_csv(f'{vcf_file}.csv', index=False)
-                #print(f"VCF file saved as {vcf_file}.csv")
+                vcf.to_csv(f"{vcf_file}.csv", index=False)
+                # print(f"VCF file saved as {vcf_file}.csv")
             except Exception as e:
-                print (e)
+                print(e)
                 sys.exit(1)
 
 
@@ -185,7 +178,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
             f"--threads {threads} "
             f"--platform ont_r10_guppy_hac_5khz "
             f"--output_dir {workdirout} -b {bedfile}"
-            #f" >/dev/null 2>&1"
+            # f" >/dev/null 2>&1"
         )
         os.system(runcommand)
         shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
@@ -210,9 +203,9 @@ def get_covdfs(bamfile):
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
-        #no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
-        #command = f"samtools view -@2 -h -F 0x100 --write-index {bamfile} -o {no_secondary_bam}"
-        #os.system(command)
+        # no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
+        # command = f"samtools view -@2 -h -F 0x100 --write-index {bamfile} -o {no_secondary_bam}"
+        # os.system(command)
         newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{bamfile}")), sep="\t")
         newcovdf.drop(
             columns=["coverage", "meanbaseq", "meanmapq"],
@@ -245,7 +238,7 @@ def subset_bam(bamfile, targets, output):
 def sort_bam(bamfile, output, threads):
     pysam.sort(f"-@{threads}", "-o", output, bamfile)
     pysam.index(f"{output}", f"{output}.bai")
-    print (f"Sorted bam file saved as {output}")
+    print(f"Sorted bam file saved as {output}")
 
 
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
@@ -338,7 +331,9 @@ class TargetCoverage(BaseAnalysis):
             while not self.SNPqueue.empty():
                 gene_list, bamfile, bedfile = self.SNPqueue.get()
 
-            workdirout = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "clair3")
+            workdirout = os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID), "clair3"
+            )
             if not os.path.exists(workdirout):
                 os.mkdir(workdirout)
             # bamfile, bedfile, workdir, workdirout, threads
@@ -354,7 +349,7 @@ class TargetCoverage(BaseAnalysis):
                 self.reference,
             )
             self.clair3running = False
-        #else:
+        # else:
         #    await asyncio.sleep(1)
         self.snp_timer.active = True
 
@@ -368,10 +363,14 @@ class TargetCoverage(BaseAnalysis):
             ).tailwind("drop-shadow", "font-bold")
             with ui.grid(columns=2).classes("w-full h-auto"):
 
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2"
+                ):
                     self.create_coverage_plot("Chromosome Coverage")
 
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2"
+                ):
                     self.create_coverage_plot_targets("Target Coverage")
         with ui.card().classes("w-full"):
             ui.label("Target Outliers").style(
@@ -397,27 +396,31 @@ class TargetCoverage(BaseAnalysis):
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
-                self.SNPplaceholder = ui.card().tight().classes("w-full overflow-x-auto")
+                self.SNPplaceholder = (
+                    ui.card().tight().classes("w-full overflow-x-auto")
+                )
                 with self.SNPplaceholder:
                     ui.label(
                         "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
                     )
-                #self.SNPview = SNPview(self.SNPplaceholder)
-                #ui.timer(0.1,lambda: self.SNPview.renderme(), once=True)
+                # self.SNPview = SNPview(self.SNPplaceholder)
+                # ui.timer(0.1,lambda: self.SNPview.renderme(), once=True)
             ui.label("Candidate IN/DELs").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
-                self.INDELplaceholder = ui.card().tight().classes("w-full overflow-x-auto")
+                self.INDELplaceholder = (
+                    ui.card().tight().classes("w-full overflow-x-auto")
+                )
 
                 with self.INDELplaceholder:
                     ui.label(
                         "Candidate IN/DELs will be displayed here. IN/DELs are called based on available data at that time."
                     )
-                #self.INDELview = SNPview(self.INDELplaceholder)
-                #ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
+                # self.INDELview = SNPview(self.INDELplaceholder)
+                # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
         if self.browse:
-            ui.timer(0.1, callback=self.show_previous_data,once=True)
+            ui.timer(0.1, callback=self.show_previous_data, once=True)
         else:
             ui.timer(10, lambda: self.show_previous_data())
 
@@ -425,9 +428,7 @@ class TargetCoverage(BaseAnalysis):
         self.echart3 = (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
                     "grid": {"containLabel": True},
                     "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -454,9 +455,7 @@ class TargetCoverage(BaseAnalysis):
         self.echart4 = (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
                     "grid": {"containLabel": True},
                     "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -483,9 +482,7 @@ class TargetCoverage(BaseAnalysis):
         self.coverage_time_chart = (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
                     "grid": {"containLabel": True},
                     "title": {"text": "Coverage Over Time"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -522,157 +519,147 @@ class TargetCoverage(BaseAnalysis):
         self.target_boxplot = (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
-                    "title":[
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
+                    "title": [
                         {
-                            "text": 'Target Coverage',
+                            "text": "Target Coverage",
                         },
                     ],
-                    "dataset":[
+                    "dataset": [
                         {
-                            "id": 'raw',
-                            "dimensions": ['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'chrom_index'],
-                            "source":[
-                               ]
+                            "id": "raw",
+                            "dimensions": [
+                                "chrom",
+                                "min",
+                                "Q1",
+                                "median",
+                                "Q3",
+                                "max",
+                                "chrom_index",
+                            ],
+                            "source": [],
                         },
                         {
-                            "id": 'rawdata',
-                            "dimensions": ['chrom', 'coverage', 'name'],
-                            "source":[
-                        ]
+                            "id": "rawdata",
+                            "dimensions": ["chrom", "coverage", "name"],
+                            "source": [],
                         },
                         {
-                            "id": 'outliers',
-                            "dimensions": ['chrom', 'coverage', 'name'],
-                            "source": [
-                            ]
+                            "id": "outliers",
+                            "dimensions": ["chrom", "coverage", "name"],
+                            "source": [],
                         },
                         {
-                            "id": 'globaloutliers',
-                            "dimensions": ['chrom', 'coverage', 'name'],
-                            "source": [
-                            ]
-                        }
+                            "id": "globaloutliers",
+                            "dimensions": ["chrom", "coverage", "name"],
+                            "source": [],
+                        },
                     ],
-                    "tooltip": {
-                        "trigger": 'item',
-                        "axisPointer": {
-                            "type": 'shadow'
-                        }
-                    },
-                    "dataZoom":[
+                    "tooltip": {"trigger": "item", "axisPointer": {"type": "shadow"}},
+                    "dataZoom": [
                         {
-                            "type": 'slider',
+                            "type": "slider",
                             "yAxisIndex": 0,
                         }
                     ],
-                    "grid": {
-                        "left": '10%',
-                        "right": '10%',
-                        "bottom": '15%'
-                    },
+                    "grid": {"left": "10%", "right": "10%", "bottom": "15%"},
                     "xAxis": {
-                        "type": 'category',
-                        "name": 'Chromosome',
+                        "type": "category",
+                        "name": "Chromosome",
                         "boundaryGap": True,
                         "nameGap": 30,
-                        "splitArea": {
-                            "show": False
-                        },
-                        "splitLine": {
-                            "show": False
-                        }
+                        "splitArea": {"show": False},
+                        "splitLine": {"show": False},
                     },
                     "yAxis": {
-                        #"type": 'value',
-                        "name": 'Coverage',
-                        #"splitArea": {
+                        # "type": 'value',
+                        "name": "Coverage",
+                        # "splitArea": {
                         #    "show": True
-                        #}
+                        # }
                     },
-                    "legend": {"data": ['boxplot', 'raw data', 'outliers', 'global outliers'],
-                               "selected": {
-                                   'boxplot': True,
-                                   'global outliers': True,
-                                   'raw data': False,
-                                   'outliers': False
-                               }
-                               },
-                    "series":[
+                    "legend": {
+                        "data": ["boxplot", "raw data", "outliers", "global outliers"],
+                        "selected": {
+                            "boxplot": True,
+                            "global outliers": True,
+                            "raw data": False,
+                            "outliers": False,
+                        },
+                    },
+                    "series": [
                         {
-                            "name": 'boxplot',
-                            "type": 'boxplot',
-                            "datasetId": 'raw',
+                            "name": "boxplot",
+                            "type": "boxplot",
+                            "datasetId": "raw",
                             "encode": {
-                                "y": ['min', 'Q1', 'median', 'Q3', 'max'],
-                                "x": 'chrom',
-                                "itemName": ['chrom'],
-                                "tooltip": ['min', 'Q1', 'median', 'Q3', 'max']
-                            }
+                                "y": ["min", "Q1", "median", "Q3", "max"],
+                                "x": "chrom",
+                                "itemName": ["chrom"],
+                                "tooltip": ["min", "Q1", "median", "Q3", "max"],
+                            },
                         },
                         {
-                            "name": 'raw data',
-                            "type": 'scatter',
-                            "datasetId": 'rawdata',
+                            "name": "raw data",
+                            "type": "scatter",
+                            "datasetId": "rawdata",
                             "encode": {
-                                "y": 'coverage',
-                                "x": 'chrom',
-                                "label": 'name',
-                                "itemName": 'name',
-                                "tooltip": ['chrom', 'name', 'coverage']
+                                "y": "coverage",
+                                "x": "chrom",
+                                "label": "name",
+                                "itemName": "name",
+                                "tooltip": ["chrom", "name", "coverage"],
                             },
                             "label": {
                                 "show": True,
-                                "position": 'right',
-                                "itemName": 'name',
+                                "position": "right",
+                                "itemName": "name",
                                 "color": "black",
                                 "fontSize": 16,
-                            }
+                            },
                         },
                         {
-                            "name": 'outliers',
-                            "type": 'scatter',
-                            "datasetId": 'outliers',
+                            "name": "outliers",
+                            "type": "scatter",
+                            "datasetId": "outliers",
                             "encode": {
-                                "y": 'coverage',
-                                "x": 'chrom',
-                                "label": 'name',
-                                "itemName": 'name',
-                                "tooltip": ['chrom', 'name', 'coverage']
+                                "y": "coverage",
+                                "x": "chrom",
+                                "label": "name",
+                                "itemName": "name",
+                                "tooltip": ["chrom", "name", "coverage"],
                             },
                             "label": {
                                 "show": True,
-                                "position": 'right',
-                                "itemName": 'name',
+                                "position": "right",
+                                "itemName": "name",
                                 "color": "black",
                                 "fontSize": 16,
-                            }
+                            },
                         },
                         {
-                            "name": 'global outliers',
-                            "type": 'scatter',
-                            "datasetId": 'globaloutliers',
+                            "name": "global outliers",
+                            "type": "scatter",
+                            "datasetId": "globaloutliers",
                             "encode": {
-                                "y": 'coverage',
-                                "x": 'chrom',
-                                "label": 'name',
-                                "itemName": 'name',
-                                "tooltip": ['chrom', 'name', 'coverage']
+                                "y": "coverage",
+                                "x": "chrom",
+                                "label": "name",
+                                "itemName": "name",
+                                "tooltip": ["chrom", "name", "coverage"],
                             },
                             "label": {
                                 "show": True,
-                                "position": 'right',
-                                "itemName": 'name',
+                                "position": "right",
+                                "itemName": "name",
                                 "color": "black",
                                 "fontSize": 16,
-                            }
+                            },
                         },
                     ],
-
                 }
-            ).style("height: 500px")
+            )
+            .style("height: 500px")
             .classes("border-double")
         )
 
@@ -682,72 +669,91 @@ class TargetCoverage(BaseAnalysis):
         :param dataframe: a pandas dataframe of
         :return:
         """
-        if 'coverage' in dataframe.columns:
+        if "coverage" in dataframe.columns:
             # Naturally sort the unique chromosome values
-            sorted_chroms = natsort.natsorted(dataframe['chrom'].unique())
+            sorted_chroms = natsort.natsorted(dataframe["chrom"].unique())
 
             # Create a lookup index for chromosomes
             chrom_lookup = {chrom: idx for idx, chrom in enumerate(sorted_chroms)}
 
             # Add the index column to the original DataFrame
-            dataframe['index'] = dataframe['chrom'].map(chrom_lookup)
+            dataframe["index"] = dataframe["chrom"].map(chrom_lookup)
 
             # Aggregate the data by 'chrom'
-            aggregated_data = dataframe.groupby('chrom').agg(
-                min_coverage=('coverage', 'min'),
-                Q1_coverage=('coverage', lambda x: np.percentile(x, 25)),
-                median_coverage=('coverage', 'median'),
-                Q3_coverage=('coverage', lambda x: np.percentile(x, 75)),
-                max_coverage=('coverage', 'max'),
-                index=('index', 'first')  # Get the corresponding index for the chromosome
-            ).reset_index()
+            aggregated_data = (
+                dataframe.groupby("chrom")
+                .agg(
+                    min_coverage=("coverage", "min"),
+                    Q1_coverage=("coverage", lambda x: np.percentile(x, 25)),
+                    median_coverage=("coverage", "median"),
+                    Q3_coverage=("coverage", lambda x: np.percentile(x, 75)),
+                    max_coverage=("coverage", "max"),
+                    index=(
+                        "index",
+                        "first",
+                    ),  # Get the corresponding index for the chromosome
+                )
+                .reset_index()
+            )
 
             # Sort the aggregated data by 'chrom' naturally using natsort
-            aggregated_data['chrom'] = pd.Categorical(aggregated_data['chrom'],
-                                                      categories=natsort.natsorted(aggregated_data['chrom'].unique()),
-                                                      ordered=True)
-            aggregated_data = aggregated_data.sort_values('chrom').reset_index(drop=True)
+            aggregated_data["chrom"] = pd.Categorical(
+                aggregated_data["chrom"],
+                categories=natsort.natsorted(aggregated_data["chrom"].unique()),
+                ordered=True,
+            )
+            aggregated_data = aggregated_data.sort_values("chrom").reset_index(
+                drop=True
+            )
 
             # Format the result as required
             result = [
-                         ['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'index']
-                     ] + aggregated_data.values.tolist()
+                ["chrom", "min", "Q1", "median", "Q3", "max", "index"]
+            ] + aggregated_data.values.tolist()
 
             df = dataframe
 
             # Function to identify outliers within each chromosome group
             def identify_outliers_per_chromosome(df):
                 outliers = pd.DataFrame()
-                for chrom in df['chrom'].unique():
-                    chrom_data = df[df['chrom'] == chrom]
-                    Q1 = chrom_data['coverage'].quantile(0.25)
-                    Q3 = chrom_data['coverage'].quantile(0.75)
+                for chrom in df["chrom"].unique():
+                    chrom_data = df[df["chrom"] == chrom]
+                    Q1 = chrom_data["coverage"].quantile(0.25)
+                    Q3 = chrom_data["coverage"].quantile(0.75)
                     IQR = Q3 - Q1
                     lower_bound = Q1 - 1.5 * IQR
                     upper_bound = Q3 + 1.5 * IQR
                     chrom_outliers = chrom_data[
-                        (chrom_data['coverage'] < lower_bound) | (chrom_data['coverage'] > upper_bound)]
+                        (chrom_data["coverage"] < lower_bound)
+                        | (chrom_data["coverage"] > upper_bound)
+                    ]
                     outliers = pd.concat([outliers, chrom_outliers])
                 return outliers
 
             def identify_outliers(df):
-                Q1 = df['coverage'].quantile(0.25)
-                Q3 = df['coverage'].quantile(0.75)
+                Q1 = df["coverage"].quantile(0.25)
+                Q3 = df["coverage"].quantile(0.75)
                 IQR = Q3 - Q1
                 lower_bound = Q1 - 1.5 * IQR
                 upper_bound = Q3 + 1.5 * IQR
-                return df[(df['coverage'] < lower_bound) | (df['coverage'] > upper_bound)]
+                return df[
+                    (df["coverage"] < lower_bound) | (df["coverage"] > upper_bound)
+                ]
 
             outliers = identify_outliers_per_chromosome(df)
             globaloutliers = identify_outliers(df)
 
             self.target_boxplot.options["dataset"][0]["source"] = result
-            self.target_boxplot.options["dataset"][1]["source"] = dataframe[['chrom', 'coverage', 'name']].values.tolist()
-            self.target_boxplot.options["dataset"][2]["source"] = outliers[['chrom', 'coverage', 'name']].values.tolist()
-            self.target_boxplot.options["dataset"][3]["source"] = globaloutliers[['chrom', 'coverage', 'name']].values.tolist()
+            self.target_boxplot.options["dataset"][1]["source"] = dataframe[
+                ["chrom", "coverage", "name"]
+            ].values.tolist()
+            self.target_boxplot.options["dataset"][2]["source"] = outliers[
+                ["chrom", "coverage", "name"]
+            ].values.tolist()
+            self.target_boxplot.options["dataset"][3]["source"] = globaloutliers[
+                ["chrom", "coverage", "name"]
+            ].values.tolist()
             self.target_boxplot.update()
-
-
 
     def update_coverage_plot(self, covdf):
         """
@@ -815,10 +821,15 @@ class TargetCoverage(BaseAnalysis):
         self.echart4.update()
 
     def update_coverage_time_plot(self):
-        if os.path.isfile(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_time_chart.npy")):
-            self.coverage_over_time = np.load(
-                os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_time_chart.npy")
+        if self.browse:
+            filepath = os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "coverage_time_chart.npy",
             )
+        else:
+            filepath = os.path.join(self.output, "coverage_time_chart.npy")
+        if os.path.isfile(filepath):
+            self.coverage_over_time = np.load(filepath)
             self.coverage_time_chart.options["series"][0][
                 "data"
             ] = self.coverage_over_time.tolist()
@@ -866,7 +877,9 @@ class TargetCoverage(BaseAnalysis):
 
         newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
 
-        tempbamfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
+        tempbamfile = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+        )
         # await loop.run_in_executor(
         #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
         # )
@@ -876,12 +889,16 @@ class TargetCoverage(BaseAnalysis):
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if not self.targetbamfile:
-                self.targetbamfile = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "target.bam")
+                self.targetbamfile = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "target.bam",
+                )
                 shutil.copy2(tempbamfile.name, self.targetbamfile)
                 os.remove(f"{tempbamfile.name}.bai")
             else:
                 tempbamholder = tempfile.NamedTemporaryFile(
-                    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+                    dir=self.check_and_create_folder(self.output, self.sampleID),
+                    suffix=".bam",
                 )
                 pysam.cat(
                     "-o", tempbamholder.name, self.targetbamfile, tempbamfile.name
@@ -895,7 +912,9 @@ class TargetCoverage(BaseAnalysis):
             os.remove(f"{tempbamfile.name}.bai")
 
         try:
-            os.remove(f"{tempbamfile.name}.bai")  # Ensure removal of .bai file if exists
+            os.remove(
+                f"{tempbamfile.name}.bai"
+            )  # Ensure removal of .bai file if exists
         except FileNotFoundError:
             pass
 
@@ -924,19 +943,31 @@ class TargetCoverage(BaseAnalysis):
         self.coverage_over_time = np.vstack(
             [self.coverage_over_time, [(currenttime, coverage)]]
         )
+
         np.save(
-            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_time_chart.npy"),
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "coverage_time_chart.npy",
+            ),
             self.coverage_over_time,
         )
 
         self.cov_df_main.to_csv(
-            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_main.csv"), index=False
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "coverage_main.csv",
+            ),
+            index=False,
         )
         # await asyncio.sleep(0.01)
 
         # self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
         self.bedcov_df_main.to_csv(
-            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "bed_coverage_main.csv"), index=False
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "bed_coverage_main.csv",
+            ),
+            index=False,
         )
         # await asyncio.sleep(0.01)
         # self.update_coverage_time_plot(self.cov_df_main, timestamp)
@@ -950,7 +981,11 @@ class TargetCoverage(BaseAnalysis):
             self.target_coverage_df["bases"] / self.target_coverage_df["length"]
         )
         self.target_coverage_df.to_csv(
-            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "target_coverage.csv"), index=False
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "target_coverage.csv",
+            ),
+            index=False,
         )
         if self.summary:
             with self.summary:
@@ -974,12 +1009,17 @@ class TargetCoverage(BaseAnalysis):
             ):
                 self.targets_exceeding_threshold = len(run_list)
                 run_list[["chrom", "startpos", "endpos"]].to_csv(
-                    os.path.join(self.check_and_create_folder(self.output, self.sampleID), "targets_exceeding_threshold.bed"),
+                    os.path.join(
+                        self.check_and_create_folder(self.output, self.sampleID),
+                        "targets_exceeding_threshold.bed",
+                    ),
                     sep="\t",
                     header=None,
                     index=None,
                 )
-                clair3workdir = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "clair3")
+                clair3workdir = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID), "clair3"
+                )
                 if not os.path.exists(clair3workdir):
                     os.mkdir(clair3workdir)
 
@@ -996,7 +1036,10 @@ class TargetCoverage(BaseAnalysis):
                             run_list,
                             os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
                             os.path.join(
-                                self.check_and_create_folder(self.output, self.sampleID), "targets_exceeding_threshold.bed"
+                                self.check_and_create_folder(
+                                    self.output, self.sampleID
+                                ),
+                                "targets_exceeding_threshold.bed",
                             ),
                         ]
                     )
@@ -1004,21 +1047,21 @@ class TargetCoverage(BaseAnalysis):
         # ToDo: Reinstate this line later.
         # self.update_target_coverage_table()
 
-        #await asyncio.sleep(0.5)
+        # await asyncio.sleep(0.5)
         self.running = False
 
     def show_previous_data(self):
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
-                if item == 'sample_ids':
+                if item == "sample_ids":
                     for sample in app.storage.general[self.mainuuid][item]:
                         self.sampleID = sample
-        output = self.check_and_create_folder(self.output, self.sampleID)
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
         # ToDo: This function needs to run in background threads.
         if self.check_file_time(os.path.join(output, "coverage_main.csv")):
-            self.cov_df_main = pd.read_csv(
-                os.path.join(output, "coverage_main.csv")
-            )
+            self.cov_df_main = pd.read_csv(os.path.join(output, "coverage_main.csv"))
             self.update_coverage_plot(self.cov_df_main)
 
         if self.check_file_time(os.path.join(output, "bed_coverage_main.csv")):
@@ -1047,9 +1090,7 @@ class TargetCoverage(BaseAnalysis):
                                     f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
                                 )
                             else:
-                                ui.label(
-                                    f"Targets Estimated Coverage: Calculating...."
-                                )
+                                ui.label("Targets Estimated Coverage: Calculating....")
                         else:
                             ui.label("No data available")
 
@@ -1108,11 +1149,10 @@ class TargetCoverage(BaseAnalysis):
                     )
 
                 with self.snptable.add_slot("top-right"):
-                    with ui.input(placeholder="Search").props(
-                            "type=search"
-                    ).bind_value(self.snptable, "filter").add_slot("append"):
+                    with ui.input(placeholder="Search").props("type=search").bind_value(
+                        self.snptable, "filter"
+                    ).add_slot("append"):
                         ui.icon("search")
-
 
         if self.check_file_time(f"{output}/clair3/snpsift_indel_output.vcf.csv"):
             vcfindel = pd.read_csv(f"{output}/clair3/snpsift_indel_output.vcf.csv")
@@ -1169,11 +1209,10 @@ class TargetCoverage(BaseAnalysis):
                     )
 
                 with self.indeltable.add_slot("top-right"):
-                    with ui.input(placeholder="Search").props(
-                            "type=search"
-                    ).bind_value(self.indeltable, "filter").add_slot("append"):
+                    with ui.input(placeholder="Search").props("type=search").bind_value(
+                        self.indeltable, "filter"
+                    ).add_slot("append"):
                         ui.icon("search")
-
 
 
 def test_me(

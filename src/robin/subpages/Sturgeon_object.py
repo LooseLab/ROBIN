@@ -69,7 +69,6 @@ def run_sturgeon_inputtobed(temp, temp2):
         pass
 
 
-
 class Sturgeon_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
         self.sturgeon_df_store = pd.DataFrame()
@@ -82,14 +81,17 @@ class Sturgeon_object(BaseAnalysis):
         self.bedDir = None
         super().__init__(*args, **kwargs)
 
-
     def setup_ui(self):
         self.card = ui.card().style("width: 100%")
         with self.card:
             with ui.grid(columns=8).classes("w-full h-auto"):
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                ):
                     self.create_sturgeon_chart("Sturgeon")
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                ):
                     self.create_sturgeon_time_chart("Sturgeon Time Series")
         if self.summary:
             with self.summary:
@@ -102,10 +104,13 @@ class Sturgeon_object(BaseAnalysis):
     def show_previous_data(self):
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
-                if item == 'sample_ids':
+                if item == "sample_ids":
                     for sample in app.storage.general[self.mainuuid][item]:
                         self.sampleID = sample
-        output = self.check_and_create_folder(self.output, self.sampleID)
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
+        print(output)
         if self.check_file_time(os.path.join(output, "sturgeon_scores.csv")):
             self.sturgeon_df_store = pd.read_csv(
                 os.path.join(os.path.join(output, "sturgeon_scores.csv")),
@@ -137,9 +142,13 @@ class Sturgeon_object(BaseAnalysis):
 
     async def process_bam(self, bamfile):
         if not self.dataDir:
-            self.dataDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
+            self.dataDir = tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, self.sampleID)
+            )
         if not self.bedDir:
-            self.bedDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
+            self.bedDir = tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, self.sampleID)
+            )
         tomerge = []
         # timestamp = None
         while len(bamfile) > 0:
@@ -147,20 +156,26 @@ class Sturgeon_object(BaseAnalysis):
             (file, filetime) = bamfile.pop()
             tomerge.append(file)
             # timestamp = filetime
-            app.storage.general[self.mainuuid][self.name]["counters"][
+            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
             # self.bams_in_processing += 1
             if len(tomerge) > 25:
                 break
         if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID))
+            tempbam = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID)
+            )
 
             await run.cpu_bound(pysam_cat, tempbam.name, tomerge)
 
             file = tempbam.name
-            temp = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID))
-            with tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID)) as temp2:
+            temp = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID)
+            )
+            with tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, self.sampleID)
+            ) as temp2:
                 await run.cpu_bound(run_modkit, file, temp.name, self.threads)
 
                 await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
@@ -196,8 +211,12 @@ class Sturgeon_object(BaseAnalysis):
                     self.dataDir.name,
                     self.modelfile,
                 )
-                if os.path.exists(os.path.join(self.dataDir.name,
-                        "final_merged_probes_methyl_calls_general.csv")):
+                if os.path.exists(
+                    os.path.join(
+                        self.dataDir.name,
+                        "final_merged_probes_methyl_calls_general.csv",
+                    )
+                ):
                     mydf = pd.read_csv(
                         os.path.join(
                             self.dataDir.name,
@@ -219,19 +238,22 @@ class Sturgeon_object(BaseAnalysis):
                         )
                 mydf_to_save = mydf
                 mydf_to_save["timestamp"] = time.time() * 1000
-                app.storage.general[self.mainuuid][self.name]["counters"][
-                    "bam_processed"
-                ] += len(tomerge)
+                app.storage.general[self.mainuuid][self.sampleID][self.name][
+                    "counters"
+                ]["bam_processed"] += len(tomerge)
 
-                app.storage.general[self.mainuuid][self.name]["counters"][
-                    "bams_in_processing"
-                ] -= len(tomerge)
+                app.storage.general[self.mainuuid][self.sampleID][self.name][
+                    "counters"
+                ]["bams_in_processing"] -= len(tomerge)
 
                 self.sturgeon_df_store = pd.concat(
                     [self.sturgeon_df_store, mydf_to_save.set_index("timestamp")]
                 )
                 self.sturgeon_df_store.to_csv(
-                    os.path.join(self.check_and_create_folder(self.output, self.sampleID), "sturgeon_scores.csv")
+                    os.path.join(
+                        self.check_and_create_folder(self.output, self.sampleID),
+                        "sturgeon_scores.csv",
+                    )
                 )
 
         await asyncio.sleep(0.1)

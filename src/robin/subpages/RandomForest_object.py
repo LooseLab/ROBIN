@@ -15,7 +15,6 @@ from sturgeon.callmapping import (
 import yappi
 import tabulate
 
-import asyncio
 from robin import submodules
 
 from robin.utilities.merge_bedmethyl import (
@@ -57,12 +56,15 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
 
 def run_samtools_sort(file, tomerge, sortfile, threads, regions):
     pysam.cat("-o", file, *tomerge)
-    #pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
+    # pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
     intermediate_bam = tempfile.NamedTemporaryFile(suffix=".bam")
-    command = f"samtools sort -@{threads} --write-index -o {intermediate_bam.name} {file}"
+    command = (
+        f"samtools sort -@{threads} --write-index -o {intermediate_bam.name} {file}"
+    )
     os.system(command)
     command2 = f"samtools view -b -L {regions} -o {sortfile} --write-index {intermediate_bam.name} "
     os.system(command2)
+
 
 def run_modkit(bamfile, outbed, cpgs, threads, showerrors):
     """
@@ -75,9 +77,7 @@ def run_modkit(bamfile, outbed, cpgs, threads, showerrors):
         )
         if not showerrors:
             command += "--suppress-progress  >/dev/null 2>&1"
-        os.system(
-            command
-        )
+        os.system(command)
         # self.log("Done processing bam file")
     except Exception as e:
         print(e)
@@ -104,14 +104,17 @@ class RandomForest_object(BaseAnalysis):
         self.bedDir = None
         super().__init__(*args, **kwargs)
 
-
     def setup_ui(self):
         self.card = ui.card().style("width: 100%")
         with self.card:
             with ui.grid(columns=8).classes("w-full h-auto"):
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                ):
                     self.create_rcns2_chart("Random Forest")
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                ):
                     self.create_rcns2_time_chart("Random Forest Time Series")
         if self.summary:
             with self.summary:
@@ -124,14 +127,16 @@ class RandomForest_object(BaseAnalysis):
     def show_previous_data(self):
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
-                if item == 'sample_ids':
+                if item == "sample_ids":
                     for sample in app.storage.general[self.mainuuid][item]:
                         self.sampleID = sample
-        output = self.check_and_create_folder(self.output, self.sampleID)
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
         try:
             if self.check_file_time(os.path.join(output, "random_forest_scores.csv")):
                 self.rcns2_df_store = pd.read_csv(
-                        os.path.join(output, "random_forest_scores.csv"),
+                    os.path.join(output, "random_forest_scores.csv"),
                     index_col=0,
                 )
                 columns_greater_than_threshold = (
@@ -161,9 +166,13 @@ class RandomForest_object(BaseAnalysis):
 
     async def process_bam(self, bamfile):
         if not self.dataDir:
-            self.dataDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
+            self.dataDir = tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, self.sampleID)
+            )
         if not self.bedDir:
-            self.bedDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
+            self.bedDir = tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, self.sampleID)
+            )
         tomerge = []
         # timestamp = None
 
@@ -172,24 +181,43 @@ class RandomForest_object(BaseAnalysis):
             (file, filetime) = bamfile.pop()
             tomerge.append(file)
             # timestamp = filetime
-            app.storage.general[self.mainuuid][self.name]["counters"][
+            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
             if len(tomerge) > 25:
                 break
 
         if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
-            sortbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
-            tempbed = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bed")
+            tempbam = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID),
+                suffix=".bam",
+            )
+            sortbam = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID),
+                suffix=".bam",
+            )
+            tempbed = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID),
+                suffix=".bed",
+            )
             self.batch += 1
 
             await run.cpu_bound(
-                run_samtools_sort, tempbam.name, tomerge, sortbam.name, self.threads,self.cpgs_file
+                run_samtools_sort,
+                tempbam.name,
+                tomerge,
+                sortbam.name,
+                self.threads,
+                self.cpgs_file,
             )  # , file, tomerge, sortfile, self.threads)
 
             await run.cpu_bound(
-                run_modkit, sortbam.name, tempbed.name, self.cpgs_file, self.threads, self.showerrors
+                run_modkit,
+                sortbam.name,
+                tempbed.name,
+                self.cpgs_file,
+                self.threads,
+                self.showerrors,
             )
             # await asyncio.sleep(0.1)
 
@@ -297,7 +325,9 @@ class RandomForest_object(BaseAnalysis):
                 )
                 self.first_run = False
 
-            tempDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
+            tempDir = tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, self.sampleID)
+            )
 
             # await background_tasks.create(load_rcns2())
             await run.cpu_bound(
@@ -326,15 +356,18 @@ class RandomForest_object(BaseAnalysis):
                 )
 
                 self.rcns2_df_store.to_csv(
-                    os.path.join(self.check_and_create_folder(self.output, self.sampleID), "random_forest_scores.csv")
+                    os.path.join(
+                        self.check_and_create_folder(self.output, self.sampleID),
+                        "random_forest_scores.csv",
+                    )
                 )
 
-                app.storage.general[self.mainuuid][self.name]["counters"][
-                    "bam_processed"
-                ] += len(tomerge)
-                app.storage.general[self.mainuuid][self.name]["counters"][
-                    "bams_in_processing"
-                ] -= len(tomerge)
+                app.storage.general[self.mainuuid][self.sampleID][self.name][
+                    "counters"
+                ]["bam_processed"] += len(tomerge)
+                app.storage.general[self.mainuuid][self.sampleID][self.name][
+                    "counters"
+                ]["bams_in_processing"] -= len(tomerge)
 
                 """
                 

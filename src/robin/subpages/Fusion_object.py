@@ -160,7 +160,7 @@ def fusion_work(
                     fusion_candidates_all = fusion_candidates_all[
                         fusion_candidates_all["diff"] > 1000
                     ]
-    except Exception as e:
+    except Exception:
         # logging.error(f"Error during fusion work: {e}")
         raise
 
@@ -386,7 +386,11 @@ class FusionObject(BaseAnalysis):
             counts_all = doubles_all.groupby(7)[3].transform("nunique")
             result_all = doubles_all[counts_all > 1]
             result_all.to_csv(
-                os.path.join(self.check_and_create_folder(self.output, self.sampleID), "fusion_candidates_all.csv"), index=False
+                os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "fusion_candidates_all.csv",
+                ),
+                index=False,
             )
             # self.update_fusion_table_all(result_all)
 
@@ -573,7 +577,11 @@ class FusionObject(BaseAnalysis):
             counts = doubles.groupby(7)[3].transform("nunique")
             result = doubles[counts > 1]
             result.to_csv(
-                os.path.join(self.check_and_create_folder(self.output, self.sampleID), "fusion_candidates_master.csv"), index=False
+                os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "fusion_candidates_master.csv",
+                ),
+                index=False,
             )
         # self.update_fusion_table(result)
 
@@ -742,10 +750,18 @@ class FusionObject(BaseAnalysis):
             bamfile (str): Path to the BAM file to process.
             timestamp (str): Timestamp for the analysis.
         """
-        tempreadfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt")
-        tempbamfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
-        tempmappings = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt")
-        tempallmappings = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt")
+        tempreadfile = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
+        )
+        tempbamfile = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+        )
+        tempmappings = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
+        )
+        tempallmappings = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
+        )
 
         try:
             fusion_candidates, fusion_candidates_all = await run.cpu_bound(
@@ -779,7 +795,7 @@ class FusionObject(BaseAnalysis):
             self.fusion_table()
             self.fusion_table_all()
 
-        except Exception as e:
+        except Exception:
             # logging.error(f"Error processing BAM file: {e}")
             raise
         finally:
@@ -823,16 +839,19 @@ class FusionObject(BaseAnalysis):
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
-                if item == 'sample_ids':
+                if item == "sample_ids":
                     for sample in app.storage.general[self.mainuuid][item]:
                         self.sampleID = sample
-        output = self.check_and_create_folder(self.output, self.sampleID)
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
+
         if self.check_file_time(os.path.join(output, "fusion_candidates_master.csv")):
             fusion_candidates = pd.read_csv(
                 os.path.join(output, "fusion_candidates_master.csv"),
                 dtype=str,
-                #names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
-                names=[ 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                # names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
                 header=None,
                 skiprows=1,
             )
@@ -841,7 +860,7 @@ class FusionObject(BaseAnalysis):
             fusion_candidates_all = pd.read_csv(
                 os.path.join(output, "fusion_candidates_all.csv"),
                 dtype=str,
-                #names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                # names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
                 names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
                 header=None,
                 skiprows=1,
