@@ -380,6 +380,8 @@ class BrainMeth:
 
     @ui.refreshable
     def show_list(self):
+        #ui.html(
+        #    "<div class='max-w-sm rounded overflow-hidden shadow-lg bg-white p-4'><div class='px-6 py-4'><div class='font-bold text-xl mb-2'>Sample Data Overview</div><p class='text-gray-700 text-base'><strong>Devices:</strong> P2S-01121-A</p><p class='text-gray-700 text-base'><strong>Basecall Model:</strong> dna_r10.4.1_e8.2_400bps_hac@v4.3.0</p><p class='text-gray-700 text-base'><strong>Run Time:</strong> 2024-06-12T13:15:54.142158+01:00</p><p class='text-gray-700 text-base'><strong>Flowcell ID:</strong> PAW67625</p><p class='text-gray-700 text-base'><strong>Sample ID:</strong> ds1332_4_b</p></div><div class='px-6 pt-4 pb-2'><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam_passed: 14</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam_failed: 0</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#mapped_count: 25648</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#pass_mapped_count: 25648</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#unmapped_count: 33771</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#pass_unmapped_count: 33771</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#pass_bases_count: 19012109</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bases_count: 19012109</span></div></div>")
         if len(app.storage.general[self.mainuuid]["sample_list"]) == 0:
             ui.label("No samples found")
         elif len(app.storage.general[self.mainuuid]["sample_list"]) == 1:
@@ -389,24 +391,22 @@ class BrainMeth:
             myrow = ui.row().classes("w-full")
             with myrow:
                 for item in app.storage.general[self.mainuuid]["sample_list"]:
-                    with ui.button(on_click=lambda: ui.navigate.to(f"/live/{item}")):
-                        with ui.column():
-                            ui.label(f"{item}")
-                            ui.label().bind_text_from(app.storage.general[self.mainuuid]["samples"][
-                                        item
-                                    ]["file_counters"],
-                                    "bam_passed",
-                                    backward=lambda n: f" BAM pass: {n:,}",
-                                )
-                            ui.label().bind_text_from(app.storage.general[self.mainuuid]["samples"][
-                                                          item
-                                                      ]["file_counters"],
-                                                      "bam_failed",
-                                                      backward=lambda n: f" fail: {n:,}",
-                                                      )
-                        ui.image("https://picsum.photos/id/377/640/360").classes(
-                            "rounded-full w-16 h-16 ml-4"
-                        )
+                    with ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white p-4'):
+                        ui.label(f"Sample ID: {item}").classes('font-bold text-xl mb-2')
+                        for element in ["devices", "basecall_models", "run_time", "flowcell_ids"]:
+                            if element in app.storage.general[self.mainuuid]["samples"][item]:
+                                ui.html().bind_content_from(app.storage.general[self.mainuuid]["samples"][item], element,
+                                                        backward=lambda n, e=element: f"<strong>{e}:</strong> {n[0]}" if n else "Default Value")
+                        ui.html().bind_content_from(app.storage.general[self.mainuuid]["samples"][item]["file_counters"],
+                                "bam_passed",
+                                backward=lambda n: f"<span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam passed: {n}</span>")
+                        ui.html().bind_content_from(
+                            app.storage.general[self.mainuuid]["samples"][item]["file_counters"],
+                            "bam_failed",
+                            backward=lambda
+                                n: f"<span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam failed: {n}</span>")
+                        ui.button('View Data', on_click=lambda i=item: ui.navigate.to(f"/live/{i}"))
+
 
     async def information_panel(self, sample_id=None):
         await ui.context.client.connected()
@@ -440,8 +440,13 @@ class BrainMeth:
                 ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
                     "drop-shadow", "font-bold"
                 )
+                #ui.label().bind_text_from(app.storage.general[self.mainuuid]["samples"], self.sampleID, backward=lambda n: f"{n}")
+
+                #ui.label().bind_text_from(app.storage.general[self.mainuuid], "samples", backward=lambda n: f"{n}")
+
                 with ui.row():
                     if not self.browse:
+
                         ui.label().bind_text_from(
                             app.storage.general[self.mainuuid]["samples"][
                                 self.sampleID
@@ -829,11 +834,11 @@ class BrainMeth:
                 baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
                 # print(baminfo)
                 # print(bamdata)
+                sample_id = baminfo["sample_id"]
                 if (
-                    baminfo["sample_id"]
+                    sample_id
                     not in app.storage.general[self.mainuuid]["samples"]
                 ):
-                    sample_id = baminfo["sample_id"]
                     # print (f"Processing sample {sample_id}")
                     app.storage.general[self.mainuuid]["samples"][sample_id] = {}
                     self.configure_storage(sample_id)
@@ -949,21 +954,21 @@ class BrainMeth:
 
                 counter += 1
                 if "forest" not in self.exclude:
-                    self.bamforcns.put([file[0], file[1], baminfo["sample_id"]])
+                    self.bamforcns.put([file[0], file[1], sample_id])
                 if "sturgeon" not in self.exclude:
-                    self.bamforsturgeon.put([file[0], file[1], baminfo["sample_id"]])
+                    self.bamforsturgeon.put([file[0], file[1], sample_id])
                 if "nanodx" not in self.exclude:
-                    self.bamfornanodx.put([file[0], file[1], baminfo["sample_id"]])
+                    self.bamfornanodx.put([file[0], file[1], sample_id])
                 if "cnv" not in self.exclude:
-                    self.bamforcnv.put([file[0], file[1], baminfo["sample_id"]])
+                    self.bamforcnv.put([file[0], file[1], sample_id])
                 if "coverage" not in self.exclude:
                     self.bamfortargetcoverage.put(
-                        [file[0], file[1], baminfo["sample_id"]]
+                        [file[0], file[1], sample_id]
                     )
                 if "mgmt" not in self.exclude:
-                    self.bamformgmt.put([file[0], file[1], baminfo["sample_id"]])
+                    self.bamformgmt.put([file[0], file[1], sample_id])
                 if "fusion" not in self.exclude:
-                    self.bamforfusions.put([file[0], file[1], baminfo["sample_id"]])
+                    self.bamforfusions.put([file[0], file[1], sample_id])
 
             self.nofiles = True
         self.process_bams_tracker.active = True
