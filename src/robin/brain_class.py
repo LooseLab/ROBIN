@@ -383,7 +383,8 @@ class BrainMeth:
         if len(app.storage.general[self.mainuuid]["sample_list"]) == 0:
             ui.label("No samples found")
         elif len(app.storage.general[self.mainuuid]["sample_list"]) == 1:
-            ui.navigate.to(f"/live/{app.storage.general[self.mainuuid]['sample_list'][0]}")
+            if self.sampleID != app.storage.general[self.mainuuid]["sample_list"][0]:
+                ui.navigate.to(f"/live/{app.storage.general[self.mainuuid]['sample_list'][0]}")
         else:
             myrow = ui.row().classes("w-full")
             with myrow:
