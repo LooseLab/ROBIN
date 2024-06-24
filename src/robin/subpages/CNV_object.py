@@ -757,11 +757,14 @@ class CNVAnalysis(BaseAnalysis):
                 if key != "chrM":
                     moving_avg_data1 = moving_average(self.result.cnv[key])
                     moving_avg_data2 = moving_average(r2_cnv[key])
+                    moving_avg_data1, moving_avg_data2 = pad_arrays(
+                        moving_avg_data1, moving_avg_data2
+                    )
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                    if len(self.result3.cnv[key]) > 20:
-                        algo_c = ruptures_plotting(self.result3.cnv[key])
-                        penalty_value = 5
-                        result = algo_c.predict(pen=penalty_value)
+                    #if len(self.result3.cnv[key]) > 20:
+                    #    algo_c = ruptures_plotting(self.result3.cnv[key])
+                    #    penalty_value = 5
+                    #    result = algo_c.predict(pen=penalty_value)
 
             self.update_plots()
             if self.summary:
