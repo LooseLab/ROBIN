@@ -110,7 +110,7 @@ class Sturgeon_object(BaseAnalysis):
             output = self.output
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
-        print(output)
+
         if self.check_file_time(os.path.join(output, "sturgeon_scores.csv")):
             self.sturgeon_df_store = pd.read_csv(
                 os.path.join(os.path.join(output, "sturgeon_scores.csv")),

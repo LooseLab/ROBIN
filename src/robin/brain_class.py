@@ -380,13 +380,19 @@ class BrainMeth:
 
     @ui.refreshable
     def show_list(self):
-        for item in app.storage.general[self.mainuuid]["sample_list"]:
-            with ui.button(on_click=lambda: ui.navigate.to(f"/live/{item}")):
-                ui.label(f"{item}")
-                ui.image("https://picsum.photos/id/377/640/360").classes(
-                    "rounded-full w-16 h-16 ml-4"
-                )
-            # ui.link(f'view {item}', f'/live/{item}')
+        if len(app.storage.general[self.mainuuid]["sample_list"]) == 0:
+            ui.label("No samples found")
+        elif len(app.storage.general[self.mainuuid]["sample_list"]) == 1:
+            ui.navigate.to(f"/live/{app.storage.general[self.mainuuid]['sample_list'][0]}")
+        else:
+            myrow = ui.row().classes("w-full")
+            with myrow:
+                for item in app.storage.general[self.mainuuid]["sample_list"]:
+                    with ui.button(on_click=lambda: ui.navigate.to(f"/live/{item}")):
+                        ui.label(f"{item}")
+                        ui.image("https://picsum.photos/id/377/640/360").classes(
+                            "rounded-full w-16 h-16 ml-4"
+                        )
 
     async def information_panel(self, sample_id=None):
         self.frontpage = ui.card().classes("w-full")
