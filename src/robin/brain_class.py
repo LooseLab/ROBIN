@@ -409,7 +409,10 @@ class BrainMeth:
                         )
 
     async def information_panel(self, sample_id=None):
+        await ui.context.client.connected()
+
         self.frontpage = ui.card().classes("w-full")
+
         if sample_id:
             self.sampleID = sample_id
             # ui.label(f"Viewing sample: {self.sampleID}")
@@ -635,7 +638,7 @@ class BrainMeth:
                                 )
         if sample_id:
             selectedtab = None
-            await ui.context.client.connected()
+
             with ui.tabs().classes("w-full") as tabs:
                 if not (
                     set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
