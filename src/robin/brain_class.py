@@ -412,11 +412,9 @@ class BrainMeth:
         await ui.context.client.connected()
 
         self.frontpage = ui.card().classes("w-full")
-        print(f"Sample ID: {sample_id}")
-        print("frontpage setup")
+
         if sample_id:
             self.sampleID = sample_id
-            # ui.label(f"Viewing sample: {self.sampleID}")
         with self.frontpage:
             if not self.browse:
                 self.show_list()
@@ -442,7 +440,6 @@ class BrainMeth:
                 ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
                     "drop-shadow", "font-bold"
                 )
-                print ("sample_id found")
                 with ui.row():
                     if not self.browse:
                         ui.label().bind_text_from(
@@ -638,6 +635,7 @@ class BrainMeth:
                                 ).style(
                                     "color: #000000; font-size: 100%; font-weight: 300"
                                 )
+        """                                
         if sample_id:
             selectedtab = None
 
@@ -758,6 +756,7 @@ class BrainMeth:
                     if item == "sample_ids":
                         for sample in app.storage.general[self.mainuuid][item]:
                             self.sampleID = sample
+        """
 
         async def download_report():
             ui.notify("Generating Report")
