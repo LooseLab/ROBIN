@@ -362,7 +362,6 @@ class TargetCoverage(BaseAnalysis):
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.grid(columns=2).classes("w-full h-auto"):
-
                 with ui.card().classes(
                     f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2"
                 ):
@@ -422,7 +421,7 @@ class TargetCoverage(BaseAnalysis):
         if self.browse:
             ui.timer(0.1, callback=self.show_previous_data, once=True)
         else:
-            ui.timer(10, lambda: self.show_previous_data())
+            ui.timer(30, lambda: self.show_previous_data())
 
     def create_coverage_plot(self, title):
         self.echart3 = (
@@ -1096,123 +1095,125 @@ class TargetCoverage(BaseAnalysis):
 
         if self.check_file_time(f"{output}/clair3/snpsift_output.vcf.csv"):
             vcf = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv", low_memory=False)
-            self.SNPplaceholder.clear()
-            with self.SNPplaceholder:
-                self.snptable = (
-                    ui.table.from_pandas(vcf, pagination=25)
-                    .props("dense")
-                    .style("height: 900px")
-                    .style("font-size: 100%; font-weight: 300")
-                )
-                for col in self.snptable.columns:
-                    col["sortable"] = True
+            if len(vcf) > 0:
+                self.SNPplaceholder.clear()
+                with self.SNPplaceholder:
+                    self.snptable = (
+                        ui.table.from_pandas(vcf, pagination=25)
+                        .props("dense")
+                        .style("height: 900px")
+                        .style("font-size: 100%; font-weight: 300")
+                    )
+                    for col in self.snptable.columns:
+                        col["sortable"] = True
 
-                def toggle(column: dict, visible: bool) -> None:
-                    column["classes"] = "" if visible else "hidden"
-                    column["headerClasses"] = "" if visible else "hidden"
-                    self.snptable.update()
+                    def toggle(column: dict, visible: bool) -> None:
+                        column["classes"] = "" if visible else "hidden"
+                        column["headerClasses"] = "" if visible else "hidden"
+                        self.snptable.update()
 
-                def set_pathogenic(value: bool) -> None:
-                    self.snptable.filter = "pathogenic" if value else None
+                    def set_pathogenic(value: bool) -> None:
+                        self.snptable.filter = "pathogenic" if value else None
 
-                with self.snptable.add_slot("top-left"):
+                    with self.snptable.add_slot("top-left"):
 
-                    def toggle_fs() -> None:
-                        self.snptable.toggle_fullscreen()
-                        button.props(
-                            "icon=fullscreen_exit"
-                            if self.snptable.is_fullscreen
-                            else "icon=fullscreen"
+                        def toggle_fs() -> None:
+                            self.snptable.toggle_fullscreen()
+                            button.props(
+                                "icon=fullscreen_exit"
+                                if self.snptable.is_fullscreen
+                                else "icon=fullscreen"
+                            )
+
+                        button = ui.button(
+                            "Toggle fullscreen",
+                            icon="fullscreen",
+                            on_click=toggle_fs,
+                        ).props("flat")
+
+                        with ui.button(icon="menu"):
+                            with ui.menu(), ui.column().classes("gap-0 p-2"):
+                                for column in self.snptable.columns:
+                                    ui.switch(
+                                        column["label"],
+                                        value=True,
+                                        on_change=lambda e, column=column: toggle(
+                                            column, e.value
+                                        ),
+                                    )
+
+                        ui.switch(
+                            "Show potentially pathogenic SNPs only",
+                            value=False,
+                            on_change=lambda e: set_pathogenic(e.value),
                         )
 
-                    button = ui.button(
-                        "Toggle fullscreen",
-                        icon="fullscreen",
-                        on_click=toggle_fs,
-                    ).props("flat")
-
-                    with ui.button(icon="menu"):
-                        with ui.menu(), ui.column().classes("gap-0 p-2"):
-                            for column in self.snptable.columns:
-                                ui.switch(
-                                    column["label"],
-                                    value=True,
-                                    on_change=lambda e, column=column: toggle(
-                                        column, e.value
-                                    ),
-                                )
-
-                    ui.switch(
-                        "Show potentially pathogenic SNPs only",
-                        value=False,
-                        on_change=lambda e: set_pathogenic(e.value),
-                    )
-
-                with self.snptable.add_slot("top-right"):
-                    with ui.input(placeholder="Search").props("type=search").bind_value(
-                        self.snptable, "filter"
-                    ).add_slot("append"):
-                        ui.icon("search")
+                    with self.snptable.add_slot("top-right"):
+                        with ui.input(placeholder="Search").props("type=search").bind_value(
+                            self.snptable, "filter"
+                        ).add_slot("append"):
+                            ui.icon("search")
 
         if self.check_file_time(f"{output}/clair3/snpsift_indel_output.vcf.csv"):
             vcfindel = pd.read_csv(f"{output}/clair3/snpsift_indel_output.vcf.csv", low_memory=False)
-            self.INDELplaceholder.clear()
-            with self.INDELplaceholder:
-                self.indeltable = (
-                    ui.table.from_pandas(vcfindel, pagination=25)
-                    .props("dense")
-                    .style("height: 900px")
-                    .style("font-size: 100%; font-weight: 300")
-                )
-                for col in self.indeltable.columns:
-                    col["sortable"] = True
+            if len(vcfindel) > 0:
+                self.INDELplaceholder.clear()
+                with self.INDELplaceholder:
+                    self.indeltable = (
+                        ui.table.from_pandas(vcfindel, pagination=25)
+                        .props("dense")
+                        .style("height: 900px")
+                        .style("font-size: 100%; font-weight: 300")
+                    )
+                    for col in self.indeltable.columns:
+                        col["sortable"] = True
 
-                def idtoggle(column: dict, visible: bool) -> None:
-                    column["classes"] = "" if visible else "hidden"
-                    column["headerClasses"] = "" if visible else "hidden"
-                    self.indeltable.update()
+                    def idtoggle(column: dict, visible: bool) -> None:
+                        column["classes"] = "" if visible else "hidden"
+                        column["headerClasses"] = "" if visible else "hidden"
+                        self.indeltable.update()
 
-                def set_idpathogenic(value: bool) -> None:
-                    self.indeltable.filter = "pathogenic" if value else None
+                    def set_idpathogenic(value: bool) -> None:
+                        self.indeltable.filter = "pathogenic" if value else None
 
-                with self.indeltable.add_slot("top-left"):
+                    with self.indeltable.add_slot("top-left"):
 
-                    def toggle_idfs() -> None:
-                        self.indeltable.toggle_fullscreen()
-                        button.props(
-                            "icon=fullscreen_exit"
-                            if self.indeltable.is_fullscreen
-                            else "icon=fullscreen"
+                        def toggle_idfs() -> None:
+                            self.indeltable.toggle_fullscreen()
+                            button.props(
+                                "icon=fullscreen_exit"
+                                if self.indeltable.is_fullscreen
+                                else "icon=fullscreen"
+                            )
+
+                        button = ui.button(
+                            "Toggle fullscreen",
+                            icon="fullscreen",
+                            on_click=toggle_idfs,
+                        ).props("flat")
+
+                        with ui.button(icon="menu"):
+                            with ui.menu(), ui.column().classes("gap-0 p-2"):
+                                for column in self.indeltable.columns:
+                                    ui.switch(
+                                        column["label"],
+                                        value=True,
+                                        on_change=lambda e, column=column: idtoggle(
+                                            column, e.value
+                                        ),
+                                    )
+
+                        ui.switch(
+                            "Show potentially pathogenic IN/DELs only",
+                            value=False,
+                            on_change=lambda e: set_idpathogenic(e.value),
                         )
 
-                    button = ui.button(
-                        "Toggle fullscreen",
-                        icon="fullscreen",
-                        on_click=toggle_idfs,
-                    ).props("flat")
-
-                    with ui.button(icon="menu"):
-                        with ui.menu(), ui.column().classes("gap-0 p-2"):
-                            for column in self.indeltable.columns:
-                                ui.switch(
-                                    column["label"],
-                                    value=True,
-                                    on_change=lambda e, column=column: idtoggle(
-                                        column, e.value
-                                    ),
-                                )
-
-                    ui.switch(
-                        "Show potentially pathogenic IN/DELs only",
-                        value=False,
-                        on_change=lambda e: set_idpathogenic(e.value),
-                    )
-
-                with self.indeltable.add_slot("top-right"):
-                    with ui.input(placeholder="Search").props("type=search").bind_value(
-                        self.indeltable, "filter"
-                    ).add_slot("append"):
-                        ui.icon("search")
+                    with self.indeltable.add_slot("top-right"):
+                        with ui.input(placeholder="Search").props("type=search").bind_value(
+                            self.indeltable, "filter"
+                        ).add_slot("append"):
+                            ui.icon("search")
 
 
 def test_me(
