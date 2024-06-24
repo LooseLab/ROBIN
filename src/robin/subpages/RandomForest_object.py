@@ -184,7 +184,7 @@ class RandomForest_object(BaseAnalysis):
             app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
-            if len(tomerge) > 25:
+            if len(tomerge) > 200:
                 break
 
         if len(tomerge) > 0:

@@ -260,7 +260,7 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_bam_count += 1
             tomerge.append(file)
 
-            if len(tomerge) > 25:
+            if len(tomerge) > 200:
                 break
         app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
             "bams_in_processing"
