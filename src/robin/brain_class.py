@@ -635,7 +635,7 @@ class BrainMeth:
                                 ).style(
                                     "color: #000000; font-size: 100%; font-weight: 300"
                                 )
-        """                                
+
         if sample_id:
             selectedtab = None
 
@@ -749,14 +749,13 @@ class BrainMeth:
                             )
                             await self.Fusion_panel.render_ui(sample_id=self.sampleID)
 
-            print ("tabs setup")
 
             if not self.browse:
                 for item in app.storage.general[self.mainuuid]:
                     if item == "sample_ids":
                         for sample in app.storage.general[self.mainuuid][item]:
                             self.sampleID = sample
-        """
+
 
         async def download_report():
             ui.notify("Generating Report")
