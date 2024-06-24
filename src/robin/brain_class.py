@@ -412,7 +412,8 @@ class BrainMeth:
         await ui.context.client.connected()
 
         self.frontpage = ui.card().classes("w-full")
-
+        print(f"Sample ID: {sample_id}")
+        print("frontpage setup")
         if sample_id:
             self.sampleID = sample_id
             # ui.label(f"Viewing sample: {self.sampleID}")
@@ -441,6 +442,7 @@ class BrainMeth:
                 ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
                     "drop-shadow", "font-bold"
                 )
+                print ("sample_id found")
                 with ui.row():
                     if not self.browse:
                         ui.label().bind_text_from(
@@ -748,6 +750,8 @@ class BrainMeth:
                                 **display_args,
                             )
                             await self.Fusion_panel.render_ui(sample_id=self.sampleID)
+
+            print ("tabs setup")
 
             if not self.browse:
                 for item in app.storage.general[self.mainuuid]:
