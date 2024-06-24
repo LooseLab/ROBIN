@@ -1095,7 +1095,7 @@ class TargetCoverage(BaseAnalysis):
                             ui.label("No data available")
 
         if self.check_file_time(f"{output}/clair3/snpsift_output.vcf.csv"):
-            vcf = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv")
+            vcf = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv", low_memory=False)
             self.SNPplaceholder.clear()
             with self.SNPplaceholder:
                 self.snptable = (
@@ -1155,7 +1155,7 @@ class TargetCoverage(BaseAnalysis):
                         ui.icon("search")
 
         if self.check_file_time(f"{output}/clair3/snpsift_indel_output.vcf.csv"):
-            vcfindel = pd.read_csv(f"{output}/clair3/snpsift_indel_output.vcf.csv")
+            vcfindel = pd.read_csv(f"{output}/clair3/snpsift_indel_output.vcf.csv", low_memory=False)
             self.INDELplaceholder.clear()
             with self.INDELplaceholder:
                 self.indeltable = (

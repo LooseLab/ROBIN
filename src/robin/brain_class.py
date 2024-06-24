@@ -390,7 +390,20 @@ class BrainMeth:
             with myrow:
                 for item in app.storage.general[self.mainuuid]["sample_list"]:
                     with ui.button(on_click=lambda: ui.navigate.to(f"/live/{item}")):
-                        ui.label(f"{item}")
+                        with ui.column():
+                            ui.label(f"{item}")
+                            ui.label().bind_text_from(app.storage.general[self.mainuuid]["samples"][
+                                        item
+                                    ]["file_counters"],
+                                    "bam_passed",
+                                    backward=lambda n: f" BAM pass: {n:,}",
+                                )
+                            ui.label().bind_text_from(app.storage.general[self.mainuuid]["samples"][
+                                                          item
+                                                      ]["file_counters"],
+                                                      "bam_failed",
+                                                      backward=lambda n: f" fail: {n:,}",
+                                                      )
                         ui.image("https://picsum.photos/id/377/640/360").classes(
                             "rounded-full w-16 h-16 ml-4"
                         )
