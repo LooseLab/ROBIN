@@ -782,7 +782,7 @@ class BrainMeth:
         ui.button("Generate Report", on_click=download_report, icon="download")
 
     async def background_process_bams(self):
-        await asyncio.sleep(5)
+        #await asyncio.sleep(5)
         self.process_bams_tracker = ui.timer(10, self.process_bams)
 
     def check_and_create_folder(self, path, folder_name=None):
