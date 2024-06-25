@@ -371,6 +371,7 @@ class FusionObject(BaseAnalysis):
                             ui.label("Table not yet available.").style(
                                 "color: #000000; font-size: 125%; font-weight: 300"
                             )
+
         if self.browse:
             self.show_previous_data()
         else:
@@ -392,7 +393,7 @@ class FusionObject(BaseAnalysis):
                 ),
                 index=False,
             )
-            # self.update_fusion_table_all(result_all)
+            self.update_fusion_table_all(result_all)
 
     def update_fusion_table_all(self, result_all: pd.DataFrame) -> None:
         """
@@ -469,103 +470,35 @@ class FusionObject(BaseAnalysis):
 
             if not result_all.empty:
                 with self.fusionplot_all.classes("w-full"):
-                    for gene_pair in (
-                        result_all[goodpairs].sort_values(by=7)["tag"].unique()
-                    ):
-                        with ui.card():
+                    gene_pairs = result_all[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                    with ui.row().classes("w-full"):
+                        ui.select(options=gene_pairs, with_input=True,
+                                  on_change=lambda e: show_gene_pair(e.value)).classes(
+                            'w-40')
+                    with ui.row().classes("w-full"):
+                        self.all_card = ui.card()
+                        with self.all_card:
+                            ui.label("Select gene pair to see results.").tailwind("drop-shadow", "font-bold")
+
+                    def show_gene_pair(gene_pair: str) -> None:
+                        ui.notify(gene_pair)
+                        self.all_card.clear()
+                        with self.all_card:
                             with ui.row():
                                 ui.label(f"{gene_pair}").tailwind(
                                     "drop-shadow", "font-bold"
                                 )
-                            with ui.row():
-                                for gene in result_all[
-                                    goodpairs
-                                    & result_all[goodpairs]["tag"].eq(gene_pair)
-                                ][3].unique():
-                                    title = gene
+                                for gene in gene_pair.split(", "):
+                                    #title = gene
                                     reads = result_all[goodpairs].sort_values(by=7)[
                                         result_all[goodpairs]
                                         .sort_values(by=7)[3]
                                         .eq(gene)
                                     ]
-                                    with ui.card().classes("no-shadow border-[2px]"):
-                                        with ui.pyplot(figsize=(16, 2)):
-                                            ax1 = plt.gca()
-                                            features = []
-                                            first_index = 0
-                                            sequence_length = 100
-                                            x_label = ""
-                                            for index, row in self.gene_table[
-                                                self.gene_table["gene_name"].eq(
-                                                    title.strip()
-                                                )
-                                            ].iterrows():
-                                                if row["Type"] == "gene":
-                                                    x_label = row["Seqid"]
-                                                    features.append(
-                                                        GraphicFeature(
-                                                            start=int(row["Start"]),
-                                                            end=int(row["End"]),
-                                                            strand=STRAND[
-                                                                row["Strand"]
-                                                            ],
-                                                            thickness=4,
-                                                            color="#ffd700",
-                                                        )
-                                                    )
-                                                    first_index = (
-                                                        int(row["Start"]) - 1000
-                                                    )
-                                                    sequence_length = (
-                                                        int(row["End"])
-                                                        - int(row["Start"])
-                                                        + 2000
-                                                    )
-                                                if (
-                                                    row["Type"] == "CDS"
-                                                    and row["transcript_type"]
-                                                    == "protein_coding"
-                                                ):
-                                                    features.append(
-                                                        GraphicFeature(
-                                                            start=int(row["Start"]),
-                                                            end=int(row["End"]),
-                                                            strand=STRAND[
-                                                                row["Strand"]
-                                                            ],
-                                                            color="#ffcccc",
-                                                        )
-                                                    )
-                                            record = GraphicRecord(
-                                                sequence_length=sequence_length,
-                                                first_index=first_index,
-                                                features=features,
-                                            )
-                                            ax1.set_title(f"{title} - {x_label}")
-                                            record.plot(ax=ax1)
+                                    self.create_fusion_plot(
+                                        gene,reads,
+                                    )
 
-                                        with ui.pyplot(figsize=(16, 1)):
-                                            ax = plt.gca()
-                                            features = []
-                                            for index, row in reads.sort_values(
-                                                by=7
-                                            ).iterrows():
-                                                features.append(
-                                                    GraphicFeature(
-                                                        start=int(row[5]),
-                                                        end=int(row[6]),
-                                                        strand=STRAND[row[9]],
-                                                        color=row["Color"],
-                                                    )
-                                                )
-                                            record = GraphicRecord(
-                                                sequence_length=sequence_length,
-                                                first_index=first_index,
-                                                features=features,
-                                            )
-                                            record.plot(
-                                                ax=ax, with_ruler=False, draw_line=True
-                                            )
 
     def fusion_table(self) -> None:
         """
@@ -654,6 +587,40 @@ class FusionObject(BaseAnalysis):
 
             result, goodpairs = self._annotate_results(result)
             self.candidates = result[goodpairs].sort_values(by=7)["tag"].nunique()
+
+
+            if not result.empty:
+                with self.fusionplot.classes("w-full"):
+                    gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                    with ui.row().classes("w-full"):
+                        ui.select(options=gene_pairs, with_input=True,
+                                  on_change=lambda e: show_gene_pair(e.value)).classes(
+                            'w-40')
+                    with ui.row().classes("w-full"):
+                        self.card = ui.card()
+                        with self.card:
+                            ui.label("Select gene pair to see results.").tailwind("drop-shadow", "font-bold")
+
+                    def show_gene_pair(gene_pair: str) -> None:
+                        ui.notify(gene_pair)
+                        self.all_card.clear()
+                        with self.all_card:
+                            with ui.row():
+                                ui.label(f"{gene_pair}").tailwind(
+                                    "drop-shadow", "font-bold"
+                                )
+                                for gene in gene_pair.split(", "):
+                                    #title = gene
+                                    reads = result_all[goodpairs].sort_values(by=7)[
+                                        result_all[goodpairs]
+                                        .sort_values(by=7)[3]
+                                        .eq(gene)
+                                    ]
+                                    self.create_fusion_plot(
+                                        gene,reads,
+                                    )
+
+            """
             with self.fusionplot.classes("w-full"):
                 for gene_pair in result[goodpairs].sort_values(by=7)["tag"].unique():
                     with ui.card():
@@ -671,6 +638,7 @@ class FusionObject(BaseAnalysis):
                                         result[goodpairs].sort_values(by=7)[3].eq(gene)
                                     ],
                                 )
+            """
 
     def create_fusion_plot(self, title: str, reads: pd.DataFrame) -> None:
         """
@@ -865,7 +833,9 @@ class FusionObject(BaseAnalysis):
                 header=None,
                 skiprows=1,
             )
+
             self.update_fusion_table_all(fusion_candidates_all)
+
 
 
 def test_me(

@@ -348,6 +348,7 @@ class BrainMeth:
         await self.minknow_connection.access_device.clicked()
 
     async def pick_file(self) -> None:
+        ui.notify("Select a folder to monitor")
         result = await LocalFilePicker(f"{self.runsfolder}", multiple=True)
         if result:
             ui.notify(f"You selected {result}")
@@ -409,9 +410,9 @@ class BrainMeth:
 
 
     async def information_panel(self, sample_id=None):
-        await ui.context.client.connected()
-
         self.frontpage = ui.card().classes("w-full")
+
+
 
         if sample_id:
             self.sampleID = sample_id
@@ -443,7 +444,6 @@ class BrainMeth:
                 #ui.label().bind_text_from(app.storage.general[self.mainuuid]["samples"], self.sampleID, backward=lambda n: f"{n}")
 
                 #ui.label().bind_text_from(app.storage.general[self.mainuuid], "samples", backward=lambda n: f"{n}")
-
                 with ui.row():
                     if not self.browse:
 
@@ -529,7 +529,6 @@ class BrainMeth:
                     ):
                         if "coverage" not in self.exclude:
                             coverage = ui.column()
-
                 if not self.browse:
                     with ui.expansion(icon="work").bind_text_from(
                         self,
@@ -640,10 +639,8 @@ class BrainMeth:
                                 ).style(
                                     "color: #000000; font-size: 100%; font-weight: 300"
                                 )
-
         if sample_id:
             selectedtab = None
-
             with ui.tabs().classes("w-full") as tabs:
                 if not (
                     set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
@@ -713,6 +710,7 @@ class BrainMeth:
                                 await self.RandomForest.render_ui(
                                     sample_id=self.sampleID
                                 )
+
                 if "cnv" not in self.exclude:
                     with ui.tab_panel(copy_numbertab).classes("w-full"):
                         with ui.card().classes("w-full"):
@@ -723,6 +721,7 @@ class BrainMeth:
                                 **display_args,
                             )
                             await self.CNV.render_ui(sample_id=self.sampleID)
+
                 if "coverage" not in self.exclude:
                     with ui.tab_panel(coveragetab).classes("w-full"):
                         with ui.card().classes("w-full"):
@@ -736,6 +735,7 @@ class BrainMeth:
                             await self.Target_Coverage.render_ui(
                                 sample_id=self.sampleID
                             )
+
                 if "mgmt" not in self.exclude:
                     with ui.tab_panel(mgmttab).classes("w-full"):
                         with ui.card().classes("w-full"):
@@ -743,6 +743,7 @@ class BrainMeth:
                                 analysis_name="MGMT", summary=mgmt, **display_args
                             )
                             await self.MGMT_panel.render_ui(sample_id=self.sampleID)
+
                 if "fusion" not in self.exclude:
                     with ui.tab_panel(fusionstab).classes("w-full"):
                         with ui.card().classes("w-full"):
@@ -753,8 +754,6 @@ class BrainMeth:
                                 **display_args,
                             )
                             await self.Fusion_panel.render_ui(sample_id=self.sampleID)
-
-
             if not self.browse:
                 for item in app.storage.general[self.mainuuid]:
                     if item == "sample_ids":

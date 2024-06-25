@@ -1093,8 +1093,19 @@ class TargetCoverage(BaseAnalysis):
                         else:
                             ui.label("No data available")
 
+
         if self.check_file_time(f"{output}/clair3/snpsift_output.vcf.csv"):
-            vcf = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv", low_memory=False)
+            df = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv", low_memory=False)
+
+            # Define a function to check for 'pathogenic'
+            def contains_pathogenic(text):
+                if pd.isna(text):
+                    return False
+                return 'pathogenic' in str(text).lower()
+
+            # Apply the function to each cell and filter rows
+            vcf = df[df.map(contains_pathogenic).any(axis=1)]
+
             if len(vcf) > 0:
                 self.SNPplaceholder.clear()
                 with self.SNPplaceholder:
@@ -1155,7 +1166,17 @@ class TargetCoverage(BaseAnalysis):
                             ui.icon("search")
 
         if self.check_file_time(f"{output}/clair3/snpsift_indel_output.vcf.csv"):
-            vcfindel = pd.read_csv(f"{output}/clair3/snpsift_indel_output.vcf.csv", low_memory=False)
+            df = pd.read_csv(f"{output}/clair3/snpsift_indel_output.vcf.csv", low_memory=False)
+
+            # Define a function to check for 'pathogenic'
+            def contains_pathogenic(text):
+                if pd.isna(text):
+                    return False
+                return 'pathogenic' in str(text).lower()
+
+            # Apply the function to each cell and filter rows
+            vcfindel = df[df.map(contains_pathogenic).any(axis=1)]
+
             if len(vcfindel) > 0:
                 self.INDELplaceholder.clear()
                 with self.INDELplaceholder:
@@ -1214,7 +1235,6 @@ class TargetCoverage(BaseAnalysis):
                             self.indeltable, "filter"
                         ).add_slot("append"):
                             ui.icon("search")
-
 
 def test_me(
     port: int,
