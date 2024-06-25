@@ -35,7 +35,7 @@ class Worker:
             try:
                 msg = self._queue.get_nowait()
             except Empty:
-                await asyncio.sleep(0.1)
+                #await asyncio.sleep(0.1)
                 continue
             self.progress = msg["progress"]
         self.is_running = False
