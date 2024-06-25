@@ -393,7 +393,7 @@ class FusionObject(BaseAnalysis):
                 ),
                 index=False,
             )
-            self.update_fusion_table_all(result_all)
+            #self.update_fusion_table_all(result_all)
 
     def update_fusion_table_all(self, result_all: pd.DataFrame) -> None:
         """

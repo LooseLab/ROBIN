@@ -411,9 +411,6 @@ class BrainMeth:
 
     async def information_panel(self, sample_id=None):
         self.frontpage = ui.card().classes("w-full")
-
-
-
         if sample_id:
             self.sampleID = sample_id
         with self.frontpage:
