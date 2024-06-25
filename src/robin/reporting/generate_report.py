@@ -572,7 +572,11 @@ def create_pdf(filename, output):
     if filename.startswith("None"):
         final_folder = os.path.basename(os.path.normpath(output))
         filename = filename.replace("None", final_folder, 1)
-    print(f"Creating PDF {filename} in {output}")
+        sample_id = final_folder
+    else:
+        sample_id = os.path.basename(os.path.normpath(output))
+    print(f"Creating PDF {filename} in {output} for sample {sample_id}")
+
 
     pdfmetrics.registerFont(
         TTFont(
@@ -621,13 +625,13 @@ def create_pdf(filename, output):
     else:
         masterdf = None
 
-    if masterdf is not None and isinstance(masterdf, pd.DataFrame):
-        sample_id = convert_to_space_separated_string(
-            masterdf.loc[(masterdf.index == "sample_ids")][1].values
-        )
+    #if masterdf is not None and isinstance(masterdf, pd.DataFrame):
+    #    sample_id = convert_to_space_separated_string(
+    #        masterdf.loc[(masterdf.index == "sample_ids")][1].values
+    #    )
 
-    else:
-        sample_id = None
+    #else:
+    #    sample_id = None
 
     elements.append(Paragraph("Classification Summary", styles["Heading1"]))
 
@@ -821,17 +825,18 @@ def create_pdf(filename, output):
     if masterdf is not None and isinstance(masterdf, pd.DataFrame):
         elements.append(Paragraph("Run Data Summary", styles["Heading2"]))
         start_time = "Placeholder"
+        masterdf_dict = eval(masterdf[masterdf.index=="samples"][1]["samples"])[sample_id]
         elements.append(
             Paragraph(
                 f"Sample ID: {sample_id}<br/>"
-                f"Run Start: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'run_time')][1].values)}<br/>"
+                f"Run Start: {convert_to_space_separated_string(masterdf_dict['run_time'])}<br/>"
                 f"Run Folder: {' '.join(masterdf.loc[(masterdf.index == 'watchfolder')][1].values)}<br/>"
                 f"Output Folder: {' '.join(masterdf.loc[(masterdf.index == 'output')][1].values)}<br/>"
                 f"Target Panel: {' '.join(masterdf.loc[(masterdf.index == 'target_panel')][1].values)}<br/>"
                 f"Reference: {' '.join(masterdf.loc[(masterdf.index == 'reference')][1].values)}<br/>"
-                f"Sequencing Device: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'devices')][1].values)}<br/>"
-                f"Flowcell ID: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'flowcell_ids')][1].values)}<br/>"
-                f"Basecalling Model: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'basecall_models')][1].values)}<br/>",
+                f"Sequencing Device: {convert_to_space_separated_string(masterdf_dict['devices'])}<br/>"
+                f"Flowcell ID: {convert_to_space_separated_string(masterdf_dict['flowcell_ids'])}<br/>"
+                f"Basecalling Model: {convert_to_space_separated_string(masterdf_dict['basecall_models'])}<br/>",
                 # f"Files Seen: {masterdf.loc[(masterdf.index == 'file_counters')][1].values}<br/>",
                 smaller_style,
             )
@@ -841,10 +846,8 @@ def create_pdf(filename, output):
                 (
                     f"{k}: {v}<br/>"
                     for k, v in eval(
-                        masterdf.loc[(masterdf.index == "file_counters")][1][
-                            "file_counters"
-                        ]
-                    ).items()
+                            masterdf[masterdf.index== "samples"][1]["samples"])[sample_id]['file_counters'].items()
+
                 )
             )
             elements.append(
@@ -1456,5 +1459,5 @@ if __name__ == "__main__":
     # Generate the PDF
     create_pdf(
         "sample_report.pdf",
-        "/Users/mattloose/GIT/niceGUI/cnsmeth/runoutputs/ds1305_Intraop0015_a",
+        "/Users/mattloose/datasets/new_outputs/ds1305_Intraop0002_3",
     )
