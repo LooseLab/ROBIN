@@ -15,12 +15,15 @@ from sturgeon.callmapping import (
 import yappi
 import tabulate
 
+
 from robin import submodules
 
 from robin.utilities.merge_bedmethyl import (
     merge_bedmethyl,
     save_bedmethyl,
 )
+from typing import List, Tuple, Optional, Dict, Any
+
 
 HVPATH = os.path.join(
     os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
@@ -87,21 +90,22 @@ def run_modkit(bamfile, outbed, cpgs, threads, showerrors):
 
 class RandomForest_object(BaseAnalysis):
     def __init__(self, *args, showerrors=False, **kwargs):
-        self.rcns2_df_store = pd.DataFrame()
+        self.rcns2_df_store = {}
         self.threshold = 0.05
-        self.batch = 0
+        self.bambatch = {}
         self.cpgs_file = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "hglft_genome_260e9_91a970_clean.bed",
         )
         self.offset = False
-        self.first_run = True
+        self.first_run = {}
         self.showerrors = showerrors
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
-        self.dataDir = None
-        self.bedDir = None
+        self.dataDir = {}
+        self.bedDir = {}
+        self.merged_bed_file = {}
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
@@ -164,24 +168,29 @@ class RandomForest_object(BaseAnalysis):
         except FileNotFoundError:
             pass
 
-    async def process_bam(self, bamfile):
-        if not self.dataDir:
-            self.dataDir = tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, self.sampleID)
+    async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
+        """
+        Processes the BAM files and performs the NanoDX analysis.
+
+        Args:
+            bamfile (List[Tuple[str, float]]): List of BAM files with their timestamps.
+        """
+        sampleID = self.sampleID
+        if sampleID not in self.dataDir.keys():
+            self.dataDir[sampleID] = tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, sampleID)
             )
-        if not self.bedDir:
-            self.bedDir = tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, self.sampleID)
+        if sampleID not in self.bedDir.keys():
+            self.bedDir[sampleID] = tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, sampleID)
             )
         tomerge = []
-        # timestamp = None
 
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop()
             tomerge.append(file)
-            # timestamp = filetime
-            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
             if len(tomerge) > 200:
@@ -189,18 +198,18 @@ class RandomForest_object(BaseAnalysis):
 
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, self.sampleID),
+                dir=self.check_and_create_folder(self.output, sampleID),
                 suffix=".bam",
             )
             sortbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, self.sampleID),
+                dir=self.check_and_create_folder(self.output, sampleID),
                 suffix=".bam",
             )
             tempbed = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, self.sampleID),
+                dir=self.check_and_create_folder(self.output, sampleID),
                 suffix=".bed",
             )
-            self.batch += 1
+            self.bambatch[sampleID] = self.bambatch.get(sampleID, 0) + 1
 
             await run.cpu_bound(
                 run_samtools_sort,
@@ -209,7 +218,7 @@ class RandomForest_object(BaseAnalysis):
                 sortbam.name,
                 self.threads,
                 self.cpgs_file,
-            )  # , file, tomerge, sortfile, self.threads)
+            )
 
             await run.cpu_bound(
                 run_modkit,
@@ -219,14 +228,13 @@ class RandomForest_object(BaseAnalysis):
                 self.threads,
                 self.showerrors,
             )
-            # await asyncio.sleep(0.1)
 
             try:
                 os.remove(f"{sortbam.name}.csi")
             except FileNotFoundError:
                 pass
 
-            if not self.first_run:
+            if sampleID in self.first_run.keys() and not self.first_run[sampleID]:
                 bed_a = pd.read_table(
                     f"{tempbed.name}",
                     names=[
@@ -273,12 +281,12 @@ class RandomForest_object(BaseAnalysis):
                     sep="\s+",
                 )
 
-                self.merged_bed_file = await run.cpu_bound(
-                    merge_bedmethyl, bed_a, self.merged_bed_file
+                self.merged_bed_file[sampleID] = await run.cpu_bound(
+                    merge_bedmethyl, bed_a, self.merged_bed_file.get(sampleID)
                 )
-                save_bedmethyl(self.merged_bed_file, f"{tempbed.name}")
+                save_bedmethyl(self.merged_bed_file[sampleID], f"{tempbed.name}")
             else:
-                self.merged_bed_file = pd.read_table(
+                self.merged_bed_file[sampleID] = pd.read_table(
                     f"{tempbed.name}",
                     names=[
                         "chrom",
@@ -323,87 +331,52 @@ class RandomForest_object(BaseAnalysis):
                     header=None,
                     sep="\s+",
                 )
-                self.first_run = False
+                self.first_run[sampleID] = False
 
             tempDir = tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, self.sampleID)
+                dir=self.check_and_create_folder(self.output, sampleID)
             )
 
-            # await background_tasks.create(load_rcns2())
             await run.cpu_bound(
                 run_rcns2,
                 tempDir.name,
-                self.batch,
+                self.bambatch[sampleID],
                 tempbed.name,
                 self.threads,
                 self.showerrors,
             )
 
-            if os.path.isfile(f"{tempDir.name}/live_{self.batch}_votes.tsv"):
+            if os.path.isfile(f"{tempDir.name}/live_{self.bambatch[sampleID]}_votes.tsv"):
                 scores = pd.read_table(
-                    f"{tempDir.name}/live_{self.batch}_votes.tsv",
+                    f"{tempDir.name}/live_{self.bambatch[sampleID]}_votes.tsv",
                     sep="\s+",
                 )
                 scores_to_save = scores.drop(columns=["Freq"]).T
-
-                # if timestamp:
-                #    scores_to_save["timestamp"] = timestamp * 1000
-                # else:
                 scores_to_save["timestamp"] = time.time() * 1000
 
-                self.rcns2_df_store = pd.concat(
-                    [self.rcns2_df_store, scores_to_save.set_index("timestamp")]
+                if sampleID not in self.rcns2_df_store:
+                    self.rcns2_df_store[sampleID] = pd.DataFrame()
+
+                self.rcns2_df_store[sampleID] = pd.concat(
+                    [self.rcns2_df_store[sampleID], scores_to_save.set_index("timestamp")]
                 )
 
-                self.rcns2_df_store.to_csv(
+                self.rcns2_df_store[sampleID].to_csv(
                     os.path.join(
-                        self.check_and_create_folder(self.output, self.sampleID),
+                        self.check_and_create_folder(self.output, sampleID),
                         "random_forest_scores.csv",
                     )
                 )
 
-                app.storage.general[self.mainuuid][self.sampleID][self.name][
-                    "counters"
-                ]["bam_processed"] += len(tomerge)
-                app.storage.general[self.mainuuid][self.sampleID][self.name][
-                    "counters"
-                ]["bams_in_processing"] -= len(tomerge)
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bam_processed"
+                ] += len(tomerge)
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bams_in_processing"
+                ] -= len(tomerge)
 
-                """
-                
-                columns_greater_than_threshold = (
-                    self.rcns2_df_store > self.threshold * 100
-                ).any()
-                columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                result = self.rcns2_df_store.columns[
-                    columns_not_greater_than_threshold
-                ].tolist()
+            self.running = False
 
-                self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
-
-                scores = scores.sort_values(by=["cal_Freq"], ascending=False).head(10)
-                scores_top = scores.sort_values(by=["cal_Freq"], ascending=False).head(
-                    1
-                )
-                app.storage.general[self.mainuuid][self.name]['counters']['bam_processed'] += len(tomerge)
-                app.storage.general[self.mainuuid][self.name]['counters']['bams_in_processing'] -= len(tomerge)
-
-                self.update_rcns2_plot(
-                    scores.index.to_list(),
-                    list(scores["cal_Freq"].values / 100),
-                    app.storage.general[self.mainuuid][self.name]['counters']['bam_processed'],
-                )
-                if self.summary:
-                    with self.summary:
-                        self.summary.clear()
-                        ui.label(
-                            f"Forest classification: {scores_top.head(1).index[0]} - {scores_top['cal_Freq'].head(1).values[0]:.2f} "
-                        )
-                """
-            else:
-                pass
-                # ui.notify("Random Forest Complete by no data.")
-        self.running = False
 
     def create_rcns2_chart(self, title):
         self.echart = self.create_chart(title)

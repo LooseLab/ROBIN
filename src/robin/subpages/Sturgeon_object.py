@@ -73,12 +73,12 @@ class Sturgeon_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
         self.sturgeon_df_store = pd.DataFrame()
         self.threshold = 0.05
-        self.first_run = True
+        self.first_run = {}
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
-        self.dataDir = None
-        self.bedDir = None
+        self.dataDir = {}
+        self.bedDir = {}
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
@@ -141,12 +141,11 @@ class Sturgeon_object(BaseAnalysis):
             )
 
     async def process_bam(self, bamfile):
-        if not self.dataDir:
-            self.dataDir = tempfile.TemporaryDirectory(
+        if self.sampleID not in self.dataDir.keys():
+            self.dataDir[self.sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, self.sampleID)
             )
-        if not self.bedDir:
-            self.bedDir = tempfile.TemporaryDirectory(
+            self.bedDir[self.sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, self.sampleID)
             )
         tomerge = []
@@ -184,12 +183,13 @@ class Sturgeon_object(BaseAnalysis):
                     temp2, "merged_probes_methyl_calls.txt"
                 )
                 merged_output_file = os.path.join(
-                    self.dataDir.name,
+                    self.dataDir[self.sampleID].name,
                     "_merged_probes_methyl_calls.txt",
                 )
-                if self.first_run:
+
+                if self.sampleID not in self.first_run.keys():
+                    self.first_run[self.sampleID] = True
                     shutil.copyfile(calls_per_probe_file, merged_output_file)
-                    self.first_run = False
                 else:
                     await run.cpu_bound(
                         run_sturgeon_merge_probes,
@@ -198,7 +198,7 @@ class Sturgeon_object(BaseAnalysis):
                     )
 
                 bed_output_file = os.path.join(
-                    self.bedDir.name, "final_merged_probes_methyl_calls.bed"
+                    self.bedDir[self.sampleID].name, "final_merged_probes_methyl_calls.bed"
                 )
 
                 await run.cpu_bound(
@@ -207,19 +207,19 @@ class Sturgeon_object(BaseAnalysis):
 
                 await run.cpu_bound(
                     run_sturgeon_predict,
-                    self.bedDir.name,
-                    self.dataDir.name,
+                    self.bedDir[self.sampleID].name,
+                    self.dataDir[self.sampleID].name,
                     self.modelfile,
                 )
                 if os.path.exists(
                     os.path.join(
-                        self.dataDir.name,
+                        self.dataDir[self.sampleID].name,
                         "final_merged_probes_methyl_calls_general.csv",
                     )
                 ):
                     mydf = pd.read_csv(
                         os.path.join(
-                            self.dataDir.name,
+                            self.dataDir[self.sampleID].name,
                             "final_merged_probes_methyl_calls_general.csv",
                         )
                     )
@@ -229,13 +229,13 @@ class Sturgeon_object(BaseAnalysis):
 
                 self.st_num_probes = mydf.iloc[-1]["number_probes"]
                 lastrow = mydf.iloc[-1].drop("number_probes")
-                lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-                if self.summary:
-                    with self.summary:
-                        self.summary.clear()
-                        ui.label(
-                            f"Sturgeon classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
-                        )
+                #lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+                #if self.summary:
+                #    with self.summary:
+                #        self.summary.clear()
+                #        ui.label(
+                #            f"Sturgeon classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                #        )
                 mydf_to_save = mydf
                 mydf_to_save["timestamp"] = time.time() * 1000
                 app.storage.general[self.mainuuid][self.sampleID][self.name][
@@ -256,7 +256,7 @@ class Sturgeon_object(BaseAnalysis):
                     )
                 )
 
-        await asyncio.sleep(0.1)
+        #await asyncio.sleep(0.1)
         self.running = False
 
     def create_sturgeon_chart(self, title):

@@ -162,7 +162,7 @@ class MGMT_Object(BaseAnalysis):
     """
 
     def __init__(self, *args, **kwargs):
-        self.MGMTbamfile: Optional[str] = None
+        self.MGMTbamfile = {}
         self.counter: int = 0
         self.last_seen: int = 0
         # logger.debug("Initializing MGMT_Object")
@@ -219,12 +219,13 @@ class MGMT_Object(BaseAnalysis):
 
         try:
             if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
-                if not self.MGMTbamfile:
-                    self.MGMTbamfile = os.path.join(
+                if self.sampleID not in self.MGMTbamfile.keys():
+                #if not self.MGMTbamfile:
+                    self.MGMTbamfile[self.sampleID] = os.path.join(
                         self.check_and_create_folder(self.output, self.sampleID),
                         "mgmt.bam",
                     )
-                    shutil.copy2(tempbamfile.name, self.MGMTbamfile)
+                    shutil.copy2(tempbamfile.name, self.MGMTbamfile[self.sampleID])
                     os.remove(f"{tempbamfile.name}.bai")
                 else:
                     tempbamholder = tempfile.NamedTemporaryFile(
@@ -232,9 +233,9 @@ class MGMT_Object(BaseAnalysis):
                         suffix=".bam",
                     )
                     pysam.cat(
-                        "-o", tempbamholder.name, self.MGMTbamfile, tempbamfile.name
+                        "-o", tempbamholder.name, self.MGMTbamfile[self.sampleID], tempbamfile.name
                     )
-                    shutil.copy2(tempbamholder.name, self.MGMTbamfile)
+                    shutil.copy2(tempbamholder.name, self.MGMTbamfile[self.sampleID])
                     try:
                         os.remove(f"{tempbamholder.name}.bai")
                         os.remove(f"{tempbamfile.name}.bai")
@@ -245,7 +246,7 @@ class MGMT_Object(BaseAnalysis):
                 )
 
                 await run.cpu_bound(
-                    run_modkit, tempmgmtdir.name, self.MGMTbamfile, self.threads
+                    run_modkit, tempmgmtdir.name, self.MGMTbamfile[self.sampleID], self.threads
                 )
 
                 try:
@@ -284,7 +285,7 @@ class MGMT_Object(BaseAnalysis):
             # logger.error(f"Error in BAM file processing: {e}")
             raise
         finally:
-            await asyncio.sleep(0.1)
+            #await asyncio.sleep(0.1)
             self.running = False
 
     def tabulate(self, results: pd.DataFrame) -> None:

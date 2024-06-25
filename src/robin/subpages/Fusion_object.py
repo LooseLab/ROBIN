@@ -192,8 +192,8 @@ class FusionObject(BaseAnalysis):
     def __init__(self, *args, target_panel=None, **kwargs):
         self.target_panel = target_panel
 
-        self.fusion_candidates = pd.DataFrame()
-        self.fusion_candidates_all = pd.DataFrame()
+        self.fusion_candidates = {} # pd.DataFrame()
+        self.fusion_candidates_all = {} # pd.DataFrame()
         self.fstable_all = None
         self.fstable = None
         self.fstable_all_row_count = 0
@@ -381,9 +381,10 @@ class FusionObject(BaseAnalysis):
         """
         Displays all fusion candidates in a table format.
         """
-        if not self.fusion_candidates_all.empty:
-            uniques_all = self.fusion_candidates_all[7].duplicated(keep=False)
-            doubles_all = self.fusion_candidates_all[uniques_all]
+        #if not self.fusion_candidates_all.empty:
+        if self.sampleID in self.fusion_candidates_all.keys():
+            uniques_all = self.fusion_candidates_all[self.sampleID][7].duplicated(keep=False)
+            doubles_all = self.fusion_candidates_all[self.sampleID][uniques_all]
             counts_all = doubles_all.groupby(7)[3].transform("nunique")
             result_all = doubles_all[counts_all > 1]
             result_all.to_csv(
@@ -504,9 +505,10 @@ class FusionObject(BaseAnalysis):
         """
         Displays fusion candidates in a table format.
         """
-        if not self.fusion_candidates.empty:
-            uniques = self.fusion_candidates[7].duplicated(keep=False)
-            doubles = self.fusion_candidates[uniques]
+        #if not self.fusion_candidates.empty:
+        if self.sampleID in self.fusion_candidates.keys():
+            uniques = self.fusion_candidates[self.sampleID][7].duplicated(keep=False)
+            doubles = self.fusion_candidates[self.sampleID][uniques]
             counts = doubles.groupby(7)[3].transform("nunique")
             result = doubles[counts > 1]
             result.to_csv(
@@ -745,19 +747,19 @@ class FusionObject(BaseAnalysis):
             )
 
             if fusion_candidates is not None:
-                if self.fusion_candidates.empty:
-                    self.fusion_candidates = fusion_candidates
+                if self.sampleID not in self.fusion_candidates.keys():
+                    self.fusion_candidates[self.sampleID] = fusion_candidates
                 else:
-                    self.fusion_candidates = pd.concat(
-                        [self.fusion_candidates, fusion_candidates]
+                    self.fusion_candidates[self.sampleID] = pd.concat(
+                        [self.fusion_candidates[self.sampleID], fusion_candidates]
                     ).reset_index(drop=True)
 
             if fusion_candidates_all is not None:
-                if self.fusion_candidates_all.empty:
-                    self.fusion_candidates_all = fusion_candidates_all
+                if self.sampleID not in self.fusion_candidates_all.keys():
+                    self.fusion_candidates_all[self.sampleID] = fusion_candidates_all
                 else:
-                    self.fusion_candidates_all = pd.concat(
-                        [self.fusion_candidates_all, fusion_candidates_all]
+                    self.fusion_candidates_all[self.sampleID] = pd.concat(
+                        [self.fusion_candidates_all[self.sampleID], fusion_candidates_all]
                     ).reset_index(drop=True)
 
             self.fusion_table()
@@ -823,7 +825,9 @@ class FusionObject(BaseAnalysis):
                 header=None,
                 skiprows=1,
             )
+
             self.update_fusion_table(fusion_candidates)
+
         if self.check_file_time(os.path.join(output, "fusion_candidates_all.csv")):
             fusion_candidates_all = pd.read_csv(
                 os.path.join(output, "fusion_candidates_all.csv"),

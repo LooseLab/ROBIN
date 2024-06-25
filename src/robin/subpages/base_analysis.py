@@ -475,10 +475,10 @@ class BaseAnalysis:
                 time_diff = 0
             while elapsed_time < time_diff:
                 if self.running:
-                    time.sleep(1)
+                    #time.sleep(1)
                     elapsed_time = (time.time() - playback_start_time) + self.offset
                 else:
-                    time.sleep(1)
+                    #time.sleep(1)
                     self.offset += step_size
                     elapsed_time += self.offset
             if len(row["full_path"]) > 0:

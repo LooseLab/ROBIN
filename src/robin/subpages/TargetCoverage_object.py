@@ -290,13 +290,13 @@ class TargetCoverage(BaseAnalysis):
     def __init__(self, *args, target_panel=None, reference=None, **kwargs):
         self.callthreshold = 10
         self.clair3running = False
-        self.targets_exceeding_threshold = 0
-        self.targetbamfile = None
+        self.targets_exceeding_threshold = {}
+        self.targetbamfile = {}
         self.covtable = None
         self.covtable_row_count = 0
-        self.coverage_over_time = np.empty((0, 2))
-        self.cov_df_main = pd.DataFrame()
-        self.bedcov_df_main = pd.DataFrame()
+        self.coverage_over_time = {} #np.empty((0, 2))
+        self.cov_df_main = {}
+        self.bedcov_df_main = {}
         self.SNPqueue = queue.Queue()
         self.reference = reference
         if self.reference:
@@ -887,12 +887,12 @@ class TargetCoverage(BaseAnalysis):
         # )
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
-            if not self.targetbamfile:
-                self.targetbamfile = os.path.join(
+            if self.sampleID not in self.targetbamfile.keys():
+                self.targetbamfile[self.sampleID] = os.path.join(
                     self.check_and_create_folder(self.output, self.sampleID),
                     "target.bam",
                 )
-                shutil.copy2(tempbamfile.name, self.targetbamfile)
+                shutil.copy2(tempbamfile.name, self.targetbamfile[self.sampleID])
                 os.remove(f"{tempbamfile.name}.bai")
             else:
                 tempbamholder = tempfile.NamedTemporaryFile(
@@ -900,9 +900,9 @@ class TargetCoverage(BaseAnalysis):
                     suffix=".bam",
                 )
                 pysam.cat(
-                    "-o", tempbamholder.name, self.targetbamfile, tempbamfile.name
+                    "-o", tempbamholder.name, self.targetbamfile[self.sampleID], tempbamfile.name
                 )
-                shutil.copy2(tempbamholder.name, self.targetbamfile)
+                shutil.copy2(tempbamholder.name, self.targetbamfile[self.sampleID])
                 try:
                     os.remove(f"{tempbamholder.name}.bai")
                 except FileNotFoundError:
@@ -917,30 +917,30 @@ class TargetCoverage(BaseAnalysis):
         except FileNotFoundError:
             pass
 
-        if self.cov_df_main.empty:
-            self.cov_df_main = newcovdf
-            self.bedcov_df_main = bedcovdf
+        if self.sampleID not in self.cov_df_main.keys():
+            self.cov_df_main[self.sampleID] = newcovdf
+            self.bedcov_df_main[self.sampleID] = bedcovdf
         else:
-            self.cov_df_main, self.bedcov_df_main = await run.cpu_bound(
+            self.cov_df_main[self.sampleID], self.bedcov_df_main[self.sampleID] = await run.cpu_bound(
                 run_bedmerge,
                 newcovdf,
-                self.cov_df_main,
+                self.cov_df_main[self.sampleID],
                 bedcovdf,
-                self.bedcov_df_main,
+                self.bedcov_df_main[self.sampleID],
             )
 
-            # self.cov_df_main, self.bedcov_df_main = run_bedmerge(
-            #    newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
-            # )
-        bases = self.cov_df_main["covbases"].sum()
-        genome = self.cov_df_main["endpos"].sum()
+
+        bases = self.cov_df_main[self.sampleID]["covbases"].sum()
+        genome = self.cov_df_main[self.sampleID]["endpos"].sum()
         coverage = bases / genome
         # if timestamp:
         #    currenttime = timestamp * 1000
         # else:
         currenttime = time.time() * 1000
-        self.coverage_over_time = np.vstack(
-            [self.coverage_over_time, [(currenttime, coverage)]]
+        if self.sampleID not in self.coverage_over_time.keys():
+            self.coverage_over_time[self.sampleID] = np.empty((0, 2))
+        self.coverage_over_time[self.sampleID] = np.vstack(
+            [self.coverage_over_time[self.sampleID], [(currenttime, coverage)]]
         )
 
         np.save(
@@ -948,10 +948,10 @@ class TargetCoverage(BaseAnalysis):
                 self.check_and_create_folder(self.output, self.sampleID),
                 "coverage_time_chart.npy",
             ),
-            self.coverage_over_time,
+            self.coverage_over_time[self.sampleID],
         )
 
-        self.cov_df_main.to_csv(
+        self.cov_df_main[self.sampleID].to_csv(
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
                 "coverage_main.csv",
@@ -961,7 +961,7 @@ class TargetCoverage(BaseAnalysis):
         # await asyncio.sleep(0.01)
 
         # self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
-        self.bedcov_df_main.to_csv(
+        self.bedcov_df_main[self.sampleID].to_csv(
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
                 "bed_coverage_main.csv",
@@ -971,7 +971,7 @@ class TargetCoverage(BaseAnalysis):
         # await asyncio.sleep(0.01)
         # self.update_coverage_time_plot(self.cov_df_main, timestamp)
         # await asyncio.sleep(0.01)
-        self.target_coverage_df = self.bedcov_df_main
+        self.target_coverage_df = self.bedcov_df_main[self.sampleID]
         self.target_coverage_df["length"] = (
             self.target_coverage_df["endpos"] - self.target_coverage_df["startpos"] + 1
         )
@@ -986,27 +986,28 @@ class TargetCoverage(BaseAnalysis):
             ),
             index=False,
         )
-        if self.summary:
-            with self.summary:
-                self.summary.clear()
-                with ui.row():
-                    ui.label("Coverage Depths - ")
-                    ui.label(
-                        f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
-                    )
-                    ui.label(
-                        f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
-                    )
+        #if self.summary:
+        #    with self.summary:
+        #        self.summary.clear()
+        #        with ui.row():
+        #            ui.label("Coverage Depths - ")
+        #            ui.label(
+        #                f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
+        #            )
+        #            ui.label(
+        #                f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
+        #            )
         run_list = self.target_coverage_df[
             self.target_coverage_df["coverage"].ge(self.callthreshold)
         ]
-
+        if self.sampleID not in self.targets_exceeding_threshold.keys():
+            self.targets_exceeding_threshold[self.sampleID] = 0
         if self.reference:
             if (
-                len(run_list) > self.targets_exceeding_threshold
+                len(run_list) > self.targets_exceeding_threshold[self.sampleID]
                 and not self.clair3running
             ):
-                self.targets_exceeding_threshold = len(run_list)
+                self.targets_exceeding_threshold[self.sampleID] = len(run_list)
                 run_list[["chrom", "startpos", "endpos"]].to_csv(
                     os.path.join(
                         self.check_and_create_folder(self.output, self.sampleID),
@@ -1024,7 +1025,7 @@ class TargetCoverage(BaseAnalysis):
 
                 await run.cpu_bound(
                     sort_bam,
-                    self.targetbamfile,
+                    self.targetbamfile[self.sampleID],
                     os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
                     self.threads,
                 )

@@ -239,7 +239,7 @@ class CNVAnalysis(BaseAnalysis):
     """
 
     def __init__(self, *args, target_panel: Optional[str] = None, **kwargs) -> None:
-        self.file_list = []
+        #self.file_list = []
         self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.update_cnv_dict = {}
         self.result = None
@@ -303,7 +303,7 @@ class CNVAnalysis(BaseAnalysis):
             bamfile (BinaryIO): The BAM file to process.
             timestamp (float): The timestamp indicating when the file was generated.
         """
-        self.file_list.append(bamfile)
+        #self.file_list.append(bamfile)
         await self.do_cnv_work(bamfile)
 
     async def do_cnv_work(self, bamfile: BinaryIO) -> None:
@@ -313,12 +313,14 @@ class CNVAnalysis(BaseAnalysis):
         Args:
             bamfile (BinaryIO): The BAM file to process.
         """
-        r_cnv, r_bin, r_var, self.update_cnv_dict = await run.cpu_bound(
+        if self.sampleID not in self.update_cnv_dict.keys():
+            self.update_cnv_dict[self.sampleID] = {}
+        r_cnv, r_bin, r_var, self.update_cnv_dict[self.sampleID] = await run.cpu_bound(
             iterate_bam,
             bamfile,
             self.threads,
             60,
-            self.update_cnv_dict,
+            self.update_cnv_dict[self.sampleID],
             int(logging.ERROR),
         )
 
