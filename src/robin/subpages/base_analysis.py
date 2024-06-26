@@ -276,7 +276,7 @@ class BaseAnalysis:
                 self.bams[sampleID] = []
             self.bams[sampleID].append((bamfile, timestamp))
             count += 1
-            if count >= 400:
+            if count >= 100:
                 break
         # self.sampleID = sampleID
         for sample_id, data_list in self.bams.items():
