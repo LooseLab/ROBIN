@@ -473,32 +473,28 @@ class FusionObject(BaseAnalysis):
                 with self.fusionplot_all.classes("w-full"):
                     gene_pairs = result_all[goodpairs].sort_values(by=7)["tag"].unique().tolist()
                     with ui.row().classes("w-full"):
-                        ui.select(options=gene_pairs, with_input=True,
-                                  on_change=lambda e: show_gene_pair(e.value)).classes(
-                            'w-40')
+                        ui.select(
+                            options=gene_pairs,
+                            with_input=True,
+                            on_change=lambda e: show_gene_pair(e.value, result_all, goodpairs)
+                        ).classes('w-40')
                     with ui.row().classes("w-full"):
                         self.all_card = ui.card()
                         with self.all_card:
                             ui.label("Select gene pair to see results.").tailwind("drop-shadow", "font-bold")
 
-                    def show_gene_pair(gene_pair: str) -> None:
+                    def show_gene_pair(gene_pair: str, result_all, goodpairs) -> None:
                         ui.notify(gene_pair)
                         self.all_card.clear()
                         with self.all_card:
                             with ui.row():
-                                ui.label(f"{gene_pair}").tailwind(
-                                    "drop-shadow", "font-bold"
-                                )
+                                ui.label(f"{gene_pair}").tailwind("drop-shadow", "font-bold")
+                            with ui.row():
                                 for gene in gene_pair.split(", "):
-                                    #title = gene
                                     reads = result_all[goodpairs].sort_values(by=7)[
-                                        result_all[goodpairs]
-                                        .sort_values(by=7)[3]
-                                        .eq(gene)
+                                        result_all[goodpairs].sort_values(by=7)[3].str.contains(gene)
                                     ]
-                                    self.create_fusion_plot(
-                                        gene,reads,
-                                    )
+                                    self.create_fusion_plot(gene, reads)
 
 
     def fusion_table(self) -> None:
@@ -611,13 +607,15 @@ class FusionObject(BaseAnalysis):
                                 ui.label(f"{gene_pair}").tailwind(
                                     "drop-shadow", "font-bold"
                                 )
+                            with ui.row():
                                 for gene in gene_pair.split(", "):
                                     #title = gene
-                                    reads = result_all[goodpairs].sort_values(by=7)[
-                                        result_all[goodpairs]
+                                    reads = result[goodpairs].sort_values(by=7)[
+                                        result[goodpairs]
                                         .sort_values(by=7)[3]
-                                        .eq(gene)
+                                        .str.contains(gene)
                                     ]
+
                                     self.create_fusion_plot(
                                         gene,reads,
                                     )
