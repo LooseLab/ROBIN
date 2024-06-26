@@ -1105,7 +1105,8 @@ class TargetCoverage(BaseAnalysis):
                 return 'pathogenic' in str(text).lower()
 
             # Apply the function to each cell and filter rows
-            vcf = df[df.map(contains_pathogenic).any(axis=1)]
+            #vcf = df[df.map(contains_pathogenic).any(axis=1)]
+            vcf = df
 
             if len(vcf) > 0:
                 self.SNPplaceholder.clear()
@@ -1176,7 +1177,9 @@ class TargetCoverage(BaseAnalysis):
                 return 'pathogenic' in str(text).lower()
 
             # Apply the function to each cell and filter rows
-            vcfindel = df[df.map(contains_pathogenic).any(axis=1)]
+            #vcfindel = df[df.map(contains_pathogenic).any(axis=1)]
+
+            vcfindel = df
 
             if len(vcfindel) > 0:
                 self.INDELplaceholder.clear()
