@@ -236,7 +236,10 @@ class BaseAnalysis:
 
             if not timestamp:
                 timestamp = time.time()
-            await self.process_bam(bamfile, timestamp)
+            try:
+                await self.process_bam(bamfile, timestamp)
+            except Exception as e:
+                logger.error(f"Error processing BAM files: {e}")
             app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                 "bam_processed"
             ] += 1
@@ -301,7 +304,10 @@ class BaseAnalysis:
 
             if not self.running and len(data_list) > 0:
                 self.running = True
-                await self.process_bam(data_list)
+                try:
+                    await self.process_bam(data_list)
+                except Exception as e:
+                    logger.error(f"Error processing BAM files: {e}")
 
         self.timer.active = True
 
