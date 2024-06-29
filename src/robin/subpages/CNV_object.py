@@ -315,7 +315,7 @@ class CNVAnalysis(BaseAnalysis):
         """
         if self.sampleID not in self.update_cnv_dict.keys():
             self.update_cnv_dict[self.sampleID] = {}
-        print("Running CNV analysis on", self.sampleID, bamfile)
+        #print("Running CNV analysis on", self.sampleID, bamfile)
         r_cnv, r_bin, r_var, self.update_cnv_dict[self.sampleID] = await run.cpu_bound(
             iterate_bam,
             bamfile,
