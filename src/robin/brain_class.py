@@ -394,7 +394,7 @@ class BrainMeth:
             myrow = ui.row().classes("w-full")
             with myrow:
                 for item in app.storage.general[self.mainuuid]["sample_list"]:
-                    print (item, self.sampleID)
+                    #print (item, self.sampleID)
                     if item == self.sampleID:
                         card = ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white p-4').style('box-shadow: 0 0 10px 2px rgba(0, 0, 255, 0.5);')
                     else:
