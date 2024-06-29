@@ -1089,6 +1089,9 @@ class TargetCoverage(BaseAnalysis):
                                 ui.label(
                                     f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
                                 )
+                                ui.label(
+                                    f"Estimated enrichment: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum())/(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
+                                )
                             else:
                                 ui.label("Targets Estimated Coverage: Calculating....")
                         else:

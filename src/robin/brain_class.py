@@ -381,10 +381,12 @@ class BrainMeth:
 
     @ui.refreshable
     def show_list(self):
-        #ui.html(
-        #    "<div class='max-w-sm rounded overflow-hidden shadow-lg bg-white p-4'><div class='px-6 py-4'><div class='font-bold text-xl mb-2'>Sample Data Overview</div><p class='text-gray-700 text-base'><strong>Devices:</strong> P2S-01121-A</p><p class='text-gray-700 text-base'><strong>Basecall Model:</strong> dna_r10.4.1_e8.2_400bps_hac@v4.3.0</p><p class='text-gray-700 text-base'><strong>Run Time:</strong> 2024-06-12T13:15:54.142158+01:00</p><p class='text-gray-700 text-base'><strong>Flowcell ID:</strong> PAW67625</p><p class='text-gray-700 text-base'><strong>Sample ID:</strong> ds1332_4_b</p></div><div class='px-6 pt-4 pb-2'><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam_passed: 14</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam_failed: 0</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#mapped_count: 25648</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#pass_mapped_count: 25648</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#unmapped_count: 33771</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#pass_unmapped_count: 33771</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#pass_bases_count: 19012109</span><span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bases_count: 19012109</span></div></div>")
         if len(app.storage.general[self.mainuuid]["sample_list"]) == 0:
-            ui.label("No samples found")
+            with ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white p-4').style(
+                'box-shadow: 0 0 10px 2px rgba(0, 0, 255, 0.5);'):
+                with ui.row():
+                    ui.label("No samples found waiting.")
+                    ui.spinner('dots', size='lg', color='#6E93D6')
         elif len(app.storage.general[self.mainuuid]["sample_list"]) == 1:
             if self.sampleID != app.storage.general[self.mainuuid]["sample_list"][0]:
                 ui.navigate.to(f"/live/{app.storage.general[self.mainuuid]['sample_list'][0]}")
@@ -392,35 +394,46 @@ class BrainMeth:
             myrow = ui.row().classes("w-full")
             with myrow:
                 for item in app.storage.general[self.mainuuid]["sample_list"]:
-                    with ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white p-4'):
-                        ui.label(f"Sample ID: {item}").classes('font-bold text-xl mb-2')
-                        for element in ["devices", "basecall_models", "run_time", "flowcell_ids"]:
-                            if element in app.storage.general[self.mainuuid]["samples"][item]:
-                                ui.html().bind_content_from(app.storage.general[self.mainuuid]["samples"][item], element,
-                                                        backward=lambda n, e=element: f"<strong>{e}:</strong> {n[0]}" if n else "Default Value")
-                        ui.html().bind_content_from(app.storage.general[self.mainuuid]["samples"][item]["file_counters"],
-                                "bam_passed",
-                                backward=lambda n: f"<span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam passed: {n}</span>")
-                        ui.html().bind_content_from(
-                            app.storage.general[self.mainuuid]["samples"][item]["file_counters"],
-                            "bam_failed",
-                            backward=lambda
-                                n: f"<span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam failed: {n}</span>")
-                        ui.button('View Data', on_click=lambda i=item: ui.navigate.to(f"/live/{i}"))
+                    print (item, self.sampleID)
+                    if item == self.sampleID:
+                        card = ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white p-4').style('box-shadow: 0 0 10px 2px rgba(0, 0, 255, 0.5);')
+                    else:
+                        card = ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white p-4')
+                    with card:
+                        with ui.expansion(f"{item}", icon='topic').style("color: #6E93D6; font-size: 120%; font-weight: 300").classes('w-full'):
+                            for element in ["devices", "basecall_models", "run_time", "flowcell_ids"]:
+                                if element in app.storage.general[self.mainuuid]["samples"][item]:
+                                    ui.html().bind_content_from(app.storage.general[self.mainuuid]["samples"][item],
+                                                                element,
+                                                                backward=lambda n,
+                                                                                e=element: f"<strong>{e}</strong>:{n[0]}" if n else "Default Value").style("color: #000000; font-size: 75%; font-weight: 100").classes('font-normal text-sm w-full')
 
+                            ui.html().bind_content_from(
+                                app.storage.general[self.mainuuid]["samples"][item]["file_counters"],
+                                "bam_passed",
+                                backward=lambda
+                                    n: f"<span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam passed: {n}</span>")
+                            ui.html().bind_content_from(
+                                app.storage.general[self.mainuuid]["samples"][item]["file_counters"],
+                                "bam_failed",
+                                backward=lambda
+                                    n: f"<span class='inline-block bg-gray-200 rounded-full px-3 py-1 text-sm font-semibold text-gray-700 mr-2 mb-2'>#bam failed: {n}</span>")
+
+                            ui.button('View Data', on_click=lambda i=item: ui.navigate.to(f"/live/{i}"))
 
     async def information_panel(self, sample_id=None):
-        self.frontpage = ui.card().classes("w-full")
+
         if sample_id:
             self.sampleID = sample_id
-        with self.frontpage:
-            if not self.browse:
-                self.show_list()
-                app.storage.general[self.mainuuid]["sample_list"].on_change(
-                    self.show_list.refresh
-                )
+        if not self.browse:
+            self.show_list()
+            app.storage.general[self.mainuuid]["sample_list"].on_change(
+                self.show_list.refresh
+            )
 
-            if sample_id:
+        if sample_id:
+            self.frontpage = ui.card().classes("rounded w-full")
+            with self.frontpage:
                 if not self.browse:
                     if (
                         self.sampleID
@@ -430,49 +443,48 @@ class BrainMeth:
                         ui.navigate.to("/live")
                         return
 
-                ui.label("CNS Tumour Methylation Classification").style(
+                ui.label(f"CNS Tumour Methylation Classification - {self.sampleID}").style(
                     "color: #6E93D6; font-size: 150%; font-weight: 300"
-                ).tailwind("drop-shadow", "font-bold")
+                ).classes("drop-shadow font-bold")
+
                 ui.label(
                     "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
-                ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
-                    "drop-shadow", "font-bold"
+                ).style("color: #000000; font-size: 100%; font-weight: 300").classes(
+                    "drop-shadow font-bold"
                 )
-                #ui.label().bind_text_from(app.storage.general[self.mainuuid]["samples"], self.sampleID, backward=lambda n: f"{n}")
 
-                #ui.label().bind_text_from(app.storage.general[self.mainuuid], "samples", backward=lambda n: f"{n}")
+                with ui.row():
+                    ui.label("Results Summary").style(
+                        "color: #6E93D6; font-size: 150%; font-weight: 300"
+                    ).classes("drop-shadow font-bold")
+
+                with ui.row().style("color: #000000; font-size: 120%; font-weight: 300"):
+                    if "sturgeon" not in self.exclude:
+                        sturgeonsummary = ui.column()
+                    if "nanodx" not in self.exclude:
+                        nanodxsummary = ui.column()
+                    if "forest" not in self.exclude:
+                        forestsummary = ui.column()
+
                 with ui.row():
                     if not self.browse:
-
                         ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
+                            app.storage.general[self.mainuuid]["samples"][self.sampleID],
                             "devices",
                             backward=lambda n: [f"Devices: {str(item)}" for item in n],
                         ).style("color: #000000; font-size: 100%; font-weight: 300")
                         ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
+                            app.storage.general[self.mainuuid]["samples"][self.sampleID],
                             "basecall_models",
-                            backward=lambda n: [
-                                f"Basecall Models: {str(item)}" for item in n
-                            ],
+                            backward=lambda n: [f"Basecall Models: {str(item)}" for item in n],
                         ).style("color: #000000; font-size: 100%; font-weight: 300")
                         ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
+                            app.storage.general[self.mainuuid]["samples"][self.sampleID],
                             "flowcell_ids",
-                            backward=lambda n: [
-                                f"Flowcell IDs: {str(item)}" for item in n
-                            ],
+                            backward=lambda n: [f"Flowcell IDs: {str(item)}" for item in n],
                         ).style("color: #000000; font-size: 100%; font-weight: 300")
                         ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
+                            app.storage.general[self.mainuuid]["samples"][self.sampleID],
                             "run_time",
                             backward=lambda n: [
                                 f"Run Start Time: {parser.parse(date).astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S %Z')}"
@@ -480,65 +492,34 @@ class BrainMeth:
                             ],
                         ).style("color: #000000; font-size: 100%; font-weight: 300")
                         ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
+                            app.storage.general[self.mainuuid]["samples"][self.sampleID],
                             "sample_ids",
-                            backward=lambda n: [
-                                f"Sample ID: {str(item)}" for item in n
-                            ],
+                            backward=lambda n: [f"Sample ID: {str(item)}" for item in n],
                         ).style("color: #000000; font-size: 100%; font-weight: 300")
 
-                with ui.row():
-                    ui.label("Results Summary").style(
-                        "color: #6E93D6; font-size: 125%; font-weight: 300"
-                    ).tailwind("drop-shadow", "font-bold")
 
-                with ui.row().style(
-                    "color: #000000; font-size: 100%; font-weight: 300"
-                ):
-                    if "sturgeon" not in self.exclude:
-                        sturgeonsummary = ui.column()
-                    if "nanodx" not in self.exclude:
-                        nanodxsummary = ui.column()
-                    if "forest" not in self.exclude:
-                        forestsummary = ui.column()
+
                 if "mgmt" not in self.exclude:
-                    with ui.row().style(
-                        "color: #000000; font-size: 100%; font-weight: 300"
-                    ):
+                    with ui.row().style("color: #000000; font-size: 120%; font-weight: 300"):
                         mgmt = ui.column()
                 if "cnv" not in self.exclude:
-                    with ui.row().style(
-                        "color: #000000; font-size: 100%; font-weight: 300"
-                    ):
-                        if "cnv" not in self.exclude:
-                            cnvsummary = ui.column()
+                    with ui.row().style("color: #000000; font-size: 120%; font-weight: 300"):
+                        cnvsummary = ui.column()
                 if "fusion" not in self.exclude:
-                    with ui.row().style(
-                        "color: #000000; font-size: 100%; font-weight: 300"
-                    ):
-                        if "fusion" not in self.exclude:
-                            fusions = ui.column()
+                    with ui.row().style("color: #000000; font-size: 120%; font-weight: 300"):
+                        fusions = ui.column()
                 if "coverage" not in self.exclude:
-                    with ui.row().style(
-                        "color: #000000; font-size: 100%; font-weight: 300"
-                    ):
-                        if "coverage" not in self.exclude:
-                            coverage = ui.column()
+                    with ui.row().style("color: #000000; font-size: 120%; font-weight: 300"):
+                        coverage = ui.column()
+
                 if not self.browse:
                     with ui.expansion(icon="work").bind_text_from(
-                        self,
-                        "watchfolder",
-                        backward=lambda n: f"Monitoring the path: {n}",
-                    ).classes("w-full"):
+                            self,
+                            "watchfolder",
+                            backward=lambda n: f"Monitoring the path: {n}",
+                    ):
                         with ui.row():
-                            ui.label().bind_text_from(
-                                self,
-                                "watchfolder",
-                                backward=lambda n: f"Monitoring the path: {n}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
-                            ui.label(f"Outputting to:{self.output}").style(
+                            ui.label(f"Outputting to: {self.output}").style(
                                 "color: #000000; font-size: 100%; font-weight: 300"
                             )
                             ui.label().bind_text_from(
@@ -547,118 +528,99 @@ class BrainMeth:
                                 backward=lambda n: f"BAM files seen: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
                                 "bam_passed",
                                 backward=lambda n: f"BAM pass: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
                                 "bam_failed",
                                 backward=lambda n: f"BAM fail: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
+
                         with ui.row():
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
                                 "mapped_count",
                                 backward=lambda n: f"Mapped Read Count: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
                                 "unmapped_count",
                                 backward=lambda n: f"Unmapped Read Count: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
                                 "pass_mapped_count",
                                 backward=lambda n: f"Pass Mapped Read Count: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
                                 "fail_mapped_count",
                                 backward=lambda n: f"Fail Mapped Read Count: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
+
                         with ui.row():
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
                                 "bases_count",
                                 backward=lambda n: f"Total Mapped Bases: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
                                 "pass_bases_count",
                                 backward=lambda n: f"Total Mapped Pass Bases: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
                                 "fail_bases_count",
                                 backward=lambda n: f"Total Mapped Fail Bases: {n:,}",
                             ).style("color: #000000; font-size: 100%; font-weight: 300")
+
                         with ui.row():
                             if "forest" not in self.exclude:
                                 ui.label().bind_text_from(
                                     self,
                                     "bamforcns",
                                     backward=lambda n: f"BAM files for CNS: {n.qsize()}",
-                                ).style(
-                                    "color: #000000; font-size: 100%; font-weight: 300"
-                                )
+                                ).style("color: #000000; font-size: 100%; font-weight: 300")
                             if "sturgeon" not in self.exclude:
                                 ui.label().bind_text_from(
                                     self,
                                     "bamforsturgeon",
                                     backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
-                                ).style(
-                                    "color: #000000; font-size: 100%; font-weight: 300"
-                                )
+                                ).style("color: #000000; font-size: 100%; font-weight: 300")
                             if "nanodx" not in self.exclude:
                                 ui.label().bind_text_from(
                                     self,
                                     "bamfornanodx",
                                     backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
-                                ).style(
-                                    "color: #000000; font-size: 100%; font-weight: 300"
-                                )
+                                ).style("color: #000000; font-size: 100%; font-weight: 300")
+
+
         if sample_id:
             selectedtab = None
             with ui.tabs().classes("w-full") as tabs:
                 if not (
                     set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
                 ):
-                    methylationtab = ui.tab("Methylation Classification")
+                    methylationtab = ui.tab("Methylation Classification").style("color: #6E93D6; font-size: 150%; font-weight: 600")
                     if not selectedtab:
                         selectedtab = methylationtab
                 if "cnv" not in self.exclude:
-                    copy_numbertab = ui.tab("Copy Number Variation")
+                    copy_numbertab = ui.tab("Copy Number Variation").style("color: #6E93D6; font-size: 150%; font-weight: 600")
                     if not selectedtab:
                         selectedtab = copy_numbertab
                 if "coverage" not in self.exclude:
-                    coveragetab = ui.tab("Target Coverage")
+                    coveragetab = ui.tab("Target Coverage").style("color: #6E93D6; font-size: 150%; font-weight: 600")
                     if not selectedtab:
                         selectedtab = coveragetab
                 if "mgmt" not in self.exclude:
-                    mgmttab = ui.tab("MGMT")
+                    mgmttab = ui.tab("MGMT").style("color: #6E93D6; font-size: 150%; font-weight: 600")
                     if not selectedtab:
                         selectedtab = mgmttab
                 if "fusion" not in self.exclude:
-                    fusionstab = ui.tab("Fusions")
+                    fusionstab = ui.tab("Fusions").style("color: #6E93D6; font-size: 150%; font-weight: 600")
                     if not selectedtab:
                         selectedtab = fusionstab
             with ui.tab_panels(tabs, value=selectedtab).classes("w-screen"):
@@ -676,7 +638,7 @@ class BrainMeth:
                     set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
                 ):
                     with ui.tab_panel(methylationtab).classes("w-full"):
-                        with ui.card().style("width: 100%"):
+                        with ui.card().classes("rounded w-full"):
                             ui.label("Methylation Classifications").style(
                                 "color: #6E93D6; font-size: 150%; font-weight: 300"
                             ).tailwind("drop-shadow", "font-bold")
@@ -710,7 +672,7 @@ class BrainMeth:
 
                 if "cnv" not in self.exclude:
                     with ui.tab_panel(copy_numbertab).classes("w-full"):
-                        with ui.card().classes("w-full"):
+                        with ui.card().classes("rounded w-full"):
                             self.CNV = CNVAnalysis(
                                 analysis_name="CNV",
                                 summary=cnvsummary,
@@ -721,7 +683,7 @@ class BrainMeth:
 
                 if "coverage" not in self.exclude:
                     with ui.tab_panel(coveragetab).classes("w-full"):
-                        with ui.card().classes("w-full"):
+                        with ui.card().classes("rounded w-full"):
                             self.Target_Coverage = TargetCoverage(
                                 analysis_name="COVERAGE",
                                 summary=coverage,
@@ -735,7 +697,7 @@ class BrainMeth:
 
                 if "mgmt" not in self.exclude:
                     with ui.tab_panel(mgmttab).classes("w-full"):
-                        with ui.card().classes("w-full"):
+                        with ui.card().classes("rounded w-full"):
                             self.MGMT_panel = MGMT_Object(
                                 analysis_name="MGMT", summary=mgmt, **display_args
                             )
@@ -743,7 +705,7 @@ class BrainMeth:
 
                 if "fusion" not in self.exclude:
                     with ui.tab_panel(fusionstab).classes("w-full"):
-                        with ui.card().classes("w-full"):
+                        with ui.card().classes("rounded w-full"):
                             self.Fusion_panel = FusionObject(
                                 analysis_name="FUSION",
                                 summary=fusions,
@@ -758,28 +720,28 @@ class BrainMeth:
                             self.sampleID = sample
 
 
-        async def download_report():
-            ui.notify("Generating Report")
-            if not self.browse:
-                for item in app.storage.general[self.mainuuid]:
-                    if item == "sample_ids":
-                        for sample in app.storage.general[self.mainuuid][item]:
-                            self.sampleID = sample
-            if self.browse:
-                myfile = await run.io_bound(
-                    create_pdf,
-                    f"{self.sampleID}_run_report.pdf",
-                    self.check_and_create_folder(self.output, self.sampleID),
-                )
-            else:
-                myfile = await run.io_bound(
-                    create_pdf, f"{self.sampleID}_run_report.pdf", self.output
-                )
-            # myfile = run.io_bound(create_pdf(f"{self.sampleID}_run_report.pdf", self.check_and_create_folder(self.output,self.sampleID))
-            ui.download(myfile)
-            ui.notify("Report Downloaded")
+            async def download_report():
+                ui.notify("Generating Report")
+                if not self.browse:
+                    for item in app.storage.general[self.mainuuid]:
+                        if item == "sample_ids":
+                            for sample in app.storage.general[self.mainuuid][item]:
+                                self.sampleID = sample
+                if self.browse:
+                    myfile = await run.io_bound(
+                        create_pdf,
+                        f"{self.sampleID}_run_report.pdf",
+                        self.check_and_create_folder(self.output, self.sampleID),
+                    )
+                else:
+                    myfile = await run.io_bound(
+                        create_pdf, f"{self.sampleID}_run_report.pdf", self.output
+                    )
+                # myfile = run.io_bound(create_pdf(f"{self.sampleID}_run_report.pdf", self.check_and_create_folder(self.output,self.sampleID))
+                ui.download(myfile)
+                ui.notify("Report Downloaded")
 
-        ui.button("Generate Report", on_click=download_report, icon="download")
+            ui.button("Generate Report", on_click=download_report, icon="download")
 
     async def background_process_bams(self):
         #await asyncio.sleep(5)
