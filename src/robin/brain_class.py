@@ -382,7 +382,7 @@ class BrainMeth:
     @ui.refreshable
     def show_list(self):
         if len(app.storage.general[self.mainuuid]["sample_list"]) == 0:
-            with ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white p-4').style(
+            with ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white').style(
                 'box-shadow: 0 0 10px 2px rgba(0, 0, 255, 0.5);'):
                 with ui.row():
                     ui.label("No samples found waiting.")
@@ -396,9 +396,9 @@ class BrainMeth:
                 for item in app.storage.general[self.mainuuid]["sample_list"]:
                     #print (item, self.sampleID)
                     if item == self.sampleID:
-                        card = ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white p-4').style('box-shadow: 0 0 10px 2px rgba(0, 0, 255, 0.5);')
+                        card = ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white').style('box-shadow: 0 0 10px 2px rgba(0, 0, 255, 0.5);')
                     else:
-                        card = ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white p-4')
+                        card = ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white')
                     with card:
                         with ui.expansion(f"{item}", icon='topic').style("color: #6E93D6; font-size: 120%; font-weight: 300").classes('w-full'):
                             for element in ["devices", "basecall_models", "run_time", "flowcell_ids"]:
