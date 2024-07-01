@@ -1,4 +1,4 @@
-# ![MethBrain_small.png](src/robin/images/ROBIN_logo2_small.png)ROBIN
+# ![ROBIN_logo_small.png](src/robin/images/ROBIN_logo_small.png)ROBIN
 
 [![PyPI - Version](https://img.shields.io/pypi/v/methnicegui.svg)](https://pypi.org/project/methnicegui)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/methnicegui.svg)](https://pypi.org/project/methnicegui)

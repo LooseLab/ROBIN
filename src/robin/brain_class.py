@@ -1,7 +1,7 @@
 """
-Main Module for Initializing and Configuring the Brain Tumour Classification Application
+Main Module for Initializing and Configuring the Brain Tumor Classification Application
 
-This module sets up and configures the Brain Tumour Classification application using the NiceGUI framework (https://nicegui.io/). The application ensures that all long-running processes operate in the background, preventing the main thread from being blocked.
+This module sets up and configures the Brain Tumor Classification application using the NiceGUI framework (https://nicegui.io/). The application ensures that all long-running processes operate in the background, preventing the main thread from being blocked.
 
 The app creates an instance of the `BrainMeth` class for each specific run, taking arguments from either the command line or a configuration file. Shared arguments are stored in `nicegui.app.storage.general` for accessibility across the application.
 
@@ -10,102 +10,69 @@ Key Components:
 1. **BrainMeth Class**:
 
    - Sets up the application.
-
    - Manages BAM file processing and classification tasks.
-
    - Handles the configuration of subpages for various analysis types (e.g., MGMT, Sturgeon, NanoDX).
 
 2. **BAM File Handling**:
 
    - `check_bam(bamfile)`: Checks a BAM file and returns its attributes.
-
    - Uses `watchdog.observers.Observer` to monitor a directory for new BAM files.
 
 3. **Subpage Objects**:
 
    - `MGMT_Object`
-
    - `Sturgeon_object`
-
    - `NanoDX_object`
-
    - `RandomForest_object`
-
    - `CNVAnalysis`
-
    - `TargetCoverage`
-
    - `FusionObject`
 
 4. **Utility Functions**:
 
    - `check_bam(bamfile)`: Verifies BAM file attributes.
-
    - `LocalFilePicker`: Allows for local file selection.
 
 5. **Queues for BAM Processing**:
 
    - `bam_tracking`
-
    - `bamforcns`
-
    - `bamforsturgeon`
-
    - `bamfornanodx`
-
    - `bamforcnv`
-
    - `bamfortargetcoverage`
-
    - `bamformgmt`
-
    - `bamforfusions`
 
 6. **Configuration**:
 
    - Uses `click` for command-line interface options.
-
    - Loads configuration from `config.ini` or specified file.
 
 Dependencies:
 
-- `nicegui` (ui, app)
-
+- `nicegui` (ui, app, run)
 - `robin.utilities.bam_handler.BamEventHandler`
-
 - `robin.subpages` (MGMT_Object, Sturgeon_object, NanoDX_object, RandomForest_object, CNVAnalysis, TargetCoverage, FusionObject)
-
 - `robin.utilities.local_file_picker.LocalFilePicker`
-
 - `robin.utilities.ReadBam.ReadBam`
-
 - `watchdog.observers.Observer`
-
 - `pathlib.Path`
-
 - `queue.Queue`
-
 - `pandas`
-
 - `asyncio`
-
 - `collections.Counter`
-
 - `datetime`
-
 - `os`
-
 """
 
 from nicegui import ui, app, run
 
 from robin.utilities.bam_handler import BamEventHandler
-
 from robin.subpages.MGMT_object import MGMT_Object
 from robin.subpages.Sturgeon_object import Sturgeon_object
 from robin.subpages.NanoDX_object import NanoDX_object
 from robin.subpages.RandomForest_object import RandomForest_object
-
 from robin.subpages.CNV_object import CNVAnalysis
 from robin.subpages.TargetCoverage_object import TargetCoverage
 from robin.subpages.Fusion_object import FusionObject
@@ -120,31 +87,24 @@ import pandas as pd
 import asyncio
 import pysam
 from collections import Counter
-
-
 import time
 from datetime import datetime
 from dateutil import parser
 import pytz
 import os
 
-# Configure logging
-# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-# logger = logging.getLogger(__name__)
-
-
 def check_bam(bamfile):
     """
-    This function checks a bam file and returns a dictionary of its attributes.
-    :param bamfile:
-    :return:
+    Check a BAM file and return its attributes.
+
+    :param bamfile: Path to the BAM file.
+    :return: Tuple containing baminfo and bamdata.
     """
     pysam.index(bamfile)
     bam = ReadBam(bamfile)
     baminfo = bam.process_reads()
     bamdata = bam.summary()
     return baminfo, bamdata
-
 
 class BrainMeth:
     def __init__(
@@ -163,6 +123,23 @@ class BrainMeth:
         reference=None,
         mainuuid=None,
     ):
+        """
+        Initialize the BrainMeth class.
+
+        :param threads: Number of threads to use.
+        :param force_sampleid: Force the use of a specific sample ID.
+        :param simtime: Simulate time for testing.
+        :param watchfolder: Folder to watch for BAM files.
+        :param output: Output directory.
+        :param sequencing_summary: Path to the sequencing summary file.
+        :param target_panel: Target panel for analysis.
+        :param showerrors: Show errors during processing.
+        :param browse: Enable browsing mode.
+        :param exclude: List of analysis types to exclude.
+        :param minknow_connection: Connection to MinKNOW.
+        :param reference: Reference genome.
+        :param mainuuid: Main UUID for the application instance.
+        """
         self.mainuuid = mainuuid
         self.force_sampleid = force_sampleid
         self.threads = threads
@@ -182,6 +159,11 @@ class BrainMeth:
         self.sampleID = None
 
     def configure_storage(self, sample_id):
+        """
+        Configure storage for the application.
+
+        :param sample_id: Sample ID to configure storage for.
+        """
         app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"] = (
             Counter(
                 bam_passed=0,
@@ -197,22 +179,16 @@ class BrainMeth:
                 bases_count=0,
             )
         )
-        app.storage.general[self.mainuuid]["samples"][sample_id]["devices"] = []  # set
-        app.storage.general[self.mainuuid]["samples"][sample_id][
-            "basecall_models"
-        ] = []  # set()
-        app.storage.general[self.mainuuid]["samples"][sample_id][
-            "run_time"
-        ] = []  # set()
-        app.storage.general[self.mainuuid]["samples"][sample_id][
-            "flowcell_ids"
-        ] = []  # set()
-        app.storage.general[self.mainuuid]["samples"][sample_id][
-            "sample_ids"
-        ] = []  # set()
+        app.storage.general[self.mainuuid]["samples"][sample_id]["devices"] = []
+        app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"] = []
+        app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"] = []
+        app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"] = []
+        app.storage.general[self.mainuuid]["samples"][sample_id]["sample_ids"] = []
 
     async def start_background(self):
-        # logger.debug("Init Brain Class")
+        """
+        Start background tasks for BAM processing and analysis.
+        """
         app.storage.general[self.mainuuid]["bam_count"] = {}
         app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
         app.storage.general[self.mainuuid]["bam_count"]["files"] = {}
@@ -270,7 +246,6 @@ class BrainMeth:
             self.CNV = CNVAnalysis(
                 analysis_name="CNV",
                 bamqueue=self.bamforcnv,
-                # summary=cnvsummary,
                 target_panel=self.target_panel,
                 **common_args,
             )
@@ -280,7 +255,6 @@ class BrainMeth:
             self.Target_Coverage = TargetCoverage(
                 analysis_name="COVERAGE",
                 bamqueue=self.bamfortargetcoverage,
-                #    summary=coverage,
                 target_panel=self.target_panel,
                 reference=self.reference,
                 **common_args,
@@ -302,30 +276,28 @@ class BrainMeth:
             )
             self.Fusion_panel.process_data()
 
-        # if self.minknow_connection:
-        #    while not self.minknow_connection.connected:
-        #        await asyncio.sleep(1)
-        #    while not self.minknow_connection.selected_position:
-        #        await asyncio.sleep(1)
-        #    await self.minknow_connection.access_device.clicked()
-
     async def render_ui(self, sample_id=None):
+        """
+        Render the user interface.
+
+        :param sample_id: Sample ID to render the UI for.
+        """
         if sample_id:
             self.output = self.check_and_create_folder(self.output, sample_id)
 
         if not self.browse:
             await self.information_panel(sample_id=sample_id)
-
-            # if self.watchfolder:
-            #    self.add_watchfolder(self.watchfolder)
-
         else:
             ui.label("Browse mode enabled. Please choose a folder to see data from.")
             ui.button("Choose file", on_click=self.pick_file, icon="folder")
-
             self.content = ui.column().classes("w-full")
 
     async def add_watchfolder(self, watchfolder):
+        """
+        Add a watch folder to monitor for BAM files.
+
+        :param watchfolder: Path to the folder to watch.
+        """
         if not self.observer:
             self.watchfolder = watchfolder
             if "file" not in app.storage.general[self.mainuuid]["bam_count"].keys():
@@ -338,40 +310,46 @@ class BrainMeth:
             self.observer.start()
 
             ui.timer(1, callback=self.background_process_bams, once=True)
-
             ui.timer(1, callback=self.check_existing_bams, once=True)
 
-            print("watchfolder setup and added")
-
-    async def waitforclick(self):
-        self.minknow_connection.check_connection()
-        await self.minknow_connection.access_device.clicked()
+            print("Watchfolder setup and added")
 
     async def pick_file(self) -> None:
+        """
+        Handle file picking for monitoring.
+
+        :return: None
+        """
         ui.notify("Select a folder to monitor")
         result = await LocalFilePicker(f"{self.runsfolder}", multiple=True)
         if result:
             ui.notify(f"You selected {result}")
             self.content.clear()
             with self.content:
-                ui.label(f"Monitoring the path:{result}").tailwind(
+                ui.label(f"Monitoring the path: {result}").tailwind(
                     "drop-shadow", "font-bold"
                 )
                 self.output, self.sampleID = os.path.split(result[0])
-
                 await self.information_panel(sample_id=self.sampleID)
 
     def replay(self):
+        """
+        Replay the data processing.
+
+        :return: None
+        """
         ui.notify("Replaying data")
         self.replaycontrol.visible = False
         self.rcns2_worker.replay_prior_data()
         self.sturgeon_worker.replay_prior_data()
 
-    def replay_cnv(self):
-        ui.notify("Replaying CNV data")
-
     @property
     def min_start_time(self):
+        """
+        Get the minimum start time for runs.
+
+        :return: Minimum start time formatted as string.
+        """
         if len(self.run_time) > 0:
             dt = datetime.fromisoformat(min(self.run_time))
             formatted_string = dt.strftime("%Y-%m-%d %H:%M")
@@ -381,6 +359,11 @@ class BrainMeth:
 
     @ui.refreshable
     def show_list(self):
+        """
+        Show the list of samples.
+
+        :return: None
+        """
         if len(app.storage.general[self.mainuuid]["sample_list"]) == 0:
             with ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white').style(
                 'box-shadow: 0 0 10px 2px rgba(0, 0, 255, 0.5);'):
@@ -394,11 +377,10 @@ class BrainMeth:
             myrow = ui.row().classes("w-full")
             with myrow:
                 for item in app.storage.general[self.mainuuid]["sample_list"]:
-                    #print (item, self.sampleID)
                     if item == self.sampleID:
-                        card = ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white').style('box-shadow: 0 0 10px 2px rgba(0, 0, 255, 0.5);')
+                        card = ui.card().classes('max-w-sm rounded shadow-lg').style('box-shadow: 0 0 10px 2px rgba(0, 0, 255, 0.5);')
                     else:
-                        card = ui.card().classes('max-w-sm rounded overflow-hidden shadow-lg bg-white')
+                        card = ui.card().classes('max-w-sm rounded shadow-lg')
                     with card:
                         with ui.expansion(f"{item}", icon='topic').style("color: #6E93D6; font-size: 120%; font-weight: 300").classes('w-full'):
                             for element in ["devices", "basecall_models", "run_time", "flowcell_ids"]:
@@ -422,7 +404,12 @@ class BrainMeth:
                             ui.button('View Data', on_click=lambda i=item: ui.navigate.to(f"/live/{i}"))
 
     async def information_panel(self, sample_id=None):
+        """
+        Render the information panel for a sample.
 
+        :param sample_id: Sample ID to render the panel for.
+        :return: None
+        """
         if sample_id:
             self.sampleID = sample_id
         if not self.browse:
@@ -443,12 +430,12 @@ class BrainMeth:
                         ui.navigate.to("/live")
                         return
 
-                ui.label(f"CNS Tumour Methylation Classification - {self.sampleID}").style(
+                ui.label(f"CNS Tumor Methylation Classification - {self.sampleID}").style(
                     "color: #6E93D6; font-size: 150%; font-weight: 300"
                 ).classes("drop-shadow font-bold")
 
                 ui.label(
-                    "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
+                    "This tool enables classification of brain tumors in real time from Oxford Nanopore Data."
                 ).style("color: #000000; font-size: 100%; font-weight: 300").classes(
                     "drop-shadow font-bold"
                 )
@@ -496,8 +483,6 @@ class BrainMeth:
                             "sample_ids",
                             backward=lambda n: [f"Sample ID: {str(item)}" for item in n],
                         ).style("color: #000000; font-size: 100%; font-weight: 300")
-
-
 
                 if "mgmt" not in self.exclude:
                     with ui.row().style("color: #000000; font-size: 120%; font-weight: 300"):
@@ -596,7 +581,6 @@ class BrainMeth:
                                     "bamfornanodx",
                                     backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
                                 ).style("color: #000000; font-size: 100%; font-weight: 300")
-
 
         if sample_id:
             selectedtab = None
@@ -713,14 +697,13 @@ class BrainMeth:
                                 **display_args,
                             )
                             await self.Fusion_panel.render_ui(sample_id=self.sampleID)
-            if not self.browse:
-                for item in app.storage.general[self.mainuuid]:
-                    if item == "sample_ids":
-                        for sample in app.storage.general[self.mainuuid][item]:
-                            self.sampleID = sample
-
 
             async def download_report():
+                """
+                Generate and download the report.
+
+                :return: None
+                """
                 ui.notify("Generating Report")
                 if not self.browse:
                     for item in app.storage.general[self.mainuuid]:
@@ -737,28 +720,35 @@ class BrainMeth:
                     myfile = await run.io_bound(
                         create_pdf, f"{self.sampleID}_run_report.pdf", self.output
                     )
-                # myfile = run.io_bound(create_pdf(f"{self.sampleID}_run_report.pdf", self.check_and_create_folder(self.output,self.sampleID))
                 ui.download(myfile)
                 ui.notify("Report Downloaded")
 
             ui.button("Generate Report", on_click=download_report, icon="download")
 
     async def background_process_bams(self):
-        #await asyncio.sleep(5)
+        """
+        Background task to process BAM files.
+
+        :return: None
+        """
         self.process_bams_tracker = ui.timer(10, self.process_bams)
 
     def check_and_create_folder(self, path, folder_name=None):
-        # Check if the path exists
+        """
+        Check if a folder exists and create it if necessary.
+
+        :param path: Base path.
+        :param folder_name: Folder name to create within the base path.
+        :return: Full path to the folder.
+        """
         if not os.path.exists(path):
             raise FileNotFoundError(f"The specified path does not exist: {path}")
 
         if self.force_sampleid:
             folder_name = self.force_sampleid
 
-        # If folder_name is provided
         if folder_name:
             full_path = os.path.join(path, folder_name)
-            # Create the folder if it doesn't exist
             if not os.path.exists(full_path):
                 os.makedirs(full_path)
             return full_path
@@ -767,41 +757,22 @@ class BrainMeth:
 
     async def process_bams(self) -> None:
         """
-        This function processes the bam files and adds them to the bamforcns and bamforsturgeon lists.
-        These lists are then processed by the rapid_cns2 and sturgeon functions.
-        #ToDo: switch to using threadsafe queues.
-        :param self:
-        :return:
+        Process BAM files and update the application's storage.
+
+        :return: None
         """
         self.process_bams_tracker.active = False
         counter = 0
-        # while True:
-        # print(f"We're processing a bam man - {self.mainuuid}")
         if "file" in app.storage.general[self.mainuuid]["bam_count"]:
-            # print (app.storage.general[self.mainuuid]['bam_count']["file"])
             while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
                 self.nofiles = False
                 file = app.storage.general[self.mainuuid]["bam_count"]["file"].popitem()
-                # ToDo: Check if the file is still being written to.
-                # if file[1] > time.time() - 5:
-                #    break
-                # ToDo: This function should be moved to a background task.
-                # self.check_bam(file[0])
-                # self.bam_tracking.put(file[0])
-
                 baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
-                # print(baminfo)
-                # print(bamdata)
                 sample_id = baminfo["sample_id"]
-                if (
-                    sample_id
-                    not in app.storage.general[self.mainuuid]["samples"]
-                ):
-                    # print (f"Processing sample {sample_id}")
+                if sample_id not in app.storage.general[self.mainuuid]["samples"]:
                     app.storage.general[self.mainuuid]["samples"][sample_id] = {}
                     self.configure_storage(sample_id)
                     app.storage.general[self.mainuuid]["sample_list"].append(sample_id)
-                    # print (f"Added sample {sample_id} to list")
                 if baminfo["state"] == "pass":
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "file_counters"
@@ -828,7 +799,6 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "file_counters"
                     ]["fail_bases_count"] += bamdata["yield_tracking"]
-                    # self.basecall_models.add(baminfo["basecall_model"])
                 if (
                     baminfo["device_position"]
                     not in app.storage.general[self.mainuuid]["samples"][sample_id][
@@ -885,9 +855,6 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "run_time"
                     ].append(baminfo["time_of_run"])
-                # self.sample_ids.add(baminfo["sample_id"])
-                # self.flowcell_ids.add(baminfo["flow_cell_id"])
-                # self.run_time.add(baminfo["time_of_run"])
                 app.storage.general[self.mainuuid]["samples"][sample_id][
                     "file_counters"
                 ]["mapped_count"] += bamdata["mapped_reads"]
@@ -932,15 +899,15 @@ class BrainMeth:
         self.process_bams_tracker.active = True
 
     async def check_existing_bams(self, sequencing_summary=None):
+        """
+        Check and process existing BAM files based on a sequencing summary.
+
+        :param sequencing_summary: Path to the sequencing summary file.
+        :return: None
+        """
         file_endings = {".bam"}
         if sequencing_summary:
             print("Using sequencing summary")
-            # with self.frontpage:
-            #    ui.notify(
-            #        "Checking for existing bams against sequencing summary",
-            #        type="info",
-            #        position="top-right",
-            #    )
             df = pd.read_csv(
                 sequencing_summary,
                 delimiter="\t",
@@ -960,7 +927,7 @@ class BrainMeth:
             latest_timestamps["full_path"] = ""
             latest_timestamps["file_produced"] = latest_timestamps[
                 "template_end"
-            ]  # + now
+            ]
             for path, dirs, files in os.walk(self.watchfolder):
                 for f in files:
                     if "".join(Path(f).suffixes) in file_endings:
@@ -969,9 +936,6 @@ class BrainMeth:
                         ] = os.path.join(path, f)
 
             step_size = 20
-
-            # with self.frontpage:
-            #    ui.notify("Target Playback Started", type="info", position="top-right")
 
             if "sturgeon" not in self.exclude:
                 self.Sturgeon.playback(latest_timestamps, step_size=step_size)
@@ -992,9 +956,7 @@ class BrainMeth:
 
             for index, row in latest_timestamps.iterrows():
                 if len(row["full_path"]) > 0:
-                    # ToDo: This needs to be called in the background.
                     self.check_bam(row["full_path"])
-
             self.runfinished = True
         else:
             for path, dirs, files in os.walk(self.watchfolder):
