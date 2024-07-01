@@ -272,24 +272,33 @@ class BaseAnalysis:
         count = 0
 
         # Different bam files may come from different runs (sampleIDs). Therefore we must process reads according to the run they have come from.
-
         while self.bamqueue.qsize() > 0:
             bamfile, timestamp, sampleID = self.bamqueue.get()
             if sampleID not in self.bams:
                 self.bams[sampleID] = []
             self.bams[sampleID].append((bamfile, timestamp))
             count += 1
+            if sampleID not in app.storage.general[self.mainuuid]:
+                app.storage.general[self.mainuuid][sampleID] = {}
+
+            if self.name not in app.storage.general[self.mainuuid].get(sampleID, {}):
+                app.storage.general[self.mainuuid].setdefault(sampleID, {})[self.name] = {
+                    "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
+                }
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_count"] += 1
+
             if count >= 100:
                 break
-        # self.sampleID = sampleID
+
         for sample_id, data_list in self.bams.items():
-            self.sampleID = sample_id
-            if self.sampleID:
+            if not self.running and len(data_list) > 0:
+                self.running = True
+                self.sampleID = sample_id
                 if self.sampleID not in app.storage.general[self.mainuuid]:
                     app.storage.general[self.mainuuid][self.sampleID] = {}
 
                 if self.name not in app.storage.general[self.mainuuid].get(
-                    self.sampleID, {}
+                        self.sampleID, {}
                 ):
                     app.storage.general[self.mainuuid].setdefault(self.sampleID, {})[
                         self.name
@@ -300,14 +309,20 @@ class BaseAnalysis:
                     }
                 app.storage.general[self.mainuuid][self.sampleID][self.name][
                     "counters"
-                ]["bam_count"] += len(data_list)
+                ]["bams_in_processing"] += len(data_list)
 
-            if not self.running and len(data_list) > 0:
-                self.running = True
                 try:
                     await self.process_bam(data_list)
                 except Exception as e:
                     print(f"Error processing BAM files: {e}")
+                finally:
+                    app.storage.general[self.mainuuid][self.sampleID][self.name][
+                        "counters"
+                    ]["bams_in_processing"] -= len(data_list)
+                    app.storage.general[self.mainuuid][self.sampleID][self.name][
+                        "counters"
+                    ]["bam_processed"] += len(data_list)
+                    self.running = False
 
         self.timer.active = True
 
