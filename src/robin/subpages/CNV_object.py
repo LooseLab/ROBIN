@@ -239,7 +239,7 @@ class CNVAnalysis(BaseAnalysis):
     """
 
     def __init__(self, *args, target_panel: Optional[str] = None, **kwargs) -> None:
-        #self.file_list = []
+        # self.file_list = []
         self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.update_cnv_dict = {}
         self.result = None
@@ -303,7 +303,7 @@ class CNVAnalysis(BaseAnalysis):
             bamfile (BinaryIO): The BAM file to process.
             timestamp (float): The timestamp indicating when the file was generated.
         """
-        #self.file_list.append(bamfile)
+        # self.file_list.append(bamfile)
         await self.do_cnv_work(bamfile)
 
     async def do_cnv_work(self, bamfile: BinaryIO) -> None:
@@ -315,7 +315,7 @@ class CNVAnalysis(BaseAnalysis):
         """
         if self.sampleID not in self.update_cnv_dict.keys():
             self.update_cnv_dict[self.sampleID] = {}
-        #print("Running CNV analysis on", self.sampleID, bamfile)
+        # print("Running CNV analysis on", self.sampleID, bamfile)
         r_cnv, r_bin, r_var, self.update_cnv_dict[self.sampleID] = await run.cpu_bound(
             iterate_bam,
             bamfile,
@@ -764,7 +764,7 @@ class CNVAnalysis(BaseAnalysis):
                         moving_avg_data1, moving_avg_data2
                     )
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                    #if len(self.result3.cnv[key]) > 20:
+                    # if len(self.result3.cnv[key]) > 20:
                     #    algo_c = ruptures_plotting(self.result3.cnv[key])
                     #    penalty_value = 5
                     #    result = algo_c.predict(pen=penalty_value)

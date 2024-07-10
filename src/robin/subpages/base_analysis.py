@@ -282,10 +282,16 @@ class BaseAnalysis:
                 app.storage.general[self.mainuuid][sampleID] = {}
 
             if self.name not in app.storage.general[self.mainuuid].get(sampleID, {}):
-                app.storage.general[self.mainuuid].setdefault(sampleID, {})[self.name] = {
-                    "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
+                app.storage.general[self.mainuuid].setdefault(sampleID, {})[
+                    self.name
+                ] = {
+                    "counters": Counter(
+                        bam_count=0, bam_processed=0, bams_in_processing=0
+                    )
                 }
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_count"] += 1
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_count"
+            ] += 1
 
             if count >= 100:
                 break
@@ -298,7 +304,7 @@ class BaseAnalysis:
                     app.storage.general[self.mainuuid][self.sampleID] = {}
 
                 if self.name not in app.storage.general[self.mainuuid].get(
-                        self.sampleID, {}
+                    self.sampleID, {}
                 ):
                     app.storage.general[self.mainuuid].setdefault(self.sampleID, {})[
                         self.name
@@ -322,7 +328,7 @@ class BaseAnalysis:
                     app.storage.general[self.mainuuid][self.sampleID][self.name][
                         "counters"
                     ]["bam_processed"] += len(data_list)
-                    self.running = False
+                    # self.running = False
 
         self.timer.active = True
 
@@ -496,10 +502,10 @@ class BaseAnalysis:
                 time_diff = 0
             while elapsed_time < time_diff:
                 if self.running:
-                    #time.sleep(1)
+                    # time.sleep(1)
                     elapsed_time = (time.time() - playback_start_time) + self.offset
                 else:
-                    #time.sleep(1)
+                    # time.sleep(1)
                     self.offset += step_size
                     elapsed_time += self.offset
             if len(row["full_path"]) > 0:

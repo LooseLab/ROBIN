@@ -52,7 +52,6 @@ from robin import submodules
 import pandas as pd
 import os
 import sys
-import asyncio
 from nicegui import ui, run, app
 import pysam
 import shutil
@@ -220,7 +219,7 @@ class MGMT_Object(BaseAnalysis):
         try:
             if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
                 if self.sampleID not in self.MGMTbamfile.keys():
-                #if not self.MGMTbamfile:
+                    # if not self.MGMTbamfile:
                     self.MGMTbamfile[self.sampleID] = os.path.join(
                         self.check_and_create_folder(self.output, self.sampleID),
                         "mgmt.bam",
@@ -233,7 +232,10 @@ class MGMT_Object(BaseAnalysis):
                         suffix=".bam",
                     )
                     pysam.cat(
-                        "-o", tempbamholder.name, self.MGMTbamfile[self.sampleID], tempbamfile.name
+                        "-o",
+                        tempbamholder.name,
+                        self.MGMTbamfile[self.sampleID],
+                        tempbamfile.name,
                     )
                     shutil.copy2(tempbamholder.name, self.MGMTbamfile[self.sampleID])
                     try:
@@ -246,7 +248,10 @@ class MGMT_Object(BaseAnalysis):
                 )
 
                 await run.cpu_bound(
-                    run_modkit, tempmgmtdir.name, self.MGMTbamfile[self.sampleID], self.threads
+                    run_modkit,
+                    tempmgmtdir.name,
+                    self.MGMTbamfile[self.sampleID],
+                    self.threads,
                 )
 
                 try:
@@ -285,7 +290,7 @@ class MGMT_Object(BaseAnalysis):
             # logger.error(f"Error in BAM file processing: {e}")
             raise
         finally:
-            #await asyncio.sleep(0.1)
+            # await asyncio.sleep(0.1)
             self.running = False
 
     def tabulate(self, results: pd.DataFrame) -> None:

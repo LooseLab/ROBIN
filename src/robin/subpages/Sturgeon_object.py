@@ -15,7 +15,6 @@ from sturgeon.callmapping import (
 )
 import click
 from pathlib import Path
-import asyncio
 from typing import List, Tuple
 
 
@@ -182,7 +181,7 @@ class Sturgeon_object(BaseAnalysis):
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
             with tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
+                dir=self.check_and_create_folder(self.output, sampleID)
             ) as temp2:
                 await run.cpu_bound(run_modkit, file, temp.name, self.threads)
 
@@ -221,10 +220,10 @@ class Sturgeon_object(BaseAnalysis):
                     self.modelfile,
                 )
                 if os.path.exists(
-                        os.path.join(
-                            self.dataDir[sampleID].name,
-                            "final_merged_probes_methyl_calls_general.csv",
-                        )
+                    os.path.join(
+                        self.dataDir[sampleID].name,
+                        "final_merged_probes_methyl_calls_general.csv",
+                    )
                 ):
                     mydf = pd.read_csv(
                         os.path.join(
@@ -240,21 +239,24 @@ class Sturgeon_object(BaseAnalysis):
                 lastrow = mydf.iloc[-1].drop("number_probes")
                 mydf_to_save = mydf
                 mydf_to_save["timestamp"] = time.time() * 1000
-                app.storage.general[self.mainuuid][sampleID][self.name][
-                    "counters"
-                ]["bam_processed"] += len(tomerge)
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bam_processed"
+                ] += len(tomerge)
 
-                app.storage.general[self.mainuuid][sampleID][self.name][
-                    "counters"
-                ]["bams_in_processing"] -= len(tomerge)
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bams_in_processing"
+                ] -= len(tomerge)
 
                 if sampleID not in self.sturgeon_df_store:
                     self.sturgeon_df_store[sampleID] = pd.DataFrame()
 
                 # Exclude empty or all-NA entries before concatenation
-                if not mydf_to_save.dropna(how='all').empty:
+                if not mydf_to_save.dropna(how="all").empty:
                     self.sturgeon_df_store[sampleID] = pd.concat(
-                        [self.sturgeon_df_store[sampleID], mydf_to_save.set_index("timestamp")]
+                        [
+                            self.sturgeon_df_store[sampleID],
+                            mydf_to_save.set_index("timestamp"),
+                        ]
                     )
                     self.sturgeon_df_store[sampleID].to_csv(
                         os.path.join(

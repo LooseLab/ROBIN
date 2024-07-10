@@ -294,7 +294,7 @@ class TargetCoverage(BaseAnalysis):
         self.targetbamfile = {}
         self.covtable = None
         self.covtable_row_count = 0
-        self.coverage_over_time = {} #np.empty((0, 2))
+        self.coverage_over_time = {}  # np.empty((0, 2))
         self.cov_df_main = {}
         self.bedcov_df_main = {}
         self.SNPqueue = queue.Queue()
@@ -900,7 +900,10 @@ class TargetCoverage(BaseAnalysis):
                     suffix=".bam",
                 )
                 pysam.cat(
-                    "-o", tempbamholder.name, self.targetbamfile[self.sampleID], tempbamfile.name
+                    "-o",
+                    tempbamholder.name,
+                    self.targetbamfile[self.sampleID],
+                    tempbamfile.name,
                 )
                 shutil.copy2(tempbamholder.name, self.targetbamfile[self.sampleID])
                 try:
@@ -921,14 +924,15 @@ class TargetCoverage(BaseAnalysis):
             self.cov_df_main[self.sampleID] = newcovdf
             self.bedcov_df_main[self.sampleID] = bedcovdf
         else:
-            self.cov_df_main[self.sampleID], self.bedcov_df_main[self.sampleID] = await run.cpu_bound(
-                run_bedmerge,
-                newcovdf,
-                self.cov_df_main[self.sampleID],
-                bedcovdf,
-                self.bedcov_df_main[self.sampleID],
+            self.cov_df_main[self.sampleID], self.bedcov_df_main[self.sampleID] = (
+                await run.cpu_bound(
+                    run_bedmerge,
+                    newcovdf,
+                    self.cov_df_main[self.sampleID],
+                    bedcovdf,
+                    self.bedcov_df_main[self.sampleID],
+                )
             )
-
 
         bases = self.cov_df_main[self.sampleID]["covbases"].sum()
         genome = self.cov_df_main[self.sampleID]["endpos"].sum()
@@ -986,7 +990,7 @@ class TargetCoverage(BaseAnalysis):
             ),
             index=False,
         )
-        #if self.summary:
+        # if self.summary:
         #    with self.summary:
         #        self.summary.clear()
         #        with ui.row():
@@ -1097,18 +1101,19 @@ class TargetCoverage(BaseAnalysis):
                         else:
                             ui.label("No data available")
 
-
         if self.check_file_time(f"{output}/clair3/snpsift_output.vcf.csv"):
-            df = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv", low_memory=False)
+            df = pd.read_csv(
+                f"{output}/clair3/snpsift_output.vcf.csv", low_memory=False
+            )
 
             # Define a function to check for 'pathogenic'
             def contains_pathogenic(text):
                 if pd.isna(text):
                     return False
-                return 'pathogenic' in str(text).lower()
+                return "pathogenic" in str(text).lower()
 
             # Apply the function to each cell and filter rows
-            #vcf = df[df.map(contains_pathogenic).any(axis=1)]
+            # vcf = df[df.map(contains_pathogenic).any(axis=1)]
             vcf = df
 
             if len(vcf) > 0:
@@ -1165,22 +1170,24 @@ class TargetCoverage(BaseAnalysis):
                         )
 
                     with self.snptable.add_slot("top-right"):
-                        with ui.input(placeholder="Search").props("type=search").bind_value(
-                            self.snptable, "filter"
-                        ).add_slot("append"):
+                        with ui.input(placeholder="Search").props(
+                            "type=search"
+                        ).bind_value(self.snptable, "filter").add_slot("append"):
                             ui.icon("search")
 
         if self.check_file_time(f"{output}/clair3/snpsift_indel_output.vcf.csv"):
-            df = pd.read_csv(f"{output}/clair3/snpsift_indel_output.vcf.csv", low_memory=False)
+            df = pd.read_csv(
+                f"{output}/clair3/snpsift_indel_output.vcf.csv", low_memory=False
+            )
 
             # Define a function to check for 'pathogenic'
             def contains_pathogenic(text):
                 if pd.isna(text):
                     return False
-                return 'pathogenic' in str(text).lower()
+                return "pathogenic" in str(text).lower()
 
             # Apply the function to each cell and filter rows
-            #vcfindel = df[df.map(contains_pathogenic).any(axis=1)]
+            # vcfindel = df[df.map(contains_pathogenic).any(axis=1)]
 
             vcfindel = df
 
@@ -1238,10 +1245,11 @@ class TargetCoverage(BaseAnalysis):
                         )
 
                     with self.indeltable.add_slot("top-right"):
-                        with ui.input(placeholder="Search").props("type=search").bind_value(
-                            self.indeltable, "filter"
-                        ).add_slot("append"):
+                        with ui.input(placeholder="Search").props(
+                            "type=search"
+                        ).bind_value(self.indeltable, "filter").add_slot("append"):
                             ui.icon("search")
+
 
 def test_me(
     port: int,

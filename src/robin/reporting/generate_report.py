@@ -577,7 +577,6 @@ def create_pdf(filename, output):
         sample_id = os.path.basename(os.path.normpath(output))
     print(f"Creating PDF {filename} in {output} for sample {sample_id}")
 
-
     pdfmetrics.registerFont(
         TTFont(
             "FiraSans",
@@ -625,12 +624,12 @@ def create_pdf(filename, output):
     else:
         masterdf = None
 
-    #if masterdf is not None and isinstance(masterdf, pd.DataFrame):
+    # if masterdf is not None and isinstance(masterdf, pd.DataFrame):
     #    sample_id = convert_to_space_separated_string(
     #        masterdf.loc[(masterdf.index == "sample_ids")][1].values
     #    )
 
-    #else:
+    # else:
     #    sample_id = None
 
     elements.append(Paragraph("Classification Summary", styles["Heading1"]))
@@ -825,7 +824,9 @@ def create_pdf(filename, output):
     if masterdf is not None and isinstance(masterdf, pd.DataFrame):
         elements.append(Paragraph("Run Data Summary", styles["Heading2"]))
         start_time = "Placeholder"
-        masterdf_dict = eval(masterdf[masterdf.index=="samples"][1]["samples"])[sample_id]
+        masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[
+            sample_id
+        ]
         elements.append(
             Paragraph(
                 f"Sample ID: {sample_id}<br/>"
@@ -846,8 +847,8 @@ def create_pdf(filename, output):
                 (
                     f"{k}: {v}<br/>"
                     for k, v in eval(
-                            masterdf[masterdf.index== "samples"][1]["samples"])[sample_id]['file_counters'].items()
-
+                        masterdf[masterdf.index == "samples"][1]["samples"]
+                    )[sample_id]["file_counters"].items()
                 )
             )
             elements.append(
@@ -1343,23 +1344,32 @@ def create_pdf(filename, output):
             )
 
         elements.append(Spacer(1, 12))
-        for gene_pair in result_all[goodpairs_all].sort_values(by=7)["tag"].unique():
-            elements.append(Paragraph(f"Fusion Candidate: {gene_pair}", smaller_style))
-            for gene in result_all[
-                goodpairs_all & result_all[goodpairs_all]["tag"].eq(gene_pair)
-            ][3].unique():
-                title = gene
-                reads = result_all[goodpairs_all].sort_values(by=7)[
-                    result_all[goodpairs_all].sort_values(by=7)[3].eq(gene)
-                ]
-                buf, buf2 = fusion_plot(title, reads)
-                width, height = A4
-                img = Image(buf, width=width * 0.6, height=width, kind="proportional")
-                elements.append(img)
-                width, height = A4
-                img = Image(buf2, width=width * 0.6, height=width, kind="proportional")
-                elements.append(img)
-                elements.append(Spacer(1, 12))
+        if len(result_all[goodpairs_all].sort_values(by=7)["tag"].unique()) > 0:
+            for gene_pair in (
+                result_all[goodpairs_all].sort_values(by=7)["tag"].unique()
+            ):
+                elements.append(
+                    Paragraph(f"Fusion Candidate: {gene_pair}", smaller_style)
+                )
+                for gene in result_all[
+                    goodpairs_all & result_all[goodpairs_all]["tag"].eq(gene_pair)
+                ][3].unique():
+                    title = gene
+                    reads = result_all[goodpairs_all].sort_values(by=7)[
+                        result_all[goodpairs_all].sort_values(by=7)[3].eq(gene)
+                    ]
+                    buf, buf2 = fusion_plot(title, reads)
+                    width, height = A4
+                    img = Image(
+                        buf, width=width * 0.6, height=width, kind="proportional"
+                    )
+                    elements.append(img)
+                    width, height = A4
+                    img = Image(
+                        buf2, width=width * 0.6, height=width, kind="proportional"
+                    )
+                    elements.append(img)
+                    elements.append(Spacer(1, 12))
 
     elements.append(Spacer(1, 12))
 

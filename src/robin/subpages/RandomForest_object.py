@@ -22,7 +22,7 @@ from robin.utilities.merge_bedmethyl import (
     merge_bedmethyl,
     save_bedmethyl,
 )
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List, Tuple
 
 
 HVPATH = os.path.join(
@@ -346,7 +346,9 @@ class RandomForest_object(BaseAnalysis):
                 self.showerrors,
             )
 
-            if os.path.isfile(f"{tempDir.name}/live_{self.bambatch[sampleID]}_votes.tsv"):
+            if os.path.isfile(
+                f"{tempDir.name}/live_{self.bambatch[sampleID]}_votes.tsv"
+            ):
                 scores = pd.read_table(
                     f"{tempDir.name}/live_{self.bambatch[sampleID]}_votes.tsv",
                     sep="\s+",
@@ -358,7 +360,10 @@ class RandomForest_object(BaseAnalysis):
                     self.rcns2_df_store[sampleID] = pd.DataFrame()
 
                 self.rcns2_df_store[sampleID] = pd.concat(
-                    [self.rcns2_df_store[sampleID], scores_to_save.set_index("timestamp")]
+                    [
+                        self.rcns2_df_store[sampleID],
+                        scores_to_save.set_index("timestamp"),
+                    ]
                 )
 
                 self.rcns2_df_store[sampleID].to_csv(
@@ -376,7 +381,6 @@ class RandomForest_object(BaseAnalysis):
                 ] -= len(tomerge)
 
             self.running = False
-
 
     def create_rcns2_chart(self, title):
         self.echart = self.create_chart(title)

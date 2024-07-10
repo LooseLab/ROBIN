@@ -53,6 +53,7 @@ import os
 import sys
 import click
 from pathlib import Path
+import numpy as np
 import pysam
 import pandas as pd
 import shutil
@@ -66,6 +67,29 @@ from robin.utilities.merge_bedmethyl import (
 )
 from typing import List, Tuple, Optional, Dict, Any
 
+import logging
+
+# Configure the logger
+logger = logging.getLogger("NanoDX")
+logger.setLevel(logging.ERROR)  # Set to DEBUG to capture all types of logs
+
+# Create a console handler with a higher log level
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.ERROR)
+
+# Create a file handler to save logs to a file
+file_handler = logging.FileHandler("nanodx_analysis.log")
+file_handler.setLevel(logging.ERROR)
+
+# Create a formatter and set it for both handlers
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+# Add the handlers to the logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
+
 
 def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
     """
@@ -78,14 +102,20 @@ def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
         threads (int): Number of threads to use.
     """
     try:
-        # print (f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --only-tabs -t {threads} {sortfile} {temp}")
-        os.system(
-            f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --mixed-delim -t {threads} {sortfile} {temp} --suppress-progress >/dev/null 2>&1"
+        logger.debug(
+            f"Running modkit with the following parameters: cpgs={cpgs}, sortfile={sortfile}, temp={temp}, threads={threads}"
         )
-        # shutil.copy(f"{sortfile}","modkit.bam")
-        # shutil.copy(f"{temp}", "modkitoutput.bed")
-    except Exception as e:
-        print(e)
+
+        if logger.isEnabledFor(logging.DEBUG):
+            command = f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --mixed-delim -t {threads} {sortfile} {temp}"
+        else:
+            command = f"modkit pileup --include-bed {cpgs} --filter-threshold 0.73 --combine-mods --mixed-delim -t {threads} {sortfile} {temp} --suppress-progress >/dev/null 2>&1"
+
+        logger.debug(f"Executing command: {command}")
+        os.system(command)
+        logger.debug("modkit command executed successfully.")
+    except Exception:
+        logger.error("An error occurred while running modkit", exc_info=True)
 
 
 def run_samtools_sort(
@@ -100,13 +130,12 @@ def run_samtools_sort(
         sortfile (str): Path to the sorted BAM file.
         threads (int): Number of threads to use.
     """
+    logger.debug(
+        f"Running samtools sort with the following parameters: file={file}, tomerge={tomerge}, sortfile={sortfile}, threads={threads}"
+    )
     pysam.cat("-o", file, *tomerge)
     pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
-
-
-modelfile = os.path.join(
-    os.path.dirname(os.path.abspath(models.__file__)), "Capper_et_al_NN.pkl"
-)
+    logger.debug("samtools sort command executed successfully.")
 
 
 def classification(
@@ -122,12 +151,13 @@ def classification(
     Returns:
         Tuple[np.ndarray, np.ndarray, int]: Predictions, class labels, and number of features.
     """
-    # NN = NN_classifier(modelfile)
+    logger.debug(f"Running classification with model file: {modelfile}")
     NN = NN_classifier(modelfile)
     try:
         predictions, class_labels, n_features = NN.predict(test_df)
-    except Exception as e:
-        print(e)
+        logger.debug("Classification executed successfully.")
+    except Exception:
+        logger.error("An error occurred during classification", exc_info=True)
         test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
         # sys.exit(1)
     return predictions, class_labels, n_features
@@ -163,11 +193,11 @@ class NanoDX_object(BaseAnalysis):
         self.model = model
         self.threshold = 0.05
         self.nanodx_bam_count = {}
-        self.not_first_run = {} #False
+        self.not_first_run = {}  # False
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), self.model
         )
-        self.nanodx_df_store = {} #pd.DataFrame()
+        self.nanodx_df_store = {}  # pd.DataFrame()
         self.nanodxfile = {}
         self.merged_bed_file = {}
         super().__init__(*args, **kwargs)
@@ -349,7 +379,9 @@ class NanoDX_object(BaseAnalysis):
                 self.merged_bed_file[sampleID] = await run.cpu_bound(
                     merge_bedmethyl, bed_a, self.merged_bed_file[sampleID]
                 )
-                save_bedmethyl(self.merged_bed_file[sampleID], self.nanodxfile[sampleID].name)
+                save_bedmethyl(
+                    self.merged_bed_file[sampleID], self.nanodxfile[sampleID].name
+                )
             else:
                 shutil.copy(f"{temp.name}", self.nanodxfile[sampleID].name)
                 self.merged_bed_file[sampleID] = pd.read_table(
@@ -450,7 +482,7 @@ class NanoDX_object(BaseAnalysis):
             bamfile (List[Tuple[str, float]]): List of BAM files with their timestamps.
         """
         if self.sampleID not in self.nanodxfile.keys():
-            self.nanodxfile[self.sampleID] =  tempfile.NamedTemporaryFile(
+            self.nanodxfile[self.sampleID] = tempfile.NamedTemporaryFile(
                 dir=self.check_and_create_folder(self.output, self.sampleID),
                 suffix=".nanodx",
             )
@@ -547,7 +579,9 @@ class NanoDX_object(BaseAnalysis):
                 self.merged_bed_file = await run.cpu_bound(
                     merge_bedmethyl, bed_a, self.merged_bed_file
                 )
-                save_bedmethyl(self.merged_bed_file, self.nanodxfile[self.sampleID].name)
+                save_bedmethyl(
+                    self.merged_bed_file, self.nanodxfile[self.sampleID].name
+                )
             else:
                 shutil.copy(f"{temp.name}", self.nanodxfile[self.sampleID].name)
                 self.merged_bed_file = pd.read_table(
@@ -596,7 +630,7 @@ class NanoDX_object(BaseAnalysis):
                     sep="\s+",
                 )
                 self.not_first_run[self.sampleID] = True
-                #self.not_first_run = True
+                # self.not_first_run = True
             self.merged_bed_file = await run.cpu_bound(
                 collapse_bedmethyl, self.merged_bed_file
             )
@@ -623,7 +657,10 @@ class NanoDX_object(BaseAnalysis):
             if self.sampleID not in self.nanodx_df_store.keys():
                 self.nanodx_df_store[self.sampleID] = pd.DataFrame()
             self.nanodx_df_store[self.sampleID] = pd.concat(
-                [self.nanodx_df_store[self.sampleID], nanoDX_save.set_index("timestamp")]
+                [
+                    self.nanodx_df_store[self.sampleID],
+                    nanoDX_save.set_index("timestamp"),
+                ]
             )
 
             self.nanodx_df_store[self.sampleID].to_csv(

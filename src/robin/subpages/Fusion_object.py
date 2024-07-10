@@ -51,6 +51,8 @@ import subprocess
 import gff3_parser
 import tempfile
 import random
+import pysam
+import networkx as nx
 import pandas as pd
 import click
 from typing import Optional, Tuple
@@ -59,7 +61,10 @@ from robin import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
 import matplotlib
+from matplotlib.ticker import FuncFormatter
+from matplotlib.patches import ConnectionPatch
 from robin.subpages.base_analysis import BaseAnalysis
+from collections import Counter
 
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
@@ -69,6 +74,92 @@ from matplotlib import pyplot as plt
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
+
+
+def get_gene_network(gene_pairs):
+    G = nx.Graph()
+    for pair in gene_pairs:
+        G.add_edge(pair[0], pair[1])
+    connected_components = list(nx.connected_components(G))
+    return [list(component) for component in connected_components]
+
+
+def extract_bam_info(bam_file):
+    # Open the BAM file
+    bam = pysam.AlignmentFile(bam_file, "rb")
+
+    # Initialize lists to store information
+    read_ids = []
+    reference_ids = []
+    reference_starts = []
+    reference_ends = []
+    read_starts = []
+    read_ends = []
+    strands = []
+    mapping_qualities = []
+    is_primary = []
+    is_secondary = []
+    is_supplementary = []
+
+    # Iterate over each read in the BAM file
+    for read in bam:
+        # Append the read information to the lists
+        read_ids.append(read.query_name)
+        reference_ids.append(bam.get_reference_name(read.reference_id))
+        reference_starts.append(read.reference_start)
+        reference_ends.append(read.reference_end)
+        read_starts.append(read.query_alignment_start)
+        read_ends.append(read.query_alignment_end)
+        strands.append("-" if read.is_reverse else "+")
+        mapping_qualities.append(read.mapping_quality)
+        # is_primary.append(read.is_primary)
+        is_secondary.append(read.is_secondary)
+        is_supplementary.append(read.is_supplementary)
+
+    # Close the BAM file
+    bam.close()
+
+    # Create a DataFrame
+    df = pd.DataFrame(
+        {
+            "read_id": read_ids,
+            "reference_id": reference_ids,
+            "reference_start": reference_starts,
+            "reference_end": reference_ends,
+            "read_start": read_starts,
+            "read_end": read_ends,
+            "strand": strands,
+            "mapping_quality": mapping_qualities,
+            # 'is_primary': is_primary,
+            "is_secondary": is_secondary,
+            "is_supplementary": is_supplementary,
+        }
+    )
+
+    return df
+
+
+# Function to collapse ranges within a fixed distance
+def collapse_ranges(df, max_distance):
+    collapsed = []
+    current_range = None
+
+    for _, row in df.iterrows():
+        chromosome, start, end = row["chromosome"], row["start"], row["end"]
+
+        if current_range is None:
+            current_range = row
+        else:
+            if start <= current_range["end"] + max_distance:
+                current_range["end"] = max(current_range["end"], end)
+            else:
+                collapsed.append(current_range)
+                current_range = row
+
+    if current_range is not None:
+        collapsed.append(current_range)
+
+    return pd.DataFrame(collapsed)
 
 
 def run_command(command: str) -> None:
@@ -123,10 +214,10 @@ def fusion_work(
         if os.path.getsize(tempreadfile) > 0:
             # Extract reads to a temporary BAM file
             run_command(
-                f"samtools view -@{threads} -N {tempreadfile} -o {tempbamfile} {bamfile}"
+                f"samtools view -@{threads}  --write-index -N {tempreadfile} -o {tempbamfile} {bamfile}"
             )
-
             if os.path.getsize(tempbamfile) > 0:
+                read_data = extract_bam_info(tempbamfile)
                 # Intersect the gene BED file with the temporary BAM file
                 run_command(
                     f"bedtools intersect -a {gene_bed} -b {tempbamfile} -wa -wb > {tempmappings}"
@@ -134,16 +225,51 @@ def fusion_work(
                 run_command(
                     f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}"
                 )
+                # print(f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}")
 
                 # Process gene mappings if available
+
+                samfile = pysam.AlignmentFile(f"{tempbamfile}", "r")
+
                 if os.path.getsize(tempmappings) > 0:
                     fusion_candidates = pd.read_csv(tempmappings, sep="\t", header=None)
-                    fusion_candidates = fusion_candidates[fusion_candidates[8] > 50]
-                    fusion_candidates["diff"] = (
-                        fusion_candidates[6] - fusion_candidates[5]
+                    # Merge on common columns
+                    # Find columns in df1 that are not in df2
+                    fusion_candidates.columns = [
+                        "col1",
+                        "col2",
+                        "col3",
+                        "col4",
+                        "reference_id",
+                        "reference_start",
+                        "reference_end",
+                        "read_id",
+                        "mapping_quality",
+                        "strand",
+                    ]
+                    additional_columns = [
+                        col
+                        for col in read_data.columns
+                        if col not in fusion_candidates.columns
+                    ]
+                    fusion_candidates = pd.merge(
+                        fusion_candidates,
+                        read_data[
+                            ["read_id", "reference_start", "reference_end"]
+                            + additional_columns
+                        ],
+                        on=["read_id", "reference_start", "reference_end"],
+                        how="left",
                     )
                     fusion_candidates = fusion_candidates[
-                        fusion_candidates["diff"] > 1000
+                        fusion_candidates["mapping_quality"] > 50
+                    ]
+                    fusion_candidates["diff"] = (
+                        fusion_candidates["reference_end"]
+                        - fusion_candidates["reference_start"]
+                    )
+                    fusion_candidates = fusion_candidates[
+                        fusion_candidates["diff"] > 100
                     ]
 
                 # Process all gene mappings if available
@@ -151,15 +277,46 @@ def fusion_work(
                     fusion_candidates_all = pd.read_csv(
                         tempallmappings, sep="\t", header=None
                     )
+                    fusion_candidates_all.columns = [
+                        "col1",
+                        "col2",
+                        "col3",
+                        "col4",
+                        "reference_id",
+                        "reference_start",
+                        "reference_end",
+                        "read_id",
+                        "mapping_quality",
+                        "strand",
+                    ]
+
+                    additional_columns = [
+                        col
+                        for col in read_data.columns
+                        if col not in fusion_candidates_all.columns
+                    ]
+                    fusion_candidates_all = pd.merge(
+                        fusion_candidates_all,
+                        read_data[
+                            ["read_id", "reference_start", "reference_end"]
+                            + additional_columns
+                        ],
+                        on=["read_id", "reference_start", "reference_end"],
+                        how="left",
+                    )
                     fusion_candidates_all = fusion_candidates_all[
-                        fusion_candidates_all[8] > 59
+                        fusion_candidates_all["mapping_quality"] > 50
                     ]
                     fusion_candidates_all["diff"] = (
-                        fusion_candidates_all[6] - fusion_candidates_all[5]
+                        fusion_candidates_all["reference_end"]
+                        - fusion_candidates_all["reference_start"]
                     )
                     fusion_candidates_all = fusion_candidates_all[
                         fusion_candidates_all["diff"] > 1000
                     ]
+
+                samfile.close()
+
     except Exception:
         # logging.error(f"Error during fusion work: {e}")
         raise
@@ -192,8 +349,8 @@ class FusionObject(BaseAnalysis):
     def __init__(self, *args, target_panel=None, **kwargs):
         self.target_panel = target_panel
 
-        self.fusion_candidates = {} # pd.DataFrame()
-        self.fusion_candidates_all = {} # pd.DataFrame()
+        self.fusion_candidates = {}  # pd.DataFrame()
+        self.fusion_candidates_all = {}  # pd.DataFrame()
         self.fstable_all = None
         self.fstable = None
         self.fstable_all_row_count = 0
@@ -381,11 +538,13 @@ class FusionObject(BaseAnalysis):
         """
         Displays all fusion candidates in a table format.
         """
-        #if not self.fusion_candidates_all.empty:
+        # if not self.fusion_candidates_all.empty:
         if self.sampleID in self.fusion_candidates_all.keys():
-            uniques_all = self.fusion_candidates_all[self.sampleID][7].duplicated(keep=False)
+            uniques_all = self.fusion_candidates_all[self.sampleID][
+                "read_id"
+            ].duplicated(keep=False)
             doubles_all = self.fusion_candidates_all[self.sampleID][uniques_all]
-            counts_all = doubles_all.groupby(7)[3].transform("nunique")
+            counts_all = doubles_all.groupby("read_id")["col4"].transform("nunique")
             result_all = doubles_all[counts_all > 1]
             result_all.to_csv(
                 os.path.join(
@@ -394,7 +553,6 @@ class FusionObject(BaseAnalysis):
                 ),
                 index=False,
             )
-            #self.update_fusion_table_all(result_all)
 
     def update_fusion_table_all(self, result_all: pd.DataFrame) -> None:
         """
@@ -423,6 +581,11 @@ class FusionObject(BaseAnalysis):
                                     7: "readID",
                                     8: "mapQ",
                                     9: "strand",
+                                    10: "Read Map Start",
+                                    11: "Read Map End",
+                                    12: "Secondary",
+                                    13: "Supplementary",
+                                    14: "mapping span",
                                 }
                             ),
                             pagination=25,
@@ -457,6 +620,11 @@ class FusionObject(BaseAnalysis):
                             7: "readID",
                             8: "mapQ",
                             9: "strand",
+                            10: "Read Map Start",
+                            11: "Read Map End",
+                            12: "Secondary",
+                            13: "Supplementary",
+                            14: "mapping span",
                         }
                     )
                     .to_dict("records")
@@ -465,47 +633,75 @@ class FusionObject(BaseAnalysis):
                 self.fusionplot_all.clear()
 
             result_all, goodpairs = self._annotate_results(result_all)
-            self.all_candidates = (
-                result_all[goodpairs].sort_values(by=7)["tag"].nunique()
-            )
+            self.all_candidates = 0
 
             if not result_all.empty:
                 with self.fusionplot_all.classes("w-full"):
-                    gene_pairs = result_all[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                    gene_pairs = (
+                        result_all[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                    )
+                    gene_pairs = [pair.split(", ") for pair in gene_pairs]
+                    gene_groups_test = get_gene_network(gene_pairs)
+                    gene_groups = []
+                    for gene_group in gene_groups_test:
+                        if (
+                            len(
+                                self._get_reads(
+                                    result_all[goodpairs][
+                                        result_all[goodpairs][3].isin(gene_group)
+                                    ]
+                                )
+                            )
+                            > 1
+                        ):
+                            gene_groups.append(gene_group)
+                    self.all_candidates = len(gene_groups)
+                    # print (gene_groups)
                     with ui.row().classes("w-full"):
                         ui.select(
-                            options=gene_pairs,
+                            options=gene_groups,
                             with_input=True,
-                            on_change=lambda e: show_gene_pair(e.value, result_all, goodpairs)
-                        ).classes('w-40')
+                            on_change=lambda e: show_gene_pair(
+                                e.value, result_all, goodpairs
+                            ),
+                        ).classes("w-40")
                     with ui.row().classes("w-full"):
                         self.all_card = ui.card()
                         with self.all_card:
-                            ui.label("Select gene pair to see results.").tailwind("drop-shadow", "font-bold")
+                            ui.label("Select gene pair to see results.").tailwind(
+                                "drop-shadow", "font-bold"
+                            )
 
-                    def show_gene_pair(gene_pair: str, result_all, goodpairs) -> None:
-                        ui.notify(gene_pair)
+                    def show_gene_pair(gene_group: str, result_all, goodpairs) -> None:
+                        ui.notify(gene_group)
                         self.all_card.clear()
                         with self.all_card:
                             with ui.row():
-                                ui.label(f"{gene_pair}").tailwind("drop-shadow", "font-bold")
+                                ui.label(f"{gene_group}").tailwind(
+                                    "drop-shadow", "font-bold"
+                                )
                             with ui.row():
-                                for gene in gene_pair.split(", "):
-                                    reads = result_all[goodpairs].sort_values(by=7)[
-                                        result_all[goodpairs].sort_values(by=7)[3].str.contains(gene)
-                                    ]
-                                    self.create_fusion_plot(gene, reads)
-
+                                # for gene in gene_pair.split(", "):
+                                #    reads = result_all[goodpairs].sort_values(by=7)[
+                                #        result_all[goodpairs].sort_values(by=7)[3].str.contains(gene)
+                                #    ]
+                                reads = result_all[goodpairs][
+                                    result_all[goodpairs][3].isin(gene_group)
+                                ]
+                                self.create_fusion_plot(gene_group, reads)
 
     def fusion_table(self) -> None:
         """
         Displays fusion candidates in a table format.
         """
-        #if not self.fusion_candidates.empty:
+        # if not self.fusion_candidates.empty:
         if self.sampleID in self.fusion_candidates.keys():
-            uniques = self.fusion_candidates[self.sampleID][7].duplicated(keep=False)
+            # print(self.fusion_candidates[self.sampleID].columns)
+            uniques = self.fusion_candidates[self.sampleID]["read_id"].duplicated(
+                keep=False
+            )
             doubles = self.fusion_candidates[self.sampleID][uniques]
-            counts = doubles.groupby(7)[3].transform("nunique")
+            counts = doubles.groupby("read_id")["col4"].transform("nunique")
             result = doubles[counts > 1]
             result.to_csv(
                 os.path.join(
@@ -542,6 +738,11 @@ class FusionObject(BaseAnalysis):
                                     7: "readID",
                                     8: "mapQ",
                                     9: "strand",
+                                    10: "Read Map Start",
+                                    11: "Read Map End",
+                                    12: "Secondary",
+                                    13: "Supplementary",
+                                    14: "mapping span",
                                 }
                             ),
                             pagination=25,
@@ -576,6 +777,11 @@ class FusionObject(BaseAnalysis):
                             7: "readID",
                             8: "mapQ",
                             9: "strand",
+                            10: "Read Map Start",
+                            11: "Read Map End",
+                            12: "Secondary",
+                            13: "Supplementary",
+                            14: "mapping span",
                         }
                     )
                     .to_dict("records")
@@ -584,41 +790,64 @@ class FusionObject(BaseAnalysis):
                 self.fusionplot.clear()
 
             result, goodpairs = self._annotate_results(result)
-            self.candidates = result[goodpairs].sort_values(by=7)["tag"].nunique()
+            # self.candidates = result[goodpairs].sort_values(by=7)["tag"].nunique()
+            self.candidates = 0
 
-
-            if not result.empty:
+            if not (result.empty):
                 with self.fusionplot.classes("w-full"):
-                    gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                    gene_pairs = (
+                        result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                    )
+                    gene_pairs = [pair.split(", ") for pair in gene_pairs]
+                    gene_groups_test = get_gene_network(gene_pairs)
+                    gene_groups = []
+                    for gene_group in gene_groups_test:
+                        if (
+                            len(
+                                self._get_reads(
+                                    result[goodpairs][
+                                        result[goodpairs][3].isin(gene_group)
+                                    ]
+                                )
+                            )
+                            > 1
+                        ):
+                            gene_groups.append(gene_group)
+                    self.candidates = len(gene_groups)
+                    # print (gene_groups)
                     with ui.row().classes("w-full"):
-                        ui.select(options=gene_pairs, with_input=True,
-                                  on_change=lambda e: show_gene_pair(e.value)).classes(
-                            'w-40')
+                        ui.select(
+                            options=gene_groups,
+                            with_input=True,
+                            on_change=lambda e: show_gene_pair(
+                                e.value, result, goodpairs
+                            ),
+                        ).classes("w-40")
                     with ui.row().classes("w-full"):
                         self.card = ui.card()
                         with self.card:
-                            ui.label("Select gene pair to see results.").tailwind("drop-shadow", "font-bold")
+                            ui.label("Select gene pair to see results.").tailwind(
+                                "drop-shadow", "font-bold"
+                            )
 
-                    def show_gene_pair(gene_pair: str) -> None:
-                        ui.notify(gene_pair)
+                    def show_gene_pair(gene_group: str, result, goodpairs) -> None:
+                        ui.notify(gene_group)
                         self.all_card.clear()
                         with self.all_card:
                             with ui.row():
-                                ui.label(f"{gene_pair}").tailwind(
+                                ui.label(f"{gene_group}").tailwind(
                                     "drop-shadow", "font-bold"
                                 )
                             with ui.row():
-                                for gene in gene_pair.split(", "):
-                                    #title = gene
-                                    reads = result[goodpairs].sort_values(by=7)[
-                                        result[goodpairs]
-                                        .sort_values(by=7)[3]
-                                        .str.contains(gene)
-                                    ]
-
-                                    self.create_fusion_plot(
-                                        gene,reads,
-                                    )
+                                # for gene in gene_pair.split(", "):
+                                #    reads = result_all[goodpairs].sort_values(by=7)[
+                                #        result_all[goodpairs].sort_values(by=7)[3].str.contains(gene)
+                                #    ]
+                                reads = result[goodpairs][
+                                    result[goodpairs][3].isin(gene_group)
+                                ]
+                                # print (reads)
+                                self.create_fusion_plot(gene_group, reads)
 
             """
             with self.fusionplot.classes("w-full"):
@@ -640,6 +869,54 @@ class FusionObject(BaseAnalysis):
                                 )
             """
 
+    def _get_reads(self, reads: pd.DataFrame) -> pd.DataFrame:
+        """
+        Get reads for a specific gene.
+
+        Args:
+            reads (pd.DataFrame): DataFrame with reads
+
+        Returns:
+            pd.DataFrame: DataFrame with reads
+        """
+        df = reads
+        df.columns = [
+            "chromosome",
+            "start",
+            "end",
+            "gene",
+            "chromosome2",
+            "start2",
+            "end2",
+            "id",
+            "quality",
+            "strand",
+            "read_start",
+            "read_end",
+            "secondary",
+            "supplementary",
+            "span",
+            "tag",
+            "color",
+        ]
+        df["start"] = df["start"].astype(int)
+        df["end"] = df["end"].astype(int)
+
+        # Sort the DataFrame by chromosome, start, and end positions
+        df = df.sort_values(by=["chromosome", "start", "end"])
+
+        df = df.drop_duplicates(subset=["start2", "end2", "id"])
+        # print(df)
+
+        # Group by chromosome and collapse ranges within each group
+        result = (
+            df.groupby("chromosome")
+            .apply(lambda x: collapse_ranges(x, 10000))
+            .reset_index(drop=True)
+        )
+        # return reads[reads[3].eq(gene)]
+        return result
+
     def create_fusion_plot(self, title: str, reads: pd.DataFrame) -> None:
         """
         Creates a fusion plot to illustrate the alignments of reads to each region of the genome.
@@ -648,67 +925,248 @@ class FusionObject(BaseAnalysis):
             title (str): Title of the plot.
             reads (pd.DataFrame): DataFrame with reads to be plotted.
         """
-        with ui.card().classes("no-shadow border-[2px]"):
-            with ui.pyplot(figsize=(16, 2)):
-                ax1 = plt.gca()
-                features = []
-                first_index = 0
-                sequence_length = 100
-                x_label = ""
-                for index, row in self.gene_table[
-                    self.gene_table["gene_name"].eq(title.strip())
-                ].iterrows():
-                    if row["Type"] == "gene":
-                        x_label = row["Seqid"]
-                        features.append(
-                            GraphicFeature(
-                                start=int(row["Start"]),
-                                end=int(row["End"]),
-                                strand=STRAND[row["Strand"]],
-                                thickness=4,
-                                color="#ffd700",
-                            )
-                        )
-                        first_index = int(row["Start"]) - 1000
-                        sequence_length = int(row["End"]) - int(row["Start"]) + 2000
-                    if (
-                        row["Type"] == "CDS"
-                        and row["transcript_type"] == "protein_coding"
-                    ):
-                        features.append(
-                            GraphicFeature(
-                                start=int(row["Start"]),
-                                end=int(row["End"]),
-                                strand=STRAND[row["Strand"]],
-                                color="#ffcccc",
-                            )
-                        )
-                record = GraphicRecord(
-                    sequence_length=sequence_length,
-                    first_index=first_index,
-                    features=features,
-                )
-                ax1.set_title(f"{title} - {x_label}")
-                record.plot(ax=ax1)
+        with ui.card().classes("w-full no-shadow border-[2px]"):
+            result = self._get_reads(reads)
+            df = reads
 
-            with ui.pyplot(figsize=(16, 1)):
-                ax = plt.gca()
-                features = []
-                for index, row in reads.sort_values(by=7).iterrows():
-                    features.append(
-                        GraphicFeature(
-                            start=int(row[5]),
-                            end=int(row[6]),
-                            strand=STRAND[row[9]],
-                            color=row["Color"],
-                        )
-                    )
-                record = GraphicRecord(
-                    sequence_length=sequence_length,
-                    first_index=first_index,
-                    features=features,
+            # Function to rank overlapping ranges
+            def rank_overlaps(df, start_col, end_col):
+                # Sort by start and end columns
+                df = df.sort_values(by=["gene", start_col, end_col]).reset_index(
+                    drop=True
                 )
-                record.plot(ax=ax, with_ruler=False, draw_line=True)
+                # print(df)
+                ranks = []
+                current_rank = 0
+                current_end = -1
+
+                for _, row in df.iterrows():
+                    if row[start_col] > current_end:
+                        current_rank = 0
+                    ranks.append(current_rank)
+                    current_end = max(current_end, row[end_col])
+                    current_rank += 1
+
+                return ranks
+
+            df["start2"] = df["start2"].astype(int)
+            df["end2"] = df["end2"].astype(int)
+            df = df.sort_values(by=["gene", "start2", "end2"])
+
+            df["rank"] = rank_overlaps(df, "start2", "end2")
+
+            lines = df.sort_values(by=["id", "read_start"]).reset_index(drop=True)
+
+            # Function to assign occurrence number
+            def assign_occurrence(group):
+                group["Occurrence"] = range(1, len(group) + 1)
+                return group
+
+            # Apply the function to each group
+            lines = lines.groupby("id").apply(assign_occurrence).reset_index(drop=True)
+
+            # Function to find join coordinates
+            def find_joins(group):
+                group = group.reset_index(drop=True)
+                for i in range(len(group)):
+                    if i < len(group) - 1:
+                        if (
+                            group.loc[i, "Occurrence"] == 1
+                        ):  # The first read in the sequence of read mappings
+                            group.loc[i, "Join_Gene"] = group.loc[i + 1, "gene"]
+                            group.loc[i, "Join_Start"] = group.loc[
+                                i, "start2"
+                            ]  # Reference end of current read
+                            group.loc[i, "Join_Chromosome"] = group.loc[
+                                i + 1, "chromosome2"
+                            ]
+                            group.loc[i, "spanB"] = group.loc[i + 1, "span"]
+                            group.loc[i, "start3"] = group.loc[i + 1, "start2"]
+                            group.loc[i, "end3"] = group.loc[i + 1, "end2"]
+                            group.loc[i, "rankB"] = group.loc[i + 1, "rank"]
+                            if group.loc[i + 1, "strand"] == "+":
+
+                                group.loc[i, "Join_End"] = group.loc[
+                                    i + 1, "end2"
+                                ]  # Reference start of next read
+                            else:
+
+                                group.loc[i, "Join_End"] = group.loc[
+                                    i + 1, "start2"
+                                ]  # Reference end of next read
+
+                return group
+
+            # Initialize columns for the coordinates where the read joins the next read
+            lines["Join_Start"] = None
+            lines["Join_End"] = None
+            lines["Join_Chromosome"] = None
+            lines["Join_Gene"] = None
+            lines["spanB"] = None
+            lines["start3"] = None
+            lines["end3"] = None
+            lines["rankB"] = None
+
+            # Apply the function to each group
+            lines = lines.groupby("id").apply(find_joins).reset_index(drop=True)
+            # print (lines)
+            # Remove rows containing NA values
+            lines = lines.dropna()
+
+            # Dict to store ax
+
+            axdict = {}
+
+            if len(result) > 1:
+                gene_table = self.gene_table
+                with ui.pyplot(figsize=(21, 5)).classes("w-full"):  # figsize=(20, 5)):
+                    num_plots = 2 * len(result)
+                    num_cols = len(result)  # 2  # Number of columns in the subplot grid
+                    num_rows = (
+                        num_plots + num_cols - 1
+                    ) // num_cols  # Calculate the number of rows needed
+
+                    for i, ax in enumerate(range(num_plots), start=1):
+                        plt.subplot(num_rows, num_cols, i)
+                        row, col = divmod(i - 1, num_cols)
+                        # plt.title(f'Subplot {i} (Row {row + 1}, Col {col + 1})')
+                        data = result.iloc[col]
+
+                        chrom = data["chromosome"]
+                        start = data["start"]
+                        end = data["end"]
+
+                        def human_readable_format(x, pos):
+                            return f"{x / 1e6:.2f}"  # Mb'
+
+                        if row == 1:
+                            features = []
+                            for index, row in gene_table[
+                                gene_table["Seqid"].eq(chrom)
+                                & gene_table["Start"].le(end)
+                                & gene_table["End"].ge(start)
+                            ].iterrows():
+                                if row["Type"] == "gene":
+                                    features.append(
+                                        GraphicFeature(
+                                            start=int(row["Start"]),
+                                            end=int(row["End"]),
+                                            strand=STRAND[row["Strand"]],
+                                            thickness=8,
+                                            color="#ffd700",
+                                            label=row["gene_name"],
+                                            fontdict={
+                                                "family": "sans",
+                                                "color": "black",
+                                                "fontsize": 8,
+                                            },
+                                        )
+                                    )
+
+                            for index, row in (
+                                gene_table[
+                                    gene_table["gene_name"].eq(data["gene"])
+                                    & gene_table["Source"].eq("HAVANA")
+                                    & gene_table["Type"].eq("exon")
+                                ]
+                                .groupby(["Seqid", "Start", "End", "Type", "Strand"])
+                                .count()
+                                .reset_index()
+                                .iterrows()
+                            ):
+                                # print(row)
+                                features.append(
+                                    GraphicFeature(
+                                        start=int(row["Start"]),
+                                        end=int(row["End"]),
+                                        strand=STRAND[row["Strand"]],
+                                        thickness=4,
+                                        color="#C0C0C0",
+                                        # label=row["gene_name"],
+                                        # fontdict = {
+                                        #    'family': 'sans',
+                                        #    'color':  'black',
+                                        #    'fontsize': 8,
+                                        # }
+                                    )
+                                )
+
+                            record = GraphicRecord(
+                                sequence_length=end - start,
+                                first_index=start,
+                                features=features,
+                            )
+                            ax = plt.gca()
+                            record.plot(
+                                ax=ax,
+                                with_ruler=False,
+                                draw_line=True,
+                                strand_in_label_threshold=4,
+                            )
+
+                            plt.tight_layout()
+
+                        else:
+                            features2 = []
+                            for index, row in (
+                                df[df["chromosome"].eq(chrom)]
+                                .sort_values(by="id")
+                                .iterrows()
+                            ):
+                                features2.append(
+                                    GraphicFeature(
+                                        start=int(row["start2"]),
+                                        end=int(row["end2"]),
+                                        strand=STRAND[row["strand"]],
+                                        color=row["color"],
+                                    )
+                                )
+
+                            record2 = GraphicRecord(
+                                sequence_length=end - start,
+                                first_index=start,
+                                features=features2,
+                            )
+                            ax = plt.gca()
+                            record2.plot(ax=ax)
+                            ax.xaxis.set_major_formatter(
+                                FuncFormatter(human_readable_format)
+                            )
+                            ax.tick_params(
+                                axis="x", labelsize=8
+                            )  # Set font size for x-axis labels in ax0
+                            ax.set_xlabel(
+                                f'Position (Mb) - {chrom} - {data["gene"]}', fontsize=10
+                            )
+                            ax.set_title(f'{data["gene"]}')
+
+                            axdict[data["gene"]] = ax
+                    gene_counter = Counter()
+                    # print (lines)
+                    for index, row in lines.iterrows():
+                        # Coordinates in data space of each subplot
+
+                        xyB = (row["Join_Start"], row["rank"])  # Point in subplot 1
+                        xyA = (row["Join_End"], row["rankB"])
+
+                        gene_counter[row["gene"]] += 1
+                        gene_counter[row["Join_Gene"]] += 1
+
+                        # Create an arc connection
+                        con = ConnectionPatch(
+                            xyA=xyA,
+                            coordsA=axdict[row["Join_Gene"]].transData,
+                            xyB=xyB,
+                            coordsB=axdict[row["gene"]].transData,
+                            axesB=row["gene"],
+                            axesA=row["Join_Gene"],
+                            connectionstyle="arc3,rad=0.05",
+                            arrowstyle="->",
+                            linestyle="--",
+                            color=row["color"],
+                        )
+                        # Add the arc connection to the second subplot (ax2)
+                        axdict[row["Join_Gene"]].add_artist(con)
 
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
@@ -757,7 +1215,10 @@ class FusionObject(BaseAnalysis):
                     self.fusion_candidates_all[self.sampleID] = fusion_candidates_all
                 else:
                     self.fusion_candidates_all[self.sampleID] = pd.concat(
-                        [self.fusion_candidates_all[self.sampleID], fusion_candidates_all]
+                        [
+                            self.fusion_candidates_all[self.sampleID],
+                            fusion_candidates_all,
+                        ]
                     ).reset_index(drop=True)
 
             self.fusion_table()
@@ -794,8 +1255,11 @@ class FusionObject(BaseAnalysis):
         result_copy.loc[:, "tag"] = tags
         result = result_copy
         colors = result.groupby(7).apply(lambda x: self._generate_random_color())
+        result = result.map(lambda x: x.strip() if isinstance(x, str) else x)
         result["Color"] = result[7].map(colors.get)
         goodpairs = result.groupby("tag")[7].transform("nunique") > 1
+        # gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+        # print(gene_pairs)
         return result, goodpairs
 
     def show_previous_data(self) -> None:
@@ -815,29 +1279,36 @@ class FusionObject(BaseAnalysis):
             output = self.check_and_create_folder(self.output, self.sampleID)
 
         if self.check_file_time(os.path.join(output, "fusion_candidates_master.csv")):
-            fusion_candidates = pd.read_csv(
-                os.path.join(output, "fusion_candidates_master.csv"),
-                dtype=str,
-                # names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
-                names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
-                header=None,
-                skiprows=1,
-            )
+            try:
+                fusion_candidates = pd.read_csv(
+                    os.path.join(output, "fusion_candidates_master.csv"),
+                    dtype=str,
+                    # names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                    # names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                    header=None,
+                    skiprows=1,
+                )
+                print("fusion_candidates", fusion_candidates)
 
-            self.update_fusion_table(fusion_candidates)
+                self.update_fusion_table(fusion_candidates)
+            except pd.errors.EmptyDataError:
+                pass
 
         if self.check_file_time(os.path.join(output, "fusion_candidates_all.csv")):
-            fusion_candidates_all = pd.read_csv(
-                os.path.join(output, "fusion_candidates_all.csv"),
-                dtype=str,
-                # names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
-                names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
-                header=None,
-                skiprows=1,
-            )
+            try:
+                fusion_candidates_all = pd.read_csv(
+                    os.path.join(output, "fusion_candidates_all.csv"),
+                    dtype=str,
+                    # names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                    # names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
+                    header=None,
+                    skiprows=1,
+                )
+                # print("fusion_candidates_all", fusion_candidates_all)
 
-            self.update_fusion_table_all(fusion_candidates_all)
-
+                self.update_fusion_table_all(fusion_candidates_all)
+            except pd.errors.EmptyDataError:
+                pass
 
 
 def test_me(

@@ -85,6 +85,20 @@ def frame(navtitle: str, smalltitle=None):
     """
     # Add custom HTML and CSS to the head of the page
     ui.add_head_html(HEADER_HTML + f"<style>{STYLE_CSS}</style>")
+    ui.add_head_html(
+        """
+        <script>
+        function emitSize() {
+            emitEvent('resize', {
+                width: document.body.offsetWidth,
+                height: document.body.offsetHeight,
+            });
+        }
+        window.onload = emitSize;
+        window.onresize = emitSize;
+        </script>
+    """
+    )
     # ui.add_head_html(f'<script type="text/javascript" src="https://fastly.jsdelivr.net/npm/echarts-simple-transform/dist/ecSimpleTransform.min.js"> </script>')
     # Create a persistent dialog for quitting the app
     with ui.dialog().props("persistent") as quitdialog, ui.card():
@@ -174,6 +188,8 @@ def frame(navtitle: str, smalltitle=None):
 
     # Create a footer with useful information and quit button
     with ui.footer().style("background-color: #4F9153"):
+        # ui.on('resize', lambda e: print(f'resize: {e.args}'))
+
         with ui.dialog() as dialog, ui.card():
             ui.label("Links").tailwind("text-2xl font-bold font-italic drop-shadow")
             ui.separator()
