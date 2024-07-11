@@ -5,10 +5,9 @@ Original code written by: Thomas Murray and taken from https://github.com/tom-mu
 import pysam
 import os
 from typing import Optional, Tuple, Dict, Any, Generator, Set
-import logging
 
 # Configure logging
-#logger = logging.getLogger(__name__)
+# logger = logging.getLogger(__name__)
 
 
 class ReadBam:
@@ -75,7 +74,7 @@ class ReadBam:
         if self.sam_file:
             rg_tags = self.sam_file.header.get("RG", [])
             if not rg_tags:
-                #logger.warning("This BAM file does not contain an @RG field")
+                # logger.warning("This BAM file does not contain an @RG field")
                 return None
 
             for rg_tag in rg_tags:
@@ -135,9 +134,9 @@ class ReadBam:
         """
         if self.bam_file:
             if not os.path.isfile(f"{self.bam_file}.bai"):
-                #logger.warning(
+                # logger.warning(
                 #    f"Index file for {self.bam_file} does not exist. Generating index file."
-                #)
+                # )
                 pysam.index(self.bam_file)
             self.sam_file = pysam.AlignmentFile(self.bam_file, "rb", check_sq=False)
 
@@ -194,8 +193,8 @@ class ReadBam:
             self.mapped_reads = len(readset)
             self.unmapped_reads = self.sam_file.mapped if self.sam_file else 0
 
-            #logger.debug(f"Mapped reads: {filtered_reads_count}")
-            #logger.debug(f"Total reads: {filtered_reads_count + self.unmapped_reads}")
+            # logger.debug(f"Mapped reads: {filtered_reads_count}")
+            # logger.debug(f"Total reads: {filtered_reads_count + self.unmapped_reads}")
 
             return bam_read
         return None

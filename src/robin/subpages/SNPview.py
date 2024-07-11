@@ -220,8 +220,6 @@ class SNPview:
                                 ui.icon("search")
 
 
-
-
 def index_page() -> None:
     # from check_connection import ConnectionDialog
     # initial_ip = "127.0.0.1"

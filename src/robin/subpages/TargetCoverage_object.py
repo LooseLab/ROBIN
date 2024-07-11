@@ -18,15 +18,13 @@ from pathlib import Path
 from nicegui import ui, run, app  # , background_tasks
 from io import StringIO
 import pysam
-import asyncio
 import tempfile
 import shutil
 import queue
-import subprocess
 
-from robin.subpages.SNPview import SNPview
 
 os.environ["CI"] = "1"
+
 
 def process_annotations(record: dict) -> dict:
     """
@@ -67,9 +65,7 @@ def process_annotations(record: dict) -> dict:
                             ann_dict[count]["CDS.pos / CDS.length"] = myvalues[12]
                             ann_dict[count]["AA.pos / AA.length"] = myvalues[13]
                             ann_dict[count]["Distance"] = myvalues[14]
-                            ann_dict[count]["ERRORS / WARNINGS / INFO"] = myvalues[
-                                15
-                            ]
+                            ann_dict[count]["ERRORS / WARNINGS / INFO"] = myvalues[15]
                         except Exception as e:
                             print(f"Error: {e}")
                             sys.exit()
@@ -90,17 +86,13 @@ def process_annotations(record: dict) -> dict:
                                 ann_dict[count]["Rank"] = myvalues[8]
                                 ann_dict[count]["HGVS.c"] = myvalues[9]
                                 ann_dict[count]["HGVS.p"] = myvalues[10]
-                                ann_dict[count]["cDNA.pos / cDNA.length"] = (
-                                    myvalues[11]
-                                )
-                                ann_dict[count]["CDS.pos / CDS.length"] = myvalues[
-                                    12
-                                ]
+                                ann_dict[count]["cDNA.pos / cDNA.length"] = myvalues[11]
+                                ann_dict[count]["CDS.pos / CDS.length"] = myvalues[12]
                                 ann_dict[count]["AA.pos / AA.length"] = myvalues[13]
                                 ann_dict[count]["Distance"] = myvalues[14]
-                                ann_dict[count]["ERRORS / WARNINGS / INFO"] = (
-                                    myvalues[15]
-                                )
+                                ann_dict[count]["ERRORS / WARNINGS / INFO"] = myvalues[
+                                    15
+                                ]
                                 count += 1
                             except Exception as e:
                                 print(f"Error: {e}")
@@ -108,6 +100,7 @@ def process_annotations(record: dict) -> dict:
             else:
                 rec_dict[mykey] = myvalue
     return ann_dict, rec_dict
+
 
 def parse_vcf(vcf_file):
     header = "CHROM POS ID REF ALT QUAL FILTER INFO FORMAT GT".split()
@@ -163,10 +156,10 @@ def parse_vcf(vcf_file):
             vcf = result
 
             try:
-                vcf.to_csv(f'{vcf_file}.csv', index=False)
-                #print(f"VCF file saved as {vcf_file}.csv")
+                vcf.to_csv(f"{vcf_file}.csv", index=False)
+                # print(f"VCF file saved as {vcf_file}.csv")
             except Exception as e:
-                print (e)
+                print(e)
                 sys.exit(1)
 
 
@@ -185,7 +178,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
             f"--threads {threads} "
             f"--platform ont_r10_guppy_hac_5khz "
             f"--output_dir {workdirout} -b {bedfile}"
-            #f" >/dev/null 2>&1"
+            # f" >/dev/null 2>&1"
         )
         os.system(runcommand)
         shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
@@ -210,9 +203,9 @@ def get_covdfs(bamfile):
     This function runs modkit on a bam file and extracts the methylation data.
     """
     try:
-        #no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
-        #command = f"samtools view -@2 -h -F 0x100 --write-index {bamfile} -o {no_secondary_bam}"
-        #os.system(command)
+        # no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
+        # command = f"samtools view -@2 -h -F 0x100 --write-index {bamfile} -o {no_secondary_bam}"
+        # os.system(command)
         newcovdf = pd.read_csv(StringIO(pysam.coverage(f"{bamfile}")), sep="\t")
         newcovdf.drop(
             columns=["coverage", "meanbaseq", "meanmapq"],
@@ -245,7 +238,7 @@ def subset_bam(bamfile, targets, output):
 def sort_bam(bamfile, output, threads):
     pysam.sort(f"-@{threads}", "-o", output, bamfile)
     pysam.index(f"{output}", f"{output}.bai")
-    print (f"Sorted bam file saved as {output}")
+    print(f"Sorted bam file saved as {output}")
 
 
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
@@ -297,13 +290,13 @@ class TargetCoverage(BaseAnalysis):
     def __init__(self, *args, target_panel=None, reference=None, **kwargs):
         self.callthreshold = 10
         self.clair3running = False
-        self.targets_exceeding_threshold = 0
-        self.targetbamfile = None
+        self.targets_exceeding_threshold = {}
+        self.targetbamfile = {}
         self.covtable = None
         self.covtable_row_count = 0
-        self.coverage_over_time = np.empty((0, 2))
-        self.cov_df_main = pd.DataFrame()
-        self.bedcov_df_main = pd.DataFrame()
+        self.coverage_over_time = {}  # np.empty((0, 2))
+        self.cov_df_main = {}
+        self.bedcov_df_main = {}
         self.SNPqueue = queue.Queue()
         self.reference = reference
         if self.reference:
@@ -338,7 +331,9 @@ class TargetCoverage(BaseAnalysis):
             while not self.SNPqueue.empty():
                 gene_list, bamfile, bedfile = self.SNPqueue.get()
 
-            workdirout = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "clair3")
+            workdirout = os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID), "clair3"
+            )
             if not os.path.exists(workdirout):
                 os.mkdir(workdirout)
             # bamfile, bedfile, workdir, workdirout, threads
@@ -354,7 +349,7 @@ class TargetCoverage(BaseAnalysis):
                 self.reference,
             )
             self.clair3running = False
-        #else:
+        # else:
         #    await asyncio.sleep(1)
         self.snp_timer.active = True
 
@@ -367,11 +362,14 @@ class TargetCoverage(BaseAnalysis):
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.grid(columns=2).classes("w-full h-auto"):
-
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2"
+                ):
                     self.create_coverage_plot("Chromosome Coverage")
 
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2"
+                ):
                     self.create_coverage_plot_targets("Target Coverage")
         with ui.card().classes("w-full"):
             ui.label("Target Outliers").style(
@@ -397,37 +395,39 @@ class TargetCoverage(BaseAnalysis):
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
-                self.SNPplaceholder = ui.card().tight().classes("w-full overflow-x-auto")
+                self.SNPplaceholder = (
+                    ui.card().tight().classes("w-full overflow-x-auto")
+                )
                 with self.SNPplaceholder:
                     ui.label(
                         "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
                     )
-                #self.SNPview = SNPview(self.SNPplaceholder)
-                #ui.timer(0.1,lambda: self.SNPview.renderme(), once=True)
+                # self.SNPview = SNPview(self.SNPplaceholder)
+                # ui.timer(0.1,lambda: self.SNPview.renderme(), once=True)
             ui.label("Candidate IN/DELs").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
-                self.INDELplaceholder = ui.card().tight().classes("w-full overflow-x-auto")
+                self.INDELplaceholder = (
+                    ui.card().tight().classes("w-full overflow-x-auto")
+                )
 
                 with self.INDELplaceholder:
                     ui.label(
                         "Candidate IN/DELs will be displayed here. IN/DELs are called based on available data at that time."
                     )
-                #self.INDELview = SNPview(self.INDELplaceholder)
-                #ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
+                # self.INDELview = SNPview(self.INDELplaceholder)
+                # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
         if self.browse:
-            ui.timer(0.1, callback=self.show_previous_data,once=True)
+            ui.timer(0.1, callback=self.show_previous_data, once=True)
         else:
-            ui.timer(10, lambda: self.show_previous_data())
+            ui.timer(30, lambda: self.show_previous_data())
 
     def create_coverage_plot(self, title):
         self.echart3 = (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
                     "grid": {"containLabel": True},
                     "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -454,9 +454,7 @@ class TargetCoverage(BaseAnalysis):
         self.echart4 = (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
                     "grid": {"containLabel": True},
                     "title": {"text": title},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -483,9 +481,7 @@ class TargetCoverage(BaseAnalysis):
         self.coverage_time_chart = (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
                     "grid": {"containLabel": True},
                     "title": {"text": "Coverage Over Time"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
@@ -522,157 +518,147 @@ class TargetCoverage(BaseAnalysis):
         self.target_boxplot = (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
-                    "title":[
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
+                    "title": [
                         {
-                            "text": 'Target Coverage',
+                            "text": "Target Coverage",
                         },
                     ],
-                    "dataset":[
+                    "dataset": [
                         {
-                            "id": 'raw',
-                            "dimensions": ['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'chrom_index'],
-                            "source":[
-                               ]
+                            "id": "raw",
+                            "dimensions": [
+                                "chrom",
+                                "min",
+                                "Q1",
+                                "median",
+                                "Q3",
+                                "max",
+                                "chrom_index",
+                            ],
+                            "source": [],
                         },
                         {
-                            "id": 'rawdata',
-                            "dimensions": ['chrom', 'coverage', 'name'],
-                            "source":[
-                        ]
+                            "id": "rawdata",
+                            "dimensions": ["chrom", "coverage", "name"],
+                            "source": [],
                         },
                         {
-                            "id": 'outliers',
-                            "dimensions": ['chrom', 'coverage', 'name'],
-                            "source": [
-                            ]
+                            "id": "outliers",
+                            "dimensions": ["chrom", "coverage", "name"],
+                            "source": [],
                         },
                         {
-                            "id": 'globaloutliers',
-                            "dimensions": ['chrom', 'coverage', 'name'],
-                            "source": [
-                            ]
-                        }
+                            "id": "globaloutliers",
+                            "dimensions": ["chrom", "coverage", "name"],
+                            "source": [],
+                        },
                     ],
-                    "tooltip": {
-                        "trigger": 'item',
-                        "axisPointer": {
-                            "type": 'shadow'
-                        }
-                    },
-                    "dataZoom":[
+                    "tooltip": {"trigger": "item", "axisPointer": {"type": "shadow"}},
+                    "dataZoom": [
                         {
-                            "type": 'slider',
+                            "type": "slider",
                             "yAxisIndex": 0,
                         }
                     ],
-                    "grid": {
-                        "left": '10%',
-                        "right": '10%',
-                        "bottom": '15%'
-                    },
+                    "grid": {"left": "10%", "right": "10%", "bottom": "15%"},
                     "xAxis": {
-                        "type": 'category',
-                        "name": 'Chromosome',
+                        "type": "category",
+                        "name": "Chromosome",
                         "boundaryGap": True,
                         "nameGap": 30,
-                        "splitArea": {
-                            "show": False
-                        },
-                        "splitLine": {
-                            "show": False
-                        }
+                        "splitArea": {"show": False},
+                        "splitLine": {"show": False},
                     },
                     "yAxis": {
-                        #"type": 'value',
-                        "name": 'Coverage',
-                        #"splitArea": {
+                        # "type": 'value',
+                        "name": "Coverage",
+                        # "splitArea": {
                         #    "show": True
-                        #}
+                        # }
                     },
-                    "legend": {"data": ['boxplot', 'raw data', 'outliers', 'global outliers'],
-                               "selected": {
-                                   'boxplot': True,
-                                   'global outliers': True,
-                                   'raw data': False,
-                                   'outliers': False
-                               }
-                               },
-                    "series":[
+                    "legend": {
+                        "data": ["boxplot", "raw data", "outliers", "global outliers"],
+                        "selected": {
+                            "boxplot": True,
+                            "global outliers": True,
+                            "raw data": False,
+                            "outliers": False,
+                        },
+                    },
+                    "series": [
                         {
-                            "name": 'boxplot',
-                            "type": 'boxplot',
-                            "datasetId": 'raw',
+                            "name": "boxplot",
+                            "type": "boxplot",
+                            "datasetId": "raw",
                             "encode": {
-                                "y": ['min', 'Q1', 'median', 'Q3', 'max'],
-                                "x": 'chrom',
-                                "itemName": ['chrom'],
-                                "tooltip": ['min', 'Q1', 'median', 'Q3', 'max']
-                            }
+                                "y": ["min", "Q1", "median", "Q3", "max"],
+                                "x": "chrom",
+                                "itemName": ["chrom"],
+                                "tooltip": ["min", "Q1", "median", "Q3", "max"],
+                            },
                         },
                         {
-                            "name": 'raw data',
-                            "type": 'scatter',
-                            "datasetId": 'rawdata',
+                            "name": "raw data",
+                            "type": "scatter",
+                            "datasetId": "rawdata",
                             "encode": {
-                                "y": 'coverage',
-                                "x": 'chrom',
-                                "label": 'name',
-                                "itemName": 'name',
-                                "tooltip": ['chrom', 'name', 'coverage']
+                                "y": "coverage",
+                                "x": "chrom",
+                                "label": "name",
+                                "itemName": "name",
+                                "tooltip": ["chrom", "name", "coverage"],
                             },
                             "label": {
                                 "show": True,
-                                "position": 'right',
-                                "itemName": 'name',
+                                "position": "right",
+                                "itemName": "name",
                                 "color": "black",
                                 "fontSize": 16,
-                            }
+                            },
                         },
                         {
-                            "name": 'outliers',
-                            "type": 'scatter',
-                            "datasetId": 'outliers',
+                            "name": "outliers",
+                            "type": "scatter",
+                            "datasetId": "outliers",
                             "encode": {
-                                "y": 'coverage',
-                                "x": 'chrom',
-                                "label": 'name',
-                                "itemName": 'name',
-                                "tooltip": ['chrom', 'name', 'coverage']
+                                "y": "coverage",
+                                "x": "chrom",
+                                "label": "name",
+                                "itemName": "name",
+                                "tooltip": ["chrom", "name", "coverage"],
                             },
                             "label": {
                                 "show": True,
-                                "position": 'right',
-                                "itemName": 'name',
+                                "position": "right",
+                                "itemName": "name",
                                 "color": "black",
                                 "fontSize": 16,
-                            }
+                            },
                         },
                         {
-                            "name": 'global outliers',
-                            "type": 'scatter',
-                            "datasetId": 'globaloutliers',
+                            "name": "global outliers",
+                            "type": "scatter",
+                            "datasetId": "globaloutliers",
                             "encode": {
-                                "y": 'coverage',
-                                "x": 'chrom',
-                                "label": 'name',
-                                "itemName": 'name',
-                                "tooltip": ['chrom', 'name', 'coverage']
+                                "y": "coverage",
+                                "x": "chrom",
+                                "label": "name",
+                                "itemName": "name",
+                                "tooltip": ["chrom", "name", "coverage"],
                             },
                             "label": {
                                 "show": True,
-                                "position": 'right',
-                                "itemName": 'name',
+                                "position": "right",
+                                "itemName": "name",
                                 "color": "black",
                                 "fontSize": 16,
-                            }
+                            },
                         },
                     ],
-
                 }
-            ).style("height: 500px")
+            )
+            .style("height: 500px")
             .classes("border-double")
         )
 
@@ -682,72 +668,91 @@ class TargetCoverage(BaseAnalysis):
         :param dataframe: a pandas dataframe of
         :return:
         """
-        if 'coverage' in dataframe.columns:
+        if "coverage" in dataframe.columns:
             # Naturally sort the unique chromosome values
-            sorted_chroms = natsort.natsorted(dataframe['chrom'].unique())
+            sorted_chroms = natsort.natsorted(dataframe["chrom"].unique())
 
             # Create a lookup index for chromosomes
             chrom_lookup = {chrom: idx for idx, chrom in enumerate(sorted_chroms)}
 
             # Add the index column to the original DataFrame
-            dataframe['index'] = dataframe['chrom'].map(chrom_lookup)
+            dataframe["index"] = dataframe["chrom"].map(chrom_lookup)
 
             # Aggregate the data by 'chrom'
-            aggregated_data = dataframe.groupby('chrom').agg(
-                min_coverage=('coverage', 'min'),
-                Q1_coverage=('coverage', lambda x: np.percentile(x, 25)),
-                median_coverage=('coverage', 'median'),
-                Q3_coverage=('coverage', lambda x: np.percentile(x, 75)),
-                max_coverage=('coverage', 'max'),
-                index=('index', 'first')  # Get the corresponding index for the chromosome
-            ).reset_index()
+            aggregated_data = (
+                dataframe.groupby("chrom")
+                .agg(
+                    min_coverage=("coverage", "min"),
+                    Q1_coverage=("coverage", lambda x: np.percentile(x, 25)),
+                    median_coverage=("coverage", "median"),
+                    Q3_coverage=("coverage", lambda x: np.percentile(x, 75)),
+                    max_coverage=("coverage", "max"),
+                    index=(
+                        "index",
+                        "first",
+                    ),  # Get the corresponding index for the chromosome
+                )
+                .reset_index()
+            )
 
             # Sort the aggregated data by 'chrom' naturally using natsort
-            aggregated_data['chrom'] = pd.Categorical(aggregated_data['chrom'],
-                                                      categories=natsort.natsorted(aggregated_data['chrom'].unique()),
-                                                      ordered=True)
-            aggregated_data = aggregated_data.sort_values('chrom').reset_index(drop=True)
+            aggregated_data["chrom"] = pd.Categorical(
+                aggregated_data["chrom"],
+                categories=natsort.natsorted(aggregated_data["chrom"].unique()),
+                ordered=True,
+            )
+            aggregated_data = aggregated_data.sort_values("chrom").reset_index(
+                drop=True
+            )
 
             # Format the result as required
             result = [
-                         ['chrom', 'min', 'Q1', 'median', 'Q3', 'max', 'index']
-                     ] + aggregated_data.values.tolist()
+                ["chrom", "min", "Q1", "median", "Q3", "max", "index"]
+            ] + aggregated_data.values.tolist()
 
             df = dataframe
 
             # Function to identify outliers within each chromosome group
             def identify_outliers_per_chromosome(df):
                 outliers = pd.DataFrame()
-                for chrom in df['chrom'].unique():
-                    chrom_data = df[df['chrom'] == chrom]
-                    Q1 = chrom_data['coverage'].quantile(0.25)
-                    Q3 = chrom_data['coverage'].quantile(0.75)
+                for chrom in df["chrom"].unique():
+                    chrom_data = df[df["chrom"] == chrom]
+                    Q1 = chrom_data["coverage"].quantile(0.25)
+                    Q3 = chrom_data["coverage"].quantile(0.75)
                     IQR = Q3 - Q1
                     lower_bound = Q1 - 1.5 * IQR
                     upper_bound = Q3 + 1.5 * IQR
                     chrom_outliers = chrom_data[
-                        (chrom_data['coverage'] < lower_bound) | (chrom_data['coverage'] > upper_bound)]
+                        (chrom_data["coverage"] < lower_bound)
+                        | (chrom_data["coverage"] > upper_bound)
+                    ]
                     outliers = pd.concat([outliers, chrom_outliers])
                 return outliers
 
             def identify_outliers(df):
-                Q1 = df['coverage'].quantile(0.25)
-                Q3 = df['coverage'].quantile(0.75)
+                Q1 = df["coverage"].quantile(0.25)
+                Q3 = df["coverage"].quantile(0.75)
                 IQR = Q3 - Q1
                 lower_bound = Q1 - 1.5 * IQR
                 upper_bound = Q3 + 1.5 * IQR
-                return df[(df['coverage'] < lower_bound) | (df['coverage'] > upper_bound)]
+                return df[
+                    (df["coverage"] < lower_bound) | (df["coverage"] > upper_bound)
+                ]
 
             outliers = identify_outliers_per_chromosome(df)
             globaloutliers = identify_outliers(df)
 
             self.target_boxplot.options["dataset"][0]["source"] = result
-            self.target_boxplot.options["dataset"][1]["source"] = dataframe[['chrom', 'coverage', 'name']].values.tolist()
-            self.target_boxplot.options["dataset"][2]["source"] = outliers[['chrom', 'coverage', 'name']].values.tolist()
-            self.target_boxplot.options["dataset"][3]["source"] = globaloutliers[['chrom', 'coverage', 'name']].values.tolist()
+            self.target_boxplot.options["dataset"][1]["source"] = dataframe[
+                ["chrom", "coverage", "name"]
+            ].values.tolist()
+            self.target_boxplot.options["dataset"][2]["source"] = outliers[
+                ["chrom", "coverage", "name"]
+            ].values.tolist()
+            self.target_boxplot.options["dataset"][3]["source"] = globaloutliers[
+                ["chrom", "coverage", "name"]
+            ].values.tolist()
             self.target_boxplot.update()
-
-
 
     def update_coverage_plot(self, covdf):
         """
@@ -815,10 +820,15 @@ class TargetCoverage(BaseAnalysis):
         self.echart4.update()
 
     def update_coverage_time_plot(self):
-        if os.path.isfile(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_time_chart.npy")):
-            self.coverage_over_time = np.load(
-                os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_time_chart.npy")
+        if self.browse:
+            filepath = os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "coverage_time_chart.npy",
             )
+        else:
+            filepath = os.path.join(self.output, "coverage_time_chart.npy")
+        if os.path.isfile(filepath):
+            self.coverage_over_time = np.load(filepath)
             self.coverage_time_chart.options["series"][0][
                 "data"
             ] = self.coverage_over_time.tolist()
@@ -866,7 +876,9 @@ class TargetCoverage(BaseAnalysis):
 
         newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
 
-        tempbamfile = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam")
+        tempbamfile = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+        )
         # await loop.run_in_executor(
         #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
         # )
@@ -875,18 +887,25 @@ class TargetCoverage(BaseAnalysis):
         # )
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
-            if not self.targetbamfile:
-                self.targetbamfile = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "target.bam")
-                shutil.copy2(tempbamfile.name, self.targetbamfile)
+            if self.sampleID not in self.targetbamfile.keys():
+                self.targetbamfile[self.sampleID] = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "target.bam",
+                )
+                shutil.copy2(tempbamfile.name, self.targetbamfile[self.sampleID])
                 os.remove(f"{tempbamfile.name}.bai")
             else:
                 tempbamholder = tempfile.NamedTemporaryFile(
-                    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+                    dir=self.check_and_create_folder(self.output, self.sampleID),
+                    suffix=".bam",
                 )
                 pysam.cat(
-                    "-o", tempbamholder.name, self.targetbamfile, tempbamfile.name
+                    "-o",
+                    tempbamholder.name,
+                    self.targetbamfile[self.sampleID],
+                    tempbamfile.name,
                 )
-                shutil.copy2(tempbamholder.name, self.targetbamfile)
+                shutil.copy2(tempbamholder.name, self.targetbamfile[self.sampleID])
                 try:
                     os.remove(f"{tempbamholder.name}.bai")
                 except FileNotFoundError:
@@ -895,53 +914,68 @@ class TargetCoverage(BaseAnalysis):
             os.remove(f"{tempbamfile.name}.bai")
 
         try:
-            os.remove(f"{tempbamfile.name}.bai")  # Ensure removal of .bai file if exists
+            os.remove(
+                f"{tempbamfile.name}.bai"
+            )  # Ensure removal of .bai file if exists
         except FileNotFoundError:
             pass
 
-        if self.cov_df_main.empty:
-            self.cov_df_main = newcovdf
-            self.bedcov_df_main = bedcovdf
+        if self.sampleID not in self.cov_df_main.keys():
+            self.cov_df_main[self.sampleID] = newcovdf
+            self.bedcov_df_main[self.sampleID] = bedcovdf
         else:
-            self.cov_df_main, self.bedcov_df_main = await run.cpu_bound(
-                run_bedmerge,
-                newcovdf,
-                self.cov_df_main,
-                bedcovdf,
-                self.bedcov_df_main,
+            self.cov_df_main[self.sampleID], self.bedcov_df_main[self.sampleID] = (
+                await run.cpu_bound(
+                    run_bedmerge,
+                    newcovdf,
+                    self.cov_df_main[self.sampleID],
+                    bedcovdf,
+                    self.bedcov_df_main[self.sampleID],
+                )
             )
 
-            # self.cov_df_main, self.bedcov_df_main = run_bedmerge(
-            #    newcovdf, self.cov_df_main, bedcovdf, self.bedcov_df_main
-            # )
-        bases = self.cov_df_main["covbases"].sum()
-        genome = self.cov_df_main["endpos"].sum()
+        bases = self.cov_df_main[self.sampleID]["covbases"].sum()
+        genome = self.cov_df_main[self.sampleID]["endpos"].sum()
         coverage = bases / genome
         # if timestamp:
         #    currenttime = timestamp * 1000
         # else:
         currenttime = time.time() * 1000
-        self.coverage_over_time = np.vstack(
-            [self.coverage_over_time, [(currenttime, coverage)]]
-        )
-        np.save(
-            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_time_chart.npy"),
-            self.coverage_over_time,
+        if self.sampleID not in self.coverage_over_time.keys():
+            self.coverage_over_time[self.sampleID] = np.empty((0, 2))
+        self.coverage_over_time[self.sampleID] = np.vstack(
+            [self.coverage_over_time[self.sampleID], [(currenttime, coverage)]]
         )
 
-        self.cov_df_main.to_csv(
-            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "coverage_main.csv"), index=False
+        np.save(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "coverage_time_chart.npy",
+            ),
+            self.coverage_over_time[self.sampleID],
+        )
+
+        self.cov_df_main[self.sampleID].to_csv(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "coverage_main.csv",
+            ),
+            index=False,
         )
         # await asyncio.sleep(0.01)
 
         # self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
-        self.bedcov_df_main.to_csv(
-            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "bed_coverage_main.csv"), index=False
+        self.bedcov_df_main[self.sampleID].to_csv(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "bed_coverage_main.csv",
+            ),
+            index=False,
         )
         # await asyncio.sleep(0.01)
         # self.update_coverage_time_plot(self.cov_df_main, timestamp)
         # await asyncio.sleep(0.01)
-        self.target_coverage_df = self.bedcov_df_main
+        self.target_coverage_df = self.bedcov_df_main[self.sampleID]
         self.target_coverage_df["length"] = (
             self.target_coverage_df["endpos"] - self.target_coverage_df["startpos"] + 1
         )
@@ -950,42 +984,52 @@ class TargetCoverage(BaseAnalysis):
             self.target_coverage_df["bases"] / self.target_coverage_df["length"]
         )
         self.target_coverage_df.to_csv(
-            os.path.join(self.check_and_create_folder(self.output, self.sampleID), "target_coverage.csv"), index=False
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "target_coverage.csv",
+            ),
+            index=False,
         )
-        if self.summary:
-            with self.summary:
-                self.summary.clear()
-                with ui.row():
-                    ui.label("Coverage Depths - ")
-                    ui.label(
-                        f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
-                    )
-                    ui.label(
-                        f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
-                    )
+        # if self.summary:
+        #    with self.summary:
+        #        self.summary.clear()
+        #        with ui.row():
+        #            ui.label("Coverage Depths - ")
+        #            ui.label(
+        #                f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
+        #            )
+        #            ui.label(
+        #                f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
+        #            )
         run_list = self.target_coverage_df[
             self.target_coverage_df["coverage"].ge(self.callthreshold)
         ]
-
+        if self.sampleID not in self.targets_exceeding_threshold.keys():
+            self.targets_exceeding_threshold[self.sampleID] = 0
         if self.reference:
             if (
-                len(run_list) > self.targets_exceeding_threshold
+                len(run_list) > self.targets_exceeding_threshold[self.sampleID]
                 and not self.clair3running
             ):
-                self.targets_exceeding_threshold = len(run_list)
+                self.targets_exceeding_threshold[self.sampleID] = len(run_list)
                 run_list[["chrom", "startpos", "endpos"]].to_csv(
-                    os.path.join(self.check_and_create_folder(self.output, self.sampleID), "targets_exceeding_threshold.bed"),
+                    os.path.join(
+                        self.check_and_create_folder(self.output, self.sampleID),
+                        "targets_exceeding_threshold.bed",
+                    ),
                     sep="\t",
                     header=None,
                     index=None,
                 )
-                clair3workdir = os.path.join(self.check_and_create_folder(self.output, self.sampleID), "clair3")
+                clair3workdir = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID), "clair3"
+                )
                 if not os.path.exists(clair3workdir):
                     os.mkdir(clair3workdir)
 
                 await run.cpu_bound(
                     sort_bam,
-                    self.targetbamfile,
+                    self.targetbamfile[self.sampleID],
                     os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
                     self.threads,
                 )
@@ -996,7 +1040,10 @@ class TargetCoverage(BaseAnalysis):
                             run_list,
                             os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
                             os.path.join(
-                                self.check_and_create_folder(self.output, self.sampleID), "targets_exceeding_threshold.bed"
+                                self.check_and_create_folder(
+                                    self.output, self.sampleID
+                                ),
+                                "targets_exceeding_threshold.bed",
                             ),
                         ]
                     )
@@ -1004,21 +1051,21 @@ class TargetCoverage(BaseAnalysis):
         # ToDo: Reinstate this line later.
         # self.update_target_coverage_table()
 
-        #await asyncio.sleep(0.5)
+        # await asyncio.sleep(0.5)
         self.running = False
 
     def show_previous_data(self):
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
-                if item == 'sample_ids':
+                if item == "sample_ids":
                     for sample in app.storage.general[self.mainuuid][item]:
                         self.sampleID = sample
-        output = self.check_and_create_folder(self.output, self.sampleID)
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
         # ToDo: This function needs to run in background threads.
         if self.check_file_time(os.path.join(output, "coverage_main.csv")):
-            self.cov_df_main = pd.read_csv(
-                os.path.join(output, "coverage_main.csv")
-            )
+            self.cov_df_main = pd.read_csv(os.path.join(output, "coverage_main.csv"))
             self.update_coverage_plot(self.cov_df_main)
 
         if self.check_file_time(os.path.join(output, "bed_coverage_main.csv")):
@@ -1046,134 +1093,162 @@ class TargetCoverage(BaseAnalysis):
                                 ui.label(
                                     f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
                                 )
-                            else:
                                 ui.label(
-                                    f"Targets Estimated Coverage: Calculating...."
+                                    f"Estimated enrichment: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum())/(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
                                 )
+                            else:
+                                ui.label("Targets Estimated Coverage: Calculating....")
                         else:
                             ui.label("No data available")
 
         if self.check_file_time(f"{output}/clair3/snpsift_output.vcf.csv"):
-            vcf = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv")
-            self.SNPplaceholder.clear()
-            with self.SNPplaceholder:
-                self.snptable = (
-                    ui.table.from_pandas(vcf, pagination=25)
-                    .props("dense")
-                    .style("height: 900px")
-                    .style("font-size: 100%; font-weight: 300")
-                )
-                for col in self.snptable.columns:
-                    col["sortable"] = True
+            df = pd.read_csv(
+                f"{output}/clair3/snpsift_output.vcf.csv", low_memory=False
+            )
 
-                def toggle(column: dict, visible: bool) -> None:
-                    column["classes"] = "" if visible else "hidden"
-                    column["headerClasses"] = "" if visible else "hidden"
-                    self.snptable.update()
+            # Define a function to check for 'pathogenic'
+            def contains_pathogenic(text):
+                if pd.isna(text):
+                    return False
+                return "pathogenic" in str(text).lower()
 
-                def set_pathogenic(value: bool) -> None:
-                    self.snptable.filter = "pathogenic" if value else None
+            # Apply the function to each cell and filter rows
+            # vcf = df[df.map(contains_pathogenic).any(axis=1)]
+            vcf = df
 
-                with self.snptable.add_slot("top-left"):
+            if len(vcf) > 0:
+                self.SNPplaceholder.clear()
+                with self.SNPplaceholder:
+                    self.snptable = (
+                        ui.table.from_pandas(vcf, pagination=25)
+                        .props("dense")
+                        .style("height: 900px")
+                        .style("font-size: 100%; font-weight: 300")
+                    )
+                    for col in self.snptable.columns:
+                        col["sortable"] = True
 
-                    def toggle_fs() -> None:
-                        self.snptable.toggle_fullscreen()
-                        button.props(
-                            "icon=fullscreen_exit"
-                            if self.snptable.is_fullscreen
-                            else "icon=fullscreen"
+                    def toggle(column: dict, visible: bool) -> None:
+                        column["classes"] = "" if visible else "hidden"
+                        column["headerClasses"] = "" if visible else "hidden"
+                        self.snptable.update()
+
+                    def set_pathogenic(value: bool) -> None:
+                        self.snptable.filter = "pathogenic" if value else None
+
+                    with self.snptable.add_slot("top-left"):
+
+                        def toggle_fs() -> None:
+                            self.snptable.toggle_fullscreen()
+                            button.props(
+                                "icon=fullscreen_exit"
+                                if self.snptable.is_fullscreen
+                                else "icon=fullscreen"
+                            )
+
+                        button = ui.button(
+                            "Toggle fullscreen",
+                            icon="fullscreen",
+                            on_click=toggle_fs,
+                        ).props("flat")
+
+                        with ui.button(icon="menu"):
+                            with ui.menu(), ui.column().classes("gap-0 p-2"):
+                                for column in self.snptable.columns:
+                                    ui.switch(
+                                        column["label"],
+                                        value=True,
+                                        on_change=lambda e, column=column: toggle(
+                                            column, e.value
+                                        ),
+                                    )
+
+                        ui.switch(
+                            "Show potentially pathogenic SNPs only",
+                            value=False,
+                            on_change=lambda e: set_pathogenic(e.value),
                         )
 
-                    button = ui.button(
-                        "Toggle fullscreen",
-                        icon="fullscreen",
-                        on_click=toggle_fs,
-                    ).props("flat")
-
-                    with ui.button(icon="menu"):
-                        with ui.menu(), ui.column().classes("gap-0 p-2"):
-                            for column in self.snptable.columns:
-                                ui.switch(
-                                    column["label"],
-                                    value=True,
-                                    on_change=lambda e, column=column: toggle(
-                                        column, e.value
-                                    ),
-                                )
-
-                    ui.switch(
-                        "Show potentially pathogenic SNPs only",
-                        value=False,
-                        on_change=lambda e: set_pathogenic(e.value),
-                    )
-
-                with self.snptable.add_slot("top-right"):
-                    with ui.input(placeholder="Search").props(
+                    with self.snptable.add_slot("top-right"):
+                        with ui.input(placeholder="Search").props(
                             "type=search"
-                    ).bind_value(self.snptable, "filter").add_slot("append"):
-                        ui.icon("search")
-
+                        ).bind_value(self.snptable, "filter").add_slot("append"):
+                            ui.icon("search")
 
         if self.check_file_time(f"{output}/clair3/snpsift_indel_output.vcf.csv"):
-            vcfindel = pd.read_csv(f"{output}/clair3/snpsift_indel_output.vcf.csv")
-            self.INDELplaceholder.clear()
-            with self.INDELplaceholder:
-                self.indeltable = (
-                    ui.table.from_pandas(vcfindel, pagination=25)
-                    .props("dense")
-                    .style("height: 900px")
-                    .style("font-size: 100%; font-weight: 300")
-                )
-                for col in self.indeltable.columns:
-                    col["sortable"] = True
+            df = pd.read_csv(
+                f"{output}/clair3/snpsift_indel_output.vcf.csv", low_memory=False
+            )
 
-                def idtoggle(column: dict, visible: bool) -> None:
-                    column["classes"] = "" if visible else "hidden"
-                    column["headerClasses"] = "" if visible else "hidden"
-                    self.indeltable.update()
+            # Define a function to check for 'pathogenic'
+            def contains_pathogenic(text):
+                if pd.isna(text):
+                    return False
+                return "pathogenic" in str(text).lower()
 
-                def set_idpathogenic(value: bool) -> None:
-                    self.indeltable.filter = "pathogenic" if value else None
+            # Apply the function to each cell and filter rows
+            # vcfindel = df[df.map(contains_pathogenic).any(axis=1)]
 
-                with self.indeltable.add_slot("top-left"):
+            vcfindel = df
 
-                    def toggle_idfs() -> None:
-                        self.indeltable.toggle_fullscreen()
-                        button.props(
-                            "icon=fullscreen_exit"
-                            if self.indeltable.is_fullscreen
-                            else "icon=fullscreen"
+            if len(vcfindel) > 0:
+                self.INDELplaceholder.clear()
+                with self.INDELplaceholder:
+                    self.indeltable = (
+                        ui.table.from_pandas(vcfindel, pagination=25)
+                        .props("dense")
+                        .style("height: 900px")
+                        .style("font-size: 100%; font-weight: 300")
+                    )
+                    for col in self.indeltable.columns:
+                        col["sortable"] = True
+
+                    def idtoggle(column: dict, visible: bool) -> None:
+                        column["classes"] = "" if visible else "hidden"
+                        column["headerClasses"] = "" if visible else "hidden"
+                        self.indeltable.update()
+
+                    def set_idpathogenic(value: bool) -> None:
+                        self.indeltable.filter = "pathogenic" if value else None
+
+                    with self.indeltable.add_slot("top-left"):
+
+                        def toggle_idfs() -> None:
+                            self.indeltable.toggle_fullscreen()
+                            button.props(
+                                "icon=fullscreen_exit"
+                                if self.indeltable.is_fullscreen
+                                else "icon=fullscreen"
+                            )
+
+                        button = ui.button(
+                            "Toggle fullscreen",
+                            icon="fullscreen",
+                            on_click=toggle_idfs,
+                        ).props("flat")
+
+                        with ui.button(icon="menu"):
+                            with ui.menu(), ui.column().classes("gap-0 p-2"):
+                                for column in self.indeltable.columns:
+                                    ui.switch(
+                                        column["label"],
+                                        value=True,
+                                        on_change=lambda e, column=column: idtoggle(
+                                            column, e.value
+                                        ),
+                                    )
+
+                        ui.switch(
+                            "Show potentially pathogenic IN/DELs only",
+                            value=False,
+                            on_change=lambda e: set_idpathogenic(e.value),
                         )
 
-                    button = ui.button(
-                        "Toggle fullscreen",
-                        icon="fullscreen",
-                        on_click=toggle_idfs,
-                    ).props("flat")
-
-                    with ui.button(icon="menu"):
-                        with ui.menu(), ui.column().classes("gap-0 p-2"):
-                            for column in self.indeltable.columns:
-                                ui.switch(
-                                    column["label"],
-                                    value=True,
-                                    on_change=lambda e, column=column: idtoggle(
-                                        column, e.value
-                                    ),
-                                )
-
-                    ui.switch(
-                        "Show potentially pathogenic IN/DELs only",
-                        value=False,
-                        on_change=lambda e: set_idpathogenic(e.value),
-                    )
-
-                with self.indeltable.add_slot("top-right"):
-                    with ui.input(placeholder="Search").props(
+                    with self.indeltable.add_slot("top-right"):
+                        with ui.input(placeholder="Search").props(
                             "type=search"
-                    ).bind_value(self.indeltable, "filter").add_slot("append"):
-                        ui.icon("search")
-
+                        ).bind_value(self.indeltable, "filter").add_slot("append"):
+                            ui.icon("search")
 
 
 def test_me(

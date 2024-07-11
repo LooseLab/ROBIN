@@ -88,11 +88,14 @@ class Result:
     """
     A class to store CNV results.
     """
+
     def __init__(self, cnv_dict: dict) -> None:
         self.cnv = cnv_dict
 
 
-def iterate_bam(bamfile, _threads: int, mapq_filter: int, copy_numbers: dict, log_level: int) -> Tuple[dict, int, float, dict]:
+def iterate_bam(
+    bamfile, _threads: int, mapq_filter: int, copy_numbers: dict, log_level: int
+) -> Tuple[dict, int, float, dict]:
     """
     Iterate over a BAM file and return CNV data and associated metrics.
 
@@ -116,7 +119,14 @@ def iterate_bam(bamfile, _threads: int, mapq_filter: int, copy_numbers: dict, lo
     return result.cnv, result.bin_width, result.variance, copy_numbers
 
 
-def iterate_bam_bin(bamfile: BinaryIO, _threads: int, mapq_filter: int, copy_numbers: dict, log_level: int, bin_width: int) -> Tuple[dict, int, float, dict]:
+def iterate_bam_bin(
+    bamfile: BinaryIO,
+    _threads: int,
+    mapq_filter: int,
+    copy_numbers: dict,
+    log_level: int,
+    bin_width: int,
+) -> Tuple[dict, int, float, dict]:
     """
     Iterate over a BAM file with specified bin width and return CNV data and associated metrics.
 
@@ -162,6 +172,7 @@ class CNV_Difference:
     """
     A class to store CNV difference data.
     """
+
     def __init__(self, *args, **kwargs) -> None:
         self.cnv = {}
 
@@ -180,7 +191,9 @@ def moving_average(data: np.ndarray, n: int = 3) -> np.ndarray:
     return np.convolve(data, np.ones(n) / n, mode="same")
 
 
-def pad_arrays(arr1: np.ndarray, arr2: np.ndarray, pad_value: int = 0) -> Tuple[np.ndarray, np.ndarray]:
+def pad_arrays(
+    arr1: np.ndarray, arr2: np.ndarray, pad_value: int = 0
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Pad two arrays to the same length with a specified value.
 
@@ -224,8 +237,9 @@ class CNVAnalysis(BaseAnalysis):
 
     Inherits from `BaseAnalysis` and provides specific methods for CNV analysis.
     """
+
     def __init__(self, *args, target_panel: Optional[str] = None, **kwargs) -> None:
-        self.file_list = []
+        # self.file_list = []
         self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.update_cnv_dict = {}
         self.result = None
@@ -272,7 +286,13 @@ class CNVAnalysis(BaseAnalysis):
             self.XYestimate = "XY"
         else:
             self.XYestimate = "Unknown"
-        with open(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "XYestimate.pkl"), "wb") as file:
+        with open(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "XYestimate.pkl",
+            ),
+            "wb",
+        ) as file:
             pickle.dump(self.XYestimate, file)
 
     async def process_bam(self, bamfile: BinaryIO, timestamp: float) -> None:
@@ -283,7 +303,7 @@ class CNVAnalysis(BaseAnalysis):
             bamfile (BinaryIO): The BAM file to process.
             timestamp (float): The timestamp indicating when the file was generated.
         """
-        self.file_list.append(bamfile)
+        # self.file_list.append(bamfile)
         await self.do_cnv_work(bamfile)
 
     async def do_cnv_work(self, bamfile: BinaryIO) -> None:
@@ -293,12 +313,15 @@ class CNVAnalysis(BaseAnalysis):
         Args:
             bamfile (BinaryIO): The BAM file to process.
         """
-        r_cnv, r_bin, r_var, self.update_cnv_dict = await run.cpu_bound(
+        if self.sampleID not in self.update_cnv_dict.keys():
+            self.update_cnv_dict[self.sampleID] = {}
+        # print("Running CNV analysis on", self.sampleID, bamfile)
+        r_cnv, r_bin, r_var, self.update_cnv_dict[self.sampleID] = await run.cpu_bound(
             iterate_bam,
             bamfile,
             self.threads,
             60,
-            self.update_cnv_dict,
+            self.update_cnv_dict[self.sampleID],
             int(logging.ERROR),
         )
 
@@ -325,8 +348,18 @@ class CNVAnalysis(BaseAnalysis):
 
         self.estimate_XY()
 
-        np.save(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV.npy"), r_cnv)
-        np.save(os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV_dict.npy"), self.cnv_dict)
+        np.save(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID), "CNV.npy"
+            ),
+            r_cnv,
+        )
+        np.save(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID), "CNV_dict.npy"
+            ),
+            self.cnv_dict,
+        )
 
         self.running = False
 
@@ -377,7 +410,7 @@ class CNVAnalysis(BaseAnalysis):
         """
         Set up the user interface for CNV analysis.
         """
-        #if not self.browse:
+        # if not self.browse:
         #    for item in app.storage.general[self.mainuuid]:
         #        if item == 'sample_ids':
         #            for run in app.storage.general[self.mainuuid][item]:
@@ -428,7 +461,13 @@ class CNVAnalysis(BaseAnalysis):
         else:
             ui.timer(15, lambda: self.show_previous_data())
 
-    def generate_chart(self, title: Optional[str] = None, initmax: int = 8, initmin: int = 0, type: str = "value") -> ui.echart:
+    def generate_chart(
+        self,
+        title: Optional[str] = None,
+        initmax: int = 8,
+        initmin: int = 0,
+        type: str = "value",
+    ) -> ui.echart:
         """
         Generate an ECharts object for displaying CNV scatter plots.
 
@@ -444,9 +483,7 @@ class CNVAnalysis(BaseAnalysis):
         return (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
                     "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": f"{title}"},
@@ -689,12 +726,17 @@ class CNVAnalysis(BaseAnalysis):
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
-                if item == 'sample_ids':
+                if item == "sample_ids":
                     for sample in app.storage.general[self.mainuuid][item]:
                         self.sampleID = sample
-        output = self.check_and_create_folder(self.output, self.sampleID)
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
+        # print(output, self.sampleID)
         if self.check_file_time(os.path.join(output, "CNV.npy")):
-            result = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
+            result = np.load(
+                os.path.join(output, "CNV.npy"), allow_pickle="TRUE"
+            ).item()
             self.result = Result(result)
             cnv_dict = np.load(
                 os.path.join(output, "CNV_dict.npy"), allow_pickle=True
@@ -718,11 +760,14 @@ class CNVAnalysis(BaseAnalysis):
                 if key != "chrM":
                     moving_avg_data1 = moving_average(self.result.cnv[key])
                     moving_avg_data2 = moving_average(r2_cnv[key])
+                    moving_avg_data1, moving_avg_data2 = pad_arrays(
+                        moving_avg_data1, moving_avg_data2
+                    )
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                    if len(self.result3.cnv[key]) > 20:
-                        algo_c = ruptures_plotting(self.result3.cnv[key])
-                        penalty_value = 5
-                        result = algo_c.predict(pen=penalty_value)
+                    # if len(self.result3.cnv[key]) > 20:
+                    #    algo_c = ruptures_plotting(self.result3.cnv[key])
+                    #    penalty_value = 5
+                    #    result = algo_c.predict(pen=penalty_value)
 
             self.update_plots()
             if self.summary:
@@ -738,7 +783,9 @@ class CNVAnalysis(BaseAnalysis):
                                     ui.icon("woman").classes("text-4xl")
                                 ui.label(f"Estimated Genetic Sex: {XYestimate}")
                             ui.label(f"Current Bin Width: {self.cnv_dict['bin_width']}")
-                            ui.label(f"Current Variance: {round(self.cnv_dict['variance'], 3)}")
+                            ui.label(
+                                f"Current Variance: {round(self.cnv_dict['variance'], 3)}"
+                            )
 
 
 def test_me(
@@ -822,7 +869,14 @@ def test_me(
         case_sensitive=True,
     ),
 )
-def main(port: int, threads: int, watchfolder: str, output: str, browse: bool, target_panel: str) -> None:
+def main(
+    port: int,
+    threads: int,
+    watchfolder: str,
+    output: str,
+    browse: bool,
+    target_panel: str,
+) -> None:
     """
     Entry point for the command-line interface to start the CNV analysis application.
 

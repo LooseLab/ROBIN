@@ -15,6 +15,7 @@ from reportlab.lib import colors
 from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase import pdfmetrics
 import matplotlib
+
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
@@ -28,7 +29,7 @@ from datetime import datetime
 import random
 import pickle
 from PIL import Image as PILImage
-from typing import Optional, Tuple
+from typing import Tuple
 
 from robin.subpages.CNV_object import Result
 
@@ -40,10 +41,22 @@ from dna_features_viewer import GraphicFeature, GraphicRecord
 STRAND = {"+": 1, "-": -1}
 
 pdfmetrics.registerFont(
-    TTFont("FiraSans",  os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-regular.ttf"))
+    TTFont(
+        "FiraSans",
+        os.path.join(
+            os.path.dirname(os.path.abspath(fonts.__file__)),
+            "fira-sans-v16-latin-regular.ttf",
+        ),
+    )
 )
 pdfmetrics.registerFont(
-    TTFont("FiraSans-Bold", os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-700.ttf"))
+    TTFont(
+        "FiraSans-Bold",
+        os.path.join(
+            os.path.dirname(os.path.abspath(fonts.__file__)),
+            "fira-sans-v16-latin-700.ttf",
+        ),
+    )
 )  # Assuming this is the path for the bold version
 
 # Update styles to use the custom font
@@ -125,7 +138,7 @@ class HeaderFooterCanvas(canvas.Canvas):
         logo_path = os.path.join(
             os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
         )
-        #logo_path = "src/robin/images/Robin_logo_small.png"  # Replace with the path to your logo
+        # logo_path = "src/robin/images/Robin_logo_small.png"  # Replace with the path to your logo
         max_logo_size = 50  # Maximum width and height in pixels
         self.drawImage(
             logo_path,
@@ -154,6 +167,7 @@ def header_footer_canvas_factory(sample_id):
         return HeaderFooterCanvas(sample_id, *args, **kwargs)
 
     return create_canvas
+
 
 def target_distribution_plot(df):
     df["chrom"] = pd.Categorical(
@@ -211,14 +225,18 @@ def target_distribution_plot(df):
 
 def fusion_plot_test(title, reads):
     features = [
-        GraphicFeature(start=0, end=20, strand=+1, color="#ffd700",
-                       label="Small feature"),
-        GraphicFeature(start=20, end=500, strand=+1, color="#ffcccc",
-                       label="Gene 1 with a very long name"),
-        GraphicFeature(start=400, end=700, strand=-1, color="#cffccc",
-                       label="Gene 2"),
-        GraphicFeature(start=600, end=900, strand=+1, color="#ccccff",
-                       label="Gene 3")
+        GraphicFeature(
+            start=0, end=20, strand=+1, color="#ffd700", label="Small feature"
+        ),
+        GraphicFeature(
+            start=20,
+            end=500,
+            strand=+1,
+            color="#ffcccc",
+            label="Gene 1 with a very long name",
+        ),
+        GraphicFeature(start=400, end=700, strand=-1, color="#cffccc", label="Gene 2"),
+        GraphicFeature(start=600, end=900, strand=+1, color="#ccccff", label="Gene 3"),
     ]
     record = GraphicRecord(sequence_length=1000, features=features)
     ax, _ = record.plot(figure_width=5)
@@ -229,8 +247,12 @@ def fusion_plot(title, reads):
     # ToDo: Remove hardcoding to this gene file
     datafile = "rCNS2_data.csv.gz"
 
-    if os.path.isfile(os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), datafile)):
-        gene_table = pd.read_csv(os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), datafile))
+    if os.path.isfile(
+        os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), datafile)
+    ):
+        gene_table = pd.read_csv(
+            os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), datafile)
+        )
 
     plt.figure(figsize=(16, 2))
     ax1 = plt.gca()
@@ -261,7 +283,9 @@ def fusion_plot(title, reads):
                     color="#ffcccc",
                 )
             )
-    record = GraphicRecord(sequence_length=sequence_length, first_index=first_index, features=features)
+    record = GraphicRecord(
+        sequence_length=sequence_length, first_index=first_index, features=features
+    )
     ax1.set_title(f"{title} - {x_label}")
     ax, _ = record.plot(ax=ax1, figure_width=5)
     buf = io.BytesIO()
@@ -280,8 +304,12 @@ def fusion_plot(title, reads):
                 color=row["Color"],
             )
         )
-    record = GraphicRecord(sequence_length=sequence_length, first_index=first_index, features=features)
-    ax, _ = record.plot(ax=ax, figure_width=5,with_ruler=False, draw_line=True) #, figure_width=5)
+    record = GraphicRecord(
+        sequence_length=sequence_length, first_index=first_index, features=features
+    )
+    ax, _ = record.plot(
+        ax=ax, figure_width=5, with_ruler=False, draw_line=True
+    )  # , figure_width=5)
     buf2 = io.BytesIO()
     ax.figure.savefig(buf2, format="jpg", dpi=300, bbox_inches="tight")
     plt.close()
@@ -321,6 +349,7 @@ def create_CNV_plot_per_chromosome(result, cnv_dict):
             plt.close()
 
     return plots
+
 
 def coverage_plot(df):
     df = df[df["#rname"] != "chrM"].copy()
@@ -374,6 +403,7 @@ def coverage_plot(df):
     buf.seek(0)
     return buf
 
+
 def _generate_random_color() -> str:
     """
     Generates a random color for use in plotting.
@@ -382,6 +412,7 @@ def _generate_random_color() -> str:
         str: A random hex color code.
     """
     return "#{:06x}".format(random.randint(0, 0xFFFFFF))
+
 
 def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     """
@@ -398,7 +429,9 @@ def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     tags = result_copy[7].map(lookup.get)
     result_copy.loc[:, "tag"] = tags
     result = result_copy
-    colors = result.groupby(7).apply(lambda x: _generate_random_color(),include_groups=False)
+    colors = result.groupby(7).apply(
+        lambda x: _generate_random_color(), include_groups=False
+    )
     result["Color"] = result[7].map(colors.get)
     goodpairs = result.groupby("tag")[7].transform("nunique") > 1
     return result, goodpairs
@@ -436,7 +469,9 @@ def classification_plot(df, title, threshold):
     ax.xaxis.set_major_formatter(plt.matplotlib.dates.DateFormatter("%Y-%m-%d %H:%M"))
 
     # Move the legend below the plot
-    plt.legend(title="Condition", bbox_to_anchor=(0.5, -0.8), loc="upper center", ncol=3)
+    plt.legend(
+        title="Condition", bbox_to_anchor=(0.5, -0.8), loc="upper center", ncol=3
+    )
 
     plt.tight_layout()
 
@@ -512,6 +547,7 @@ def create_CNV_plot(result, cnv_dict):
     buf.seek(0)
     return buf
 
+
 def split_text(text):
     """Helper function to split text on '-' characters."""
     return text.replace("-", "-\n")
@@ -536,15 +572,28 @@ def create_pdf(filename, output):
     if filename.startswith("None"):
         final_folder = os.path.basename(os.path.normpath(output))
         filename = filename.replace("None", final_folder, 1)
-    print(f"Creating PDF {filename} in {output}")
+        sample_id = final_folder
+    else:
+        sample_id = os.path.basename(os.path.normpath(output))
+    print(f"Creating PDF {filename} in {output} for sample {sample_id}")
 
     pdfmetrics.registerFont(
-        TTFont("FiraSans",
-               os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-regular.ttf"))
+        TTFont(
+            "FiraSans",
+            os.path.join(
+                os.path.dirname(os.path.abspath(fonts.__file__)),
+                "fira-sans-v16-latin-regular.ttf",
+            ),
+        )
     )
     pdfmetrics.registerFont(
-        TTFont("FiraSans-Bold",
-               os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-700.ttf"))
+        TTFont(
+            "FiraSans-Bold",
+            os.path.join(
+                os.path.dirname(os.path.abspath(fonts.__file__)),
+                "fira-sans-v16-latin-700.ttf",
+            ),
+        )
     )
 
     # Update styles to use the custom font
@@ -575,13 +624,13 @@ def create_pdf(filename, output):
     else:
         masterdf = None
 
-    if masterdf is not None and isinstance(masterdf, pd.DataFrame):
-        sample_id = convert_to_space_separated_string(
-            masterdf.loc[(masterdf.index == "sample_ids")][1].values
-        )
+    # if masterdf is not None and isinstance(masterdf, pd.DataFrame):
+    #    sample_id = convert_to_space_separated_string(
+    #        masterdf.loc[(masterdf.index == "sample_ids")][1].values
+    #    )
 
-    else:
-        sample_id = None
+    # else:
+    #    sample_id = None
 
     elements.append(Paragraph("Classification Summary", styles["Heading1"]))
 
@@ -676,7 +725,10 @@ def create_pdf(filename, output):
         file = open(os.path.join(output, "XYestimate.pkl"), "rb")
         XYestimate = pickle.load(file)
         elements.append(
-            Paragraph(f"Estimated sex chromosome composition: {XYestimate}", styles["BodyText"])
+            Paragraph(
+                f"Estimated sex chromosome composition: {XYestimate}",
+                styles["BodyText"],
+            )
         )
 
     if os.path.exists(os.path.join(output, "coverage_main.csv")):
@@ -689,10 +741,10 @@ def create_pdf(filename, output):
                 styles["BodyText"],
             )
         )
-        if bedcov_df_main['bases'].sum() / bedcov_df_main['length'].sum() < 10:
+        if bedcov_df_main["bases"].sum() / bedcov_df_main["length"].sum() < 10:
             elements.append(
                 Paragraph(
-                    f"Target Coverage is below the recommended 10x threshold",
+                    "Target Coverage is below the recommended 10x threshold",
                     styles["BodyText"],
                 )
             )
@@ -706,7 +758,7 @@ def create_pdf(filename, output):
         outliers = outliers.sort_values(by="coverage", ascending=False)
 
         # Define the threshold value
-        threshold = bedcov_df_main['bases'].sum() / bedcov_df_main['length'].sum()
+        threshold = bedcov_df_main["bases"].sum() / bedcov_df_main["length"].sum()
 
         # Split the dataframe based on the threshold value
         outliers_above_threshold = outliers[outliers["coverage"] > threshold].copy()
@@ -714,18 +766,23 @@ def create_pdf(filename, output):
 
         # Create the desired string representation using f-strings for both groups
         outliers_above_threshold["name_with_coverage"] = outliers_above_threshold.apply(
-            lambda row: f"{row['name']} ({row['coverage']})", axis=1)
+            lambda row: f"{row['name']} ({row['coverage']})", axis=1
+        )
         outliers_below_threshold["name_with_coverage"] = outliers_below_threshold.apply(
-            lambda row: f"{row['name']} ({row['coverage']})", axis=1)
+            lambda row: f"{row['name']} ({row['coverage']})", axis=1
+        )
 
         gene_names = " - ".join(outliers_above_threshold["name_with_coverage"])
         elements.append(Spacer(1, 6))
-        elements.append(Paragraph(f"Outlier genes by coverage (high): {gene_names}", smaller_style))
+        elements.append(
+            Paragraph(f"Outlier genes by coverage (high): {gene_names}", smaller_style)
+        )
         elements.append(Spacer(1, 6))
         gene_names = " - ".join(outliers_below_threshold["name_with_coverage"])
         elements.append(Spacer(1, 6))
-        elements.append(Paragraph(f"Outlier genes by coverage (low): {gene_names}", smaller_style))
-
+        elements.append(
+            Paragraph(f"Outlier genes by coverage (low): {gene_names}", smaller_style)
+        )
 
     else:
         elements.append(Paragraph("No Coverage Data Available", styles["BodyText"]))
@@ -754,7 +811,6 @@ def create_pdf(filename, output):
 
         result_all, goodpairs_all = _annotate_results(fusion_candidates_all)
 
-
         elements.append(
             Paragraph(
                 f"Fusion Candidates - using panel rCNS2 <br/> {result[goodpairs].sort_values(by=7)['tag'].nunique()} high confidence fusions observed.<br/>{result_all[goodpairs_all].sort_values(by=7)['tag'].nunique()} low confidence fusions observed.",
@@ -768,30 +824,41 @@ def create_pdf(filename, output):
     if masterdf is not None and isinstance(masterdf, pd.DataFrame):
         elements.append(Paragraph("Run Data Summary", styles["Heading2"]))
         start_time = "Placeholder"
+        masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[
+            sample_id
+        ]
         elements.append(
             Paragraph(
                 f"Sample ID: {sample_id}<br/>"
-                f"Run Start: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'run_time')][1].values)}<br/>"
+                f"Run Start: {convert_to_space_separated_string(masterdf_dict['run_time'])}<br/>"
                 f"Run Folder: {' '.join(masterdf.loc[(masterdf.index == 'watchfolder')][1].values)}<br/>"
                 f"Output Folder: {' '.join(masterdf.loc[(masterdf.index == 'output')][1].values)}<br/>"
                 f"Target Panel: {' '.join(masterdf.loc[(masterdf.index == 'target_panel')][1].values)}<br/>"
                 f"Reference: {' '.join(masterdf.loc[(masterdf.index == 'reference')][1].values)}<br/>"
-                f"Sequencing Device: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'devices')][1].values)}<br/>"
-                f"Flowcell ID: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'flowcell_ids')][1].values)}<br/>"
-                f"Basecalling Model: {convert_to_space_separated_string(masterdf.loc[(masterdf.index == 'basecall_models')][1].values)}<br/>",
-                #f"Files Seen: {masterdf.loc[(masterdf.index == 'file_counters')][1].values}<br/>",
+                f"Sequencing Device: {convert_to_space_separated_string(masterdf_dict['devices'])}<br/>"
+                f"Flowcell ID: {convert_to_space_separated_string(masterdf_dict['flowcell_ids'])}<br/>"
+                f"Basecalling Model: {convert_to_space_separated_string(masterdf_dict['basecall_models'])}<br/>",
+                # f"Files Seen: {masterdf.loc[(masterdf.index == 'file_counters')][1].values}<br/>",
                 smaller_style,
             )
         )
-        formatted_lines = "".join(
-            (f"{k}: {v}<br/>" for k, v in eval(masterdf.loc[(masterdf.index == 'file_counters')][1]['file_counters']).items())
-        )
-        elements.append(
-            Paragraph(
-                f"{formatted_lines}",
-                smaller_style,
+        try:
+            formatted_lines = "".join(
+                (
+                    f"{k}: {v}<br/>"
+                    for k, v in eval(
+                        masterdf[masterdf.index == "samples"][1]["samples"]
+                    )[sample_id]["file_counters"].items()
+                )
             )
-        )
+            elements.append(
+                Paragraph(
+                    f"{formatted_lines}",
+                    smaller_style,
+                )
+            )
+        except Exception as e:
+            print(f"Error parsing file counters: {e}")
 
     elements.append(Spacer(1, 12))
 
@@ -800,7 +867,12 @@ def create_pdf(filename, output):
     elements.append(Paragraph("Methylation Classifications", styles["Heading2"]))
 
     if os.path.exists(os.path.join(output, "sturgeon_scores.csv")):
-        elements.append(Paragraph(f"Sturgeon classification: {Sturgeonlastrow_plot_top.index[0]} - {Sturgeonlastrow_plot_top.values[0]:.2f}", styles["Heading3"]))
+        elements.append(
+            Paragraph(
+                f"Sturgeon classification: {Sturgeonlastrow_plot_top.index[0]} - {Sturgeonlastrow_plot_top.values[0]:.2f}",
+                styles["Heading3"],
+            )
+        )
         elements.append(
             Paragraph("This plot was generated by sturgeon.", smaller_style)
         )
@@ -855,11 +927,16 @@ def create_pdf(filename, output):
         table.setStyle(style)
 
         elements.append(table)
-        #elements.append(Spacer(1, 12))
-        #elements.append(PageBreak())
+        # elements.append(Spacer(1, 12))
+        # elements.append(PageBreak())
 
     if os.path.exists(os.path.join(output, "nanoDX_scores.csv")):
-        elements.append(Paragraph(f"NanoDX (crossNN) classification: {NanoDXlastrow_plot_top.index[0]} - {NanoDXlastrow_plot_top.values[0]:.2f}", styles["Heading3"]))
+        elements.append(
+            Paragraph(
+                f"NanoDX (crossNN) classification: {NanoDXlastrow_plot_top.index[0]} - {NanoDXlastrow_plot_top.values[0]:.2f}",
+                styles["Heading3"],
+            )
+        )
         elements.append(Paragraph("This plot was generated by NanoDX.", smaller_style))
         img_buf = classification_plot(nanodx_df_store, "NanoDX", 0.05)
         # Read the image from the buffer to get its dimensions
@@ -868,9 +945,9 @@ def create_pdf(filename, output):
 
         width, height = A4
 
-        height = (width*0.95)/width_img * height_img
+        height = (width * 0.95) / width_img * height_img
 
-        img = Image(img_buf, width=width*0.95, height=height, kind="proportional")
+        img = Image(img_buf, width=width * 0.95, height=height, kind="proportional")
         elements.append(img)
         df = NanoDXlastrow_plot.reset_index()
         df.columns = ["Classification", "Score"]
@@ -907,11 +984,16 @@ def create_pdf(filename, output):
         table.setStyle(style)
 
         elements.append(table)
-        #elements.append(Spacer(1, 12))
-        #elements.append(PageBreak())
+        # elements.append(Spacer(1, 12))
+        # elements.append(PageBreak())
 
     if os.path.exists(os.path.join(output, "random_forest_scores.csv")):
-        elements.append(Paragraph(f"Random Forest classification: {Forestlastrow_plot_top.index[0]} - {Forestlastrow_plot_top.values[0]:.2f}", styles["Heading3"]))
+        elements.append(
+            Paragraph(
+                f"Random Forest classification: {Forestlastrow_plot_top.index[0]} - {Forestlastrow_plot_top.values[0]:.2f}",
+                styles["Heading3"],
+            )
+        )
         elements.append(
             Paragraph("This plot was generated by Random Forest.", smaller_style)
         )
@@ -960,10 +1042,10 @@ def create_pdf(filename, output):
         table.setStyle(style)
 
         elements.append(table)
-        #elements.append(Spacer(1, 12))
+        # elements.append(Spacer(1, 12))
         elements.append(PageBreak())
 
-    #elements.append(Spacer(1, 12))
+    # elements.append(Spacer(1, 12))
 
     if os.path.exists(os.path.join(output, "CNV.npy")):
         elements.append(Paragraph("Copy Number Variation", underline_style))
@@ -976,15 +1058,13 @@ def create_pdf(filename, output):
         elements.append(img)
         elements.append(Spacer(1, 6))
 
-
         cnv_plots = create_CNV_plot_per_chromosome(CNVresult, cnv_dict)
 
         for contig, img_buf in cnv_plots:
-            #elements.append(Paragraph(f"Copy Number Variation - {contig}", smaller_style))
+            # elements.append(Paragraph(f"Copy Number Variation - {contig}", smaller_style))
             img = Image(img_buf, width=6 * inch, height=1.5 * inch)
             elements.append(img)
-            #elements.append(Spacer(1, 6))
-
+            # elements.append(Spacer(1, 6))
 
         if XYestimate != "Unknown":
             # if XYestimate == "XY":
@@ -1057,7 +1137,7 @@ def create_pdf(filename, output):
                 ("ALIGN", (0, 0), (-1, -1), "CENTER"),  # Center align all cells
                 ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),  # Header font
                 ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),  # Body font
-                ("FONTSIZE", (0, 0), (-1, 0),6),  # Header font size
+                ("FONTSIZE", (0, 0), (-1, 0), 6),  # Header font size
                 ("FONTSIZE", (0, 1), (-1, -1), 5),  # Body font size
                 ("BOTTOMPADDING", (0, 0), (-1, 0), 1),  # Header padding
                 ("BACKGROUND", (0, 1), (-1, -1), colors.white),  # Body background white
@@ -1073,10 +1153,28 @@ def create_pdf(filename, output):
         if os.path.exists(f"{output}/clair3/snpsift_output.vcf.csv"):
             elements.append(Paragraph("Pathogenic Variants", smaller_style))
             vcf = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv")
-            pathogenic_vcf = vcf[vcf["CLNSIG"].notna() & vcf["CLNSIG"].str.contains("pathogenic")].loc[:, ['CHROM', 'POS', 'REF', 'ALT', 'QUAL', 'FILTER',
-            'Allele', 'Annotation', 'Annotation_Impact', 'Gene_Name', 'Gene_ID']]
+            pathogenic_vcf = vcf[
+                vcf["CLNSIG"].notna() & vcf["CLNSIG"].str.contains("pathogenic")
+            ].loc[
+                :,
+                [
+                    "CHROM",
+                    "POS",
+                    "REF",
+                    "ALT",
+                    "QUAL",
+                    "FILTER",
+                    "Allele",
+                    "Annotation",
+                    "Annotation_Impact",
+                    "Gene_Name",
+                    "Gene_ID",
+                ],
+            ]
             if len(pathogenic_vcf) > 0:
-                data = [pathogenic_vcf.columns.to_list()] + pathogenic_vcf.values.tolist()
+                data = [
+                    pathogenic_vcf.columns.to_list()
+                ] + pathogenic_vcf.values.tolist()
                 table = Table(data)
                 # Add style to the table
                 style = TableStyle(
@@ -1087,15 +1185,30 @@ def create_pdf(filename, output):
                             (-1, -1),
                             colors.white,
                         ),  # Set background to white
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),  # Header text color
-                        ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),  # Body text color
+                        (
+                            "TEXTCOLOR",
+                            (0, 0),
+                            (-1, 0),
+                            colors.black,
+                        ),  # Header text color
+                        (
+                            "TEXTCOLOR",
+                            (0, 1),
+                            (-1, -1),
+                            colors.black,
+                        ),  # Body text color
                         ("ALIGN", (0, 0), (-1, -1), "CENTER"),  # Center align all cells
                         ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),  # Header font
                         ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),  # Body font
                         ("FONTSIZE", (0, 0), (-1, 0), 6),  # Header font size
                         ("FONTSIZE", (0, 1), (-1, -1), 5),  # Body font size
                         ("BOTTOMPADDING", (0, 0), (-1, 0), 1),  # Header padding
-                        ("BACKGROUND", (0, 1), (-1, -1), colors.white),  # Body background white
+                        (
+                            "BACKGROUND",
+                            (0, 1),
+                            (-1, -1),
+                            colors.white,
+                        ),  # Body background white
                         ("GRID", (0, 0), (-1, -1), 1, colors.black),  # Grid lines
                     ]
                 )
@@ -1105,11 +1218,28 @@ def create_pdf(filename, output):
         if os.path.exists(f"{output}/clair3/snpsift_indel_output.vcf.csv"):
             elements.append(Paragraph("Pathogenic Variants (in/dels)", smaller_style))
             vcf = pd.read_csv(f"{output}/clair3/snpsift_output.vcf.csv")
-            pathogenic_vcf = vcf[vcf["CLNSIG"].notna() & vcf["CLNSIG"].str.contains("pathogenic")].loc[:,
-                             ['CHROM', 'POS', 'REF', 'ALT', 'QUAL', 'FILTER',
-                              'Allele', 'Annotation', 'Annotation_Impact', 'Gene_Name', 'Gene_ID']]
+            pathogenic_vcf = vcf[
+                vcf["CLNSIG"].notna() & vcf["CLNSIG"].str.contains("pathogenic")
+            ].loc[
+                :,
+                [
+                    "CHROM",
+                    "POS",
+                    "REF",
+                    "ALT",
+                    "QUAL",
+                    "FILTER",
+                    "Allele",
+                    "Annotation",
+                    "Annotation_Impact",
+                    "Gene_Name",
+                    "Gene_ID",
+                ],
+            ]
             if len(pathogenic_vcf) > 0:
-                data = [pathogenic_vcf.columns.to_list()] + pathogenic_vcf.values.tolist()
+                data = [
+                    pathogenic_vcf.columns.to_list()
+                ] + pathogenic_vcf.values.tolist()
                 table = Table(data)
                 # Add style to the table
                 style = TableStyle(
@@ -1120,15 +1250,30 @@ def create_pdf(filename, output):
                             (-1, -1),
                             colors.white,
                         ),  # Set background to white
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),  # Header text color
-                        ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),  # Body text color
+                        (
+                            "TEXTCOLOR",
+                            (0, 0),
+                            (-1, 0),
+                            colors.black,
+                        ),  # Header text color
+                        (
+                            "TEXTCOLOR",
+                            (0, 1),
+                            (-1, -1),
+                            colors.black,
+                        ),  # Body text color
                         ("ALIGN", (0, 0), (-1, -1), "CENTER"),  # Center align all cells
                         ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),  # Header font
                         ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),  # Body font
                         ("FONTSIZE", (0, 0), (-1, 0), 6),  # Header font size
                         ("FONTSIZE", (0, 1), (-1, -1), 5),  # Body font size
                         ("BOTTOMPADDING", (0, 0), (-1, 0), 1),  # Header padding
-                        ("BACKGROUND", (0, 1), (-1, -1), colors.white),  # Body background white
+                        (
+                            "BACKGROUND",
+                            (0, 1),
+                            (-1, -1),
+                            colors.white,
+                        ),  # Body background white
                         ("GRID", (0, 0), (-1, -1), 1, colors.black),  # Grid lines
                     ]
                 )
@@ -1142,30 +1287,33 @@ def create_pdf(filename, output):
     elements.append(Paragraph("Structural Variants", underline_style))
 
     if os.path.exists(os.path.join(output, "fusion_candidates.csv")):
-        elements.append(Paragraph(
-            "These are high confidence fusions. These fusions involve an interactions between genes in the candidate panel.",
-            smaller_style))
-        elements.append(Paragraph(
-            f"There are {result[goodpairs].sort_values(by=7)['tag'].nunique()} high confidence fusions observed.",
-            smaller_style))
-        for gene_pair in result[goodpairs].sort_values(by=7)['tag'].unique():
-            read_count = result[result['tag'].isin([gene_pair])][7].nunique()
-            elements.append(Paragraph(f"{gene_pair}: {read_count} reads", smaller_style))
+        elements.append(
+            Paragraph(
+                "These are high confidence fusions. These fusions involve an interactions between genes in the candidate panel.",
+                smaller_style,
+            )
+        )
+        elements.append(
+            Paragraph(
+                f"There are {result[goodpairs].sort_values(by=7)['tag'].nunique()} high confidence fusions observed.",
+                smaller_style,
+            )
+        )
+        for gene_pair in result[goodpairs].sort_values(by=7)["tag"].unique():
+            read_count = result[result["tag"].isin([gene_pair])][7].nunique()
+            elements.append(
+                Paragraph(f"{gene_pair}: {read_count} reads", smaller_style)
+            )
 
         elements.append(Spacer(1, 12))
-        for gene_pair in (
-                result[goodpairs].sort_values(by=7)["tag"].unique()
-        ):
+        for gene_pair in result[goodpairs].sort_values(by=7)["tag"].unique():
             elements.append(Paragraph(f"Fusion Candidate: {gene_pair}", smaller_style))
-            for gene in result[
-                goodpairs
-                & result[goodpairs]["tag"].eq(gene_pair)
-            ][3].unique():
+            for gene in result[goodpairs & result[goodpairs]["tag"].eq(gene_pair)][
+                3
+            ].unique():
                 title = gene
                 reads = result[goodpairs].sort_values(by=7)[
-                    result[goodpairs]
-                    .sort_values(by=7)[3]
-                    .eq(gene)
+                    result[goodpairs].sort_values(by=7)[3].eq(gene)
                 ]
                 buf, buf2 = fusion_plot(title, reads)
                 width, height = A4
@@ -1177,36 +1325,51 @@ def create_pdf(filename, output):
                 elements.append(Spacer(1, 12))
 
     if os.path.exists(os.path.join(output, "fusion_candidates_master.csv")):
-        elements.append(Paragraph("These are low confidence fusions. These fusions involve an interactions between one target gene and any other gene in the genome.", smaller_style))
-        elements.append(Paragraph(f"There are {result_all[goodpairs_all].sort_values(by=7)['tag'].nunique()} low confidence fusions observed.", smaller_style))
-        for gene_pair in result_all[goodpairs_all].sort_values(by=7)['tag'].unique():
-            read_count = result_all[result_all['tag'].isin([gene_pair])][7].nunique()
-            elements.append(Paragraph(f"{gene_pair}: {read_count} reads", smaller_style))
-
+        elements.append(
+            Paragraph(
+                "These are low confidence fusions. These fusions involve an interactions between one target gene and any other gene in the genome.",
+                smaller_style,
+            )
+        )
+        elements.append(
+            Paragraph(
+                f"There are {result_all[goodpairs_all].sort_values(by=7)['tag'].nunique()} low confidence fusions observed.",
+                smaller_style,
+            )
+        )
+        for gene_pair in result_all[goodpairs_all].sort_values(by=7)["tag"].unique():
+            read_count = result_all[result_all["tag"].isin([gene_pair])][7].nunique()
+            elements.append(
+                Paragraph(f"{gene_pair}: {read_count} reads", smaller_style)
+            )
 
         elements.append(Spacer(1, 12))
-        for gene_pair in (
+        if len(result_all[goodpairs_all].sort_values(by=7)["tag"].unique()) > 0:
+            for gene_pair in (
                 result_all[goodpairs_all].sort_values(by=7)["tag"].unique()
-        ):
-            elements.append(Paragraph(f"Fusion Candidate: {gene_pair}", smaller_style))
-            for gene in result_all[
-                goodpairs_all
-                & result_all[goodpairs_all]["tag"].eq(gene_pair)
-            ][3].unique():
-                title = gene
-                reads = result_all[goodpairs_all].sort_values(by=7)[
-                    result_all[goodpairs_all]
-                    .sort_values(by=7)[3]
-                    .eq(gene)
-                ]
-                buf,buf2=fusion_plot(title, reads)
-                width, height = A4
-                img = Image(buf, width=width * 0.6, height=width, kind="proportional")
-                elements.append(img)
-                width, height = A4
-                img = Image(buf2, width=width * 0.6, height=width, kind="proportional")
-                elements.append(img)
-                elements.append(Spacer(1, 12))
+            ):
+                elements.append(
+                    Paragraph(f"Fusion Candidate: {gene_pair}", smaller_style)
+                )
+                for gene in result_all[
+                    goodpairs_all & result_all[goodpairs_all]["tag"].eq(gene_pair)
+                ][3].unique():
+                    title = gene
+                    reads = result_all[goodpairs_all].sort_values(by=7)[
+                        result_all[goodpairs_all].sort_values(by=7)[3].eq(gene)
+                    ]
+                    buf, buf2 = fusion_plot(title, reads)
+                    width, height = A4
+                    img = Image(
+                        buf, width=width * 0.6, height=width, kind="proportional"
+                    )
+                    elements.append(img)
+                    width, height = A4
+                    img = Image(
+                        buf2, width=width * 0.6, height=width, kind="proportional"
+                    )
+                    elements.append(img)
+                    elements.append(Spacer(1, 12))
 
     elements.append(Spacer(1, 12))
 
@@ -1214,13 +1377,12 @@ def create_pdf(filename, output):
     if not last_seen:
         for file in natsort.natsorted(os.listdir(output)):
             if file.endswith("_mgmt.csv"):
-                count = int(file.split('_')[0])
+                count = int(file.split("_")[0])
                 if count > last_seen:
                     results = pd.read_csv(os.path.join(output, file))
-                    plot_out = os.path.join(
-                        output, file.replace(".csv", ".png")
-                    )
+                    plot_out = os.path.join(output, file.replace(".csv", ".png"))
                     last_seen = count
+        elements.append(PageBreak())
 
     if last_seen > 0:
         elements.append(Paragraph("MGMT Promoter Methylation", underline_style))
@@ -1258,8 +1420,6 @@ def create_pdf(filename, output):
         elements.append(Spacer(1, 12))
         elements.append(PageBreak())
 
-
-
     # Add sections
 
     doc.multiBuild(elements, canvasmaker=header_footer_canvas_factory(sample_id))
@@ -1271,12 +1431,22 @@ if __name__ == "__main__":
     # Create a sample plot
     # Register the custom fonts
     pdfmetrics.registerFont(
-        TTFont("FiraSans",
-               os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-regular.ttf"))
+        TTFont(
+            "FiraSans",
+            os.path.join(
+                os.path.dirname(os.path.abspath(fonts.__file__)),
+                "fira-sans-v16-latin-regular.ttf",
+            ),
+        )
     )
     pdfmetrics.registerFont(
-        TTFont("FiraSans-Bold",
-               os.path.join(os.path.dirname(os.path.abspath(fonts.__file__)), "fira-sans-v16-latin-700.ttf"))
+        TTFont(
+            "FiraSans-Bold",
+            os.path.join(
+                os.path.dirname(os.path.abspath(fonts.__file__)),
+                "fira-sans-v16-latin-700.ttf",
+            ),
+        )
     )
 
     # Update styles to use the custom font
@@ -1297,4 +1467,7 @@ if __name__ == "__main__":
         name="Underline", parent=styles["Heading1"], underline=True
     )
     # Generate the PDF
-    create_pdf("sample_report.pdf", "/Users/mattloose/GIT/niceGUI/cnsmeth/runoutputs/ds1305_Intraop0015_a")
+    create_pdf(
+        "sample_report.pdf",
+        "/Users/mattloose/datasets/new_outputs/ds1305_Intraop0002_3",
+    )

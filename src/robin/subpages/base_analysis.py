@@ -65,7 +65,7 @@ Example usage::
 
 import queue
 from nicegui import ui, app
-from typing import BinaryIO, Optional, List, Tuple
+from typing import BinaryIO, Optional, List, Tuple, Dict
 import pandas as pd
 import time
 import threading
@@ -110,6 +110,7 @@ class BaseAnalysis:
         browse: bool = False,
         uuid: Optional[str] = None,
         force_sampleid: Optional[str] = None,
+        sampleID: Optional[str] = None,
         *args,
         **kwargs,
     ) -> None:
@@ -123,15 +124,16 @@ class BaseAnalysis:
         self.browse = browse
         self.progress = progress
         self.file_mod_times = {}
-        self.sampleID = None
         self.MENU_BREAKPOINT = 520
-        if self.name not in app.storage.general.get(self.mainuuid, {}):
-            app.storage.general.setdefault(self.mainuuid, {})[self.name] = {
-                "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
-            }
         self.running = False
         self.force_sampleid = force_sampleid
         self.threads = max(1, threads // 2)
+        if sampleID:
+            self.sampleID = sampleID
+            # print(f"SampleID: {self.sampleID}")
+        else:
+            self.sampleID = None
+            # print("No SampleID provided")
 
     def check_file_time(self, file_path: str) -> bool:
         """
@@ -176,11 +178,13 @@ class BaseAnalysis:
         else:
             return path
 
-
-    async def render_ui(self) -> None:
+    async def render_ui(self, sample_id=None) -> None:
         """
         Set up the user interface for the analysis and display progress bars if enabled.
         """
+        if sample_id:
+            self.sampleID = sample_id
+        # print(f"Rendering UI for {self.name} and {self.sampleID}")
         self.setup_ui()
         if self.progress and not self.browse:
             self.progress_bars()
@@ -190,7 +194,8 @@ class BaseAnalysis:
         Start processing BAM files either in batch mode or in a continuous timer mode.
         """
         if self.batch:
-            self.bams: List[Tuple[BinaryIO, Optional[float]]] = []
+            # self.bams: List[Tuple[BinaryIO, Optional[float]]] = []
+            self.bams: Dict[str, List[Tuple[BinaryIO, Optional[float]]]] = {}
             self.batch_timer_run()
         else:
             self.timer_run()
@@ -212,12 +217,32 @@ class BaseAnalysis:
             self.running = True
             bamfile, timestamp, sampleID = self.bamqueue.get()
             self.sampleID = sampleID
-            app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += 1
+            if self.sampleID not in app.storage.general[self.mainuuid]:
+                app.storage.general[self.mainuuid][self.sampleID] = {}
+
+            if self.name not in app.storage.general[self.mainuuid].get(
+                self.sampleID, {}
+            ):
+                app.storage.general[self.mainuuid].setdefault(self.sampleID, {})[
+                    self.name
+                ] = {
+                    "counters": Counter(
+                        bam_count=0, bam_processed=0, bams_in_processing=0
+                    )
+                }
+            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
+                "bam_count"
+            ] += 1
 
             if not timestamp:
                 timestamp = time.time()
-            await self.process_bam(bamfile, timestamp)
-            app.storage.general[self.mainuuid][self.name]["counters"]["bam_processed"] += 1
+            try:
+                await self.process_bam(bamfile, timestamp)
+            except Exception as e:
+                print(f"Error processing BAM files: {e}")
+            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
+                "bam_processed"
+            ] += 1
 
         self.timer.active = True
 
@@ -245,18 +270,65 @@ class BaseAnalysis:
         """
         self.timer.active = False
         count = 0
+
+        # Different bam files may come from different runs (sampleIDs). Therefore we must process reads according to the run they have come from.
         while self.bamqueue.qsize() > 0:
             bamfile, timestamp, sampleID = self.bamqueue.get()
-            self.sampleID = sampleID
-            self.bams.append((bamfile, timestamp))
+            if sampleID not in self.bams:
+                self.bams[sampleID] = []
+            self.bams[sampleID].append((bamfile, timestamp))
             count += 1
-            if count >= 200:
-                break
-        app.storage.general[self.mainuuid][self.name]["counters"]["bam_count"] += count
+            if sampleID not in app.storage.general[self.mainuuid]:
+                app.storage.general[self.mainuuid][sampleID] = {}
 
-        if not self.running and self.bams:
-            self.running = True
-            await self.process_bam(self.bams)
+            if self.name not in app.storage.general[self.mainuuid].get(sampleID, {}):
+                app.storage.general[self.mainuuid].setdefault(sampleID, {})[
+                    self.name
+                ] = {
+                    "counters": Counter(
+                        bam_count=0, bam_processed=0, bams_in_processing=0
+                    )
+                }
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_count"
+            ] += 1
+
+            if count >= 100:
+                break
+
+        for sample_id, data_list in self.bams.items():
+            if not self.running and len(data_list) > 0:
+                self.running = True
+                self.sampleID = sample_id
+                if self.sampleID not in app.storage.general[self.mainuuid]:
+                    app.storage.general[self.mainuuid][self.sampleID] = {}
+
+                if self.name not in app.storage.general[self.mainuuid].get(
+                    self.sampleID, {}
+                ):
+                    app.storage.general[self.mainuuid].setdefault(self.sampleID, {})[
+                        self.name
+                    ] = {
+                        "counters": Counter(
+                            bam_count=0, bam_processed=0, bams_in_processing=0
+                        )
+                    }
+                app.storage.general[self.mainuuid][self.sampleID][self.name][
+                    "counters"
+                ]["bams_in_processing"] += len(data_list)
+
+                try:
+                    await self.process_bam(data_list)
+                except Exception as e:
+                    print(f"Error processing BAM files: {e}")
+                finally:
+                    app.storage.general[self.mainuuid][self.sampleID][self.name][
+                        "counters"
+                    ]["bams_in_processing"] -= len(data_list)
+                    app.storage.general[self.mainuuid][self.sampleID][self.name][
+                        "counters"
+                    ]["bam_processed"] += len(data_list)
+                    # self.running = False
 
         self.timer.active = True
 
@@ -268,7 +340,9 @@ class BaseAnalysis:
         Returns:
             float: The progress as a fraction of processed files over total files.
         """
-        counters = app.storage.general[self.mainuuid][self.name]["counters"]
+        counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+            "counters"
+        ]
         if counters["bam_count"] == 0:
             return 0.0
         return counters["bam_processed"] / counters["bam_count"]
@@ -281,7 +355,9 @@ class BaseAnalysis:
         Returns:
             float: The progress as a fraction of files being processed over total files.
         """
-        counters = app.storage.general[self.mainuuid][self.name]["counters"]
+        counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+            "counters"
+        ]
         if counters["bam_count"] == 0:
             return 0.0
         return counters["bams_in_processing"] / counters["bam_count"]
@@ -294,7 +370,9 @@ class BaseAnalysis:
         Returns:
             float: The fraction of files not yet processed over total files.
         """
-        counters = app.storage.general[self.mainuuid][self.name]["counters"]
+        counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+            "counters"
+        ]
         if counters["bam_count"] == 0:
             return 0.0
         return (
@@ -308,22 +386,38 @@ class BaseAnalysis:
         Show a progress bar for the number of BAM files processed.
         """
         self.progress_trackers = ui.card().classes("w-full")
+        # print(f"Progress bars for {self.name} and {self.sampleID}")
+        if self.sampleID not in app.storage.general[self.mainuuid]:
+            app.storage.general[self.mainuuid][self.sampleID] = {}
+
+        if self.name not in app.storage.general[self.mainuuid].get(self.sampleID, {}):
+            app.storage.general[self.mainuuid].setdefault(self.sampleID, {})[
+                self.name
+            ] = {
+                "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
+            }
         with self.progress_trackers:
             with ui.row():
                 ui.label("File Tracker").tailwind("drop-shadow", "font-bold")
                 ui.label().bind_text_from(
-                    app.storage.general[self.mainuuid][self.name]["counters"],
+                    app.storage.general[self.mainuuid][self.sampleID][self.name][
+                        "counters"
+                    ],
                     "bam_count",
                     backward=lambda n: f"Bam files seen: {n}",
                 )
                 if self.batch:
                     ui.label().bind_text_from(
-                        app.storage.general[self.mainuuid][self.name]["counters"],
+                        app.storage.general[self.mainuuid][self.sampleID][self.name][
+                            "counters"
+                        ],
                         "bams_in_processing",
                         backward=lambda n: f"Bam files being processed: {n}",
                     )
                 ui.label().bind_text_from(
-                    app.storage.general[self.mainuuid][self.name]["counters"],
+                    app.storage.general[self.mainuuid][self.sampleID][self.name][
+                        "counters"
+                    ],
                     "bam_processed",
                     backward=lambda n: f"Bam files processed: {n}",
                 )
@@ -408,10 +502,10 @@ class BaseAnalysis:
                 time_diff = 0
             while elapsed_time < time_diff:
                 if self.running:
-                    time.sleep(1)
+                    # time.sleep(1)
                     elapsed_time = (time.time() - playback_start_time) + self.offset
                 else:
-                    time.sleep(1)
+                    # time.sleep(1)
                     self.offset += step_size
                     elapsed_time += self.offset
             if len(row["full_path"]) > 0:
@@ -433,9 +527,7 @@ class BaseAnalysis:
         return (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
                     "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": title},
@@ -469,9 +561,7 @@ class BaseAnalysis:
         return (
             ui.echart(
                 {
-                    "textStyle": {
-                        "fontFamily": "Fira Sans, Fira Mono"
-                    },
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
                     "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": title},

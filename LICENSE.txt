@@ -1,7 +1,13 @@
 
 # Copyright (c) 2023-present Matt Loose <matt.loose@nottingham.ac.uk>
 
-This license is a placeholder - the software within this repository uses code derived from other tools and projects.
+This license is for original code only - the software within this repository uses code derived from other tools and projects.
+
+Users are referred to the licenses of the original projects for details of their licensing.
+
+Sturgeon - https://github.com/marcpaga/sturgeon/blob/main/LICENSE
+
+NanoDX - https://gitlab.com/pesk/nanoDx/-/blob/master/LICENSE?ref_type=heads
 
 The spirit and intent is that people can reuse this software for non-commercial purposes.
 

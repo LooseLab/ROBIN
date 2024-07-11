@@ -1,4 +1,4 @@
-# ![MethBrain_small.png](src/robin/images/ROBIN_logo2_small.png)ROBIN
+# ![ROBIN_logo_small.png](src/robin/images/ROBIN_logo_small.png)ROBIN
 
 [![PyPI - Version](https://img.shields.io/pypi/v/methnicegui.svg)](https://pypi.org/project/methnicegui)
 [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/methnicegui.svg)](https://pypi.org/project/methnicegui)
@@ -235,4 +235,6 @@ This software is provided "as is", and is for research use only.
 
 ## License
 
-`robin` is distributed under the terms of the [MIT](https://spdx.org/licenses/MIT.html) license.
+`robin` is distributed under a CC BY-NC 4.0 license. See [LICENSE](LICENSE.txt) for more information. This license does not override any licenses that may be present in the third party tools used by `robin`.
+
+

@@ -15,7 +15,7 @@ from sturgeon.callmapping import (
 )
 import click
 from pathlib import Path
-import asyncio
+from typing import List, Tuple
 
 
 def run_probes_methyl_calls(merged_output_file, bed_output_file):
@@ -69,27 +69,30 @@ def run_sturgeon_inputtobed(temp, temp2):
         pass
 
 
-
 class Sturgeon_object(BaseAnalysis):
     def __init__(self, *args, **kwargs):
-        self.sturgeon_df_store = pd.DataFrame()
+        self.sturgeon_df_store = {}
         self.threshold = 0.05
-        self.first_run = True
+        self.first_run = {}
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
         )
-        self.dataDir = None
-        self.bedDir = None
+        self.dataDir = {}
+        self.bedDir = {}
+        self.st_num_probes = {}
         super().__init__(*args, **kwargs)
-
 
     def setup_ui(self):
         self.card = ui.card().style("width: 100%")
         with self.card:
             with ui.grid(columns=8).classes("w-full h-auto"):
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                ):
                     self.create_sturgeon_chart("Sturgeon")
-                with ui.card().classes(f'min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8'):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                ):
                     self.create_sturgeon_time_chart("Sturgeon Time Series")
         if self.summary:
             with self.summary:
@@ -102,10 +105,13 @@ class Sturgeon_object(BaseAnalysis):
     def show_previous_data(self):
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
-                if item == 'sample_ids':
+                if item == "sample_ids":
                     for sample in app.storage.general[self.mainuuid][item]:
                         self.sampleID = sample
-        output = self.check_and_create_folder(self.output, self.sampleID)
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
+
         if self.check_file_time(os.path.join(output, "sturgeon_scores.csv")):
             self.sturgeon_df_store = pd.read_csv(
                 os.path.join(os.path.join(output, "sturgeon_scores.csv")),
@@ -135,32 +141,48 @@ class Sturgeon_object(BaseAnalysis):
                 self.sturgeon_df_store.iloc[-1]["number_probes"],
             )
 
-    async def process_bam(self, bamfile):
-        if not self.dataDir:
-            self.dataDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
-        if not self.bedDir:
-            self.bedDir = tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID))
+    async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
+        """
+        Processes the BAM files and performs the analysis.
+
+        Args:
+            bamfile (List[Tuple[str, float]]): List of BAM files with their timestamps.
+        """
+        sampleID = self.sampleID
+        # Initialize directories for each sampleID if not already present
+        if sampleID not in self.dataDir.keys():
+            self.dataDir[sampleID] = tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, sampleID)
+            )
+            self.bedDir[sampleID] = tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, sampleID)
+            )
         tomerge = []
-        # timestamp = None
+
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop()
             tomerge.append(file)
-            # timestamp = filetime
-            app.storage.general[self.mainuuid][self.name]["counters"][
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
-            # self.bams_in_processing += 1
-            if len(tomerge) > 25:
+            if len(tomerge) > 50:
                 break
+
         if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID))
+            tempbam = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, sampleID)
+            )
 
             await run.cpu_bound(pysam_cat, tempbam.name, tomerge)
 
             file = tempbam.name
-            temp = tempfile.NamedTemporaryFile(dir=self.check_and_create_folder(self.output, self.sampleID))
-            with tempfile.TemporaryDirectory(dir=self.check_and_create_folder(self.output, self.sampleID)) as temp2:
+            temp = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, sampleID)
+            )
+            with tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, sampleID)
+            ) as temp2:
                 await run.cpu_bound(run_modkit, file, temp.name, self.threads)
 
                 await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
@@ -169,12 +191,13 @@ class Sturgeon_object(BaseAnalysis):
                     temp2, "merged_probes_methyl_calls.txt"
                 )
                 merged_output_file = os.path.join(
-                    self.dataDir.name,
+                    self.dataDir[sampleID].name,
                     "_merged_probes_methyl_calls.txt",
                 )
-                if self.first_run:
+
+                if sampleID not in self.first_run.keys():
+                    self.first_run[sampleID] = True
                     shutil.copyfile(calls_per_probe_file, merged_output_file)
-                    self.first_run = False
                 else:
                     await run.cpu_bound(
                         run_sturgeon_merge_probes,
@@ -183,7 +206,7 @@ class Sturgeon_object(BaseAnalysis):
                     )
 
                 bed_output_file = os.path.join(
-                    self.bedDir.name, "final_merged_probes_methyl_calls.bed"
+                    self.bedDir[sampleID].name, "final_merged_probes_methyl_calls.bed"
                 )
 
                 await run.cpu_bound(
@@ -192,15 +215,19 @@ class Sturgeon_object(BaseAnalysis):
 
                 await run.cpu_bound(
                     run_sturgeon_predict,
-                    self.bedDir.name,
-                    self.dataDir.name,
+                    self.bedDir[sampleID].name,
+                    self.dataDir[sampleID].name,
                     self.modelfile,
                 )
-                if os.path.exists(os.path.join(self.dataDir.name,
-                        "final_merged_probes_methyl_calls_general.csv")):
+                if os.path.exists(
+                    os.path.join(
+                        self.dataDir[sampleID].name,
+                        "final_merged_probes_methyl_calls_general.csv",
+                    )
+                ):
                     mydf = pd.read_csv(
                         os.path.join(
-                            self.dataDir.name,
+                            self.dataDir[sampleID].name,
                             "final_merged_probes_methyl_calls_general.csv",
                         )
                     )
@@ -208,33 +235,36 @@ class Sturgeon_object(BaseAnalysis):
                     self.running = False
                     return
 
-                self.st_num_probes = mydf.iloc[-1]["number_probes"]
+                self.st_num_probes[sampleID] = mydf.iloc[-1]["number_probes"]
                 lastrow = mydf.iloc[-1].drop("number_probes")
-                lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-                if self.summary:
-                    with self.summary:
-                        self.summary.clear()
-                        ui.label(
-                            f"Sturgeon classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
-                        )
                 mydf_to_save = mydf
                 mydf_to_save["timestamp"] = time.time() * 1000
-                app.storage.general[self.mainuuid][self.name]["counters"][
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                     "bam_processed"
                 ] += len(tomerge)
 
-                app.storage.general[self.mainuuid][self.name]["counters"][
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                     "bams_in_processing"
                 ] -= len(tomerge)
 
-                self.sturgeon_df_store = pd.concat(
-                    [self.sturgeon_df_store, mydf_to_save.set_index("timestamp")]
-                )
-                self.sturgeon_df_store.to_csv(
-                    os.path.join(self.check_and_create_folder(self.output, self.sampleID), "sturgeon_scores.csv")
-                )
+                if sampleID not in self.sturgeon_df_store:
+                    self.sturgeon_df_store[sampleID] = pd.DataFrame()
 
-        await asyncio.sleep(0.1)
+                # Exclude empty or all-NA entries before concatenation
+                if not mydf_to_save.dropna(how="all").empty:
+                    self.sturgeon_df_store[sampleID] = pd.concat(
+                        [
+                            self.sturgeon_df_store[sampleID],
+                            mydf_to_save.set_index("timestamp"),
+                        ]
+                    )
+                    self.sturgeon_df_store[sampleID].to_csv(
+                        os.path.join(
+                            self.check_and_create_folder(self.output, sampleID),
+                            "sturgeon_scores.csv",
+                        )
+                    )
+
         self.running = False
 
     def create_sturgeon_chart(self, title):

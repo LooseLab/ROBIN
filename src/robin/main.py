@@ -49,6 +49,7 @@ Example usage::
     python main.py --config config.ini --port 8081 --threads 4 --log-level INFO
 
 """
+
 import uuid
 import click
 import os
@@ -57,7 +58,7 @@ import signal
 import logging
 
 from pathlib import Path
-from nicegui import ui, app, events, core, Client
+from nicegui import ui, app, core, observables
 import nicegui.air
 from robin import theme
 from robin import images
@@ -65,7 +66,6 @@ from configparser import ConfigParser
 
 from robin.brain_class import BrainMeth
 from robin.minknow_info.minknow_panel import MinKNOWFish
-
 
 
 DEFAULT_CFG: str = "config.ini"
@@ -92,8 +92,10 @@ def setup_logging(level: str) -> None:
     logging.info(f"Logging configured to level: {level}")
     logging.debug("Debug logging enabled.")
 
+
 def clean_up_handler(thingtokill):
     del thingtokill
+
 
 @ui.page("/", response_timeout=10)
 async def index() -> None:
@@ -116,6 +118,7 @@ async def index() -> None:
         unique_id=UNIQUE_ID,
     )
     GUI.setup()
+
     def use_on_air():
         """
         Enable or disable remote access based on the value of the general argument.
@@ -125,8 +128,8 @@ async def index() -> None:
             >>> use_on_air(args)
             None
         """
-        if 'use_on_air' in app.storage.general.keys():
-            if app.storage.general['use_on_air']:
+        if "use_on_air" in app.storage.general.keys():
+            if app.storage.general["use_on_air"]:
                 if any("on-air" in url for url in app.urls):
                     pass
                 else:
@@ -139,6 +142,32 @@ async def index() -> None:
     ui.timer(10, use_on_air)
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
     await GUI.splash_screen()
+
+
+@ui.page("/live/{sample_id}", response_timeout=20)
+async def live_sample(sample_id: str) -> None:
+    """
+    Page for live data interaction with a specific sample ID.
+    Sets up an instance of Methnice for live data visualization.
+    """
+    GUI = Methnice(
+        force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
+        threads=app.storage.general[UNIQUE_ID]["threads"],
+        simtime=app.storage.general[UNIQUE_ID]["simtime"],
+        watchfolder=app.storage.general[UNIQUE_ID]["watchfolder"],
+        output=app.storage.general[UNIQUE_ID]["output"],
+        sequencing_summary=app.storage.general[UNIQUE_ID]["sequencing_summary"],
+        target_panel=app.storage.general[UNIQUE_ID]["target_panel"],
+        showerrors=app.storage.general[UNIQUE_ID]["showerrors"],
+        browse=app.storage.general[UNIQUE_ID]["browse"],
+        exclude=app.storage.general[UNIQUE_ID]["exclude"],
+        reference=app.storage.general[UNIQUE_ID]["reference"],
+        unique_id=UNIQUE_ID,
+        sample_id=sample_id,
+    )
+    GUI.setup()
+    ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
+    await GUI.index_page()
 
 
 @ui.page("/live", response_timeout=20)
@@ -247,6 +276,7 @@ class Methnice:
         exclude: list,
         reference: Path,
         unique_id: str,
+        sample_id: str = None,
     ):
         self.force_sampleid = force_sampleid
         self.MAINID = unique_id
@@ -261,6 +291,10 @@ class Methnice:
         self.exclude = exclude
         self.reference = reference
         self.minknow_connection = None
+        if sample_id:
+            self.sample_id = sample_id
+        else:
+            self.sample_id = None
 
     @property
     def watchfolder(self) -> Path:
@@ -318,7 +352,7 @@ class Methnice:
         """
         Async method to start analysis.
         """
-        #self.timer = ui.timer(1, self._worker)
+        # self.timer = ui.timer(1, self._worker)
         await self.robin.start_background()
 
     async def browse_page(self) -> None:
@@ -326,7 +360,8 @@ class Methnice:
         Async method for rendering the browse page.
         """
         with theme.frame(
-            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>", smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>"
+            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
+            smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
         ):
             self.analysis_tab_pane = ui.row().classes("w-full")
             self.robin_browse = BrainMeth(
@@ -344,7 +379,7 @@ class Methnice:
                 minknow_connection=self.minknow_connection,
                 reference=self.reference,
             )
-            #await self.robin_browse.init()
+            # await self.robin_browse.init()
 
             with self.analysis_tab_pane:
                 await self.robin_browse.render_ui()
@@ -354,7 +389,8 @@ class Methnice:
         Async method for rendering the splash screen.
         """
         with theme.frame(
-            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>", smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>"
+            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
+            smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
         ):
             self.frontpage = ui.card().classes("w-full")
             with self.frontpage:
@@ -392,7 +428,8 @@ class Methnice:
         Async method for rendering the index page.
         """
         with theme.frame(
-            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>", smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>"
+            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
+            smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
         ):
             await ui.context.client.connected()
             with ui.column().classes("w-full"):
@@ -449,7 +486,7 @@ class Methnice:
                     )
 
             with self.analysis_tab_pane:
-                await self.robin.render_ui()
+                await self.robin.render_ui(sample_id=self.sample_id)
 
 
 def run_class(
@@ -503,6 +540,8 @@ def run_class(
         "exclude": exclude,
         "reference": reference,
     }
+    app.storage.general[UNIQUE_ID]["samples"] = {}
+    app.storage.general[UNIQUE_ID]["sample_list"] = observables.ObservableList([])
     ui.add_css(
         """
         .shadows-into light-regular {
@@ -514,7 +553,15 @@ def run_class(
     )
     app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
     app.on_startup(startup)
-    ui.run(port=port, reload=reload, title="ROBIN", favicon=iconfile, on_air=False, show=False, storage_secret=f"UNIQUE_ID")
+    ui.run(
+        port=port,
+        reload=reload,
+        title="ROBIN",
+        favicon=iconfile,
+        on_air=False,
+        show=False,
+        storage_secret="UNIQUE_ID",
+    )
 
 
 def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None:
@@ -552,7 +599,11 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     help="Port for GUI",
 )
 @click.option(
-    "--force_sampleid", default=None, help="Force a specific sampleID.", required=False, type=str
+    "--force_sampleid",
+    default=None,
+    help="Force a specific sampleID.",
+    required=False,
+    type=str,
 )
 @click.option(
     "--threads", default=4, help="Number of threads available.", required=True
@@ -691,11 +742,12 @@ def package_run(
             sequencing_summary=sequencing_summary,
             target_panel=target_panel,
             showerrors=showerrors,
-            browse=browse ,
+            browse=browse,
             exclude=exclude,
             reference=click.format_filename(reference),
         )
 
+
 if __name__ in {"__main__", "__mp_main__"}:
     print("GUI launched by auto-reload function.")
-    #package_run()
+    # package_run()
