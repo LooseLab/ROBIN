@@ -262,7 +262,7 @@ def fusion_work(
                         how="left",
                     )
                     fusion_candidates = fusion_candidates[
-                        fusion_candidates["mapping_quality"] > 50
+                        fusion_candidates["mapping_quality"] > 40
                     ]
                     fusion_candidates["diff"] = (
                         fusion_candidates["reference_end"]
@@ -305,14 +305,14 @@ def fusion_work(
                         how="left",
                     )
                     fusion_candidates_all = fusion_candidates_all[
-                        fusion_candidates_all["mapping_quality"] > 50
+                        fusion_candidates_all["mapping_quality"] > 40
                     ]
                     fusion_candidates_all["diff"] = (
                         fusion_candidates_all["reference_end"]
                         - fusion_candidates_all["reference_start"]
                     )
                     fusion_candidates_all = fusion_candidates_all[
-                        fusion_candidates_all["diff"] > 1000
+                        fusion_candidates_all["diff"] > 100
                     ]
 
                 samfile.close()
@@ -928,6 +928,7 @@ class FusionObject(BaseAnalysis):
         with ui.card().classes("w-full no-shadow border-[2px]"):
             result = self._get_reads(reads)
             df = reads
+            #print (df)
 
             # Function to rank overlapping ranges
             def rank_overlaps(df, start_col, end_col):
@@ -956,6 +957,7 @@ class FusionObject(BaseAnalysis):
             df["rank"] = rank_overlaps(df, "start2", "end2")
 
             lines = df.sort_values(by=["id", "read_start"]).reset_index(drop=True)
+            #print(lines)
 
             # Function to assign occurrence number
             def assign_occurrence(group):
@@ -1288,7 +1290,7 @@ class FusionObject(BaseAnalysis):
                     header=None,
                     skiprows=1,
                 )
-                print("fusion_candidates", fusion_candidates)
+                #print("fusion_candidates", fusion_candidates)
 
                 self.update_fusion_table(fusion_candidates)
             except pd.errors.EmptyDataError:
