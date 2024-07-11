@@ -235,4 +235,6 @@ This software is provided "as is", and is for research use only.
 
 ## License
 
-`robin` is distributed under the terms of the [MIT](https://spdx.org/licenses/MIT.html) license.
+`robin` is distributed under a CC BY-NC 4.0 license. See [LICENSE](LICENSE.txt) for more information. This license does not override any licenses that may be present in the third party tools used by `robin`.
+
+
