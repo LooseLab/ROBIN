@@ -47,6 +47,7 @@ dependencies = [
   "scikit-learn",
   "yappi",
   "tabulate",
+  "networkx"
 ]
 
 [project.scripts]
