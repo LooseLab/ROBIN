@@ -225,7 +225,6 @@ def fusion_work(
                 run_command(
                     f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}"
                 )
-                # print(f"bedtools intersect -a {all_gene_bed} -b {tempbamfile} -wa -wb > {tempallmappings}")
 
                 # Process gene mappings if available
 
@@ -262,7 +261,7 @@ def fusion_work(
                         how="left",
                     )
                     fusion_candidates = fusion_candidates[
-                        fusion_candidates["mapping_quality"] > 50
+                        fusion_candidates["mapping_quality"] > 40
                     ]
                     fusion_candidates["diff"] = (
                         fusion_candidates["reference_end"]
@@ -305,14 +304,14 @@ def fusion_work(
                         how="left",
                     )
                     fusion_candidates_all = fusion_candidates_all[
-                        fusion_candidates_all["mapping_quality"] > 50
+                        fusion_candidates_all["mapping_quality"] > 40
                     ]
                     fusion_candidates_all["diff"] = (
                         fusion_candidates_all["reference_end"]
                         - fusion_candidates_all["reference_start"]
                     )
                     fusion_candidates_all = fusion_candidates_all[
-                        fusion_candidates_all["diff"] > 1000
+                        fusion_candidates_all["diff"] > 100
                     ]
 
                 samfile.close()
@@ -656,7 +655,6 @@ class FusionObject(BaseAnalysis):
                         ):
                             gene_groups.append(gene_group)
                     self.all_candidates = len(gene_groups)
-                    # print (gene_groups)
                     with ui.row().classes("w-full"):
                         ui.select(
                             options=gene_groups,
@@ -696,7 +694,6 @@ class FusionObject(BaseAnalysis):
         """
         # if not self.fusion_candidates.empty:
         if self.sampleID in self.fusion_candidates.keys():
-            # print(self.fusion_candidates[self.sampleID].columns)
             uniques = self.fusion_candidates[self.sampleID]["read_id"].duplicated(
                 keep=False
             )
@@ -798,7 +795,7 @@ class FusionObject(BaseAnalysis):
                     gene_pairs = (
                         result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
                     )
-                    gene_pairs = [pair.split(", ") for pair in gene_pairs]
+                    gene_pairs = [pair.split(",") for pair in gene_pairs]
                     gene_groups_test = get_gene_network(gene_pairs)
                     gene_groups = []
                     for gene_group in gene_groups_test:
@@ -814,7 +811,6 @@ class FusionObject(BaseAnalysis):
                         ):
                             gene_groups.append(gene_group)
                     self.candidates = len(gene_groups)
-                    # print (gene_groups)
                     with ui.row().classes("w-full"):
                         ui.select(
                             options=gene_groups,
@@ -832,8 +828,8 @@ class FusionObject(BaseAnalysis):
 
                     def show_gene_pair(gene_group: str, result, goodpairs) -> None:
                         ui.notify(gene_group)
-                        self.all_card.clear()
-                        with self.all_card:
+                        self.card.clear()
+                        with self.card:
                             with ui.row():
                                 ui.label(f"{gene_group}").tailwind(
                                     "drop-shadow", "font-bold"
@@ -846,7 +842,6 @@ class FusionObject(BaseAnalysis):
                                 reads = result[goodpairs][
                                     result[goodpairs][3].isin(gene_group)
                                 ]
-                                # print (reads)
                                 self.create_fusion_plot(gene_group, reads)
 
             """
@@ -906,7 +901,6 @@ class FusionObject(BaseAnalysis):
         df = df.sort_values(by=["chromosome", "start", "end"])
 
         df = df.drop_duplicates(subset=["start2", "end2", "id"])
-        # print(df)
 
         # Group by chromosome and collapse ranges within each group
         result = (
@@ -928,14 +922,12 @@ class FusionObject(BaseAnalysis):
         with ui.card().classes("w-full no-shadow border-[2px]"):
             result = self._get_reads(reads)
             df = reads
-
             # Function to rank overlapping ranges
             def rank_overlaps(df, start_col, end_col):
                 # Sort by start and end columns
                 df = df.sort_values(by=["gene", start_col, end_col]).reset_index(
                     drop=True
                 )
-                # print(df)
                 ranks = []
                 current_rank = 0
                 current_end = -1
@@ -1009,7 +1001,6 @@ class FusionObject(BaseAnalysis):
 
             # Apply the function to each group
             lines = lines.groupby("id").apply(find_joins).reset_index(drop=True)
-            # print (lines)
             # Remove rows containing NA values
             lines = lines.dropna()
 
@@ -1019,7 +1010,7 @@ class FusionObject(BaseAnalysis):
 
             if len(result) > 1:
                 gene_table = self.gene_table
-                with ui.pyplot(figsize=(21, 5)).classes("w-full"):  # figsize=(20, 5)):
+                with ui.pyplot(figsize=(19, 5)).classes("w-full"):  # figsize=(20, 5)):
                     num_plots = 2 * len(result)
                     num_cols = len(result)  # 2  # Number of columns in the subplot grid
                     num_rows = (
@@ -1035,6 +1026,9 @@ class FusionObject(BaseAnalysis):
                         chrom = data["chromosome"]
                         start = data["start"]
                         end = data["end"]
+
+                        #start = df[df["chromosome"].eq(chrom)]["start2"].min()-100_000
+                        #end = df[df["chromosome"].eq(chrom)]["end2"].max()+100_000
 
                         def human_readable_format(x, pos):
                             return f"{x / 1e6:.2f}"  # Mb'
@@ -1074,7 +1068,6 @@ class FusionObject(BaseAnalysis):
                                 .reset_index()
                                 .iterrows()
                             ):
-                                # print(row)
                                 features.append(
                                     GraphicFeature(
                                         start=int(row["Start"]),
@@ -1104,7 +1097,7 @@ class FusionObject(BaseAnalysis):
                                 strand_in_label_threshold=4,
                             )
 
-                            plt.tight_layout()
+                            #plt.tight_layout()
 
                         else:
                             features2 = []
@@ -1141,8 +1134,9 @@ class FusionObject(BaseAnalysis):
                             ax.set_title(f'{data["gene"]}')
 
                             axdict[data["gene"]] = ax
+                            #plt.tight_layout()
                     gene_counter = Counter()
-                    # print (lines)
+
                     for index, row in lines.iterrows():
                         # Coordinates in data space of each subplot
 
@@ -1152,21 +1146,23 @@ class FusionObject(BaseAnalysis):
                         gene_counter[row["gene"]] += 1
                         gene_counter[row["Join_Gene"]] += 1
 
-                        # Create an arc connection
-                        con = ConnectionPatch(
-                            xyA=xyA,
-                            coordsA=axdict[row["Join_Gene"]].transData,
-                            xyB=xyB,
-                            coordsB=axdict[row["gene"]].transData,
-                            axesB=row["gene"],
-                            axesA=row["Join_Gene"],
-                            connectionstyle="arc3,rad=0.05",
-                            arrowstyle="->",
-                            linestyle="--",
-                            color=row["color"],
-                        )
-                        # Add the arc connection to the second subplot (ax2)
-                        axdict[row["Join_Gene"]].add_artist(con)
+                        if row["Join_Gene"] in axdict.keys():
+                            # Create an arc connection
+                            con = ConnectionPatch(
+                                xyA=xyA,
+                                coordsA=axdict[row["Join_Gene"]].transData,
+                                xyB=xyB,
+                                coordsB=axdict[row["gene"]].transData,
+                                axesB=row["gene"],
+                                axesA=row["Join_Gene"],
+                                connectionstyle="arc3,rad=0.05",
+                                arrowstyle="->",
+                                linestyle="--",
+                                color=row["color"],
+                            )
+                            # Add the arc connection to the second subplot (ax2)
+                            axdict[row["Join_Gene"]].add_artist(con)
+                            #plt.tight_layout()
 
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
@@ -1259,7 +1255,6 @@ class FusionObject(BaseAnalysis):
         result["Color"] = result[7].map(colors.get)
         goodpairs = result.groupby("tag")[7].transform("nunique") > 1
         # gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
-        # print(gene_pairs)
         return result, goodpairs
 
     def show_previous_data(self) -> None:
@@ -1288,8 +1283,6 @@ class FusionObject(BaseAnalysis):
                     header=None,
                     skiprows=1,
                 )
-                print("fusion_candidates", fusion_candidates)
-
                 self.update_fusion_table(fusion_candidates)
             except pd.errors.EmptyDataError:
                 pass
@@ -1304,8 +1297,6 @@ class FusionObject(BaseAnalysis):
                     header=None,
                     skiprows=1,
                 )
-                # print("fusion_candidates_all", fusion_candidates_all)
-
                 self.update_fusion_table_all(fusion_candidates_all)
             except pd.errors.EmptyDataError:
                 pass
