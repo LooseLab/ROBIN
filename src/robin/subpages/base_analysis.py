@@ -531,6 +531,10 @@ class BaseAnalysis:
                     "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": title},
+                    'tooltip': {
+                        'order': 'valueDesc',
+                        'trigger': 'axis'
+                    },
                     "toolbox": {
                         "show": True,
                         "feature": {

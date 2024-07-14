@@ -173,6 +173,7 @@ class ReadBam:
                 "device_position": pm_tag,
                 "al": al_tag,
                 "state": self.state,
+                "last_start": None
             }
 
             filtered_reads_count = 0
@@ -182,6 +183,9 @@ class ReadBam:
                     # Check if read is not unmapped and not a secondary alignment
                     if not read.is_unmapped and not read.is_secondary:
                         filtered_reads_count += 1
+                        #print(dir(read.tags))
+                        #print(read.get_tag('st'))
+                        bam_read["last_start"]=read.get_tag('st')
                         if read.query_name not in readset:
                             readset.add(read.query_name)
                             if (

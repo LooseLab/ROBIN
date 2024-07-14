@@ -158,16 +158,23 @@ class Sturgeon_object(BaseAnalysis):
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
         tomerge = []
-
+        latest_file = 0
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop()
+            if filetime > latest_file:
+                latest_file = filetime
             tomerge.append(file)
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
             if len(tomerge) > 50:
                 break
+
+        if latest_file:
+            currenttime = latest_file * 1000
+        else:
+            currenttime = time.time() * 1000
 
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(
@@ -238,7 +245,7 @@ class Sturgeon_object(BaseAnalysis):
                 self.st_num_probes[sampleID] = mydf.iloc[-1]["number_probes"]
                 lastrow = mydf.iloc[-1].drop("number_probes")
                 mydf_to_save = mydf
-                mydf_to_save["timestamp"] = time.time() * 1000
+                mydf_to_save["timestamp"] = currenttime
                 app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                     "bam_processed"
                 ] += len(tomerge)
