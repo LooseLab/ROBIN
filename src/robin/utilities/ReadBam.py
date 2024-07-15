@@ -179,8 +179,7 @@ class ReadBam:
 
     def get_last_read(self) -> Optional[BamRead]:
         """
-        Looks at the first read in the BAM file and returns a BamRead object.
-        Essentially we cheat and infer the file time from the first read.
+        Looks at the last read in the BAM file and returns a BamRead object.
 
         Returns:
             Optional[BamRead]: A BamRead object containing information about the last read,
@@ -194,7 +193,6 @@ class ReadBam:
             last_read = None
             for read in self.sam_file.fetch(until_eof=True):
                 last_read = read
-                break
 
             if last_read is None:
                 logger.warning("No reads found in the BAM file")
