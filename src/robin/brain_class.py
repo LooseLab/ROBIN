@@ -87,11 +87,11 @@ import pandas as pd
 import asyncio
 import pysam
 from collections import Counter
-import time
 from datetime import datetime
 from dateutil import parser
 import pytz
 import os
+from alive_progress import alive_bar
 
 
 def check_bam(bamfile):
@@ -116,12 +116,14 @@ def sort_bams(files_and_timestamps,watchfolder,file_endings):
         bisect.insort(files_and_timestamps, (datetime_obj, file))
 
     for path, dirs, files in os.walk(watchfolder):
-        for f in files:
-            if "".join(Path(f).suffixes) in file_endings:
-                # print(os.path.join(path, f))
-                bam = ReadBam(os.path.join(path, f))
-                baminfo = bam.process_reads()
-                insert_sorted((os.path.join(path, f), baminfo["last_start"]))
+        with alive_bar(len(files)) as bar:
+            for f in files:
+                if "".join(Path(f).suffixes) in file_endings:
+                    # print(os.path.join(path, f))
+                    bam = ReadBam(os.path.join(path, f))
+                    baminfo = bam.get_last_read()
+                    insert_sorted((os.path.join(path, f), baminfo["last_start"]))
+                bar()
     return files_and_timestamps
 
 
