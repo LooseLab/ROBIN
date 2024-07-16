@@ -165,7 +165,10 @@ class ReadBam:
                         readset.add(read.query_name)
                         if read.infer_query_length() and read.infer_query_length() > 0:
                             self.yield_tracking += read.infer_query_length()
-                bam_read.last_start = read.get_tag('st')
+                if not bam_read.last_start:
+                    bam_read.last_start = read.get_tag('st')
+                if read.get_tag('st') > bam_read.last_start:
+                    bam_read.last_start = read.get_tag('st')
 
             self.mapped_reads = len(readset)
             self.unmapped_reads = self.sam_file.unmapped

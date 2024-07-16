@@ -91,6 +91,7 @@ from datetime import datetime
 from dateutil import parser
 import pytz
 import os
+from pprint import pprint
 from alive_progress import alive_bar
 
 
@@ -114,14 +115,14 @@ def sort_bams(files_and_timestamps,watchfolder,file_endings):
         file, timestamp = file_timestamp_tuple
         datetime_obj = datetime.fromisoformat(timestamp)
         bisect.insort(files_and_timestamps, (datetime_obj, file))
-
+    print(watchfolder)
     for path, dirs, files in os.walk(watchfolder):
         with alive_bar(len(files)) as bar:
             for f in files:
                 if "".join(Path(f).suffixes) in file_endings:
                     # print(os.path.join(path, f))
                     bam = ReadBam(os.path.join(path, f))
-                    baminfo = bam.get_last_read()
+                    baminfo = bam.process_reads()
                     insert_sorted((os.path.join(path, f), baminfo["last_start"]))
                 bar()
     return files_and_timestamps

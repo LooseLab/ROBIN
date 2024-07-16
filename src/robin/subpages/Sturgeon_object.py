@@ -246,13 +246,7 @@ class Sturgeon_object(BaseAnalysis):
                 lastrow = mydf.iloc[-1].drop("number_probes")
                 mydf_to_save = mydf
                 mydf_to_save["timestamp"] = currenttime
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bam_processed"
-                ] += len(tomerge)
 
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bams_in_processing"
-                ] -= len(tomerge)
 
                 if sampleID not in self.sturgeon_df_store:
                     self.sturgeon_df_store[sampleID] = pd.DataFrame()
@@ -271,6 +265,13 @@ class Sturgeon_object(BaseAnalysis):
                             "sturgeon_scores.csv",
                         )
                     )
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_processed"
+            ] += len(tomerge)
+
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bams_in_processing"
+            ] -= len(tomerge)
 
         self.running = False
 

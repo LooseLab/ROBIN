@@ -321,11 +321,11 @@ class BaseAnalysis:
                     await self.process_bam(data_list)
                 except Exception as e:
                     print(f"Error processing BAM files: {e}")
-                finally:
-                    app.storage.general[self.mainuuid][self.sampleID][self.name][
+
+                app.storage.general[self.mainuuid][self.sampleID][self.name][
                         "counters"
                     ]["bams_in_processing"] -= len(data_list)
-                    app.storage.general[self.mainuuid][self.sampleID][self.name][
+                app.storage.general[self.mainuuid][self.sampleID][self.name][
                         "counters"
                     ]["bam_processed"] += len(data_list)
                     # self.running = False
