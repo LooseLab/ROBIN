@@ -161,7 +161,7 @@ class Sturgeon_object(BaseAnalysis):
         latest_file = 0
         while len(bamfile) > 0:
             self.running = True
-            (file, filetime) = bamfile.pop()
+            (file, filetime) = bamfile.pop(0)
             if filetime > latest_file:
                 latest_file = filetime
             tomerge.append(file)

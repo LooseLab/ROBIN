@@ -291,20 +291,20 @@ class NanoDX_object(BaseAnalysis):
         latest_file = 0
         while len(bamfile) > 0:
             self.running = True
-            (file, filetime) = bamfile.pop()
+            (file, filetime) = bamfile.pop(0)
             if filetime>latest_file:
                 latest_file = filetime
             self.nanodx_bam_count[sampleID] += 1
             tomerge.append(file)
-            if len(tomerge) > 200:
+            if len(tomerge) > 50:
                 break
         if latest_file:
             currenttime = latest_file * 1000
         else:
             currenttime = time.time() * 1000
-        #app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-        #    "bams_in_processing"
-        #] += len(tomerge)
+        app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+            "bams_in_processing"
+        ] += len(tomerge)
 
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(
@@ -472,12 +472,12 @@ class NanoDX_object(BaseAnalysis):
                 )
             )
 
-            #app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-            #    "bam_processed"
-            #] += len(tomerge)
-            #app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-            #    "bams_in_processing"
-            #] -= len(tomerge)
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_processed"
+            ] += len(tomerge)
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bams_in_processing"
+            ] -= len(tomerge)
         self.running = False
 
     def create_nanodx_chart(self, title: str) -> None:

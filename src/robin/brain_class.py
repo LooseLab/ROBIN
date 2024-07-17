@@ -112,10 +112,9 @@ def sort_bams(files_and_timestamps,watchfolder,file_endings):
     import bisect
     # Function to insert into sorted list
     def insert_sorted(file_timestamp_tuple):
-        file, timestamp = file_timestamp_tuple
+        file, timestamp, elapsed = file_timestamp_tuple
         datetime_obj = datetime.fromisoformat(timestamp)
-        bisect.insort(files_and_timestamps, (datetime_obj, file))
-    print(watchfolder)
+        bisect.insort(files_and_timestamps, (datetime_obj, file, elapsed))
     for path, dirs, files in os.walk(watchfolder):
         with alive_bar(len(files)) as bar:
             for f in files:
@@ -123,7 +122,7 @@ def sort_bams(files_and_timestamps,watchfolder,file_endings):
                     # print(os.path.join(path, f))
                     bam = ReadBam(os.path.join(path, f))
                     baminfo = bam.process_reads()
-                    insert_sorted((os.path.join(path, f), baminfo["last_start"]))
+                    insert_sorted((os.path.join(path, f), baminfo["last_start"], baminfo["elapsed_time"]))
                 bar()
     return files_and_timestamps
 
@@ -887,8 +886,7 @@ class BrainMeth:
         if "file" in app.storage.general[self.mainuuid]["bam_count"]:
             while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
                 self.nofiles = False
-                file = app.storage.general[self.mainuuid]["bam_count"]["file"].popitem()
-                #print(file)
+                file = (k := next(iter(app.storage.general[self.mainuuid]["bam_count"]["file"])),app.storage.general[self.mainuuid]["bam_count"]["file"].pop(k))
                 baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
                 sample_id = baminfo["sample_id"]
                 if sample_id not in app.storage.general[self.mainuuid]["samples"]:
@@ -1079,9 +1077,9 @@ class BrainMeth:
         else:
             files_and_timestamps = []
             files_and_timestamps = await run.cpu_bound(sort_bams, files_and_timestamps, self.watchfolder, file_endings)
-            files_and_timestamps.reverse()
+
             # Iterate through the sorted list
-            for timestamp, f in files_and_timestamps:
+            for timestamp, f, elapsed_time in files_and_timestamps:
                 #print (f, timestamp)
                 app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
                 if (

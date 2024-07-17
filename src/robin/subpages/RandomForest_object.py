@@ -188,7 +188,7 @@ class RandomForest_object(BaseAnalysis):
         latest_file = 0
         while len(bamfile) > 0:
             self.running = True
-            (file, filetime) = bamfile.pop()
+            (file, filetime) = bamfile.pop(0)
             if filetime > latest_file:
                 latest_file = filetime
             tomerge.append(file)
@@ -378,14 +378,14 @@ class RandomForest_object(BaseAnalysis):
                     )
                 )
 
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bam_processed"
-                ] += len(tomerge)
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bams_in_processing"
-                ] -= len(tomerge)
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_processed"
+            ] += len(tomerge)
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bams_in_processing"
+            ] -= len(tomerge)
 
-            self.running = False
+        self.running = False
 
     def create_rcns2_chart(self, title):
         self.echart = self.create_chart(title)

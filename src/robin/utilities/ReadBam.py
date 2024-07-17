@@ -6,6 +6,7 @@ import os
 from typing import Optional, Tuple, Dict, Any, Generator, Set
 from dataclasses import dataclass, field, asdict
 import logging
+from datetime import datetime
 
 # Create a logger for this module
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ class BamRead:
     al: Optional[str] = None
     state: str = "fail"
     last_start: Optional[int] = None
+    elapsed_time: Optional[int] = None
 
 
 @dataclass
@@ -151,7 +153,8 @@ class ReadBam:
                 device_position=rg_tags[6],
                 al=rg_tags[8],
                 state=self.state,
-                last_start = None
+                last_start = None,
+                elapsed_time = None,
             )
 
             if not self.sam_file:
@@ -175,6 +178,7 @@ class ReadBam:
 
             logger.info(f"Mapped reads: {self.mapped_reads}")
             logger.info(f"Total reads: {self.mapped_reads + self.unmapped_reads}")
+            bam_read.elapsed_time = datetime.fromisoformat(bam_read.last_start) - datetime.fromisoformat(bam_read.time_of_run)
 
             return asdict(bam_read)
 
