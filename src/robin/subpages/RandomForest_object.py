@@ -11,7 +11,7 @@ from sturgeon.callmapping import (
     merge_probes_methyl_calls,
     probes_methyl_calls_to_bed,
 )
-
+import shutil
 import yappi
 import tabulate
 
@@ -188,14 +188,21 @@ class RandomForest_object(BaseAnalysis):
         latest_file = 0
         while len(bamfile) > 0:
             self.running = True
-            (file, filetime) = bamfile.pop(0)
+            (file, (filetime,et)) = bamfile.pop(0)
+            elapsed_time = self.parse_timedelta(et)
             if filetime > latest_file:
                 latest_file = filetime
-            tomerge.append(file)
+            while elapsed_time.total_seconds() > time.time()-self.module_start_time+self.track_elapsed_time:
+                asyncio.sleep(1)
+            self.track_elapsed_time = elapsed_time.total_seconds()
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
+            tomerge.append(file)
             if len(tomerge) > 50:
+                break
+            if self.track_elapsed_time - self.five_minutes > (5*60):
+                self.five_minutes += (5*60)
                 break
         if latest_file:
             currenttime = latest_file * 1000
@@ -290,6 +297,11 @@ class RandomForest_object(BaseAnalysis):
                     merge_bedmethyl, bed_a, self.merged_bed_file.get(sampleID)
                 )
                 save_bedmethyl(self.merged_bed_file[sampleID], f"{tempbed.name}")
+                shutil.copyfile(f"{tempbed.name}", os.path.join(
+                        self.check_and_create_folder(self.output, sampleID),
+                        f"{self.track_elapsed_time}_mod_{sampleID}.bed",
+                    ))
+
             else:
                 self.merged_bed_file[sampleID] = pd.read_table(
                     f"{tempbed.name}",
@@ -341,6 +353,7 @@ class RandomForest_object(BaseAnalysis):
             tempDir = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
+
 
             await run.cpu_bound(
                 run_rcns2,

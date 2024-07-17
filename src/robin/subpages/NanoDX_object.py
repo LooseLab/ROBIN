@@ -203,8 +203,9 @@ class NanoDX_object(BaseAnalysis):
         super().__init__(*args, **kwargs)
 
     def __del__(self):
-        if self.nanodxfile:
-            self.nanodxfile.close()
+        pass
+        #if self.nanodxfile:
+        #    self.nanodxfile.close()
 
     def setup_ui(self) -> None:
         """
@@ -291,13 +292,21 @@ class NanoDX_object(BaseAnalysis):
         latest_file = 0
         while len(bamfile) > 0:
             self.running = True
-            (file, filetime) = bamfile.pop(0)
-            if filetime>latest_file:
+            (file, (filetime,et)) = bamfile.pop(0)
+            elapsed_time = self.parse_timedelta(et)
+            if filetime > latest_file:
                 latest_file = filetime
+            while elapsed_time.total_seconds() > time.time()-self.module_start_time+self.track_elapsed_time:
+                asyncio.sleep(1)
+            self.track_elapsed_time = elapsed_time.total_seconds()
             self.nanodx_bam_count[sampleID] += 1
             tomerge.append(file)
             if len(tomerge) > 50:
                 break
+            if self.track_elapsed_time - self.five_minutes > (5*60):
+                self.five_minutes += (5*60)
+                break
+
         if latest_file:
             currenttime = latest_file * 1000
         else:

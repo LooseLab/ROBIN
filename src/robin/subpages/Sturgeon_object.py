@@ -17,6 +17,9 @@ import click
 from pathlib import Path
 from typing import List, Tuple
 
+import asyncio
+
+
 
 def run_probes_methyl_calls(merged_output_file, bed_output_file):
     probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
@@ -161,14 +164,21 @@ class Sturgeon_object(BaseAnalysis):
         latest_file = 0
         while len(bamfile) > 0:
             self.running = True
-            (file, filetime) = bamfile.pop(0)
+            (file, (filetime,et)) = bamfile.pop(0)
+            elapsed_time = self.parse_timedelta(et)
             if filetime > latest_file:
                 latest_file = filetime
+            while elapsed_time.total_seconds() > time.time()-self.module_start_time+self.track_elapsed_time:
+                asyncio.sleep(1)
+            self.track_elapsed_time = elapsed_time.total_seconds()
             tomerge.append(file)
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
             if len(tomerge) > 50:
+                break
+            if self.track_elapsed_time - self.five_minutes > (5*60):
+                self.five_minutes += (5*60)
                 break
 
         if latest_file:

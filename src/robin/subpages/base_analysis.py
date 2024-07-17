@@ -72,6 +72,7 @@ import threading
 from collections import Counter
 import os
 import logging
+from datetime import timedelta
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -133,6 +134,9 @@ class BaseAnalysis:
             # print(f"SampleID: {self.sampleID}")
         else:
             self.sampleID = None
+        self.module_start_time = time.time()
+        self.track_elapsed_time = 0
+        self.five_minutes = 0
             # print("No SampleID provided")
 
     def check_file_time(self, file_path: str) -> bool:
@@ -159,6 +163,17 @@ class BaseAnalysis:
 
         self.file_mod_times[file_path] = current_mod_time
         return True
+
+    def parse_timedelta(self,time_str):
+        # This handles strings like "1 day, 2:03:04" or "2:03:04"
+        if ',' in time_str:
+            days, time = time_str.split(',')
+            days = int(days.split()[0])
+        else:
+            days = 0
+            time = time_str
+        hours, minutes, seconds = map(int, time.strip().split(':'))
+        return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
 
     def check_and_create_folder(self, path, folder_name=None):
         # Check if the path exists

@@ -1089,7 +1089,7 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
                 app.storage.general[self.mainuuid]["bam_count"]["file"][
                     f
-                ] = timestamp.timestamp() #time.time()
+                ] = (timestamp.timestamp() , str(elapsed_time))#time.time()
                 if self.simtime:
                     await asyncio.sleep(1)
                 else:
