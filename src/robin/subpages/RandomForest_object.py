@@ -185,17 +185,22 @@ class RandomForest_object(BaseAnalysis):
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
         tomerge = []
-
+        latest_file = 0
         while len(bamfile) > 0:
             self.running = True
-            (file, filetime) = bamfile.pop()
+            (file, filetime) = bamfile.pop(0)
+            if filetime > latest_file:
+                latest_file = filetime
             tomerge.append(file)
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
             if len(tomerge) > 50:
                 break
-
+        if latest_file:
+            currenttime = latest_file * 1000
+        else:
+            currenttime = time.time() * 1000
         if len(tomerge) > 0:
             tempbam = tempfile.NamedTemporaryFile(
                 dir=self.check_and_create_folder(self.output, sampleID),
@@ -354,7 +359,7 @@ class RandomForest_object(BaseAnalysis):
                     sep="\s+",
                 )
                 scores_to_save = scores.drop(columns=["Freq"]).T
-                scores_to_save["timestamp"] = time.time() * 1000
+                scores_to_save["timestamp"] = currenttime
 
                 if sampleID not in self.rcns2_df_store:
                     self.rcns2_df_store[sampleID] = pd.DataFrame()
@@ -373,14 +378,14 @@ class RandomForest_object(BaseAnalysis):
                     )
                 )
 
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bam_processed"
-                ] += len(tomerge)
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bams_in_processing"
-                ] -= len(tomerge)
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_processed"
+            ] += len(tomerge)
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bams_in_processing"
+            ] -= len(tomerge)
 
-            self.running = False
+        self.running = False
 
     def create_rcns2_chart(self, title):
         self.echart = self.create_chart(title)

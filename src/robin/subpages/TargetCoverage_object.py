@@ -21,6 +21,7 @@ import pysam
 import tempfile
 import shutil
 import queue
+import docker
 
 
 os.environ["CI"] = "1"
@@ -317,8 +318,17 @@ class TargetCoverage(BaseAnalysis):
                 os.path.dirname(os.path.abspath(resources.__file__)),
                 "AML_panel_name_uniq.bed",
             )
+        if not self.is_docker_running():
+            raise SystemExit("Docker is not running on this computer. Either don't track coverage or start docker. If you are on a mac you may need to enable the standard docker socket - see https://github.com/gh640/wait-for-docker/issues/12#issuecomment-1551456057")
         super().__init__(*args, **kwargs)
 
+    def is_docker_running(self):
+        try:
+            client = docker.from_env()
+            client.ping()
+            return True
+        except (docker.errors.DockerException, docker.errors.APIError):
+            return False
     def SNP_timer_run(self):
         self.snp_timer = ui.timer(0.1, self._snp_worker)
 
@@ -487,10 +497,10 @@ class TargetCoverage(BaseAnalysis):
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
                     "xAxis": {"type": "time"},
                     "yAxis": {"type": "value", "data": [], "inverse": False},
-                    #'tooltip': {
-                    #    'order': 'valueDesc',
-                    #    'trigger': 'axis'
-                    # },
+                    'tooltip': {
+                        'order': 'valueDesc',
+                        'trigger': 'axis'
+                    },
                     "series": [
                         {
                             "type": "line",
@@ -873,7 +883,6 @@ class TargetCoverage(BaseAnalysis):
     async def process_bam(self, bamfile, timestamp):
         # loop = asyncio.get_event_loop()
         # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
-
         newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
 
         tempbamfile = tempfile.NamedTemporaryFile(
@@ -937,10 +946,10 @@ class TargetCoverage(BaseAnalysis):
         bases = self.cov_df_main[self.sampleID]["covbases"].sum()
         genome = self.cov_df_main[self.sampleID]["endpos"].sum()
         coverage = bases / genome
-        # if timestamp:
-        #    currenttime = timestamp * 1000
-        # else:
-        currenttime = time.time() * 1000
+        if timestamp:
+            currenttime = timestamp * 1000
+        else:
+            currenttime = time.time() * 1000
         if self.sampleID not in self.coverage_over_time.keys():
             self.coverage_over_time[self.sampleID] = np.empty((0, 2))
         self.coverage_over_time[self.sampleID] = np.vstack(
