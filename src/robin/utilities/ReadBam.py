@@ -1,6 +1,7 @@
 """
 Original code written by: Thomas Murray and taken from https://github.com/tom-murray98/minFQ_BAM/blob/master/BAM_RG_tag_extractor.py
 """
+
 import pysam
 import os
 from typing import Optional, Tuple, Dict, Any, Generator, Set
@@ -25,7 +26,9 @@ def configure_logging(level=logging.INFO):
     if not logger.handlers:
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 
@@ -95,7 +98,9 @@ class ReadBam:
             dt_tag = rg_tag.get("DT")
             ds_tag = rg_tag.get("DS", "")
             ds_tags = ds_tag.split(" ")
-            basecall_model_tag = ds_tags[1].replace("basecall_model=", "") if len(ds_tags) > 1 else None
+            basecall_model_tag = (
+                ds_tags[1].replace("basecall_model=", "") if len(ds_tags) > 1 else None
+            )
             runid_tag = ds_tags[0].replace("runid=", "") if ds_tags else None
             lb_tag = rg_tag.get("LB")
             pl_tag = rg_tag.get("PL")
@@ -103,7 +108,17 @@ class ReadBam:
             pu_tag = rg_tag.get("PU")
             al_tag = rg_tag.get("al")
 
-            return (id_tag, dt_tag, basecall_model_tag, runid_tag, lb_tag, pl_tag, pm_tag, pu_tag, al_tag)
+            return (
+                id_tag,
+                dt_tag,
+                basecall_model_tag,
+                runid_tag,
+                lb_tag,
+                pl_tag,
+                pm_tag,
+                pu_tag,
+                al_tag,
+            )
 
         return None
 
@@ -120,7 +135,9 @@ class ReadBam:
 
         index_file = f"{self.bam_file}.bai"
         if not os.path.isfile(index_file):
-            logger.warning(f"Index file for {self.bam_file} does not exist. Generating index file.")
+            logger.warning(
+                f"Index file for {self.bam_file} does not exist. Generating index file."
+            )
             pysam.index(self.bam_file)
 
         try:
@@ -153,8 +170,8 @@ class ReadBam:
                 device_position=rg_tags[6],
                 al=rg_tags[8],
                 state=self.state,
-                last_start = None,
-                elapsed_time = None,
+                last_start=None,
+                elapsed_time=None,
             )
 
             if not self.sam_file:
@@ -169,16 +186,18 @@ class ReadBam:
                         if read.infer_query_length() and read.infer_query_length() > 0:
                             self.yield_tracking += read.infer_query_length()
                 if not bam_read.last_start:
-                    bam_read.last_start = read.get_tag('st')
-                if read.get_tag('st') > bam_read.last_start:
-                    bam_read.last_start = read.get_tag('st')
+                    bam_read.last_start = read.get_tag("st")
+                if read.get_tag("st") > bam_read.last_start:
+                    bam_read.last_start = read.get_tag("st")
 
             self.mapped_reads = len(readset)
             self.unmapped_reads = self.sam_file.unmapped
 
             logger.info(f"Mapped reads: {self.mapped_reads}")
             logger.info(f"Total reads: {self.mapped_reads + self.unmapped_reads}")
-            bam_read.elapsed_time = datetime.fromisoformat(bam_read.last_start) - datetime.fromisoformat(bam_read.time_of_run)
+            bam_read.elapsed_time = datetime.fromisoformat(
+                bam_read.last_start
+            ) - datetime.fromisoformat(bam_read.time_of_run)
 
             return asdict(bam_read)
 
@@ -216,7 +235,7 @@ class ReadBam:
                 device_position=rg_tags[6],
                 al=rg_tags[8],
                 state=self.state,
-                last_start=last_read.get_tag('st') if last_read.has_tag('st') else None
+                last_start=last_read.get_tag("st") if last_read.has_tag("st") else None,
             )
             return asdict(bam_read)
 

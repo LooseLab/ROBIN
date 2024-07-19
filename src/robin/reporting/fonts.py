@@ -9,6 +9,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 from reportlab.pdfbase import pdfmetrics
 from robin import fonts
 
+
 def register_fonts(fonts_dir):
     """
     Registers the custom fonts for use in the PDF.

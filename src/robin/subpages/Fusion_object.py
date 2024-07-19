@@ -52,6 +52,7 @@ import gff3_parser
 import tempfile
 import random
 import pysam
+import logging
 import networkx as nx
 import pandas as pd
 import click
@@ -69,11 +70,92 @@ from collections import Counter
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
 
-# Configure logging
-# logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
+
+
+def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
+    """
+    Get reads for a specific gene.
+
+    Args:
+        reads (pd.DataFrame): DataFrame with reads
+
+    Returns:
+        pd.DataFrame: DataFrame with reads
+    """
+    df = reads
+    df.columns = [
+        "chromosome",
+        "start",
+        "end",
+        "gene",
+        "chromosome2",
+        "start2",
+        "end2",
+        "id",
+        "quality",
+        "strand",
+        "read_start",
+        "read_end",
+        "secondary",
+        "supplementary",
+        "span",
+        "tag",
+        "color",
+    ]
+    df["start"] = df["start"].astype(int)
+    df["end"] = df["end"].astype(int)
+
+    # Sort the DataFrame by chromosome, start, and end positions
+    df = df.sort_values(by=["chromosome", "start", "end"])
+
+    df = df.drop_duplicates(subset=["start2", "end2", "id"])
+
+    # Group by chromosome and collapse ranges within each group
+    result = (
+        df.groupby("chromosome")
+        .apply(lambda x: collapse_ranges(x, 10000))
+        .reset_index(drop=True)
+    )
+    # return reads[reads[3].eq(gene)]
+    return result
+
+
+def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
+    """
+    Annotates the result DataFrame with tags and colors.
+
+    Args:
+        result (pd.DataFrame): DataFrame with fusion candidates.
+
+    Returns:
+        Tuple[pd.DataFrame, pd.Series]: Annotated DataFrame and a boolean Series indicating good pairs.
+    """
+    result_copy = result.copy()
+    lookup = result_copy.groupby(7)[3].agg(lambda x: ",".join(set(x)))
+    tags = result_copy[7].map(lookup.get)
+    result_copy.loc[:, "tag"] = tags
+    result = result_copy
+    colors = result.groupby(7).apply(lambda x: _generate_random_color())
+    result = result.map(lambda x: x.strip() if isinstance(x, str) else x)
+    result["Color"] = result[7].map(colors.get)
+    goodpairs = result.groupby("tag")[7].transform("nunique") > 1
+    # gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+    return result, goodpairs
+
+
+def _generate_random_color() -> str:
+    """
+    Generates a random color for use in plotting.
+
+    Returns:
+        str: A random hex color code.
+    """
+    return "#{:06x}".format(random.randint(0, 0xFFFFFF))
 
 
 def get_gene_network(gene_pairs):
@@ -631,7 +713,7 @@ class FusionObject(BaseAnalysis):
                 self.fstable_all.update()
                 self.fusionplot_all.clear()
 
-            result_all, goodpairs = self._annotate_results(result_all)
+            result_all, goodpairs = _annotate_results(result_all)
             self.all_candidates = 0
 
             if not result_all.empty:
@@ -645,7 +727,7 @@ class FusionObject(BaseAnalysis):
                     for gene_group in gene_groups_test:
                         if (
                             len(
-                                self._get_reads(
+                                _get_reads(
                                     result_all[goodpairs][
                                         result_all[goodpairs][3].isin(gene_group)
                                     ]
@@ -786,7 +868,7 @@ class FusionObject(BaseAnalysis):
 
                 self.fusionplot.clear()
 
-            result, goodpairs = self._annotate_results(result)
+            result, goodpairs = _annotate_results(result)
             # self.candidates = result[goodpairs].sort_values(by=7)["tag"].nunique()
             self.candidates = 0
 
@@ -801,7 +883,7 @@ class FusionObject(BaseAnalysis):
                     for gene_group in gene_groups_test:
                         if (
                             len(
-                                self._get_reads(
+                                _get_reads(
                                     result[goodpairs][
                                         result[goodpairs][3].isin(gene_group)
                                     ]
@@ -864,53 +946,6 @@ class FusionObject(BaseAnalysis):
                                 )
             """
 
-    def _get_reads(self, reads: pd.DataFrame) -> pd.DataFrame:
-        """
-        Get reads for a specific gene.
-
-        Args:
-            reads (pd.DataFrame): DataFrame with reads
-
-        Returns:
-            pd.DataFrame: DataFrame with reads
-        """
-        df = reads
-        df.columns = [
-            "chromosome",
-            "start",
-            "end",
-            "gene",
-            "chromosome2",
-            "start2",
-            "end2",
-            "id",
-            "quality",
-            "strand",
-            "read_start",
-            "read_end",
-            "secondary",
-            "supplementary",
-            "span",
-            "tag",
-            "color",
-        ]
-        df["start"] = df["start"].astype(int)
-        df["end"] = df["end"].astype(int)
-
-        # Sort the DataFrame by chromosome, start, and end positions
-        df = df.sort_values(by=["chromosome", "start", "end"])
-
-        df = df.drop_duplicates(subset=["start2", "end2", "id"])
-
-        # Group by chromosome and collapse ranges within each group
-        result = (
-            df.groupby("chromosome")
-            .apply(lambda x: collapse_ranges(x, 10000))
-            .reset_index(drop=True)
-        )
-        # return reads[reads[3].eq(gene)]
-        return result
-
     def create_fusion_plot(self, title: str, reads: pd.DataFrame) -> None:
         """
         Creates a fusion plot to illustrate the alignments of reads to each region of the genome.
@@ -920,8 +955,9 @@ class FusionObject(BaseAnalysis):
             reads (pd.DataFrame): DataFrame with reads to be plotted.
         """
         with ui.card().classes("w-full no-shadow border-[2px]"):
-            result = self._get_reads(reads)
+            result = _get_reads(reads)
             df = reads
+
             # Function to rank overlapping ranges
             def rank_overlaps(df, start_col, end_col):
                 # Sort by start and end columns
@@ -1027,8 +1063,8 @@ class FusionObject(BaseAnalysis):
                         start = data["start"]
                         end = data["end"]
 
-                        #start = df[df["chromosome"].eq(chrom)]["start2"].min()-100_000
-                        #end = df[df["chromosome"].eq(chrom)]["end2"].max()+100_000
+                        # start = df[df["chromosome"].eq(chrom)]["start2"].min()-100_000
+                        # end = df[df["chromosome"].eq(chrom)]["end2"].max()+100_000
 
                         def human_readable_format(x, pos):
                             return f"{x / 1e6:.2f}"  # Mb'
@@ -1097,7 +1133,7 @@ class FusionObject(BaseAnalysis):
                                 strand_in_label_threshold=4,
                             )
 
-                            #plt.tight_layout()
+                            # plt.tight_layout()
 
                         else:
                             features2 = []
@@ -1134,7 +1170,7 @@ class FusionObject(BaseAnalysis):
                             ax.set_title(f'{data["gene"]}')
 
                             axdict[data["gene"]] = ax
-                            #plt.tight_layout()
+                            # plt.tight_layout()
                     gene_counter = Counter()
 
                     for index, row in lines.iterrows():
@@ -1162,7 +1198,7 @@ class FusionObject(BaseAnalysis):
                             )
                             # Add the arc connection to the second subplot (ax2)
                             axdict[row["Join_Gene"]].add_artist(con)
-                            #plt.tight_layout()
+                            # plt.tight_layout()
 
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
@@ -1225,37 +1261,6 @@ class FusionObject(BaseAnalysis):
             raise
         finally:
             self.running = False
-
-    def _generate_random_color(self) -> str:
-        """
-        Generates a random color for use in plotting.
-
-        Returns:
-            str: A random hex color code.
-        """
-        return "#{:06x}".format(random.randint(0, 0xFFFFFF))
-
-    def _annotate_results(self, result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
-        """
-        Annotates the result DataFrame with tags and colors.
-
-        Args:
-            result (pd.DataFrame): DataFrame with fusion candidates.
-
-        Returns:
-            Tuple[pd.DataFrame, pd.Series]: Annotated DataFrame and a boolean Series indicating good pairs.
-        """
-        result_copy = result.copy()
-        lookup = result_copy.groupby(7)[3].agg(lambda x: ",".join(set(x)))
-        tags = result_copy[7].map(lookup.get)
-        result_copy.loc[:, "tag"] = tags
-        result = result_copy
-        colors = result.groupby(7).apply(lambda x: self._generate_random_color())
-        result = result.map(lambda x: x.strip() if isinstance(x, str) else x)
-        result["Color"] = result[7].map(colors.get)
-        goodpairs = result.groupby("tag")[7].transform("nunique") > 1
-        # gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
-        return result, goodpairs
 
     def show_previous_data(self) -> None:
         """

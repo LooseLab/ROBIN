@@ -5,9 +5,8 @@ This module contains utility functions for the report generation.
 """
 
 import pandas as pd
-import random
-from typing import Tuple
 import natsort
+
 
 def convert_to_space_separated_string(array):
     """
@@ -30,8 +29,9 @@ def convert_to_space_separated_string(array):
 
         # Join the elements of the list into a space-separated string
         return " ".join(list_repr)
-    except:
+    except Exception:
         return array
+
 
 def split_text(text):
     """
@@ -44,6 +44,7 @@ def split_text(text):
         str: The text with '-' characters replaced by '-\n'.
     """
     return text.replace("-", "-\n")
+
 
 def get_target_outliers(df):
     """

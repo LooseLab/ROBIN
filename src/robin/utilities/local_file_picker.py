@@ -1,6 +1,6 @@
 import platform
 from pathlib import Path
-from typing import Optional, List, Any, Dict
+from typing import Optional, Any, Dict
 from collections import defaultdict
 import logging
 
@@ -24,7 +24,9 @@ def configure_logging(level: int = logging.INFO) -> None:
     if not logger.handlers:
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
 
@@ -44,12 +46,12 @@ class LocalFilePicker(ui.dialog):
     """
 
     def __init__(
-            self,
-            directory: str,
-            *,
-            upper_limit: Optional[str] = None,
-            multiple: bool = False,
-            show_hidden_files: bool = False,
+        self,
+        directory: str,
+        *,
+        upper_limit: Optional[str] = None,
+        multiple: bool = False,
+        show_hidden_files: bool = False,
     ) -> None:
         """
         Initializes the LocalFilePicker with specified parameters.
@@ -63,8 +65,11 @@ class LocalFilePicker(ui.dialog):
         super().__init__()
 
         self.path = Path(directory).expanduser()
-        self.upper_limit = Path(
-            directory if upper_limit == "..." else upper_limit).expanduser() if upper_limit else None
+        self.upper_limit = (
+            Path(directory if upper_limit == "..." else upper_limit).expanduser()
+            if upper_limit
+            else None
+        )
         self.show_hidden_files = show_hidden_files
         self.multiple = multiple
 
@@ -157,8 +162,9 @@ class LocalFilePicker(ui.dialog):
         Returns:
             bool: True if navigation up is allowed, False otherwise.
         """
-        return (self.upper_limit is None and self.path != self.path.parent) or \
-            (self.upper_limit is not None and self.path != self.upper_limit)
+        return (self.upper_limit is None and self.path != self.path.parent) or (
+            self.upper_limit is not None and self.path != self.upper_limit
+        )
 
     def handle_double_click(self, e: events.GenericEventArguments) -> None:
         """
@@ -213,12 +219,10 @@ if __name__ == "__main__":
     bam_count = create_bam_count()
     event_handler = BamEventHandler(bam_count=bam_count)
 
-
     async def open_file_picker():
         result = await LocalFilePicker("~/", multiple=True).open()
         if result:
             logger.info(f"Selected files: {result}")
-
 
     ui.button("Open File Picker", on_click=open_file_picker)
     ui.run()

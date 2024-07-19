@@ -59,11 +59,11 @@ import click
 from pathlib import Path
 import natsort
 import tempfile
+import logging
 from typing import Optional, Tuple
 
-# Configure logging
-# logging.basicConfig(level=logging.DEBUG, format='%(asctime)s - %(levelname)s - %(message)s')
-# logger = logging.getLogger(__name__)
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
 
 os.environ["CI"] = "1"
 

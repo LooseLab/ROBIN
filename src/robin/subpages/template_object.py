@@ -6,6 +6,9 @@ from nicegui import ui, app
 import click
 from pathlib import Path
 
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
+
 
 class Analysis(BaseAnalysis):
     def __init__(self, *args, **kwargs):

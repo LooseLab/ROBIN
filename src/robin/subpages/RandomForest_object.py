@@ -6,6 +6,7 @@ import pandas as pd
 from nicegui import ui, app, run
 from robin import theme, resources
 import pysam
+import logging
 from robin import models
 from sturgeon.callmapping import (
     merge_probes_methyl_calls,
@@ -24,6 +25,8 @@ from robin.utilities.merge_bedmethyl import (
 )
 from typing import List, Tuple
 
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
 
 HVPATH = os.path.join(
     os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"

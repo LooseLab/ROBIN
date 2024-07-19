@@ -5,11 +5,10 @@ This module contains functions for creating plots used in the PDF report.
 """
 
 import pandas as pd
-import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import io
-from dna_features_viewer import GraphicFeature, GraphicRecord
+
 import natsort
 
 from matplotlib import gridspec
@@ -77,88 +76,6 @@ def target_distribution_plot(df):
     buf.seek(0)
     return buf
 
-def fusion_plot(title, reads):
-    """
-    Creates a fusion plot.
-
-    Args:
-        title (str): Title of the plot.
-        reads (pd.DataFrame): DataFrame containing the read data.
-
-    Returns:
-        Tuple[io.BytesIO, io.BytesIO]: Buffers containing the plot images.
-    """
-    # ToDo: Remove hardcoding to this gene file
-    datafile = "rCNS2_data.csv.gz"
-
-    if os.path.isfile(
-        os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), datafile)
-    ):
-        gene_table = pd.read_csv(
-            os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), datafile)
-        )
-
-    plt.figure(figsize=(16, 2))
-    ax1 = plt.gca()
-    features = []
-    first_index = 0
-    sequence_length = 100
-    x_label = ""
-    for index, row in gene_table[gene_table["gene_name"].eq(title.strip())].iterrows():
-        if row["Type"] == "gene":
-            x_label = row["Seqid"]
-            features.append(
-                GraphicFeature(
-                    start=int(row["Start"]),
-                    end=int(row["End"]),
-                    strand=STRAND[row["Strand"]],
-                    thickness=4,
-                    color="#ffd700",
-                )
-            )
-            first_index = int(row["Start"]) - 1000
-            sequence_length = int(row["End"]) - int(row["Start"]) + 2000
-        if row["Type"] == "CDS" and row["transcript_type"] == "protein_coding":
-            features.append(
-                GraphicFeature(
-                    start=int(row["Start"]),
-                    end=int(row["End"]),
-                    strand=STRAND[row["Strand"]],
-                    color="#ffcccc",
-                )
-            )
-    record = GraphicRecord(
-        sequence_length=sequence_length, first_index=first_index, features=features
-    )
-    ax1.set_title(f"{title} - {x_label}")
-    ax, _ = record.plot(ax=ax1, figure_width=5)
-    buf = io.BytesIO()
-    ax.figure.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")
-    buf.seek(0)
-    plt.close()
-    plt.figure(figsize=(16, 2))
-    ax = plt.gca()
-    features = []
-    for index, row in reads.sort_values(by=7).iterrows():
-        features.append(
-            GraphicFeature(
-                start=int(row[5]),
-                end=int(row[6]),
-                strand=STRAND[row[9]],
-                color=row["Color"],
-            )
-        )
-    record = GraphicRecord(
-        sequence_length=sequence_length, first_index=first_index, features=features
-    )
-    ax, _ = record.plot(
-        ax=ax, figure_width=5, with_ruler=False, draw_line=True
-    )  # , figure_width=5)
-    buf2 = io.BytesIO()
-    ax.figure.savefig(buf2, format="jpg", dpi=300, bbox_inches="tight")
-    plt.close()
-    buf2.seek(0)
-    return buf, buf2
 
 def create_CNV_plot(result, cnv_dict):
     """
@@ -235,6 +152,7 @@ def create_CNV_plot(result, cnv_dict):
     buf.seek(0)
     return buf
 
+
 def create_CNV_plot_per_chromosome(result, cnv_dict):
     """
     Creates CNV plots per chromosome.
@@ -263,6 +181,7 @@ def create_CNV_plot_per_chromosome(result, cnv_dict):
             plt.close()
 
     return plots
+
 
 def classification_plot(df, title, threshold):
     """
@@ -319,6 +238,7 @@ def classification_plot(df, title, threshold):
     buf.seek(0)
     return buf
 
+
 def coverage_plot(df):
     """
     Creates a coverage plot.
@@ -338,7 +258,7 @@ def coverage_plot(df):
     df = df.sort_values("#rname")
 
     # Create subplots
-    fig = plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(10, 6))
     gs = gridspec.GridSpec(3, 1, height_ratios=[1, 1, 1])
 
     # Font size settings

@@ -73,7 +73,7 @@ from collections import Counter
 import os
 import logging
 
-# Configure logging
+# Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
 
@@ -130,10 +130,10 @@ class BaseAnalysis:
         self.threads = max(1, threads // 2)
         if sampleID:
             self.sampleID = sampleID
-            # print(f"SampleID: {self.sampleID}")
+            logger.debug(f"SampleID: {self.sampleID}")
         else:
             self.sampleID = None
-            # print("No SampleID provided")
+            logger.debug("No SampleID provided")
 
     def check_file_time(self, file_path: str) -> bool:
         """
@@ -174,6 +174,7 @@ class BaseAnalysis:
             # Create the folder if it doesn't exist
             if not os.path.exists(full_path):
                 os.makedirs(full_path)
+            logger.info(f"Folder created: {full_path}")
             return full_path
         else:
             return path
@@ -184,7 +185,7 @@ class BaseAnalysis:
         """
         if sample_id:
             self.sampleID = sample_id
-        # print(f"Rendering UI for {self.name} and {self.sampleID}")
+        logger.debug(f"Rendering UI for {self.name} and {self.sampleID}")
         self.setup_ui()
         if self.progress and not self.browse:
             self.progress_bars()
@@ -194,7 +195,6 @@ class BaseAnalysis:
         Start processing BAM files either in batch mode or in a continuous timer mode.
         """
         if self.batch:
-            # self.bams: List[Tuple[BinaryIO, Optional[float]]] = []
             self.bams: Dict[str, List[Tuple[BinaryIO, Optional[float]]]] = {}
             self.batch_timer_run()
         else:
@@ -239,7 +239,7 @@ class BaseAnalysis:
             try:
                 await self.process_bam(bamfile, timestamp)
             except Exception as e:
-                print(f"Error processing BAM files: {e}")
+                logger.error(f"Error processing BAM files: {e}")
             app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                 "bam_processed"
             ] += 1
@@ -271,7 +271,6 @@ class BaseAnalysis:
         self.timer.active = False
         count = 0
 
-        # Different bam files may come from different runs (sampleIDs). Therefore we must process reads according to the run they have come from.
         while self.bamqueue.qsize() > 0:
             bamfile, timestamp, sampleID = self.bamqueue.get()
             if sampleID not in self.bams:
@@ -313,22 +312,11 @@ class BaseAnalysis:
                             bam_count=0, bam_processed=0, bams_in_processing=0
                         )
                     }
-                #app.storage.general[self.mainuuid][self.sampleID][self.name][
-                #    "counters"
-                #]["bams_in_processing"] += len(data_list)
 
                 try:
                     await self.process_bam(data_list)
                 except Exception as e:
-                    print(f"Error processing BAM files: {e}")
-
-                #app.storage.general[self.mainuuid][self.sampleID][self.name][
-                #        "counters"
-                #    ]["bams_in_processing"] -= len(data_list)
-                #app.storage.general[self.mainuuid][self.sampleID][self.name][
-                #        "counters"
-                #    ]["bam_processed"] += len(data_list)
-                    # self.running = False
+                    logger.error(f"Error processing BAM files: {e}")
 
         self.timer.active = True
 
@@ -386,7 +374,7 @@ class BaseAnalysis:
         Show a progress bar for the number of BAM files processed.
         """
         self.progress_trackers = ui.card().classes("w-full")
-        # print(f"Progress bars for {self.name} and {self.sampleID}")
+        logger.debug(f"Progress bars for {self.name} and {self.sampleID}")
         if self.sampleID not in app.storage.general[self.mainuuid]:
             app.storage.general[self.mainuuid][self.sampleID] = {}
 
@@ -502,14 +490,11 @@ class BaseAnalysis:
                 time_diff = 0
             while elapsed_time < time_diff:
                 if self.running:
-                    # time.sleep(1)
                     elapsed_time = (time.time() - playback_start_time) + self.offset
                 else:
-                    # time.sleep(1)
                     self.offset += step_size
                     elapsed_time += self.offset
             if len(row["full_path"]) > 0:
-                # Here we check that the path to the bam file absolutely exists.
                 self.add_bam(
                     row["full_path"], playback_start_time + row["file_produced"]
                 )
@@ -531,10 +516,7 @@ class BaseAnalysis:
                     "animation": False,
                     "grid": {"containLabel": True},
                     "title": {"text": title},
-                    'tooltip': {
-                        'order': 'valueDesc',
-                        'trigger': 'axis'
-                    },
+                    "tooltip": {"order": "valueDesc", "trigger": "axis"},
                     "toolbox": {
                         "show": True,
                         "feature": {

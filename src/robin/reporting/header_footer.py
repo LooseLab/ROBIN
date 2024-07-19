@@ -12,6 +12,7 @@ from datetime import datetime
 import os
 from robin import images
 
+
 class HeaderFooterCanvas(canvas.Canvas):
     """
     A custom canvas class for adding headers and footers to the PDF report.
@@ -40,7 +41,9 @@ class HeaderFooterCanvas(canvas.Canvas):
         width, height = A4
 
         # Add first line of the header in bold
-        header1 = Paragraph("R.O.B.I.N Reports... RESEARCH USE ONLY", self.styles["Bold"])
+        header1 = Paragraph(
+            "R.O.B.I.N Reports... RESEARCH USE ONLY", self.styles["Bold"]
+        )
         w, h = header1.wrap(width - 2 * inch, inch)
         header1.drawOn(self, inch, height - h - inch + 36)
 
@@ -97,6 +100,7 @@ def header_footer_canvas_factory(sample_id, styles, fonts_dir):
     Returns:
         function: A function for creating HeaderFooterCanvas objects.
     """
+
     def create_canvas(*args, **kwargs):
         return HeaderFooterCanvas(sample_id, styles, fonts_dir, *args, **kwargs)
 

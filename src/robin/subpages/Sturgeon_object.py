@@ -16,6 +16,10 @@ from sturgeon.callmapping import (
 import click
 from pathlib import Path
 from typing import List, Tuple
+import logging
+
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
 
 
 def run_probes_methyl_calls(merged_output_file, bed_output_file):
@@ -246,7 +250,6 @@ class Sturgeon_object(BaseAnalysis):
                 lastrow = mydf.iloc[-1].drop("number_probes")
                 mydf_to_save = mydf
                 mydf_to_save["timestamp"] = currenttime
-
 
                 if sampleID not in self.sturgeon_df_store:
                     self.sturgeon_df_store[sampleID] = pd.DataFrame()

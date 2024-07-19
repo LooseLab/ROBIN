@@ -130,7 +130,7 @@ class MinknowHistograms:
                         self.Live_Run = False
                 except KeyboardInterrupt:
                     self.stream.cancel()
-                    print("KeyboardInterrupt")
+                    logger.info("KeyboardInterrupt")
                     break
 
     def stream_histogram_info(self, step_size=None, end=None) -> None:

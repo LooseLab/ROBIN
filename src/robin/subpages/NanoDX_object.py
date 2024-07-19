@@ -69,26 +69,8 @@ from typing import List, Tuple, Optional, Dict, Any
 
 import logging
 
-# Configure the logger
-logger = logging.getLogger("NanoDX")
-logger.setLevel(logging.ERROR)  # Set to DEBUG to capture all types of logs
-
-# Create a console handler with a higher log level
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.ERROR)
-
-# Create a file handler to save logs to a file
-file_handler = logging.FileHandler("nanodx_analysis.log")
-file_handler.setLevel(logging.ERROR)
-
-# Create a formatter and set it for both handlers
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-console_handler.setFormatter(formatter)
-file_handler.setFormatter(formatter)
-
-# Add the handlers to the logger
-logger.addHandler(console_handler)
-logger.addHandler(file_handler)
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
 
 
 def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
@@ -292,7 +274,7 @@ class NanoDX_object(BaseAnalysis):
         while len(bamfile) > 0:
             self.running = True
             (file, filetime) = bamfile.pop(0)
-            if filetime>latest_file:
+            if filetime > latest_file:
                 latest_file = filetime
             self.nanodx_bam_count[sampleID] += 1
             tomerge.append(file)
