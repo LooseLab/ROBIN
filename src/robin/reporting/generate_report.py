@@ -19,6 +19,8 @@ import matplotlib
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
+from matplotlib.font_manager import FontProperties
+
 import natsort
 import seaborn as sns
 import pandas as pd
@@ -1283,7 +1285,7 @@ def create_pdf(filename, output):
         elements.append(PageBreak())
 
     elements.append(Spacer(1, 12))
-
+    """
     elements.append(Paragraph("Structural Variants", underline_style))
 
     if os.path.exists(os.path.join(output, "fusion_candidates.csv")):
@@ -1351,6 +1353,8 @@ def create_pdf(filename, output):
                 elements.append(
                     Paragraph(f"Fusion Candidate: {gene_pair}", smaller_style)
                 )
+                print (gene_pair)
+                print(result_all)
                 for gene in result_all[
                     goodpairs_all & result_all[goodpairs_all]["tag"].eq(gene_pair)
                 ][3].unique():
@@ -1370,7 +1374,7 @@ def create_pdf(filename, output):
                     )
                     elements.append(img)
                     elements.append(Spacer(1, 12))
-
+    """
     elements.append(Spacer(1, 12))
 
     last_seen = 0
@@ -1469,5 +1473,5 @@ if __name__ == "__main__":
     # Generate the PDF
     create_pdf(
         "sample_report.pdf",
-        "/Users/mattloose/datasets/new_outputs/ds1305_Intraop0002_3",
+        "/Users/mattloose/GIT/niceGUI/cnsmeth/fusion_output/ds1305_Intraop0047_b",
     )
