@@ -4,6 +4,11 @@ from nicegui import ui
 import pandas as pd
 import sys
 import numpy as np
+import logging
+
+
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
 
 
 class SNPview:

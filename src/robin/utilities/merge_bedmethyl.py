@@ -5,10 +5,11 @@ Helper functions to sort and merge bedmethyl files.
 import pandas as pd
 import csv
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
 
 def configure_logging(level: int = logging.INFO) -> None:
     """
@@ -22,9 +23,12 @@ def configure_logging(level: int = logging.INFO) -> None:
     if not logger.handlers:
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
+
 
 def save_bedmethyl(result_df: pd.DataFrame, output_file: str) -> None:
     """
@@ -54,6 +58,7 @@ def save_bedmethyl(result_df: pd.DataFrame, output_file: str) -> None:
         logger.error(f"Error saving bedmethyl data to {output_file}: {e}")
         raise
 
+
 def collapse_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
     """
     Collapse and aggregate bedmethyl dataframe.
@@ -68,11 +73,19 @@ def collapse_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
     """
     try:
         # Hack strand for aggregation
-        concat_df["strand"] = concat_df["strand"].astype(str).replace({"+": ".", "-": "."})
+        concat_df["strand"] = (
+            concat_df["strand"].astype(str).replace({"+": ".", "-": "."})
+        )
 
         groupby_columns: List[str] = [
-            "chrom", "start_pos", "end_pos", "mod", "strand",
-            "start_pos2", "end_pos2", "colour"
+            "chrom",
+            "start_pos",
+            "end_pos",
+            "mod",
+            "strand",
+            "start_pos2",
+            "end_pos2",
+            "colour",
         ]
 
         agg_funcs: Dict[str, str] = {
@@ -93,9 +106,24 @@ def collapse_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
         result_df["fraction"] = result_df["Nmod"] / result_df["Nvalid"] * 100
 
         column_order: List[str] = [
-            "chrom", "start_pos", "end_pos", "mod", "score", "strand",
-            "start_pos2", "end_pos2", "colour", "Nvalid", "fraction", "Nmod",
-            "Ncanon", "Nother", "Ndel", "Nfail", "Ndiff", "Nnocall",
+            "chrom",
+            "start_pos",
+            "end_pos",
+            "mod",
+            "score",
+            "strand",
+            "start_pos2",
+            "end_pos2",
+            "colour",
+            "Nvalid",
+            "fraction",
+            "Nmod",
+            "Ncanon",
+            "Nother",
+            "Ndel",
+            "Nfail",
+            "Ndiff",
+            "Nnocall",
         ]
 
         merged_df = result_df[column_order].sort_values(by=["chrom", "start_pos"])
@@ -104,6 +132,7 @@ def collapse_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Error collapsing bedmethyl data: {e}")
         raise
+
 
 def merge_bedmethyl(dfA: pd.DataFrame, dfB: pd.DataFrame) -> pd.DataFrame:
     """
@@ -135,6 +164,7 @@ def merge_bedmethyl(dfA: pd.DataFrame, dfB: pd.DataFrame) -> pd.DataFrame:
     except Exception as e:
         logger.error(f"Error merging bedmethyl dataframes: {e}")
         raise
+
 
 if __name__ == "__main__":
     configure_logging(level=logging.DEBUG)

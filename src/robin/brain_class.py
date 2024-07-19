@@ -66,6 +66,18 @@ Dependencies:
 - `os`
 """
 
+import logging
+from pathlib import Path
+from queue import Queue
+import pandas as pd
+import asyncio
+import pysam
+from collections import Counter
+from datetime import datetime
+from dateutil import parser
+import pytz
+import os
+from alive_progress import alive_bar
 from nicegui import ui, app, run
 
 from robin.utilities.bam_handler import BamEventHandler
@@ -78,21 +90,9 @@ from robin.subpages.TargetCoverage_object import TargetCoverage
 from robin.subpages.Fusion_object import FusionObject
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.ReadBam import ReadBam
-from robin.reporting.generate_report import create_pdf
+from robin.reporting.report import create_pdf
 
 from watchdog.observers import Observer
-from pathlib import Path
-from queue import Queue
-import pandas as pd
-import asyncio
-import pysam
-from collections import Counter
-from datetime import datetime
-from dateutil import parser
-import pytz
-import os
-from pprint import pprint
-from alive_progress import alive_bar
 
 
 def check_bam(bamfile):
@@ -102,27 +102,38 @@ def check_bam(bamfile):
     :param bamfile: Path to the BAM file.
     :return: Tuple containing baminfo and bamdata.
     """
+    logging.info(f"Checking BAM file: {bamfile}")
     pysam.index(bamfile)
     bam = ReadBam(bamfile)
     baminfo = bam.process_reads()
     bamdata = bam.summary()
+    logging.info(f"BAM file processed: {bamfile}")
     return baminfo, bamdata
 
-def sort_bams(files_and_timestamps,watchfolder,file_endings):
+
+def sort_bams(files_and_timestamps, watchfolder, file_endings):
     import bisect
+
     # Function to insert into sorted list
     def insert_sorted(file_timestamp_tuple):
         file, timestamp, elapsed = file_timestamp_tuple
         datetime_obj = datetime.fromisoformat(timestamp)
         bisect.insort(files_and_timestamps, (datetime_obj, file, elapsed))
+
     for path, dirs, files in os.walk(watchfolder):
         with alive_bar(len(files)) as bar:
             for f in files:
                 if "".join(Path(f).suffixes) in file_endings:
-                    # print(os.path.join(path, f))
+                    logging.info(f"Reading BAM file: {os.path.join(path, f)}")
                     bam = ReadBam(os.path.join(path, f))
                     baminfo = bam.process_reads()
-                    insert_sorted((os.path.join(path, f), baminfo["last_start"], baminfo["elapsed_time"]))
+                    insert_sorted(
+                        (
+                            os.path.join(path, f),
+                            baminfo["last_start"],
+                            baminfo["elapsed_time"],
+                        )
+                    )
                 bar()
     return files_and_timestamps
 
@@ -179,12 +190,15 @@ class BrainMeth:
             self.runsfolder = self.output
         self.sampleID = None
 
+        logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
+
     def configure_storage(self, sample_id):
         """
         Configure storage for the application.
 
         :param sample_id: Sample ID to configure storage for.
         """
+        logging.info(f"Configuring storage for sample ID: {sample_id}")
         app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"] = (
             Counter(
                 bam_passed=0,
@@ -210,6 +224,7 @@ class BrainMeth:
         """
         Start background tasks for BAM processing and analysis.
         """
+        logging.info(f"Starting background tasks for UUID: {self.mainuuid}")
         app.storage.general[self.mainuuid]["bam_count"] = {}
         app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
         app.storage.general[self.mainuuid]["bam_count"]["files"] = {}
@@ -223,7 +238,7 @@ class BrainMeth:
         self.bamforfusions = Queue()
 
         if self.watchfolder:
-            print(f"Adding a watchfolder {self.watchfolder}")
+            logging.info(f"Adding a watchfolder: {self.watchfolder}")
             await self.add_watchfolder(self.watchfolder)
 
         common_args = {
@@ -333,7 +348,7 @@ class BrainMeth:
             ui.timer(1, callback=self.background_process_bams, once=True)
             ui.timer(1, callback=self.check_existing_bams, once=True)
 
-            print("Watchfolder setup and added")
+            logging.info("Watchfolder setup and added")
 
     async def pick_file(self) -> None:
         """
@@ -851,6 +866,7 @@ class BrainMeth:
 
         :return: None
         """
+        logging.info("Starting background BAM processing")
         self.process_bams_tracker = ui.timer(10, self.process_bams)
 
     def check_and_create_folder(self, path, folder_name=None):
@@ -871,6 +887,7 @@ class BrainMeth:
             full_path = os.path.join(path, folder_name)
             if not os.path.exists(full_path):
                 os.makedirs(full_path)
+                logging.info(f"Folder created: {full_path}")
             return full_path
         else:
             return path
@@ -886,7 +903,12 @@ class BrainMeth:
         if "file" in app.storage.general[self.mainuuid]["bam_count"]:
             while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
                 self.nofiles = False
-                file = (k := next(iter(app.storage.general[self.mainuuid]["bam_count"]["file"])),app.storage.general[self.mainuuid]["bam_count"]["file"].pop(k))
+                file = (
+                    k := next(
+                        iter(app.storage.general[self.mainuuid]["bam_count"]["file"])
+                    ),
+                    app.storage.general[self.mainuuid]["bam_count"]["file"].pop(k),
+                )
                 baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
                 sample_id = baminfo["sample_id"]
                 if sample_id not in app.storage.general[self.mainuuid]["samples"]:
@@ -1025,7 +1047,7 @@ class BrainMeth:
         """
         file_endings = {".bam"}
         if sequencing_summary:
-            print("Using sequencing summary")
+            logging.info("Using sequencing summary for existing BAM files")
             df = pd.read_csv(
                 sequencing_summary,
                 delimiter="\t",
@@ -1076,20 +1098,19 @@ class BrainMeth:
             self.runfinished = True
         else:
             files_and_timestamps = []
-            files_and_timestamps = await run.cpu_bound(sort_bams, files_and_timestamps, self.watchfolder, file_endings)
+            files_and_timestamps = await run.cpu_bound(
+                sort_bams, files_and_timestamps, self.watchfolder, file_endings
+            )
 
             # Iterate through the sorted list
             for timestamp, f, elapsed_time in files_and_timestamps:
-                #print (f, timestamp)
+                logging.debug(f"Processing existing BAM file: {f} at {timestamp}")
                 app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
-                if (
-                    "file"
-                    not in app.storage.general[self.mainuuid]["bam_count"]
-                ):
+                if "file" not in app.storage.general[self.mainuuid]["bam_count"]:
                     app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
                 app.storage.general[self.mainuuid]["bam_count"]["file"][
                     f
-                ] = timestamp.timestamp() #time.time()
+                ] = timestamp.timestamp()  # time.time()
                 if self.simtime:
                     await asyncio.sleep(1)
                 else:

@@ -11,6 +11,7 @@ import logging
 # Create a logger for this module
 logger = logging.getLogger(__name__)
 
+
 def configure_logging(level=logging.INFO):
     """
     Configure the logging for this module.
@@ -24,9 +25,12 @@ def configure_logging(level=logging.INFO):
     if not logger.handlers:
         console_handler = logging.StreamHandler()
         console_handler.setLevel(level)
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+        formatter = logging.Formatter(
+            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+        )
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
+
 
 class BamEventHandler(FileSystemEventHandler):
     """
@@ -68,7 +72,10 @@ class BamEventHandler(FileSystemEventHandler):
         if event.src_path.endswith(".bam"):
             self.bam_count["counter"] += 1
             self.bam_count["file"][event.src_path] = time.time()
-            logger.info(f"New .bam file detected: {event.src_path}, total count: {self.bam_count['counter']}")
+            logger.info(
+                f"New .bam file detected: {event.src_path}, total count: {self.bam_count['counter']}"
+            )
+
 
 def create_bam_count() -> DefaultDict[str, Dict[str, Any]]:
     """
@@ -78,6 +85,7 @@ def create_bam_count() -> DefaultDict[str, Dict[str, Any]]:
         DefaultDict[str, Dict[str, Any]]: A dictionary with 'counter' initialized to 0 and an empty 'file' dict.
     """
     return defaultdict(lambda: {"counter": 0, "file": {}})
+
 
 if __name__ == "__main__":
     # Configure logging

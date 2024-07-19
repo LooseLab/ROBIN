@@ -82,6 +82,8 @@ import ruptures as rpt
 from typing import Optional, Tuple, List, BinaryIO
 
 os.environ["CI"] = "1"
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
 
 
 class Result:
@@ -415,7 +417,7 @@ class CNVAnalysis(BaseAnalysis):
         #        if item == 'sample_ids':
         #            for run in app.storage.general[self.mainuuid][item]:
         #                self.sampleID = run
-        self.display_row = ui.row()
+        self.display_row = ui.row().style("width: 100")
         if self.summary:
             with self.summary:
                 ui.label("No CNV data available.")

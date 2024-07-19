@@ -1,55 +1,3 @@
-"""
-ROBIN Real-Time Application Setup
-
-This module initializes and configures the ROBIN real-time application using the NiceGUI framework (https://nicegui.io/). The application ensures that all long-running processes operate in the background, preventing the main thread from being blocked.
-
-The app creates an instance of the `run` class for each specific run, taking arguments from either the command line or a configuration file. Shared arguments are stored in `nicegui.app.storage.general` for accessibility across the application.
-
-Key Components:
-1. **Run Class**:
-   - Sets up the application.
-   - Shares arguments across the app through `app.storage.general`.
-
-2. **Methnice Class**:
-   - Processes data in the background.
-   - Each user connecting to the site gets individual instances for data visualization without running analysis.
-
-3. **Pages**:
-   - `index`: Main page displaying the splash screen and navigation options.
-   - `live`: Page for live data interaction.
-   - `test`: Placeholder for browsing historic data (to be implemented).
-
-4. **Utility Functions**:
-   - `setup_logging(level)`: Configures global logging level.
-   - `clean_up()`: Cleans up stored data at the end of a run.
-   - `startup()`: Starts data processing in the main application loop.
-
-5. **Configuration**:
-   - Uses `click` for command-line interface options.
-   - Loads configuration from `config.ini` or specified file.
-
-Constants:
-- `DEFAULT_CFG`: Default path to the configuration file.
-- `UNIQUE_ID`: Unique identifier for each run, used as an access key in `app.storage.general`.
-
-Dependencies:
-- `click`
-- `os`
-- `sys`
-- `signal`
-- `uuid`
-- `logging`
-- `pathlib.Path`
-- `nicegui` (ui, app)
-- `robin.theme`
-- `robin.images`
-- `configparser.ConfigParser`
-
-Example usage::
-    python main.py --config config.ini --port 8081 --threads 4 --log-level INFO
-
-"""
-
 import uuid
 import click
 import os
@@ -67,16 +15,16 @@ from configparser import ConfigParser
 from robin.brain_class import BrainMeth
 from robin.minknow_info.minknow_panel import MinKNOWFish
 
-
 DEFAULT_CFG: str = "config.ini"
 UNIQUE_ID: str = str(uuid.uuid4())
 
 
-def setup_logging(level: str) -> None:
+def setup_logging(level: str, log_file: Path) -> None:
     """
-    Configure global logging level.
+    Configure global logging level and log file.
 
     :param level: Logging level as a string (DEBUG, INFO, WARNING, ERROR, CRITICAL).
+    :param log_file: Path to the log file.
     """
     numeric_level = getattr(logging, level.upper(), None)
     if numeric_level is None:
@@ -88,8 +36,10 @@ def setup_logging(level: str) -> None:
     logging.basicConfig(
         level=numeric_level,
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)],
     )
     logging.info(f"Logging configured to level: {level}")
+    logging.info(f"Logging to file: {log_file}")
     logging.debug("Debug logging enabled.")
 
 
@@ -223,8 +173,8 @@ def clean_up() -> None:
     """
     Clean up stored data at the end of a run.
     """
-    print("App shutdown detected.")
-    print("Resetting Storage.")
+    logging.info("App shutdown detected.")
+    logging.info("Resetting Storage.")
     app.storage.general.pop(UNIQUE_ID)
     app.shutdown()
 
@@ -233,7 +183,7 @@ async def startup() -> None:
     """
     Start data processing in the main application loop.
     """
-    print(f"Setting up {UNIQUE_ID}.")
+    logging.info(f"Setting up {UNIQUE_ID}.")
     MAINPAGE = Methnice(
         force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
         threads=app.storage.general[UNIQUE_ID]["threads"],
@@ -325,7 +275,7 @@ class Methnice:
         Async method to handle changes to the watchfolder.
         """
         if self.watchfolder:
-            print(f"watchfolder value has been changed! {self.watchfolder}")
+            logging.info(f"watchfolder value has been changed! {self.watchfolder}")
             await self.robin.add_watchfolder(self.watchfolder)
 
     def setup(self) -> None:
@@ -523,7 +473,7 @@ def run_class(
     try:
         app.storage.general.clear()
     except Exception as e:
-        print(e)
+        logging.error(e)
     iconfile = os.path.join(
         os.path.dirname(os.path.abspath(images.__file__)), "favicon.ico"
     )
@@ -618,6 +568,13 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     help="Set the logging level (e.g., DEBUG, INFO, WARNING).",
 )
 @click.option(
+    "--log-file",
+    type=click.Path(dir_okay=False, writable=True, resolve_path=True, path_type=Path),
+    default="ROBIN.log",
+    help="Path to the log file.",
+    show_default=True,
+)
+@click.option(
     "--simtime",
     default=False,
     help="If set, will simulate the addition of existing files to the pipeline based on read data.",
@@ -691,6 +648,7 @@ def package_run(
     force_sampleid: str,
     threads: int,
     log_level: str,
+    log_file: Path,
     simtime: bool,
     showerrors: bool,
     sequencing_summary: Path,
@@ -704,10 +662,12 @@ def package_run(
     """
     Entrypoint for when GUI is launched directly.
     """
+    setup_logging(log_level, log_file)
+
     if sequencing_summary:
         sequencing_summary = click.format_filename(sequencing_summary)
     if browse:
-        click.echo("Browse mode is enabled. Watchfolder and output are not required.")
+        logging.info("Browse mode is enabled. Watchfolder and output are not required.")
         run_class(
             port=port,
             force_sampleid=force_sampleid,
@@ -724,9 +684,9 @@ def package_run(
             reference=click.format_filename(reference),
         )
     else:
-        click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
+        logging.info(f"Watchfolder: {watchfolder}, Output: {output}")
         if output is None:
-            click.echo("Output is required when --browse is not set.")
+            logging.error("Output is required when --browse is not set.")
             sys.exit(1)
 
         run_class(
@@ -749,5 +709,5 @@ def package_run(
 
 
 if __name__ in {"__main__", "__mp_main__"}:
-    print("GUI launched by auto-reload function.")
-    # package_run()
+    logging.info("GUI launched by auto-reload function.")
+    package_run()
