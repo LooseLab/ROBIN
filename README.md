@@ -19,57 +19,9 @@ ROBIN requires docker to be available on the system it is running on. This is be
 
 We recommend installing 'robin' using the following conda yml file included in the repository: [robin.yml](robin.yml)
 
-This will install all the required dependencies including R and Python packages as well as readfish and ont-pyguppy-client-lib.
+If you are using macOSX then you should install using: [robin_osx.yml]((robin_osx.yml))
 
-However, in this version of robin, you will need to install the tool from source. See below for installation details.
-
-The contents of this file are:
-
-```console
-name: robin
-channels:
-  - bioconda
-  - conda-forge
-  - defaults
-dependencies:
-  - git-lfs
-  - r-base
-#  - bioconductor-genomicranges
-  - bioconda::snpsift
-  - bioconda::snpeff
-#  - bioconda::samtools
-#  - bioconda::bedtools
-#  - bioconda::ont-modkit==0.3.0
-  - r-optparse
-  - r-data.table
-  - conda-forge::r-ranger
-  - r-matrixStats
-  - r-glmnet
-  - ruptures
-  - python >=3.9.0,<3.9.19
-  - pip
-  - pip:
-    - readfish
-    - ont-pyguppy-client-lib
-    - scikit-learn==1.0.2
-    - scipy==1.12.0
-    - psutil
-    #- git+https://github.com/LooseLab/robin
-variables:
-  _JAVA_OPTIONS: -Xmx8g
-
-```
-then to create the environment:
-
-```console
-conda env create -f robin.yml
-```
-
-To activate the environment:
-
-```console
-conda activate robin
-```
+This will install all the required dependencies including R and Python packages as well as readfish and ont-pyguppy-client-lib on linux.
 
 To install the tool from source follow the instructions below. Please note the git lfs install, pull and submodule update commands are required to download the data files and submodules. Without these you will see errors.
 
@@ -79,6 +31,40 @@ cd robin
 git lfs install
 git lfs pull
 git submodule update --init --recursive
+```
+
+To create the environment:
+
+```console
+conda env create -f robin.yml
+```
+
+or on OSX:
+
+```console
+conda env create -f robin_osx.yml
+```
+
+To activate the environment:
+
+```console
+conda activate robin
+```
+
+If on OSX you will probably need to run:
+
+### Note: On OSX you will most likely need to install the package genomicranges into R. To do so launch R and run:
+
+```console
+if (!require("BiocManager", quietly = TRUE))
+    install.packages("BiocManager")
+
+BiocManager::install("GenomicRanges")
+```
+
+Then finally run:
+
+```console
 pip install .
 ```
 
