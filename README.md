@@ -27,7 +27,7 @@ To install the tool from source follow the instructions below. Please note the g
 
 ```console
 git clone https://github.com/LooseLab/robin/
-cd robin
+cd ROBIN
 git lfs install
 git lfs pull
 git submodule update --init --recursive
