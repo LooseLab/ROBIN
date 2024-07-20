@@ -76,7 +76,7 @@ with open(edit_file_path, 'r') as file:
     lines = file.readlines()
 
 # Check if the line matches the target content
-line_number = 21
+line_number = 28
 target_content = 'self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")'
 if lines[line_number - 1].strip() == target_content.strip():
     target_substring = '("cuda:0" if torch.cuda.is_available() else "cpu")'
