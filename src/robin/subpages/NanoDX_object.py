@@ -59,6 +59,35 @@ import pandas as pd
 import shutil
 import tempfile
 from robin import models, theme, resources
+
+import logging
+
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
+
+# Code to edit the NN_model to use cpu and not gpu
+edit_file_path = os.path.join(
+            os.path.dirname(os.path.abspath(theme.__file__)), "submodules", "nanoDX", "workflow", "scripts", "NN_model.py"
+        )
+if not os.path.exists(edit_file_path):
+    raise FileNotFoundError(f"The file {edit_file_path} does not exist.")
+
+with open(edit_file_path, 'r') as file:
+    lines = file.readlines()
+
+# Check if the line matches the target content
+line_number = 21
+target_content = 'self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")'
+if lines[line_number - 1].strip() == target_content.strip():
+    target_substring = '("cuda:0" if torch.cuda.is_available() else "cpu")'
+    new_substring = '("cpu")'
+    lines[line_number - 1] = lines[line_number - 1].replace(target_substring, new_substring)
+    with open(edit_file_path, 'w') as file:
+        file.writelines(lines)
+    logger.info(f"Line {line_number} was modified.")
+else:
+    logger.info(f"Line {line_number} was not modified.")
+
 from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
 from robin.utilities.merge_bedmethyl import (
     merge_bedmethyl,
@@ -67,10 +96,6 @@ from robin.utilities.merge_bedmethyl import (
 )
 from typing import List, Tuple, Optional, Dict, Any
 
-import logging
-
-# Use the main logger configured in the main application
-logger = logging.getLogger(__name__)
 
 
 def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
