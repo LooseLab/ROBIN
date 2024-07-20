@@ -55,6 +55,7 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
     )
     if not showerrors:
         command += ">/dev/null 2>&1"
+    logger.debug(command)
     # print(command)
 
     os.system(command)
@@ -67,8 +68,10 @@ def run_samtools_sort(file, tomerge, sortfile, threads, regions):
     command = (
         f"samtools sort -@{threads} --write-index -o {intermediate_bam.name} {file}"
     )
+    logger.debug(command)
     os.system(command)
     command2 = f"samtools view -b -L {regions} -o {sortfile} --write-index {intermediate_bam.name} "
+    logger.debug(command2)
     os.system(command2)
 
 
@@ -83,6 +86,7 @@ def run_modkit(bamfile, outbed, cpgs, threads, showerrors):
         )
         if not showerrors:
             command += "--suppress-progress  >/dev/null 2>&1"
+        logger.debug(command)
         os.system(command)
         # self.log("Done processing bam file")
     except Exception as e:

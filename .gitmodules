@@ -1,6 +1,6 @@
-[submodule "src/robin/submodules/hv_rapidCNS2"]
-	path = src/robin/submodules/hv_rapidCNS2
-	url = https://github.com/graemefox/hv_rapidCNS2
 [submodule "src/robin/submodules/nanoDX"]
 	path = src/robin/submodules/nanoDX
 	url = https://gitlab.com/pesk/nanoDx.git
+[submodule "src/robin/submodules/hv_rapidCNS2"]
+	path = src/robin/submodules/hv_rapidCNS2
+	url = https://github.com/mattloose/hv_rapidCNS2_mod
