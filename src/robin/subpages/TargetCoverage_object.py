@@ -367,6 +367,7 @@ class TargetCoverage(BaseAnalysis):
                 workdirout,
                 self.threads,
                 self.reference,
+                self.showerrors,
             )
             self.clair3running = False
         # else:
