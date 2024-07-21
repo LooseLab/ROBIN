@@ -329,6 +329,7 @@ class TargetCoverage(BaseAnalysis):
             raise SystemExit(
                 "Docker is not running on this computer. Either don't track coverage or start docker. If you are on a mac you may need to enable the standard docker socket - see https://github.com/gh640/wait-for-docker/issues/12#issuecomment-1551456057"
             )
+        self.check_docker_image()
         super().__init__(*args, **kwargs)
 
     def is_docker_running(self):
@@ -338,6 +339,20 @@ class TargetCoverage(BaseAnalysis):
             return True
         except (docker.errors.DockerException, docker.errors.APIError):
             return False
+
+    def check_docker_image(self):
+        client = docker.from_env()
+        status = False
+        for image in client.images.list():
+            if 'hkubal/clairs-to:latest' in image.tags:
+                logger.info(f"Docker image found.")
+                status = True
+                return
+        if not status:
+            logger.info(f"Docker image not found. Pulling...")
+            client.images.pull("hkubal/clairs-to:latest")
+            logger.info("Docker image pulled.")
+
 
     def SNP_timer_run(self):
         self.snp_timer = ui.timer(0.1, self._snp_worker)
