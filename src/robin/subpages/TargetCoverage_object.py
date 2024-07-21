@@ -185,9 +185,9 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             f"--output_dir {workdirout} -b {bedfile}"
             # f" >/dev/null 2>&1"
         )
-        os.system(runcommand)
         if showerrors:
             logger.info(runcommand)
+        os.system(runcommand)
         shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
         shutil.copy2(
             f"{workdirout}/indel.vcf.gz", f"{workdirout}/output_indel_done.vcf.gz"

@@ -174,7 +174,7 @@ class BaseAnalysis:
             # Create the folder if it doesn't exist
             if not os.path.exists(full_path):
                 os.makedirs(full_path)
-            logger.info(f"Folder created: {full_path}")
+                logger.info(f"Folder created: {full_path}")
             return full_path
         else:
             return path
