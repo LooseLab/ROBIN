@@ -167,8 +167,9 @@ def parse_vcf(vcf_file):
                 sys.exit(1)
 
 
-def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
+def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, showerrors):
     # ToDo: handle any platform
+    # ToDo: Get basecall model from bam file info
     if sys.platform in ["darwin", "linux"]:
         runcommand = (
             f"docker run -it -v {workdir}:{workdir} "
@@ -185,6 +186,8 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
             # f" >/dev/null 2>&1"
         )
         os.system(runcommand)
+        if showerrors:
+            logger.info(runcommand)
         shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
         shutil.copy2(
             f"{workdirout}/indel.vcf.gz", f"{workdirout}/output_indel_done.vcf.gz"
@@ -291,7 +294,7 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
 
 
 class TargetCoverage(BaseAnalysis):
-    def __init__(self, *args, target_panel=None, reference=None, **kwargs):
+    def __init__(self, *args, showerrors=False,target_panel=None, reference=None, **kwargs):
         self.callthreshold = 10
         self.clair3running = False
         self.targets_exceeding_threshold = {}
@@ -303,6 +306,7 @@ class TargetCoverage(BaseAnalysis):
         self.bedcov_df_main = {}
         self.SNPqueue = queue.Queue()
         self.reference = reference
+        self.showerrors = showerrors
         if self.reference:
             self.snp_calling = True
         else:
