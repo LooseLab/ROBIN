@@ -167,8 +167,9 @@ def parse_vcf(vcf_file):
                 sys.exit(1)
 
 
-def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
+def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, showerrors):
     # ToDo: handle any platform
+    # ToDo: Get basecall model from bam file info
     if sys.platform in ["darwin", "linux"]:
         runcommand = (
             f"docker run -it -v {workdir}:{workdir} "
@@ -184,6 +185,8 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference):
             f"--output_dir {workdirout} -b {bedfile}"
             # f" >/dev/null 2>&1"
         )
+        if showerrors:
+            logger.info(runcommand)
         os.system(runcommand)
         shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
         shutil.copy2(
@@ -291,7 +294,7 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
 
 
 class TargetCoverage(BaseAnalysis):
-    def __init__(self, *args, target_panel=None, reference=None, **kwargs):
+    def __init__(self, *args, showerrors=False,target_panel=None, reference=None, **kwargs):
         self.callthreshold = 10
         self.clair3running = False
         self.targets_exceeding_threshold = {}
@@ -303,6 +306,7 @@ class TargetCoverage(BaseAnalysis):
         self.bedcov_df_main = {}
         self.SNPqueue = queue.Queue()
         self.reference = reference
+        self.showerrors = showerrors
         if self.reference:
             self.snp_calling = True
         else:
@@ -325,6 +329,7 @@ class TargetCoverage(BaseAnalysis):
             raise SystemExit(
                 "Docker is not running on this computer. Either don't track coverage or start docker. If you are on a mac you may need to enable the standard docker socket - see https://github.com/gh640/wait-for-docker/issues/12#issuecomment-1551456057"
             )
+        self.check_docker_image()
         super().__init__(*args, **kwargs)
 
     def is_docker_running(self):
@@ -334,6 +339,20 @@ class TargetCoverage(BaseAnalysis):
             return True
         except (docker.errors.DockerException, docker.errors.APIError):
             return False
+
+    def check_docker_image(self):
+        client = docker.from_env()
+        status = False
+        for image in client.images.list():
+            if 'hkubal/clairs-to:latest' in image.tags:
+                logger.info(f"Docker image found.")
+                status = True
+                return
+        if not status:
+            logger.info(f"Docker image not found. Pulling...")
+            client.images.pull("hkubal/clairs-to:latest")
+            logger.info("Docker image pulled.")
+
 
     def SNP_timer_run(self):
         self.snp_timer = ui.timer(0.1, self._snp_worker)
@@ -363,6 +382,7 @@ class TargetCoverage(BaseAnalysis):
                 workdirout,
                 self.threads,
                 self.reference,
+                self.showerrors,
             )
             self.clair3running = False
         # else:

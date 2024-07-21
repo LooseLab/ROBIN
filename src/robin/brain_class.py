@@ -290,6 +290,7 @@ class BrainMeth:
         if "coverage" not in self.exclude:
             self.Target_Coverage = TargetCoverage(
                 analysis_name="COVERAGE",
+                showerrors=self.showerrors,
                 bamqueue=self.bamfortargetcoverage,
                 target_panel=self.target_panel,
                 reference=self.reference,
