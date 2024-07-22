@@ -81,10 +81,12 @@ Options:
   -c, --config FILE               Read option defaults from the specified INI
                                   file  [default: config.ini]
   --port INTEGER                  Port for GUI
+  --force_sampleid TEXT           Force a specific sampleID.
   --threads INTEGER               Number of threads available.  [required]
   --log-level [DEBUG|INFO|WARNING|ERROR|CRITICAL]
                                   Set the logging level (e.g., DEBUG, INFO,
                                   WARNING).
+  --log-file FILE                 Path to the log file.  [default: ROBIN.log]
   --simtime BOOLEAN               If set, will simulate the addition of
                                   existing files to the pipeline based on read
                                   data.
@@ -122,10 +124,26 @@ Optional flags include:
 - -e, --exclude: This will allow you to exclude certain analysis types. For example, if you do not wish to run any specific classifier just exclude it. the -e flag can be used multiple times.
 
 
+### REFERENCE:
+
+ROBIN expects an hg38 reference file with the format:
+
+```chatinput
+>chr1
+.....
+>chr2
+.....
+
+```
+
+You must use hg38.
+
+
+
 A typical command line would look like this:
 
 ```console
-robin --threads 4  /path/to/watchfolder /path/to/output
+robin --threads 4  -r ~/references/hg38_simple.fa /path/to/watchfolder /path/to/output
 ```
 
 ### IMPORTANT: If running on a p2i you should set threads to 1.
