@@ -22,7 +22,9 @@ from robin.utilities.camera import Camera
 
 from enum import Enum
 from typing import Sequence
-
+import logging
+from pathlib import Path
+import sys
 
 from minknow_api.examples.load_sample_sheet import (
     ParsedSampleSheetEntry,
@@ -191,6 +193,8 @@ class MinKNOWFish:
             print(pos.name, position)
             if pos.name == position:
                 experiment_specs.append(ExperimentSpec(position=pos))
+                print (f"Found {pos}")
+        add_protocol_ids(experiment_specs, kit, basecall_config)
 
         # Build arguments for starting protocol:
         alignment_args = protocols.AlignmentArgs(
@@ -229,8 +233,7 @@ class MinKNOWFish:
             )
             print("stop_criteria")
             print(stop_criteria)
-            print(dir(spec))
-            print(spec.protocol_id)
+
             run_id = protocols.start_protocol(
                 position_connection,
                 identifier=spec.protocol_id,
@@ -246,7 +249,7 @@ class MinKNOWFish:
                 disable_active_channel_selection=False,
                 mux_scan_period=1.5,
                 stop_criteria=stop_criteria,
-                #args=None,  # Any extra args passed.
+                args=[],  # Any extra args passed.
             )
 
             flow_cell_info = position_connection.device.get_flow_cell_info()
