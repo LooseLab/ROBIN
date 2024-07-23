@@ -487,6 +487,8 @@ class NanoDX_object(BaseAnalysis):
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] -= len(tomerge)
+            if self.five_minutes > 5400:
+                raise SystemExit("90 minutes of data have been produced. Moving on.")
         self.running = False
 
     def create_nanodx_chart(self, title: str) -> None:
