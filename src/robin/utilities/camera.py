@@ -119,7 +119,7 @@ class Camera():
             for_id: Optional[str] = 'file-upload',
             canvas_id: Optional[str] = 'canvas',
             on_change: Optional[Callable[..., Any]] = None,
-            compression: Optional[float] = 0.5,
+            compression: Optional[float] = 0.4,
     ):
         """Camera Input
                 :param icon: The icon to be used for the camera
