@@ -14,7 +14,7 @@ from sturgeon.callmapping import (
 import shutil
 import yappi
 import tabulate
-
+import sys
 
 from robin import submodules
 
@@ -397,6 +397,9 @@ class RandomForest_object(BaseAnalysis):
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] -= len(tomerge)
+
+        if self.five_minutes > 5400:
+            sys.exit("90 minutes of data have been produced. Moving on.")
 
         self.running = False
 
