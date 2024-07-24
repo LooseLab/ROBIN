@@ -404,7 +404,7 @@ async def content():
                             "Start Run",
                             on_click=lambda: minknow.start_run(
                                 position=position.value.description.name,
-                                reference="/media/deepseq/HDD_Storage/refs/hg38_simple.fa",
+                                reference="/home/deepseq/refs/hg38_simple.fa",
                                 sample_id=sampleid.value,
                                 flowcell_id=flowcellid.value,
                             ),
