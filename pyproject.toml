@@ -48,7 +48,8 @@ dependencies = [
   "yappi",
   "tabulate",
   "networkx",
-  "docker"
+  "docker",
+  "opencv-python"
 ]
 
 [project.scripts]
