@@ -46,17 +46,34 @@ def add_protocol_ids(experiment_specs, kit, basecall_config):
     for spec in experiment_specs:
         # Connect to the sequencing position:
         position_connection = spec.position.connect()
-
+        print (position_connection)
         # Check if a flowcell is available for sequencing
         flow_cell_info = position_connection.device.get_flow_cell_info()
         if not flow_cell_info.has_flow_cell:
             print("No flow cell present in position {}".format(spec.position))
-            sys.exit(1)
+            ui.notify("No flow cell present in position {}".format(spec.position))
+            return
+
+        print(flow_cell_info)
 
         product_code = flow_cell_info.user_specified_product_code
         if not product_code:
             product_code = flow_cell_info.product_code
 
+        print(product_code)
+
+        """
+        device_connection: Connection,
+    product_code: str,
+    kit: str,
+    basecalling: bool = False,
+    basecall_config: Optional[str] = None,
+    barcoding: bool = False,
+    barcoding_kits: Optional[List[str]] = None,
+    force_reload: bool = False,
+    experiment_type: str = "sequencing",
+) -> Optional[str]:
+        """
         # Find the protocol identifier for the required protocol:
         protocol_info = protocols.find_protocol(
             position_connection,
@@ -65,15 +82,24 @@ def add_protocol_ids(experiment_specs, kit, basecall_config):
             basecalling=True,
             basecall_config=basecall_config,
             barcoding=False,
-            barcoding_kits=None,
+            barcoding_kits=[],
+            force_reload=True,
+            experiment_type="sequencing",
         )
+
+        print (protocol_info)
 
         if not protocol_info:
             print("Failed to find protocol for position %s" % (spec.position))
             print("Requested protocol:")
             print("  product-code: %s" % product_code)
             print("  kit: %s" % kit)
-            sys.exit(1)
+            #ui.notify("Failed to find protocol for position %s" % (spec.position))
+            #ui.notify("Requested protocol:")
+            #ui.notify("  product-code: %s" % product_code)
+            #ui.notify("  kit: %s" % kit)
+            return
+
 
         # Store the identifier for later:
         spec.protocol_id = protocol_info.identifier
@@ -120,6 +146,10 @@ class MinKNOWFish:
 
     async def connect_to_localhost(self):
         self.connection_ip = "127.0.0.1"
+        await self.add_positions()
+
+    async def connect_to_remotehost(self, remotehost):
+        self.connection_ip = remotehost
         await self.add_positions()
 
     async def add_positions(self) -> None:
@@ -174,19 +204,23 @@ class MinKNOWFish:
         ui.notify(f"Starting Run {sample_id} on {flowcell_id}!", type="positive")
         # position = "1B"
         kit = "SQK-RAD114"
-        basecall_config = "dna_r10.4.1_e8.2_400bps_5khz_modbases_5hmc_5mc_cg_hac.cfg"
+        ###Memo to self... basecall config must not include cfg
+        basecall_config = "dna_r10.4.1_e8.2_400bps_5khz_modbases_5hmc_5mc_cg_hac"
         alignment_reference = reference
-        bed_file = "/data/test.bed"
+        bed_file = "/media/deepseq/HDD_Storage/projects/read_until/rapid_cns2_template/panel_adaptive_nogenenames_20122021_hg38.bed"
         experiment_duration = 24
         experiment_group_id = "experiment_group"
         # sample_id = "SAMPLE_ID"
         experiment_specs = []
         # Add all the positions to the list:
+        ui.notify(f'looking for position {position}')
         for pos in self.manager.flow_cell_positions():
             print(pos.name, position)
             if pos.name == position:
                 experiment_specs.append(ExperimentSpec(position=pos))
                 print(f"Found {pos}")
+        print(experiment_specs)
+        print(basecall_config)
         add_protocol_ids(experiment_specs, kit, basecall_config)
 
         # Build arguments for starting protocol:
@@ -314,7 +348,7 @@ async def content():
                 flowcellid.value = "Too many barcodes - please try again."
 
         minknow = MinKNOWFish()
-        await minknow.connect_to_localhost()
+        await minknow.connect_to_remotehost("10.157.252.30")
         with ui.dialog() as startup, ui.card().classes("w-full"):
             ui.label("Sample Setup").style(
                 "color: #6E93D6; font-size: 200%; font-weight: 300"
@@ -365,7 +399,7 @@ async def content():
                             "Start Run",
                             on_click=lambda: minknow.start_run(
                                 position=position.value.description.name,
-                                reference="~/references/hg38_simple.fa",
+                                reference="/media/deepseq/HDD_Storage/refs/hg38_simple.fa",
                                 sample_id=sampleid.value,
                                 flowcell_id=flowcellid.value,
                             ),
