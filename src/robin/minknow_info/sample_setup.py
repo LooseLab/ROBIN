@@ -205,7 +205,7 @@ class MinKNOWFish:
         # position = "1B"
         kit = "SQK-RAD114"
         ###Memo to self... basecall config must not include cfg
-        basecall_config = "dna_r10.4.1_e8.2_400bps_5khz_modbases_5hmc_5mc_cg_hac.cfg"
+        basecall_config = "dna_r10.4.1_e8.2_400bps_5khz_modbases_5hmc_5mc_cg_hac"
         alignment_reference = reference
         bed_file = "/home/deepseq/panel_adaptive_nogenenames_20122021_hg38.bed"
         experiment_duration = 24
@@ -282,7 +282,7 @@ class MinKNOWFish:
                 disable_active_channel_selection=False,
                 mux_scan_period=1.5,
                 stop_criteria=stop_criteria,
-                args=[],  # Any extra args passed.
+                args=['--verbose'],  # Any extra args passed.
             )
 
             flow_cell_info = position_connection.device.get_flow_cell_info()
