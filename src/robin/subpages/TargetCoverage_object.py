@@ -296,7 +296,9 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
 
 
 class TargetCoverage(BaseAnalysis):
-    def __init__(self, *args, showerrors=False,target_panel=None, reference=None, **kwargs):
+    def __init__(
+        self, *args, showerrors=False, target_panel=None, reference=None, **kwargs
+    ):
         self.callthreshold = 10
         self.clair3running = False
         self.targets_exceeding_threshold = {}
@@ -346,15 +348,14 @@ class TargetCoverage(BaseAnalysis):
         client = docker.from_env()
         status = False
         for image in client.images.list():
-            if 'hkubal/clairs-to:latest' in image.tags:
-                logger.info(f"Docker image found.")
+            if "hkubal/clairs-to:latest" in image.tags:
+                logger.info("Docker image found.")
                 status = True
                 return
         if not status:
-            logger.info(f"Docker image not found. Pulling...")
+            logger.info("Docker image not found. Pulling...")
             client.images.pull("hkubal/clairs-to:latest")
             logger.info("Docker image pulled.")
-
 
     def SNP_timer_run(self):
         self.snp_timer = ui.timer(0.1, self._snp_worker)
