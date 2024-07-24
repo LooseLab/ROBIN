@@ -244,8 +244,11 @@ class MinKNOWFish:
         )
 
         bam_arguments = protocols.OutputArgs(
-            reads_per_file=None,  # 4000,
-            batch_duration="60",
+            reads_per_file=4000,
+            #batch_duration="60",
+        )
+        pod5_arguments = protocols.OutputArgs(
+            reads_per_file=4000,
         )
 
         # Now start the protocol(s):
@@ -271,7 +274,7 @@ class MinKNOWFish:
                 read_until=read_until_args,
                 fastq_arguments=None,
                 fast5_arguments=None,
-                pod5_arguments=None,
+                pod5_arguments=pod5_arguments,
                 bam_arguments=bam_arguments,
                 disable_active_channel_selection=False,
                 mux_scan_period=1.5,
