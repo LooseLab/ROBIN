@@ -207,7 +207,7 @@ class MinKNOWFish:
         ###Memo to self... basecall config must not include cfg
         basecall_config = "dna_r10.4.1_e8.2_400bps_5khz_modbases_5hmc_5mc_cg_hac"
         alignment_reference = reference
-        bed_file = "/media/deepseq/HDD_Storage/projects/read_until/rapid_cns2_template/panel_adaptive_nogenenames_20122021_hg38.bed"
+        bed_file = "/home/deepseq/panel_adaptive_nogenenames_20122021_hg38.bed"
         experiment_duration = 24
         experiment_group_id = "experiment_group"
         # sample_id = "SAMPLE_ID"
