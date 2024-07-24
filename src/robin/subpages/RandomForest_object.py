@@ -23,7 +23,7 @@ from robin.utilities.merge_bedmethyl import (
     save_bedmethyl,
 )
 from typing import List, Tuple
-
+import asyncio
 
 HVPATH = os.path.join(
     os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
