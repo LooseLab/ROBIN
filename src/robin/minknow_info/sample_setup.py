@@ -244,11 +244,11 @@ class MinKNOWFish:
         )
 
         bam_arguments = protocols.OutputArgs(
-            #reads_per_file=4000,
+            reads_per_file=4000,
             batch_duration="1",
         )
         pod5_arguments = protocols.OutputArgs(
-            #reads_per_file=4000,
+            reads_per_file=4000,
             batch_duration="1"
         )
 
