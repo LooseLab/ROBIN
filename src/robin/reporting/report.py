@@ -65,14 +65,14 @@ logger = logging.getLogger(__name__)
 
 
 # Use DejaVu Sans as the default font
-#font_properties = FontProperties(
-#    fname=os.path.join(
-#        os.path.dirname(os.path.abspath(fonts.__file__)),
-#        "fira-sans-v16-latin-regular.ttf",
-#    )
-#)  # Update the path to the font file
+font_properties = FontProperties(
+    fname=os.path.join(
+        os.path.dirname(os.path.abspath(fonts.__file__)),
+        "fira-sans-v16-latin-regular.ttf",
+    )
+)  # Update the path to the font file
 
-#matplotlib.rcParams["font.family"] = font_properties.get_name()
+matplotlib.rcParams["font.family"] = font_properties.get_name()
 
 
 def create_pdf(filename, output):
