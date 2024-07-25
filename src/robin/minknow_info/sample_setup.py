@@ -131,6 +131,7 @@ class MinKNOWFish:
         self.connection_ip: str | None = None
         self.connected = False
         self.watchfolder = None
+        self.devices = set()
 
     def _check_ip(self, ip: str) -> None:
         """
@@ -167,6 +168,8 @@ class MinKNOWFish:
             # with self.connect_now:
             ui.notify("Connected to MinKNOW - getting positions.")
             self.positions = list(self.manager.flow_cell_positions())
+            for position in self.positions:
+                self.devices.add(position.device_type)
             # self.connectiondialog.close()
             # with self.choices:
             #    ui.radio(
@@ -363,8 +366,8 @@ async def content():
                 flowcellid.value = "Too many barcodes - please try again."
 
         minknow = MinKNOWFish()
-        #await minknow.connect_to_remotehost("10.157.252.30")
-        await minknow.connect_to_localhost()
+        await minknow.connect_to_remotehost("10.157.252.30")
+        #await minknow.connect_to_localhost()
         with ui.dialog() as startup, ui.card().classes("w-full"):
             ui.label("Sample Setup").style(
                 "color: #6E93D6; font-size: 200%; font-weight: 300"
@@ -434,6 +437,7 @@ async def content():
             ui.label("Sample Settings:").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 600"
             )
+            ui.label(" ".join(f"Device: {device}" for device in minknow.devices))
             ui.label().bind_text_from(
                 sampleid,
                 "value",
