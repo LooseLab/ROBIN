@@ -98,7 +98,7 @@ def run_modkit(bamfile, outbed, cpgs, threads, showerrors):
 class RandomForest_object(BaseAnalysis):
     def __init__(self, *args, showerrors=False, **kwargs):
         self.rcns2_df_store = {}
-        self.threshold = 0.05
+        self.threshold = 0.5
         self.bambatch = {}
         self.cpgs_file = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
