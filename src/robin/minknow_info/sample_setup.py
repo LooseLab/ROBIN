@@ -371,37 +371,39 @@ async def content():
             )
             ui.separator()
             with ui.stepper().props("vertical").classes("w-full") as stepper:
-                step = ui.step("Sample ID")
+                step = ui.step("Sample ID").style('color: #000000; font-size: 150%; font-weight: 600')
                 with step:
-                    ui.label("Enter the sample ID:")
                     ui.label(
                         "Remember that sample IDs may be shared with others and should not include human identifiable information."
-                    )
+                    ).style('color: #000000; font-size: 100%; font-weight: 600')
+                    ui.label("Enter the sample ID:").style('color: #000000; font-size: 80%; font-weight: 300')
                     sampleid = ui.input(
                         placeholder="start typing",
                         validation = {
                             'Too short': lambda value: len(value) >= 5,
                             'Do not use Flowcell IDs as sample IDs': lambda value: re.match(r"^[A-Za-z]{3}\d{5}$", value) is None,
+                            'No whitespace allowed': lambda value: not any(char.isspace() for char in value),
+                            'Only alphanumeric characters allowed': lambda value: value.isalnum(),
                         }
-                    ).props("rounded outlined dense")
+                    ).style('color: #000000; font-size: 80%; font-weight: 300').props("rounded outlined dense")
                     sample_camera.show_camera()
                     with ui.stepper_navigation():
                         checker = ErrorChecker(sampleid)
                         c = ui.button("Next", on_click=stepper.next).bind_enabled_from(checker, 'no_errors')
 
-                with ui.step("Flowcell"):
-                    ui.label("Enter the flowcell ID.")
+                with ui.step("Flowcell").style('color: #000000; font-size: 150%; font-weight: 600'):
+                    ui.label("Enter the flowcell ID.").style('color: #000000; font-size: 80%; font-weight: 300')
                     flowcellid = ui.input(
                         placeholder="start typing",
                         validation = {'Not a valid flowcell ID': lambda value: re.match(r"^[A-Za-z]{3}\d{5}$", value) is not None}
-                    ).props("rounded outlined dense")
+                    ).style('color: #000000; font-size: 80%; font-weight: 300').props("rounded outlined dense")
                     flowcell_camera.show_camera()
                     with ui.stepper_navigation():
                         ui.button("Back", on_click=stepper.previous).props("flat")
                         checkerflowcell = ErrorChecker(flowcellid)
                         d=ui.button("Next", on_click=stepper.next).bind_enabled_from(checkerflowcell, 'no_errors')
-                with ui.step("Device Position"):
-                    ui.label("Select the device position to be used.")
+                with ui.step("Device Position").style('color: #000000; font-size: 150%; font-weight: 600'):
+                    ui.label("Select the device position to be used.").style('color: #000000; font-size: 80%; font-weight: 300')
                     run_button = ui.button(
                         "Start Run",
                         on_click=lambda: minknow.start_run(
@@ -421,7 +423,7 @@ async def content():
                         },
                     ).on(
                         "update:model-value", dostuff
-                    )
+                    ).style('color: #000000; font-size: 80%; font-weight: 300')
                     finalstep = ui.stepper_navigation()
                     with finalstep:
                         ui.button("Back", on_click=stepper.previous).props("flat")
@@ -430,7 +432,7 @@ async def content():
 
             ui.separator()
             ui.label("Sample Settings:").style(
-                "color: #6E93D6; font-size: 100%; font-weight: 300"
+                "color: #6E93D6; font-size: 150%; font-weight: 600"
             )
             ui.label().bind_text_from(
                 sampleid,
