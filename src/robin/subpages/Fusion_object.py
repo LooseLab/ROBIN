@@ -1182,6 +1182,7 @@ class FusionObject(BaseAnalysis):
                         gene_counter[row["gene"]] += 1
                         gene_counter[row["Join_Gene"]] += 1
 
+                        '''
                         if row["Join_Gene"] in axdict.keys():
                             # Create an arc connection
                             con = ConnectionPatch(
@@ -1197,8 +1198,9 @@ class FusionObject(BaseAnalysis):
                                 color=row["color"],
                             )
                             # Add the arc connection to the second subplot (ax2)
-                            axdict[row["Join_Gene"]].add_artist(con)
+                            # axdict[row["Join_Gene"]].add_artist(con)
                             # plt.tight_layout()
+                        '''
 
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
