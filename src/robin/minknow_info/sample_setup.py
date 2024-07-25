@@ -202,6 +202,7 @@ class MinKNOWFish:
         flowcell_id=None,
     ):
         ui.notify(f"Starting Run {sample_id} on {flowcell_id}!", type="positive")
+        #ToDo: At every stage we need to confirm that the correct values have been entered.
         # position = "1B"
         kit = "SQK-RAD114"
         ###Memo to self... basecall config must not include cfg
@@ -378,7 +379,10 @@ async def content():
                     )
                     sampleid = ui.input(
                         placeholder="start typing",
-                        validation = {'Too short': lambda value: len(value) >= 5}
+                        validation = {
+                            'Too short': lambda value: len(value) >= 5,
+                            'Do not use Flowcell IDs as sample IDs': lambda value: re.match(r"^[A-Za-z]{3}\d{5}$", value) is None,
+                        }
                     ).props("rounded outlined dense")
                     sample_camera.show_camera()
                     with ui.stepper_navigation():
@@ -408,8 +412,8 @@ async def content():
                         ),
                     )
                     def dostuff():
-                        print("dostuff")
                         run_button.enable()
+
                     position = ui.radio(
                         {
                             item: str(item)
