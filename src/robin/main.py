@@ -15,6 +15,9 @@ from configparser import ConfigParser
 from robin.brain_class import BrainMeth
 from robin.minknow_info.minknow_panel import MinKNOWFish
 
+from robin.__about__ import __version__
+
+
 DEFAULT_CFG: str = "config.ini"
 UNIQUE_ID: str = str(uuid.uuid4())
 
@@ -532,6 +535,7 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
 
 
 @click.command()
+@click.version_option(version=__version__, message="%(version)s")
 @click.option(
     "-c",
     "--config",
