@@ -19,6 +19,7 @@ DEVICEDICT = {
     "GRIDION": "GridION",
     "MINION": "MinION",
     "PROMETHION": "PromethION",
+    "P2_INTEGRATED": "P2Integrated"
 }
 
 
