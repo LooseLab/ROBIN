@@ -19,6 +19,7 @@ DEVICEDICT = {
     "GRIDION": "GridION",
     "MINION": "MinION",
     "PROMETHION": "PromethION",
+    "P2_INTEGRATED": "P2Integrated"
 }
 
 
@@ -30,6 +31,11 @@ def identify_device(device_type, device_name):
             f"{DEVICEDICT[device_type]}",
             "GridION_Front_Square_Elevated_Closed_Flow Cells 2_White.jpg",
         )
+    elif device_type == "P2_INTEGRATED":
+        return (
+            f"{DEVICEDICT[device_type]}",
+            "p2_-left-45_screen-up-1_splash_transparent.png",
+        )
     elif device_type == "PROMETHION":
         if device_name.startswith("PS2"):
             return "P2 Solo", "P2_Solo_Left-45_Open_Full.png"
@@ -39,7 +45,7 @@ def identify_device(device_type, device_name):
                 "PromethION_24_Right 45 Elevated_Closed_Full_white.jpg",
             )
     else:
-        return f"{device_type}"
+        return (f"{device_type}", None)
 
 
 class Minknow_Info:
@@ -53,9 +59,14 @@ class Minknow_Info:
         self.name, self.image = identify_device(
             self.position.device_type, self.position.name
         )
-        self.deviceicon = os.path.join(
-            os.path.dirname(os.path.abspath(images.__file__)), "ONTimages", self.image
-        )
+        if self.image:
+            self.deviceicon = os.path.join(
+                os.path.dirname(os.path.abspath(images.__file__)), "ONTimages", self.image
+            )
+        else:
+            self.deviceicon = os.path.join(
+                os.path.dirname(os.path.abspath(images.__file__)), "ONTimages", "unknown_sequencer.png"
+            )
         self.check_instance = threading.Thread(
             target=self.stream_instance_activity, args=()
         )
