@@ -16,6 +16,9 @@ from pathlib import Path
 import sys
 import uuid
 
+from datetime import datetime
+
+
 UNIQUE_ID: str = str(uuid.uuid4())
 
 
@@ -42,37 +45,32 @@ ExperimentSpecs = Sequence[ExperimentSpec]
 
 
 # Determine which protocol to run for each experiment, and add its ID to experiment_specs
-def add_protocol_ids(experiment_specs, kit, basecall_config):
+def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_id):
     for spec in experiment_specs:
         # Connect to the sequencing position:
         position_connection = spec.position.connect()
-        print (position_connection)
-        # Check if a flowcell is available for sequencing
         flow_cell_info = position_connection.device.get_flow_cell_info()
-        if not flow_cell_info.has_flow_cell:
-            print("No flow cell present in position {}".format(spec.position))
-            ui.notify("No flow cell present in position {}".format(spec.position))
+        if flow_cell_info.flow_cell_id != expected_flowcell_id:
+            ui.notify(f"Flowcell {expected_flowcell_id} is not found in position {spec.position}. Please check.", type="negative")
             return
-
-        print(flow_cell_info)
+        if not flow_cell_info.has_flow_cell:
+            ui.notify("No flow cell present in position {}".format(spec.position), type="negative")
+            return
 
         product_code = flow_cell_info.user_specified_product_code
         if not product_code:
             product_code = flow_cell_info.product_code
-
-        print(product_code)
-
         """
         device_connection: Connection,
-    product_code: str,
-    kit: str,
-    basecalling: bool = False,
-    basecall_config: Optional[str] = None,
-    barcoding: bool = False,
-    barcoding_kits: Optional[List[str]] = None,
-    force_reload: bool = False,
-    experiment_type: str = "sequencing",
-) -> Optional[str]:
+        product_code: str,
+        kit: str,
+        basecalling: bool = False,
+        basecall_config: Optional[str] = None,
+        barcoding: bool = False,
+        barcoding_kits: Optional[List[str]] = None,
+        force_reload: bool = False,
+        experiment_type: str = "sequencing",
+        ) -> Optional[str]:
         """
         # Find the protocol identifier for the required protocol:
         protocol_info = protocols.find_protocol(
@@ -87,13 +85,12 @@ def add_protocol_ids(experiment_specs, kit, basecall_config):
             experiment_type="sequencing",
         )
 
-        print (protocol_info)
-
         if not protocol_info:
-            print("Failed to find protocol for position %s" % (spec.position))
-            print("Requested protocol:")
-            print("  product-code: %s" % product_code)
-            print("  kit: %s" % kit)
+            ui.notify("Failed to find protocol for position %s" % (spec.position),type='negative')
+
+            #print("Requested protocol:")
+            #print("  product-code: %s" % product_code)
+            #print("  kit: %s" % kit)
             #ui.notify("Failed to find protocol for position %s" % (spec.position))
             #ui.notify("Requested protocol:")
             #ui.notify("  product-code: %s" % product_code)
@@ -103,6 +100,8 @@ def add_protocol_ids(experiment_specs, kit, basecall_config):
 
         # Store the identifier for later:
         spec.protocol_id = protocol_info.identifier
+
+    return True
 
 
 @contextmanager
@@ -213,93 +212,84 @@ class MinKNOWFish:
         alignment_reference = reference
         bed_file = "/home/deepseq/panel_adaptive_nogenenames_20122021_hg38.bed"
         experiment_duration = 24
-        experiment_group_id = "experiment_group"
+        current_date = datetime.now()
+        centreID = "NUH"
+        experiment_group_id = f"{centreID}_{current_date.strftime('%B')}_{current_date.year}"
         # sample_id = "SAMPLE_ID"
         experiment_specs = []
         # Add all the positions to the list:
-        ui.notify(f'looking for position {position}')
         for pos in self.manager.flow_cell_positions():
-            print(pos.name, position)
             if pos.name == position:
                 experiment_specs.append(ExperimentSpec(position=pos))
-                print(f"Found {pos}")
-        print(experiment_specs)
-        print(basecall_config)
-        add_protocol_ids(experiment_specs, kit, basecall_config)
+        # Check if the flowcell ID is correct
 
-        # Build arguments for starting protocol:
-        alignment_args = protocols.AlignmentArgs(
-            reference_files=[alignment_reference],
-            bed_file=bed_file,
-        )
+        if add_protocol_ids(experiment_specs, kit, basecall_config, flowcell_id):
 
-        basecalling_args = protocols.BasecallingArgs(
-            config=basecall_config,
-            barcoding=None,
-            alignment=alignment_args,
-        )
-
-        print(basecalling_args)
-
-        read_until_args = protocols.ReadUntilArgs(
-            filter_type="enrich",
-            reference_files=[alignment_reference],
-            bed_file=bed_file,
-            first_channel=None,
-            last_channel=None,
-        )
-
-        bam_arguments = protocols.OutputArgs(
-            reads_per_file=4000,
-            batch_duration="1",
-        )
-        pod5_arguments = protocols.OutputArgs(
-            reads_per_file=4000,
-            batch_duration="1"
-        )
-
-        # Now start the protocol(s):
-        print("Starting protocol on %s positions" % len(experiment_specs))
-        for spec in experiment_specs:
-            position_connection = spec.position.connect()
-
-            # Generate stop criteria for use by Run Until
-            # The `runtime` is in seconds, while the `experiment_duration` is in hours
-            stop_criteria = protocols.CriteriaValues(
-                runtime=int(experiment_duration * 60 * 60)
-            )
-            print("stop_criteria")
-            print(stop_criteria)
-
-            run_id = protocols.start_protocol(
-                position_connection,
-                identifier=spec.protocol_id,
-                sample_id=sample_id,
-                experiment_group=experiment_group_id,
-                barcode_info=None,
-                basecalling=basecalling_args,
-                read_until=read_until_args,
-                fastq_arguments=None,
-                fast5_arguments=None,
-                pod5_arguments=pod5_arguments,
-                bam_arguments=bam_arguments,
-                disable_active_channel_selection=False,
-                mux_scan_period=1.5,
-                stop_criteria=stop_criteria,
-                args=[],  # Any extra args passed.
+            # Build arguments for starting protocol:
+            alignment_args = protocols.AlignmentArgs(
+                reference_files=[alignment_reference],
+                bed_file=bed_file,
             )
 
-            flow_cell_info = position_connection.device.get_flow_cell_info()
+            basecalling_args = protocols.BasecallingArgs(
+                config=basecall_config,
+                barcoding=None,
+                alignment=alignment_args,
+            )
 
-            print("Started protocol:")
-            print("    run_id={}".format(run_id))
-            print("    position={}".format(spec.position.name))
-            print("    flow_cell_id={}".format(flow_cell_info.flow_cell_id))
-            print(
-                "    user_specified_flow_cell_id={}".format(
-                    flow_cell_info.user_specified_flow_cell_id
+            read_until_args = protocols.ReadUntilArgs(
+                filter_type="enrich",
+                reference_files=[alignment_reference],
+                bed_file=bed_file,
+                first_channel=None,
+                last_channel=None,
+            )
+
+            bam_arguments = protocols.OutputArgs(
+                reads_per_file=4000,
+                batch_duration="1",
+            )
+            pod5_arguments = protocols.OutputArgs(
+                reads_per_file=4000,
+                batch_duration="1"
+            )
+
+            # Now start the protocol(s):
+            for spec in experiment_specs:
+                position_connection = spec.position.connect()
+
+                # Generate stop criteria for use by Run Until
+                # The `runtime` is in seconds, while the `experiment_duration` is in hours
+                stop_criteria = protocols.CriteriaValues(
+                    runtime=int(experiment_duration * 60 * 60)
                 )
-            )
+
+                run_id = protocols.start_protocol(
+                    position_connection,
+                    identifier=spec.protocol_id,
+                    sample_id=sample_id,
+                    experiment_group=experiment_group_id,
+                    barcode_info=None,
+                    basecalling=basecalling_args,
+                    read_until=read_until_args,
+                    fastq_arguments=None,
+                    fast5_arguments=None,
+                    pod5_arguments=pod5_arguments,
+                    bam_arguments=bam_arguments,
+                    disable_active_channel_selection=False,
+                    mux_scan_period=1.5,
+                    stop_criteria=stop_criteria,
+                    args=[],  # Any extra args passed.
+                )
+
+                flow_cell_info = position_connection.device.get_flow_cell_info()
+
+                ui.notify(f"Started protocol:\n    run_id={run_id}\n    position={spec.position.name}\n    flow_cell_id={flow_cell_info.flow_cell_id}\n",
+                    multi_line = True,
+                    type="positive",
+                )
+        else:
+            ui.notify("Run Start Failed", type="negative")
 
 
 class ErrorChecker:
@@ -374,7 +364,7 @@ async def content():
             )
             ui.separator()
             with ui.stepper().props("vertical").classes("w-full") as stepper:
-                step = ui.step("Sample ID").style('color: #000000; font-size: 150%; font-weight: 600')
+                step = ui.step("Sample ID").style('color: #000000; font-size: 100%; font-weight: 600')
                 with step:
                     ui.label(
                         "Remember that sample IDs may be shared with others and should not include human identifiable information."
@@ -394,7 +384,7 @@ async def content():
                         checker = ErrorChecker(sampleid)
                         c = ui.button("Next", on_click=stepper.next).bind_enabled_from(checker, 'no_errors')
 
-                with ui.step("Flowcell").style('color: #000000; font-size: 150%; font-weight: 600'):
+                with ui.step("Flowcell").style('color: #000000; font-size: 100%; font-weight: 600'):
                     ui.label("Enter the flowcell ID.").style('color: #000000; font-size: 80%; font-weight: 300')
                     flowcellid = ui.input(
                         placeholder="start typing",
@@ -405,7 +395,7 @@ async def content():
                         ui.button("Back", on_click=stepper.previous).props("flat")
                         checkerflowcell = ErrorChecker(flowcellid)
                         d=ui.button("Next", on_click=stepper.next).bind_enabled_from(checkerflowcell, 'no_errors')
-                with ui.step("Device Position").style('color: #000000; font-size: 150%; font-weight: 600'):
+                with ui.step("Device Position").style('color: #000000; font-size: 100%; font-weight: 600'):
                     ui.label("Select the device position to be used.").style('color: #000000; font-size: 80%; font-weight: 300')
                     run_button = ui.button(
                         "Start Run",
@@ -434,10 +424,19 @@ async def content():
                         run_button.disable()
 
             ui.separator()
-            ui.label("Sample Settings:").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 600"
+            ui.label("Fixed Settings:").style(
+                "color: #6E93D6; font-size: 100%; font-weight: 400"
             )
             ui.label(" ".join(f"Device: {device}" for device in minknow.devices))
+            current_date = datetime.now()
+            centreID = "NUH"
+            ui.label(f"experiment_group_id = {centreID}_{current_date.strftime('%B')}_{current_date.year}")
+            ui.label("kit = SQK-RAD114")
+            ui.label("reference = {reference}")
+            ui.separator()
+            ui.label("User Settings:").style(
+                "color: #6E93D6; font-size: 100%; font-weight: 400"
+            )
             ui.label().bind_text_from(
                 sampleid,
                 "value",
