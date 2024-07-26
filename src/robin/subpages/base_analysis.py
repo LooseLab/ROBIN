@@ -214,6 +214,7 @@ class BaseAnalysis:
         This function takes reads from the queue and adds them to the background thread for processing.
         """
         self.timer.active = False
+
         if not self.bamqueue.empty() and not self.running:
             self.running = True
             bamfile, timestamp, sampleID = self.bamqueue.get()
@@ -244,7 +245,7 @@ class BaseAnalysis:
             app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                 "bam_processed"
             ] += 1
-        asyncio.sleep(0.05)
+        await asyncio.sleep(0.05)
         self.timer.active = True
 
     def add_bam(self, bamfile: BinaryIO, timestamp: Optional[float] = None) -> None:
@@ -318,7 +319,7 @@ class BaseAnalysis:
                     await self.process_bam(data_list)
                 except Exception as e:
                     logger.error(f"Error processing BAM files: {e}")
-        asyncio.sleep(0.1)
+        await asyncio.sleep(0.1)
         self.timer.active = True
 
     @property
