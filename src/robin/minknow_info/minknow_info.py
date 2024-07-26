@@ -39,7 +39,7 @@ def identify_device(device_type, device_name):
                 "PromethION_24_Right 45 Elevated_Closed_Full_white.jpg",
             )
     else:
-        return f"{device_type}"
+        return (f"{device_type}", None)
 
 
 class Minknow_Info:
@@ -53,9 +53,14 @@ class Minknow_Info:
         self.name, self.image = identify_device(
             self.position.device_type, self.position.name
         )
-        self.deviceicon = os.path.join(
-            os.path.dirname(os.path.abspath(images.__file__)), "ONTimages", self.image
-        )
+        if self.image:
+            self.deviceicon = os.path.join(
+                os.path.dirname(os.path.abspath(images.__file__)), "ONTimages", self.image
+            )
+        else:
+            self.deviceicon = os.path.join(
+                os.path.dirname(os.path.abspath(images.__file__)), "ONTimages", "unknown_sequencer.png"
+            )
         self.check_instance = threading.Thread(
             target=self.stream_instance_activity, args=()
         )
