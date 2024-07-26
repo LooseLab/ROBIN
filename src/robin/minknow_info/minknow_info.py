@@ -30,6 +30,11 @@ def identify_device(device_type, device_name):
             f"{DEVICEDICT[device_type]}",
             "GridION_Front_Square_Elevated_Closed_Flow Cells 2_White.jpg",
         )
+    elif device_type == "P2_INTEGRATED":
+        return (
+            f"{DEVICEDICT[device_type]}",
+            "p2_-left-45_screen-up-1_splash_transparent.png",
+        )
     elif device_type == "PROMETHION":
         if device_name.startswith("PS2"):
             return "P2 Solo", "P2_Solo_Left-45_Open_Full.png"
