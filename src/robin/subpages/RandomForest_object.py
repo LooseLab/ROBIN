@@ -202,7 +202,7 @@ class RandomForest_object(BaseAnalysis):
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
-            if len(tomerge) > 50:
+            if len(tomerge) > 200:
                 break
         if latest_file:
             currenttime = latest_file * 1000
