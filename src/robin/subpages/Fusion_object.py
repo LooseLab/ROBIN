@@ -403,6 +403,11 @@ def fusion_work(
                         fusion_candidates_all["diff"] > 100
                     ]
 
+                if os.path.isfile(f"{tempbamfile}.csi"):
+                    logger.debug(f"removing {tempbamfile}.csi")
+                    os.remove(f"{tempbamfile}.csi")
+
+
                 samfile.close()
 
     except Exception:

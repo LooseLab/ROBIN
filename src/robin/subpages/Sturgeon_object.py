@@ -172,7 +172,7 @@ class Sturgeon_object(BaseAnalysis):
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] += 1
-            if len(tomerge) > 50:
+            if len(tomerge) > 100:
                 break
 
         if latest_file:
