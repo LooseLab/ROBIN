@@ -23,12 +23,13 @@ import tempfile
 import shutil
 import queue
 import docker
-
+from robin.utilities.decompress import decompress_gzip_file
 
 os.environ["CI"] = "1"
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
+decompress_gzip_file(os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf.gz'))
 
 def process_annotations(record: dict) -> dict:
     """

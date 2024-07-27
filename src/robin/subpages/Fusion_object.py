@@ -65,6 +65,7 @@ import matplotlib
 from matplotlib.ticker import FuncFormatter
 from matplotlib.patches import ConnectionPatch
 from robin.subpages.base_analysis import BaseAnalysis
+from robin.utilities.decompress import decompress_gzip_file
 from collections import Counter
 
 matplotlib.use("agg")
@@ -75,6 +76,12 @@ logger = logging.getLogger(__name__)
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
+
+decompress_gzip_file(os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "gencode.v45.basic.annotation.gff3.gz",
+        )
+)
 
 
 def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
