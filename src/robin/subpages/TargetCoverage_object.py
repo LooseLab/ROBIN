@@ -182,6 +182,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             f"--tumor_bam_fn {bamfile} "
             f"--ref_fn {reference} "
             f"--threads {threads} "
+            f"--remove_intermediate_dir "
             f"--platform ont_r10_guppy_hac_5khz "
             f"--output_dir {workdirout} -b {bedfile}"
             # f" >/dev/null 2>&1"
