@@ -303,7 +303,7 @@ class NanoDX_object(BaseAnalysis):
                 latest_file = filetime
             self.nanodx_bam_count[sampleID] += 1
             tomerge.append(file)
-            if len(tomerge) > 50:
+            if len(tomerge) > 100:
                 break
         if latest_file:
             currenttime = latest_file * 1000
