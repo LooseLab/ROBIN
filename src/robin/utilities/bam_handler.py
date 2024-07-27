@@ -6,6 +6,7 @@ from watchdog.events import FileSystemEventHandler, FileSystemEvent
 import time
 from collections import defaultdict
 from typing import Dict, DefaultDict, Any
+from queue import Queue
 import logging
 
 # Create a logger for this module
@@ -44,7 +45,7 @@ class BamEventHandler(FileSystemEventHandler):
                                            and their creation timestamps.
     """
 
-    def __init__(self, bam_count: DefaultDict[str, Dict[str, Any]]):
+    def __init__(self, bam_count: Queue):
         """
         Initializes the BamEventHandler with a bam_count dictionary.
 
@@ -70,11 +71,14 @@ class BamEventHandler(FileSystemEventHandler):
             return
 
         if event.src_path.endswith(".bam"):
-            self.bam_count["counter"] += 1
-            self.bam_count["file"][event.src_path] = time.time()
+            self.bam_count.put((event.src_path,time.time()))
             logger.info(
-                f"New .bam file detected: {event.src_path}, total count: {self.bam_count['counter']}"
+                #f"New .bam file detected: {event.src_path}, total count: {self.bam_count['counter']}"
+                 f"New .bam file detected: {event.src_path}" #, total count: {self.bam_count['counter']}"
             )
+            #except Exception as e:
+            #    print("Bam error in handler.")
+            #    print(e)
 
 
 def create_bam_count() -> DefaultDict[str, Dict[str, Any]]:
