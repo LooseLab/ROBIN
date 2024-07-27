@@ -306,7 +306,12 @@ class CNVAnalysis(BaseAnalysis):
             timestamp (float): The timestamp indicating when the file was generated.
         """
         # self.file_list.append(bamfile)
-        await self.do_cnv_work(bamfile)
+        try:
+            await self.do_cnv_work(bamfile)
+        except exception as e:
+            logger.error(e)
+            logger.error("line 313")
+
 
     async def do_cnv_work(self, bamfile: BinaryIO) -> None:
         """

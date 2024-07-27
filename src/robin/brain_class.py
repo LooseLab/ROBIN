@@ -189,6 +189,7 @@ class BrainMeth:
         if self.browse:
             self.runsfolder = self.output
         self.sampleID = None
+        self.watchdogbamqueue = Queue()
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
 
@@ -339,8 +340,10 @@ class BrainMeth:
             self.watchfolder = watchfolder
             if "file" not in app.storage.general[self.mainuuid]["bam_count"].keys():
                 app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
+            #ToDo: Replace this with a queue.
             self.event_handler = BamEventHandler(
-                app.storage.general[self.mainuuid]["bam_count"]
+                self.watchdogbamqueue
+                #app.storage.general[self.mainuuid]["bam_count"]
             )
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
@@ -899,9 +902,17 @@ class BrainMeth:
 
         :return: None
         """
+        logging.info("Process Bam Starting")
         self.process_bams_tracker.active = False
         counter = 0
         if "file" in app.storage.general[self.mainuuid]["bam_count"]:
+            while self.watchdogbamqueue.qsize() > 0:
+                filename, timestamp = self.watchdogbamqueue.get()
+                app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
+                app.storage.general[self.mainuuid]["bam_count"]["file"][
+                    filename
+                ] = timestamp
+
             while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
                 self.nofiles = False
                 file = (
@@ -1037,6 +1048,7 @@ class BrainMeth:
                     self.bamforfusions.put([file[0], file[1], sample_id])
 
             self.nofiles = True
+        logging.info("Process Bam Finishing")
         self.process_bams_tracker.active = True
 
     async def check_existing_bams(self, sequencing_summary=None):
