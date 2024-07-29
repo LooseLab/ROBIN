@@ -434,8 +434,12 @@ class TargetCoverage(BaseAnalysis):
             ui.label("IGV visualisations").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
-            self.igvelem = ui.element('div').classes("w-full")
-            ui.label("If sufficient data have been generated, bam files for coverage over targets can be visualised.")
+            with ui.row().classes("w-full"):
+                with ui.card().classes("w-full"):
+                    ui.label(
+                        "If sufficient data have been generated, bam files for coverage over targets can be visualised.")
+                    self.igvelem = ui.element('div').classes("w-full")
+
 
         with ui.card().classes("w-full"):
             ui.label("Candidate SNPs").style(
@@ -468,9 +472,9 @@ class TargetCoverage(BaseAnalysis):
 
 
         if self.browse:
-            ui.timer(0.1, callback=self.show_previous_data, once=True)
+            self.page_timer = ui.timer(0.1, callback=self.show_previous_data, once=True)
         else:
-            ui.timer(30, lambda: self.show_previous_data())
+            self.page_timer = ui.timer(30, lambda: self.show_previous_data())
 
     def create_coverage_plot(self, title):
         self.echart3 = (
@@ -1113,7 +1117,7 @@ class TargetCoverage(BaseAnalysis):
                                               var igvDiv = getElement("{self.igvelem.id}");
                                               var options = {{
                                                 genome: "hg38",
-                                                locus: "chr8:127,736,588-127,739,371",
+                                                locus: "chr8:127,736,588-127,737,371",
                                                 
                                               }};
                                               igv.createBrowser(igvDiv, options).
@@ -1130,21 +1134,32 @@ class TargetCoverage(BaseAnalysis):
                                                         "indexURL": window.location.protocol + "//" + window.location.host + "/output_files/sorted_targets_exceeding.bam.bai",
                                                         "format": "bam"
                                                     }};
-                                                igv.browser.loadTrack(tracks)
-                                                
+                                                igv.browser.loadTrack(tracks).then(function (newTrack) {{
+                                                                                        console.log("Track loaded: " + newTrack.name);
+                                                                                        }})
+                                                                                        .catch(function (error)  {{
+                                                                                        console.log(error);
+                                                                                        }});
         '''
         js_clear_track = f'''
                             igv.browser.removeTrackByName("{self.sampleID}");
+                            return 1;
         '''
-        def clear_and_reload():
+        async def clear_and_reload():
             #self.igvelem.clear()
-            ui.run_javascript(js_code)
+            await ui.context.client.connected()
+            ui.run_javascript(js_code, timeout=30.0)
             mybutton.disable()
             dataload.enable()
         async def data_load():
             ui.notify("Data Loading")
+            await ui.context.client.connected()
             ui.run_javascript(js_clear_track, timeout=30)
-            ui.run_javascript(js_code_track, timeout=30)
+            #await ui.context.client.connected()
+            ui.run_javascript(js_code_track, timeout=100)
+            ui.notify("Data Loaded")
+
+
 
         with self.igvvizcard:
             #ui.button('Load IGV').on('click', lambda: ui.run_javascript(js_code))
