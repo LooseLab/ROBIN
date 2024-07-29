@@ -50,7 +50,7 @@ def clean_up_handler(thingtokill):
     del thingtokill
 
 
-@ui.page("/", response_timeout=10)
+@ui.page("/", response_timeout=30)
 async def index() -> None:
     """
     Main index page for the ROBIN site.
@@ -97,7 +97,7 @@ async def index() -> None:
     await GUI.splash_screen()
 
 
-@ui.page("/live/{sample_id}", response_timeout=20)
+@ui.page("/live/{sample_id}", response_timeout=30)
 async def live_sample(sample_id: str) -> None:
     """
     Page for live data interaction with a specific sample ID.
@@ -123,7 +123,7 @@ async def live_sample(sample_id: str) -> None:
     await GUI.index_page()
 
 
-@ui.page("/live", response_timeout=20)
+@ui.page("/live", response_timeout=30)
 async def live() -> None:
     """
     Page for live data interaction.
@@ -148,7 +148,7 @@ async def live() -> None:
     await GUI.index_page()
 
 
-@ui.page("/browse", response_timeout=10)
+@ui.page("/browse", response_timeout=60)
 async def test() -> None:
     """
     Placeholder for browsing historic data.
@@ -514,6 +514,7 @@ def run_class(
         on_air=False,
         show=False,
         storage_secret="UNIQUE_ID",
+        reconnect_timeout=60,
     )
 
 
