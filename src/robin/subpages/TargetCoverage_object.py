@@ -429,12 +429,13 @@ class TargetCoverage(BaseAnalysis):
             ).tailwind("drop-shadow", "font-bold")
             self.targ_df = ui.row().classes("w-full").style("height: 900px")
         with ui.card().classes("w-full"):
-            self.igvvizcard = ui.card().classes("w-full")
+            self.igvvizcard = ui.card().tight().classes("w-full overflow-x-auto")
         with self.igvvizcard:
             ui.label("IGV visualisations").style(
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             self.igvelem = ui.element('div').classes("w-full")
+            ui.label("If sufficient data have been generated, bam files for coverage over targets can be visualised.")
 
         with ui.card().classes("w-full"):
             ui.label("Candidate SNPs").style(
