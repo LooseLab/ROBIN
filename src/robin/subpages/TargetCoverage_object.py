@@ -1111,7 +1111,7 @@ class TargetCoverage(BaseAnalysis):
             output = self.output
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
-        if os.path.exists(os.path.join(output, "clair3"):
+        if os.path.exists(os.path.join(output, "clair3")):
             app.add_static_files('/output_files', f'{output}/clair3/')
             js_code = f'''                      
                                                   var igvDiv = getElement("{self.igvelem.id}");
