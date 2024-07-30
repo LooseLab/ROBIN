@@ -469,7 +469,7 @@ class TargetCoverage(BaseAnalysis):
                 # self.INDELview = SNPview(self.INDELplaceholder)
                 # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
 
-
+        self.mybutton = None
         if self.browse:
             self.page_timer = ui.timer(0.1, callback=self.show_previous_data, once=True)
         else:
@@ -1150,7 +1150,7 @@ class TargetCoverage(BaseAnalysis):
             async def clear_and_reload():
                 await ui.context.client.connected()
                 ui.run_javascript(js_code, timeout=30.0)
-                mybutton.disable()
+                self.mybutton.disable()
                 dataload.enable()
             async def data_load():
                 ui.notify("Data Loading")
@@ -1160,10 +1160,10 @@ class TargetCoverage(BaseAnalysis):
                 ui.notify("Data Loaded")
 
 
-
+        if not self.mybutton:
             with self.igvvizcard:
                 #ui.button('Load IGV').on('click', lambda: ui.run_javascript(js_code))
-                mybutton = ui.button('Load IGV').on('click', lambda: clear_and_reload())
+                self.mybutton = ui.button('Load IGV').on('click', lambda: clear_and_reload())
                 dataload = ui.button('Re/Load Data').on('click', lambda: data_load())
                 dataload.disable()
                 #ui.link('AI interface', '/output_files/sorted_targets_exceeding.bam.bai')
