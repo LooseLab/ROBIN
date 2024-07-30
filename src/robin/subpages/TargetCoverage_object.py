@@ -428,12 +428,11 @@ class TargetCoverage(BaseAnalysis):
                 "color: #6E93D6; font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             self.targ_df = ui.row().classes("w-full").style("height: 900px")
-        with ui.card().classes("w-full"):
-            self.igvvizcard = ui.card().tight().classes("w-full overflow-x-auto")
+        ui.label("IGV visualisations").style(
+            "color: #6E93D6; font-size: 150%; font-weight: 300"
+        ).tailwind("drop-shadow", "font-bold")
+        self.igvvizcard = ui.card().tight().classes("no-shadow border-[2px] w-full overflow-x-auto")
         with self.igvvizcard:
-            ui.label("IGV visualisations").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
-            ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
                 with ui.card().classes("w-full"):
                     ui.label(
@@ -1112,61 +1111,62 @@ class TargetCoverage(BaseAnalysis):
             output = self.output
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
-        app.add_static_files('/output_files', f'{output}/clair3/')
-        js_code = f'''                      
-                                              var igvDiv = getElement("{self.igvelem.id}");
-                                              var options = {{
-                                                genome: "hg38",
-                                                locus: "chr8:127,736,588-127,737,371",
-                                                
-                                              }};
-                                              igv.createBrowser(igvDiv, options).
-                                                then(function (browser) {{
-                                                    igv.browser = browser;
-                                               }});
-                                        '''
+        if os.path.exists(os.path.join(output, "clair3"):
+            app.add_static_files('/output_files', f'{output}/clair3/')
+            js_code = f'''                      
+                                                  var igvDiv = getElement("{self.igvelem.id}");
+                                                  var options = {{
+                                                    genome: "hg38",
+                                                    locus: "chr8:127,736,588-127,737,371",
+                                                    
+                                                  }};
+                                                  igv.createBrowser(igvDiv, options).
+                                                    then(function (browser) {{
+                                                        igv.browser = browser;
+                                                   }});
+                                            '''
 
-        js_code_track = f'''
-                             
-                                                  tracks =  {{
-                                                        "name": "{self.sampleID}",
-                                                        "url": window.location.protocol + "//" + window.location.host + "/output_files/sorted_targets_exceeding.bam",
-                                                        "indexURL": window.location.protocol + "//" + window.location.host + "/output_files/sorted_targets_exceeding.bam.bai",
-                                                        "format": "bam"
-                                                    }};
-                                                igv.browser.loadTrack(tracks).then(function (newTrack) {{
-                                                                                        console.log("Track loaded: " + newTrack.name);
-                                                                                        }})
-                                                                                        .catch(function (error)  {{
-                                                                                        console.log(error);
-                                                                                        }});
-        '''
-        js_clear_track = f'''
-                            igv.browser.removeTrackByName("{self.sampleID}");
-                            return 1;
-        '''
-        async def clear_and_reload():
-            #self.igvelem.clear()
-            await ui.context.client.connected()
-            ui.run_javascript(js_code, timeout=30.0)
-            mybutton.disable()
-            dataload.enable()
-        async def data_load():
-            ui.notify("Data Loading")
-            await ui.context.client.connected()
-            ui.run_javascript(js_clear_track, timeout=30)
-            #await ui.context.client.connected()
-            ui.run_javascript(js_code_track, timeout=100)
-            ui.notify("Data Loaded")
+            js_code_track = f'''
+                                 
+                                                      tracks =  {{
+                                                            "name": "{self.sampleID}",
+                                                            "url": window.location.protocol + "//" + window.location.host + "/output_files/sorted_targets_exceeding.bam",
+                                                            "indexURL": window.location.protocol + "//" + window.location.host + "/output_files/sorted_targets_exceeding.bam.bai",
+                                                            "format": "bam"
+                                                        }};
+                                                    igv.browser.loadTrack(tracks).then(function (newTrack) {{
+                                                                                            console.log("Track loaded: " + newTrack.name);
+                                                                                            }})
+                                                                                            .catch(function (error)  {{
+                                                                                            console.log(error);
+                                                                                            }});
+            '''
+
+            js_clear_track = f'''
+                                igv.browser.removeTrackByName("{self.sampleID}");
+                                return 1;
+            '''
+
+            async def clear_and_reload():
+                await ui.context.client.connected()
+                ui.run_javascript(js_code, timeout=30.0)
+                mybutton.disable()
+                dataload.enable()
+            async def data_load():
+                ui.notify("Data Loading")
+                await ui.context.client.connected()
+                ui.run_javascript(js_clear_track, timeout=30)
+                ui.run_javascript(js_code_track, timeout=100)
+                ui.notify("Data Loaded")
 
 
 
-        with self.igvvizcard:
-            #ui.button('Load IGV').on('click', lambda: ui.run_javascript(js_code))
-            mybutton = ui.button('Load IGV').on('click', lambda: clear_and_reload())
-            dataload = ui.button('Re/Load Data').on('click', lambda: data_load())
-            dataload.disable()
-            #ui.link('AI interface', '/output_files/sorted_targets_exceeding.bam.bai')
+            with self.igvvizcard:
+                #ui.button('Load IGV').on('click', lambda: ui.run_javascript(js_code))
+                mybutton = ui.button('Load IGV').on('click', lambda: clear_and_reload())
+                dataload = ui.button('Re/Load Data').on('click', lambda: data_load())
+                dataload.disable()
+                #ui.link('AI interface', '/output_files/sorted_targets_exceeding.bam.bai')
         # ToDo: This function needs to run in background threads.
         if self.check_file_time(os.path.join(output, "coverage_main.csv")):
             self.cov_df_main = pd.read_csv(os.path.join(output, "coverage_main.csv"))
