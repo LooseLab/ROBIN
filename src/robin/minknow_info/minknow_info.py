@@ -1,7 +1,11 @@
 # Python imports.
 from __future__ import annotations
-from nicegui import ui
+from nicegui import ui, app
+
 from robin import images
+from robin import __about__
+
+from pathlib import Path
 
 import threading
 
@@ -247,11 +251,14 @@ class Minknow_Info:
                     ui.label(f"Fail Bases: {self.Fail_Bases}")
             """
 
-
+@ui.page("/", response_timeout=30)
 def index_page() -> None:
     initial_ip = "127.0.0.1"
     my_connection = Manager(host=initial_ip)
-    with theme.frame("Test Histograms"):
+    with theme.frame(
+            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
+            smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
+        ):
         # my_connection.connect_to_minknow()
         positions = list(my_connection.flow_cell_positions())
         ui.label(f"{positions[0]}")
@@ -265,9 +272,21 @@ def run_class(port: int, reload: bool):
     :param reload: Should we reload the app on changes.
     :return:
     """
-    index_page()
+    # Add some custom CSS because - why not!
+    ui.add_css(
+        """
+        .shadows-into light-regular {
+            font-family: "Shadows Into Light", cursive;
+            font-weight: 800;
+            font-style: normal;
+        }
+    """
+    )
+    # Register some fonts that we might need later on.
+    app.add_static_files("/fonts", str(Path(__file__).parent.parent / "fonts"))
+
     ui.run(
-        port=port, reload=reload, title="Readfish NiceGUI"
+        port=port, reload=reload, title="Readfish NiceGUI", storage_secret="waynesworld",
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
 
 

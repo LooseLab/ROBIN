@@ -1,4 +1,4 @@
-from nicegui import ui, run
+from nicegui import ui, run, app
 import time
 import threading
 
@@ -14,6 +14,11 @@ from minknow_api.protocol_pb2 import ProtocolPhase
 from readfish._utils import get_device
 from robin.minknow_info.minKNOWhistograms import MinknowHistograms
 from robin.minknow_info.minknow_info import Minknow_Info
+
+from pathlib import Path
+
+
+from robin import theme
 
 
 @contextmanager
@@ -63,6 +68,15 @@ class MinKNOWFish:
         else:
             self.result.set_text("Invalid IP address: " + e.value)
             self.connect_now.visible = False
+
+    async def auto_connect(self):
+        await self.connect_to_localhost()
+        await run.io_bound(self._connect_positions)
+        ui.label(f"Connected to {self.connection_ip}")
+        #self.positions = list(self.manager.flow_cell_positions())
+        #for position in self.positions:
+        #    ui.label(f"{position}")
+
 
     def check_connection(self):
         """
@@ -407,3 +421,70 @@ class Position(MinKNOWFish):
                         ui.label(f"Pass Bases: {self.Pass_Bases}")
                         self.Fail_Bases = info.yield_summary.basecalled_fail_bases
                         ui.label(f"Fail Bases: {self.Fail_Bases}")
+
+
+@ui.page("/", response_timeout=30)
+async def index_page() -> None:
+    #initial_ip = "127.0.0.1"
+    #my_connection = Manager(host=initial_ip)
+    with theme.frame(
+            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
+            smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
+        ):
+        # my_connection.connect_to_minknow()
+        #positions = list(my_connection.flow_cell_positions())
+        #ui.label(f"{positions[0]}")
+        display_object = MinKNOWFish()
+        display_object.setup_ui()
+        await display_object.auto_connect()
+        #ui.label().bind_text_from(
+        #    self.minknow_connection,
+        ##    "connection_ip",
+        #    backward=lambda n: f"Connected to: {n}",
+        #)
+
+
+def run_class(port: int, reload: bool):
+    """
+    Helper function to run the app.
+    :param port: The port to serve the app on.
+    :param reload: Should we reload the app on changes.
+    :return:
+    """
+    # Add some custom CSS because - why not!
+    ui.add_css(
+        """
+        .shadows-into light-regular {
+            font-family: "Shadows Into Light", cursive;
+            font-weight: 800;
+            font-style: normal;
+        }
+    """
+    )
+    # Register some fonts that we might need later on.
+    app.add_static_files("/fonts", str(Path(__file__).parent.parent / "fonts"))
+
+    ui.run(
+        port=port, reload=reload, title="Readfish NiceGUI", storage_secret="waynesworld",
+    )  # , native=True, fullscreen=False, window_size=(1200, 1000))
+
+
+def main():  # , threads, simtime, watchfolder, output, sequencing_summary):
+    """
+    Entrypoint for when GUI is launched directly.
+    :return: None
+    """
+    run_class(port=12398, reload=False)
+
+
+# Entrypoint for when GUI is launched by the CLI.
+# e.g.: python my_app/my_cli.py
+if __name__ in {"__main__", "__mp_main__"}:
+    """
+    Entrypoint for when GUI is launched by the CLI
+    :return: None
+    """
+    if __name__ == "__mp_main__":
+        print("GUI launched by auto-reload")
+
+    run_class(port=12398, reload=True)
