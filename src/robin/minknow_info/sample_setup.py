@@ -356,8 +356,8 @@ async def content():
                 flowcellid.value = "Too many barcodes - please try again."
 
         minknow = MinKNOWFish()
-        await minknow.connect_to_remotehost("10.157.252.30")
-        #await minknow.connect_to_localhost()
+        #await minknow.connect_to_remotehost("10.157.252.30")
+        await minknow.connect_to_localhost()
         with ui.dialog() as startup, ui.card().classes("w-full"):
             ui.label("Sample Setup").style(
                 "color: #6E93D6; font-size: 200%; font-weight: 300"

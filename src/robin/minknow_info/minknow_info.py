@@ -18,6 +18,126 @@ from minknow_api.manager import Manager
 
 import os
 
+from nicegui import ui, run, app
+
+import asyncio
+import re
+from robin import theme
+
+from contextlib import contextmanager
+import ipaddress
+
+# MinKNOW API Imports
+from minknow_api.manager import Manager
+from robin.utilities.camera import Camera
+
+from typing import Sequence
+from pathlib import Path
+import sys
+import uuid
+
+from datetime import datetime
+
+
+UNIQUE_ID: str = str(uuid.uuid4())
+
+
+
+import cv2
+import zxingcpp
+
+import numpy as np
+
+
+import base64
+
+# We need `find_protocol` to search for the required protocol given a kit + product code.
+from minknow_api.tools import protocols
+
+
+class ExperimentSpec(object):
+    def __init__(self, position):
+        self.position = position
+        self.protocol_id = ""
+
+
+ExperimentSpecs = Sequence[ExperimentSpec]
+
+
+# Determine which protocol to run for each experiment, and add its ID to experiment_specs
+def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_id):
+    for spec in experiment_specs:
+        # Connect to the sequencing position:
+        position_connection = spec.position.connect()
+        flow_cell_info = position_connection.device.get_flow_cell_info()
+        if flow_cell_info.flow_cell_id != expected_flowcell_id:
+            ui.notify(f"Flowcell {expected_flowcell_id} is not found in position {spec.position}. Please check.", type="negative")
+            return
+        if not flow_cell_info.has_flow_cell:
+            ui.notify("No flow cell present in position {}".format(spec.position), type="negative")
+            return
+
+        product_code = flow_cell_info.user_specified_product_code
+        if not product_code:
+            product_code = flow_cell_info.product_code
+        """
+        device_connection: Connection,
+        product_code: str,
+        kit: str,
+        basecalling: bool = False,
+        basecall_config: Optional[str] = None,
+        barcoding: bool = False,
+        barcoding_kits: Optional[List[str]] = None,
+        force_reload: bool = False,
+        experiment_type: str = "sequencing",
+        ) -> Optional[str]:
+        """
+        # Find the protocol identifier for the required protocol:
+        protocol_info = protocols.find_protocol(
+            position_connection,
+            product_code=product_code,
+            kit=kit,
+            basecalling=True,
+            basecall_config=basecall_config,
+            barcoding=False,
+            barcoding_kits=[],
+            force_reload=True,
+            experiment_type="sequencing",
+        )
+
+        if not protocol_info:
+            ui.notify("Failed to find protocol for position %s" % (spec.position),type='negative')
+
+            #print("Requested protocol:")
+            #print("  product-code: %s" % product_code)
+            #print("  kit: %s" % kit)
+            #ui.notify("Failed to find protocol for position %s" % (spec.position))
+            #ui.notify("Requested protocol:")
+            #ui.notify("  product-code: %s" % product_code)
+            #ui.notify("  kit: %s" % kit)
+            return
+
+
+        # Store the identifier for later:
+        spec.protocol_id = protocol_info.identifier
+
+    return True
+
+
+@contextmanager
+def disable(button: ui.button):
+    button.disable()
+    try:
+        yield
+    finally:
+        button.enable()
+
+# Define the path to the image file used in the header and footer
+IMAGEFILE = os.path.join(
+    os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
+)
+
+
 DEVICEDICT = {
     "FLONGLE": "Flongle",
     "GRIDION": "GridION",
@@ -26,6 +146,15 @@ DEVICEDICT = {
     "P2_INTEGRATED": "P2Integrated"
 }
 
+
+class ErrorChecker:
+    def __init__(self, *elements) -> None:
+        self.elements = elements
+
+    @property
+    def no_errors(self) -> bool:
+        return all(validation(element.value) for element in self.elements for validation in
+                   element.validation.values())
 
 def identify_device(device_type, device_name):
     if device_type == "MINION":
@@ -80,6 +209,167 @@ class Minknow_Info:
         self.render_me()
 
     def render_me(self):
+        sample_camera = Camera(
+            icon="photo_camera",
+            icon_color="blue-5",
+            background_color="rgba(66, 165, 245, 0.3)",
+            for_id="samplefileupload",
+            canvas_id="samplecanvas",
+            on_change=lambda: generate_sampleID(),
+        )
+
+        async def generate_sampleID():
+            await asyncio.sleep(0.1)
+            print("calling camera sample")
+            image = await sample_camera.get_image()
+            base64_data = image.split(",")[1]
+            image_data = base64.b64decode(base64_data)
+            nparr = np.frombuffer(image_data, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            barcodes = zxingcpp.read_barcodes(img)
+            if len(barcodes) == 0:
+                sampleid.value = "Could not find any barcode."
+            elif len(barcodes) == 1:
+                sampleid.value = barcodes[0].text
+            elif len(barcodes) >= 1:
+                sampleid.value = "Too many barcodes - please try again."
+
+        flowcell_camera = Camera(
+            icon="photo_camera",
+            icon_color="blue-5",
+            background_color="rgba(66, 165, 245, 0.3)",
+            for_id="flowcellfileupload",
+            canvas_id="flowcellcanvas",
+            on_change=lambda: generate_flowcellID(),
+        )
+
+        async def generate_flowcellID():
+            await asyncio.sleep(0.1)
+            image = await flowcell_camera.get_image()
+            base64_data = image.split(",")[1]
+            image_data = base64.b64decode(base64_data)
+            nparr = np.frombuffer(image_data, np.uint8)
+            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+            barcodes = zxingcpp.read_barcodes(img)
+            if len(barcodes) == 0:
+                flowcellid.value = "Could not find any barcode."
+            elif len(barcodes) == 1:
+                flowcellid.value = barcodes[0].text
+            elif len(barcodes) >= 1:
+                flowcellid.value = "Too many barcodes - please try again."
+
+        with ui.dialog() as startup, ui.card().classes("w-full"):
+            ui.label("Sample Setup").style(
+                "color: #6E93D6; font-size: 200%; font-weight: 300"
+            )
+            ui.separator()
+            with ui.stepper().props("vertical").classes("w-full") as stepper:
+                step = ui.step("Sample ID").style('color: #000000; font-size: 100%; font-weight: 600')
+                with step:
+                    ui.label(
+                        "Remember that sample IDs may be shared with others and should not include human identifiable information."
+                    ).style('color: #000000; font-size: 100%; font-weight: 600')
+                    ui.label("Enter the sample ID:").style('color: #000000; font-size: 80%; font-weight: 300')
+                    sampleid = ui.input(
+                        placeholder="start typing",
+                        validation={
+                            'Too short': lambda value: len(value) >= 5,
+                            'Do not use Flowcell IDs as sample IDs': lambda value: re.match(r"^[A-Za-z]{3}\d{5}$",
+                                                                                            value) is None,
+                            'No whitespace allowed': lambda value: not any(char.isspace() for char in value),
+                            'Only alphanumeric characters allowed': lambda value: value.isalnum(),
+                        }
+                    ).style('color: #000000; font-size: 80%; font-weight: 300').props("rounded outlined dense")
+                    sample_camera.show_camera()
+                    with ui.stepper_navigation():
+                        checker = ErrorChecker(sampleid)
+                        c = ui.button("Next", on_click=stepper.next).bind_enabled_from(checker, 'no_errors')
+
+                with ui.step("Flowcell").style('color: #000000; font-size: 100%; font-weight: 600'):
+                    ui.label("Enter the flowcell ID.").style('color: #000000; font-size: 80%; font-weight: 300')
+                    flowcellid = ui.input(
+                        placeholder="start typing",
+                        validation={
+                            'Not a valid flowcell ID': lambda value: re.match(r"^[A-Za-z]{3}\d{5}$", value) is not None}
+                    ).style('color: #000000; font-size: 80%; font-weight: 300').props("rounded outlined dense")
+                    flowcell_camera.show_camera()
+                    with ui.stepper_navigation():
+                        ui.button("Back", on_click=stepper.previous).props("flat")
+                        checkerflowcell = ErrorChecker(flowcellid)
+                        d = ui.button("Next", on_click=stepper.next).bind_enabled_from(checkerflowcell, 'no_errors')
+                with ui.step("Device Position").style('color: #000000; font-size: 100%; font-weight: 600'):
+                    ui.label("Select the device position to be used.").style(
+                        'color: #000000; font-size: 80%; font-weight: 300')
+                    run_button = ui.button(
+                        "Start Run",
+                        on_click=lambda: minknow.start_run(
+                            position=position.value.description.name,
+                            reference="/home/deepseq/refs/hg38_simple.fa",
+                            sample_id=sampleid.value,
+                            flowcell_id=flowcellid.value,
+                        ),
+                    )
+
+                    def dostuff():
+                        run_button.enable()
+
+                    # position = ui.radio(
+                    #    {
+                    #        item: str(item)
+                    #        for index, item in enumerate(minknow.positions)
+                    #    },
+                    # ).on(
+                    #    "update:model-value", dostuff
+                    # ).style('color: #000000; font-size: 80%; font-weight: 300')
+                    finalstep = ui.stepper_navigation()
+                    with finalstep:
+                        ui.button("Back", on_click=stepper.previous).props("flat")
+                        run_button.move(finalstep)
+                        run_button.disable()
+
+            ui.separator()
+            ui.label("Fixed Settings:").style(
+                "color: #6E93D6; font-size: 100%; font-weight: 400"
+            )
+            # ui.label(" ".join(f"Device: {device}" for device in minknow.devices))
+            current_date = datetime.now()
+            centreID = "NUH"
+            ui.label(f"experiment_group_id = {centreID}_{current_date.strftime('%B')}_{current_date.year}")
+            ui.label("kit = SQK-RAD114")
+            ui.label("reference = {reference}")
+            ui.separator()
+            ui.label("User Settings:").style(
+                "color: #6E93D6; font-size: 100%; font-weight: 400"
+            )
+            ui.label().bind_text_from(
+                sampleid,
+                "value",
+                backward=lambda sid: (
+                    f"Sample ID: {sid}"
+                    if sid is not None
+                    else "Sample ID: Not specified"
+                ),
+            )
+            ui.label().bind_text_from(
+                flowcellid,
+                "value",
+                backward=lambda fid: (
+                    f"Flowcell ID: {fid}"
+                    if fid is not None
+                    else "Flowcell ID: Not specified"
+                ),
+            )
+            ui.label().bind_text_from(
+                self.position,
+                "value",
+                backward=lambda pid: (
+                    f"Position: {pid.description.name}"
+                    if pid is not None
+                    else "Position: Not selected"
+                ),
+            )
+
+            ui.button("Close", on_click=startup.close)
         if self.dev:
             ui.label(f"{dir(self.position.connect)}")
             ui.label(f"{self.position.credentials}")
@@ -150,7 +440,11 @@ class Minknow_Info:
             with ui.column().bind_visibility_from(
                 self, "show", backward=lambda v: not v
             ):
-                ui.label("Set up a run using MinKNOW to see more information.")
+                ui.label("There is no run currently on this device. You can set upt a run using MinKNOW itself or using our big green button.")
+                with ui.button(on_click=startup.open).props('color=green'):
+                    ui.label('Start Run')
+                    ui.image(f'{IMAGEFILE}') \
+                        .classes('rounded-full w-32 h-32 ml-8')
 
     def stream_instance_activity(self) -> None:
         """

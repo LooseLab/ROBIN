@@ -2,23 +2,112 @@ from nicegui import ui, run, app
 import time
 import threading
 
-from datetime import datetime
-
-from contextlib import contextmanager
-import ipaddress
 
 # MinKNOW API Imports
-from minknow_api.manager import Manager
 import minknow_api.manager_pb2 as manager_pb2
 from minknow_api.protocol_pb2 import ProtocolPhase
 from readfish._utils import get_device
 from robin.minknow_info.minKNOWhistograms import MinknowHistograms
 from robin.minknow_info.minknow_info import Minknow_Info
 
-from pathlib import Path
-
-
 from robin import theme
+
+from contextlib import contextmanager
+import ipaddress
+
+# MinKNOW API Imports
+from minknow_api.manager import Manager
+
+from typing import Sequence
+from pathlib import Path
+import uuid
+
+from datetime import datetime
+
+
+UNIQUE_ID: str = str(uuid.uuid4())
+
+# We need `find_protocol` to search for the required protocol given a kit + product code.
+from minknow_api.tools import protocols
+
+
+class ExperimentSpec(object):
+    def __init__(self, position):
+        self.position = position
+        self.protocol_id = ""
+
+
+ExperimentSpecs = Sequence[ExperimentSpec]
+
+
+class ErrorChecker:
+    def __init__(self, *elements) -> None:
+        self.elements = elements
+
+    @property
+    def no_errors(self) -> bool:
+        return all(validation(element.value) for element in self.elements for validation in
+                   element.validation.values())
+
+
+# Determine which protocol to run for each experiment, and add its ID to experiment_specs
+def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_id):
+    for spec in experiment_specs:
+        # Connect to the sequencing position:
+        position_connection = spec.position.connect()
+        flow_cell_info = position_connection.device.get_flow_cell_info()
+        if flow_cell_info.flow_cell_id != expected_flowcell_id:
+            ui.notify(f"Flowcell {expected_flowcell_id} is not found in position {spec.position}. Please check.", type="negative")
+            return
+        if not flow_cell_info.has_flow_cell:
+            ui.notify("No flow cell present in position {}".format(spec.position), type="negative")
+            return
+
+        product_code = flow_cell_info.user_specified_product_code
+        if not product_code:
+            product_code = flow_cell_info.product_code
+        """
+        device_connection: Connection,
+        product_code: str,
+        kit: str,
+        basecalling: bool = False,
+        basecall_config: Optional[str] = None,
+        barcoding: bool = False,
+        barcoding_kits: Optional[List[str]] = None,
+        force_reload: bool = False,
+        experiment_type: str = "sequencing",
+        ) -> Optional[str]:
+        """
+        # Find the protocol identifier for the required protocol:
+        protocol_info = protocols.find_protocol(
+            position_connection,
+            product_code=product_code,
+            kit=kit,
+            basecalling=True,
+            basecall_config=basecall_config,
+            barcoding=False,
+            barcoding_kits=[],
+            force_reload=True,
+            experiment_type="sequencing",
+        )
+
+        if not protocol_info:
+            ui.notify("Failed to find protocol for position %s" % (spec.position),type='negative')
+
+            #print("Requested protocol:")
+            #print("  product-code: %s" % product_code)
+            #print("  kit: %s" % kit)
+            #ui.notify("Failed to find protocol for position %s" % (spec.position))
+            #ui.notify("Requested protocol:")
+            #ui.notify("  product-code: %s" % product_code)
+            #ui.notify("  kit: %s" % kit)
+            return
+
+
+        # Store the identifier for later:
+        spec.protocol_id = protocol_info.identifier
+
+    return True
 
 
 @contextmanager
@@ -28,6 +117,7 @@ def disable(button: ui.button):
         yield
     finally:
         button.enable()
+
 
 
 class MinKNOWFish:
@@ -70,13 +160,46 @@ class MinKNOWFish:
             self.connect_now.visible = False
 
     async def auto_connect(self):
-        await self.connect_to_localhost()
+        self.connection_ip = "127.0.0.1"
+        #await self.connect_to_localhost()
         await run.io_bound(self._connect_positions)
-        ui.label(f"Connected to {self.connection_ip}")
-        #self.positions = list(self.manager.flow_cell_positions())
-        #for position in self.positions:
-        #    ui.label(f"{position}")
+        self.positions = list(self.manager.flow_cell_positions())
+        tabdict = {}
 
+        def alert_click(position):
+            ui.notify(position)
+            tabpanels.clear()
+            with tabpanels:
+                with ui.tab_panel(position):
+                    ui.label(position)
+
+        tabs = ui.tabs().classes('w-full')
+
+        tabpanels = ui.tab_panels(tabs).classes('w-full')
+
+        #with ui.tabs().classes('w-full') as tabs:
+        #    one = ui.tab('One')
+        #    two = ui.tab('Two')
+        #with ui.tab_panels(tabs, value=two).classes('w-full'):
+        #    with ui.tab_panel(one):
+        #        ui.label('First tab')
+        #    with ui.tab_panel(two):
+        #        ui.label('Second tab')
+
+
+        for position in self.positions:
+            tabdict[position]={}
+            with tabs:
+                tabdict[position]["Tab"]=ui.tab(position.name).on('click', lambda: alert_click(tabs.value))
+            #with tabpanels:
+            #    with ui.tab_panel(position.name):
+            #        tabdict[position]["Position"] = Position(position, self.connection_ip)
+            #        tabdict[position]["Position"].setup()
+
+
+        tabs.set_value(self.positions[0].name)
+
+        ui.label(f"Connected to {self.connection_ip}")
 
     def check_connection(self):
         """
@@ -233,43 +356,46 @@ class Position(MinKNOWFish):
                         self.watchfolder = self.minknow_info_pane.output_folder
 
     def setup(self):
-        with ui.card().classes("w-full p-8"):
-            with ui.card().classes("drop-shadow"):
+        with ui.card().classes("w-full"):
+            with ui.card().classes("w-full drop-shadow"):
                 self.minknow_info_pane = Minknow_Info(self.position)
 
-                self.minknowhistogram = MinknowHistograms(self.position)
+                with ui.column().bind_visibility_from(
+                        self.minknow_info_pane, "show"
+                ):
+                    self.minknowhistogram = MinknowHistograms(self.position)
 
-                with ui.row():
-                    with ui.card().classes("drop-shadow"):
-                        ui.label().bind_text_from(
-                            self, "Run_ID", backward=lambda n: f"Run ID: {n}"
+                    with ui.row():
+                        with ui.card().classes("drop-shadow"):
+                            ui.label().bind_text_from(
+                                self, "Run_ID", backward=lambda n: f"Run ID: {n}"
+                            )
+                            ui.label().bind_text_from(
+                                self.position, "name", backward=lambda n: f"Name: {n}"
+                            )
+                            ui.label().bind_text_from(
+                                self.position,
+                                "device_type",
+                                backward=lambda n: f"Device Type: {n}",
+                            )
+                            ui.label().bind_text_from(
+                                self.position, "host", backward=lambda n: f"Host: {n}"
+                            )
+                            ui.label().bind_text_from(
+                                self.position, "running", backward=lambda n: f"Running: {n}"
+                            )
+                            ui.label().bind_text_from(
+                                self.position, "state", backward=lambda n: f"State: {n}"
+                            )
+                        self.protocol_run_info = ui.column().classes(
+                            "p-4 border-dashed border-2"
                         )
-                        ui.label().bind_text_from(
-                            self.position, "name", backward=lambda n: f"Name: {n}"
-                        )
-                        ui.label().bind_text_from(
-                            self.position,
-                            "device_type",
-                            backward=lambda n: f"Device Type: {n}",
-                        )
-                        ui.label().bind_text_from(
-                            self.position, "host", backward=lambda n: f"Host: {n}"
-                        )
-                        ui.label().bind_text_from(
-                            self.position, "running", backward=lambda n: f"Running: {n}"
-                        )
-                        ui.label().bind_text_from(
-                            self.position, "state", backward=lambda n: f"State: {n}"
-                        )
-                    self.protocol_run_info = ui.column().classes(
-                        "p-4 border-dashed border-2"
-                    )
 
-                self.flowcell_info = ui.row()
+                    self.flowcell_info = ui.row()
 
-                self.yield_summary_info = ui.row().classes("p-4 border-dashed border-2")
+                    self.yield_summary_info = ui.row().classes("p-4 border-dashed border-2")
 
-                self.acquisition_run_info = ui.column()
+                    self.acquisition_run_info = ui.column()
 
     def watch_flowcell(self):
         while True:

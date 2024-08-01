@@ -60,7 +60,7 @@ class MinknowHistograms:
         self.renderme()
 
     def renderme(self):
-        with ui.card().classes("flat border-[2px] no-shadow"):
+        with ui.card().classes("w-full flat border-[2px] no-shadow"):
             with ui.card().tight().classes("flat border-[2px] no-shadow"):
                 ui.label("Histograms").classes("text-h6")
                 with ui.row().props("align-middle"):
