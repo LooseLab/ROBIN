@@ -2,9 +2,7 @@ from typing import Callable, Optional, Any
 import asyncio
 
 
-
 from nicegui import ui
-
 
 
 class Camera:

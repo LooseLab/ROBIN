@@ -13,13 +13,10 @@ from robin.utilities.camera import Camera
 
 from typing import Sequence
 from pathlib import Path
-import sys
 import uuid
 
 from datetime import datetime
 
-
-UNIQUE_ID: str = str(uuid.uuid4())
 
 
 
@@ -31,9 +28,13 @@ import numpy as np
 
 import base64
 
+
+
 # We need `find_protocol` to search for the required protocol given a kit + product code.
 from minknow_api.tools import protocols
 
+
+UNIQUE_ID: str = str(uuid.uuid4())
 
 class ExperimentSpec(object):
     def __init__(self, position):
@@ -51,10 +52,16 @@ def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_i
         position_connection = spec.position.connect()
         flow_cell_info = position_connection.device.get_flow_cell_info()
         if flow_cell_info.flow_cell_id != expected_flowcell_id:
-            ui.notify(f"Flowcell {expected_flowcell_id} is not found in position {spec.position}. Please check.", type="negative")
+            ui.notify(
+                f"Flowcell {expected_flowcell_id} is not found in position {spec.position}. Please check.",
+                type="negative",
+            )
             return
         if not flow_cell_info.has_flow_cell:
-            ui.notify("No flow cell present in position {}".format(spec.position), type="negative")
+            ui.notify(
+                "No flow cell present in position {}".format(spec.position),
+                type="negative",
+            )
             return
 
         product_code = flow_cell_info.user_specified_product_code
@@ -86,17 +93,19 @@ def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_i
         )
 
         if not protocol_info:
-            ui.notify("Failed to find protocol for position %s" % (spec.position),type='negative')
+            ui.notify(
+                "Failed to find protocol for position %s" % (spec.position),
+                type="negative",
+            )
 
-            #print("Requested protocol:")
-            #print("  product-code: %s" % product_code)
-            #print("  kit: %s" % kit)
-            #ui.notify("Failed to find protocol for position %s" % (spec.position))
-            #ui.notify("Requested protocol:")
-            #ui.notify("  product-code: %s" % product_code)
-            #ui.notify("  kit: %s" % kit)
+            # print("Requested protocol:")
+            # print("  product-code: %s" % product_code)
+            # print("  kit: %s" % kit)
+            # ui.notify("Failed to find protocol for position %s" % (spec.position))
+            # ui.notify("Requested protocol:")
+            # ui.notify("  product-code: %s" % product_code)
+            # ui.notify("  kit: %s" % kit)
             return
-
 
         # Store the identifier for later:
         spec.protocol_id = protocol_info.identifier
@@ -118,11 +127,20 @@ class MinKNOWFish:
     A way of handling a minknow connection.
     """
 
-    def __init__(self, **kwargs):
+    def __init__(
+        self,
+        kit="SQK-RAD114",
+        centreID="NUH",
+        experiment_duration=24,
+        bed_file="/home/deepseq/panel_adaptive_nogenenames_20122021_hg38.bed",
+        basecall_config="dna_r10.4.1_e8.2_400bps_5khz_modbases_5hmc_5mc_cg_hac_prom.cfg",
+        reference="mockref.ref",
+        **kwargs,
+    ):
         """
         This is called when the app is initialized.
         """
-        super().__init__(**kwargs)
+        # super().__init__(**kwargs)
         self.tabs = None
         self.manager = None
         self.positions = None
@@ -131,6 +149,12 @@ class MinKNOWFish:
         self.connected = False
         self.watchfolder = None
         self.devices = set()
+        self.kit = kit
+        self.basecall_config = basecall_config
+        self.reference = reference
+        self.bed_file = bed_file
+        self.experiment_duration = experiment_duration
+        self.centreID = centreID
 
     def _check_ip(self, ip: str) -> None:
         """
@@ -204,17 +228,19 @@ class MinKNOWFish:
         flowcell_id=None,
     ):
         ui.notify(f"Starting Run {sample_id} on {flowcell_id}!", type="positive")
-        #ToDo: At every stage we need to confirm that the correct values have been entered.
+        # ToDo: At every stage we need to confirm that the correct values have been entered.
         # position = "1B"
-        kit = "SQK-RAD114"
+        kit = self.kit
         ###Memo to self... basecall config must not include cfg
-        basecall_config = "dna_r10.4.1_e8.2_400bps_5khz_modbases_5hmc_5mc_cg_hac_prom.cfg"
-        alignment_reference = reference
-        bed_file = "/home/deepseq/panel_adaptive_nogenenames_20122021_hg38.bed"
-        experiment_duration = 24
+        basecall_config = self.basecall_config
+        alignment_reference = self.reference
+        bed_file = self.bed_file
+        experiment_duration = self.experiment_duration
         current_date = datetime.now()
-        centreID = "NUH"
-        experiment_group_id = f"{centreID}_{current_date.strftime('%B')}_{current_date.year}"
+        centreID = self.centreID
+        experiment_group_id = (
+            f"{centreID}_{current_date.strftime('%B')}_{current_date.year}"
+        )
         # sample_id = "SAMPLE_ID"
         experiment_specs = []
         # Add all the positions to the list:
@@ -250,8 +276,7 @@ class MinKNOWFish:
                 batch_duration="1",
             )
             pod5_arguments = protocols.OutputArgs(
-                reads_per_file=4000,
-                batch_duration="1"
+                reads_per_file=4000, batch_duration="1"
             )
 
             # Now start the protocol(s):
@@ -284,8 +309,9 @@ class MinKNOWFish:
 
                 flow_cell_info = position_connection.device.get_flow_cell_info()
 
-                ui.notify(f"Started protocol:\n    run_id={run_id}\n    position={spec.position.name}\n    flow_cell_id={flow_cell_info.flow_cell_id}\n",
-                    multi_line = True,
+                ui.notify(
+                    f"Started protocol:\n    run_id={run_id}\n    position={spec.position.name}\n    flow_cell_id={flow_cell_info.flow_cell_id}\n",
+                    multi_line=True,
                     type="positive",
                 )
         else:
@@ -298,15 +324,19 @@ class ErrorChecker:
 
     @property
     def no_errors(self) -> bool:
-        return all(validation(element.value) for element in self.elements for validation in
-                   element.validation.values())
+        return all(
+            validation(element.value)
+            for element in self.elements
+            for validation in element.validation.values()
+        )
+
 
 @ui.page("/")
 async def content():
-    with ((theme.frame(
+    with theme.frame(
         "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
         smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
-    ))):
+    ):
         sample_camera = Camera(
             icon="photo_camera",
             icon_color="blue-5",
@@ -315,6 +345,7 @@ async def content():
             canvas_id="samplecanvas",
             on_change=lambda: generate_sampleID(),
         )
+
         async def generate_sampleID():
             await asyncio.sleep(0.1)
             print("calling camera sample")
@@ -356,7 +387,7 @@ async def content():
                 flowcellid.value = "Too many barcodes - please try again."
 
         minknow = MinKNOWFish()
-        #await minknow.connect_to_remotehost("10.157.252.30")
+        # await minknow.connect_to_remotehost("10.157.252.30")
         await minknow.connect_to_localhost()
         with ui.dialog() as startup, ui.card().classes("w-full"):
             ui.label("Sample Setup").style(
@@ -364,39 +395,73 @@ async def content():
             )
             ui.separator()
             with ui.stepper().props("vertical").classes("w-full") as stepper:
-                step = ui.step("Sample ID").style('color: #000000; font-size: 100%; font-weight: 600')
+                step = ui.step("Sample ID").style(
+                    "color: #000000; font-size: 100%; font-weight: 600"
+                )
                 with step:
                     ui.label(
                         "Remember that sample IDs may be shared with others and should not include human identifiable information."
-                    ).style('color: #000000; font-size: 100%; font-weight: 600')
-                    ui.label("Enter the sample ID:").style('color: #000000; font-size: 80%; font-weight: 300')
-                    sampleid = ui.input(
-                        placeholder="start typing",
-                        validation = {
-                            'Too short': lambda value: len(value) >= 5,
-                            'Do not use Flowcell IDs as sample IDs': lambda value: re.match(r"^[A-Za-z]{3}\d{5}$", value) is None,
-                            'No whitespace allowed': lambda value: not any(char.isspace() for char in value),
-                            'Only alphanumeric characters allowed': lambda value: value.isalnum(),
-                        }
-                    ).style('color: #000000; font-size: 80%; font-weight: 300').props("rounded outlined dense")
+                    ).style("color: #000000; font-size: 100%; font-weight: 600")
+                    ui.label("Enter the sample ID:").style(
+                        "color: #000000; font-size: 80%; font-weight: 300"
+                    )
+                    sampleid = (
+                        ui.input(
+                            placeholder="start typing",
+                            validation={
+                                "Too short": lambda value: len(value) >= 5,
+                                "Do not use Flowcell IDs as sample IDs": lambda value: re.match(
+                                    r"^[A-Za-z]{3}\d{5}$", value
+                                )
+                                is None,
+                                "No whitespace allowed": lambda value: not any(
+                                    char.isspace() for char in value
+                                ),
+                                "Only alphanumeric characters allowed": lambda value: value.isalnum(),
+                            },
+                        )
+                        .style("color: #000000; font-size: 80%; font-weight: 300")
+                        .props("rounded outlined dense")
+                    )
                     sample_camera.show_camera()
                     with ui.stepper_navigation():
                         checker = ErrorChecker(sampleid)
-                        c = ui.button("Next", on_click=stepper.next).bind_enabled_from(checker, 'no_errors')
+                        ui.button("Next", on_click=stepper.next).bind_enabled_from(
+                            checker, "no_errors"
+                        )
 
-                with ui.step("Flowcell").style('color: #000000; font-size: 100%; font-weight: 600'):
-                    ui.label("Enter the flowcell ID.").style('color: #000000; font-size: 80%; font-weight: 300')
-                    flowcellid = ui.input(
-                        placeholder="start typing",
-                        validation = {'Not a valid flowcell ID': lambda value: re.match(r"^[A-Za-z]{3}\d{5}$", value) is not None}
-                    ).style('color: #000000; font-size: 80%; font-weight: 300').props("rounded outlined dense")
+                with ui.step("Flowcell").style(
+                    "color: #000000; font-size: 100%; font-weight: 600"
+                ):
+                    ui.label("Enter the flowcell ID.").style(
+                        "color: #000000; font-size: 80%; font-weight: 300"
+                    )
+                    flowcellid = (
+                        ui.input(
+                            placeholder="start typing",
+                            validation={
+                                "Not a valid flowcell ID": lambda value: re.match(
+                                    r"^[A-Za-z]{3}\d{5}$", value
+                                )
+                                is not None
+                            },
+                        )
+                        .style("color: #000000; font-size: 80%; font-weight: 300")
+                        .props("rounded outlined dense")
+                    )
                     flowcell_camera.show_camera()
                     with ui.stepper_navigation():
                         ui.button("Back", on_click=stepper.previous).props("flat")
                         checkerflowcell = ErrorChecker(flowcellid)
-                        d=ui.button("Next", on_click=stepper.next).bind_enabled_from(checkerflowcell, 'no_errors')
-                with ui.step("Device Position").style('color: #000000; font-size: 100%; font-weight: 600'):
-                    ui.label("Select the device position to be used.").style('color: #000000; font-size: 80%; font-weight: 300')
+                        ui.button("Next", on_click=stepper.next).bind_enabled_from(
+                            checkerflowcell, "no_errors"
+                        )
+                with ui.step("Device Position").style(
+                    "color: #000000; font-size: 100%; font-weight: 600"
+                ):
+                    ui.label("Select the device position to be used.").style(
+                        "color: #000000; font-size: 80%; font-weight: 300"
+                    )
                     run_button = ui.button(
                         "Start Run",
                         on_click=lambda: minknow.start_run(
@@ -406,17 +471,20 @@ async def content():
                             flowcell_id=flowcellid.value,
                         ),
                     )
+
                     def dostuff():
                         run_button.enable()
 
-                    position = ui.radio(
-                        {
-                            item: str(item)
-                            for index, item in enumerate(minknow.positions)
-                        },
-                    ).on(
-                        "update:model-value", dostuff
-                    ).style('color: #000000; font-size: 80%; font-weight: 300')
+                    position = (
+                        ui.radio(
+                            {
+                                item: str(item)
+                                for index, item in enumerate(minknow.positions)
+                            },
+                        )
+                        .on("update:model-value", dostuff)
+                        .style("color: #000000; font-size: 80%; font-weight: 300")
+                    )
                     finalstep = ui.stepper_navigation()
                     with finalstep:
                         ui.button("Back", on_click=stepper.previous).props("flat")
@@ -430,9 +498,11 @@ async def content():
             ui.label(" ".join(f"Device: {device}" for device in minknow.devices))
             current_date = datetime.now()
             centreID = "NUH"
-            ui.label(f"experiment_group_id = {centreID}_{current_date.strftime('%B')}_{current_date.year}")
-            ui.label("kit = SQK-RAD114")
-            ui.label("reference = {reference}")
+            ui.label(
+                f"experiment_group_id = {centreID}_{current_date.strftime('%B')}_{current_date.year}"
+            )
+            ui.label("kit = TestKit")
+            ui.label("reference = reference")
             ui.separator()
             ui.label("User Settings:").style(
                 "color: #6E93D6; font-size: 100%; font-weight: 400"

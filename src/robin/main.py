@@ -58,6 +58,8 @@ async def index() -> None:
     """
     GUI = Methnice(
         force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
+        kit=app.storage.general[UNIQUE_ID]["kit"],
+        centreID=app.storage.general[UNIQUE_ID]["centreID"],
         threads=app.storage.general[UNIQUE_ID]["threads"],
         simtime=app.storage.general[UNIQUE_ID]["simtime"],
         watchfolder=app.storage.general[UNIQUE_ID]["watchfolder"],
@@ -105,6 +107,8 @@ async def live_sample(sample_id: str) -> None:
     """
     GUI = Methnice(
         force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
+        kit=app.storage.general[UNIQUE_ID]["kit"],
+        centreID=app.storage.general[UNIQUE_ID]["centreID"],
         threads=app.storage.general[UNIQUE_ID]["threads"],
         simtime=app.storage.general[UNIQUE_ID]["simtime"],
         watchfolder=app.storage.general[UNIQUE_ID]["watchfolder"],
@@ -131,6 +135,8 @@ async def live() -> None:
     """
     GUI = Methnice(
         force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
+        kit=app.storage.general[UNIQUE_ID]["kit"],
+        centreID=app.storage.general[UNIQUE_ID]["centreID"],
         threads=app.storage.general[UNIQUE_ID]["threads"],
         simtime=app.storage.general[UNIQUE_ID]["simtime"],
         watchfolder=app.storage.general[UNIQUE_ID]["watchfolder"],
@@ -156,6 +162,8 @@ async def test() -> None:
     GUI_browse = Methnice(
         threads=1,
         force_sampleid=None,
+        kit=None,
+        centreID=None,
         simtime=False,
         watchfolder=None,
         output=app.storage.general[UNIQUE_ID]["output"],
@@ -189,6 +197,8 @@ async def startup() -> None:
     logging.info(f"Setting up {UNIQUE_ID}.")
     MAINPAGE = Methnice(
         force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
+        kit=app.storage.general[UNIQUE_ID]["kit"],
+        centreID=app.storage.general[UNIQUE_ID]["centreID"],
         threads=app.storage.general[UNIQUE_ID]["threads"],
         simtime=app.storage.general[UNIQUE_ID]["simtime"],
         watchfolder=app.storage.general[UNIQUE_ID]["watchfolder"],
@@ -218,6 +228,8 @@ class Methnice:
     def __init__(
         self,
         force_sampleid: str,
+        kit: str,
+        centreID: str,
         threads: int,
         simtime: bool,
         watchfolder: Path,
@@ -232,6 +244,8 @@ class Methnice:
         sample_id: str = None,
     ):
         self.force_sampleid = force_sampleid
+        self.kit = kit
+        self.centreID = centreID
         self.MAINID = unique_id
         self.threads = threads
         self.simtime = simtime
@@ -287,6 +301,8 @@ class Methnice:
         """
         self.robin = BrainMeth(
             force_sampleid=self.force_sampleid,
+            kit=self.kit,
+            centreID=self.centreID,
             mainuuid=self.MAINID,
             threads=self.threads,
             simtime=self.simtime,
@@ -319,6 +335,8 @@ class Methnice:
             self.analysis_tab_pane = ui.row().classes("w-full")
             self.robin_browse = BrainMeth(
                 force_sampleid=self.force_sampleid,
+                kit=self.kit,
+                centreID=self.centreID,
                 mainuuid=self.MAINID,
                 threads=self.threads,
                 simtime=self.simtime,
@@ -387,7 +405,11 @@ class Methnice:
             await ui.context.client.connected()
             with ui.column().classes("w-full"):
                 if self.watchfolder is None and not self.browse:
-                    self.minknow_connection = MinKNOWFish()
+                    self.minknow_connection = MinKNOWFish(
+                        kit=self.kit,
+                        reference=self.reference,
+                        centreID=self.centreID,
+                    )
                 else:
                     self.minknow_connection = None
                 if self.minknow_connection:
@@ -395,7 +417,7 @@ class Methnice:
                         with splitter.before:
                             with ui.tabs().props("vertical").classes("w-full") as tabs:
                                 analysis = ui.tab("Analysis", icon="analytics")
-                                readfish = ui.tab("ReadFish", icon="phishing")
+                                # readfish = ui.tab("ReadFish", icon="phishing")
                                 minknow = ui.tab("minKNOW", icon="set_meal")
                         with splitter.after:
                             with ui.tab_panels(tabs, value=minknow).props(
@@ -410,13 +432,13 @@ class Methnice:
                                         ui.label("Real Time Analysis").classes(
                                             "text-h4"
                                         )
-                                with ui.tab_panel(readfish):
-                                    with ui.row():
-                                        ui.icon("phishing", color="primary").classes(
-                                            "text-h4"
-                                        )
-                                        ui.label("ReadFish Data").classes("text-h4")
-                                    ui.label("To Be Updated.")
+                                # with ui.tab_panel(readfish):
+                                #    with ui.row():
+                                #        ui.icon("phishing", color="primary").classes(
+                                #            "text-h4"
+                                #        )
+                                #        ui.label("ReadFish Data").classes("text-h4")
+                                #    ui.label("To Be Updated.")
                                 self.minknow_tab_pane = ui.tab_panel(minknow)
                                 with self.minknow_tab_pane:
                                     with ui.row():
@@ -431,7 +453,8 @@ class Methnice:
             if self.minknow_connection:
                 with self.minknow_tab_pane:
                     self.minknow_connection.setup_ui()
-                    self.minknow_connection.check_connection()
+                    await self.minknow_connection.auto_connect()
+                    # self.minknow_connection.check_connection()
                     ui.label().bind_text_from(
                         self.minknow_connection,
                         "connection_ip",
@@ -445,6 +468,8 @@ class Methnice:
 def run_class(
     port: int,
     force_sampleid: str,
+    kit: str,
+    centreID: str,
     reload: bool,
     threads: int,
     simtime: bool,
@@ -483,6 +508,8 @@ def run_class(
     app.storage.general[UNIQUE_ID] = {
         "threads": threads,
         "force_sampleid": force_sampleid,
+        "kit": kit,
+        "centreID": centreID,
         "simtime": simtime,
         "watchfolder": watchfolder,
         "output": output,
@@ -558,6 +585,19 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     default=None,
     help="Force a specific sampleID.",
     required=False,
+    type=str,
+)
+@click.option(
+    "--kit",
+    default="SQK-RAD114",
+    help="Specify sequencing kit.",
+    required=False,
+    type=str,
+)
+@click.option(
+    "--centreID",
+    help="Provide an identifier to be used in the experiment name field.",
+    required=True,
     type=str,
 )
 @click.option(
@@ -651,6 +691,8 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
 def package_run(
     port: int,
     force_sampleid: str,
+    kit: str,
+    centreid: str,
     threads: int,
     log_level: str,
     log_file: Path,
@@ -676,6 +718,7 @@ def package_run(
         run_class(
             port=port,
             force_sampleid=force_sampleid,
+            kit=kit,
             reload=False,
             threads=threads,
             simtime=simtime,
@@ -697,6 +740,8 @@ def package_run(
         run_class(
             port=port,
             force_sampleid=force_sampleid,
+            kit=kit,
+            centreID=centreid,
             reload=False,
             threads=threads,
             simtime=simtime,

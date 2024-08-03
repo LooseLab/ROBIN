@@ -143,6 +143,8 @@ class BrainMeth:
         self,
         threads=4,
         force_sampleid=None,
+        kit=None,
+        centreID=None,
         simtime=False,
         watchfolder=None,
         output=None,
@@ -174,6 +176,8 @@ class BrainMeth:
         """
         self.mainuuid = mainuuid
         self.force_sampleid = force_sampleid
+        self.kit = kit
+        self.centreID = centreID
         self.threads = threads
         self.simtime = simtime
         self.watchfolder = watchfolder
@@ -340,10 +344,10 @@ class BrainMeth:
             self.watchfolder = watchfolder
             if "file" not in app.storage.general[self.mainuuid]["bam_count"].keys():
                 app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
-            #ToDo: Replace this with a queue.
+            # ToDo: Replace this with a queue.
             self.event_handler = BamEventHandler(
                 self.watchdogbamqueue
-                #app.storage.general[self.mainuuid]["bam_count"]
+                # app.storage.general[self.mainuuid]["bam_count"]
             )
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)

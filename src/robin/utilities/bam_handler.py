@@ -71,12 +71,12 @@ class BamEventHandler(FileSystemEventHandler):
             return
 
         if event.src_path.endswith(".bam"):
-            self.bam_count.put((event.src_path,time.time()))
+            self.bam_count.put((event.src_path, time.time()))
             logger.info(
-                #f"New .bam file detected: {event.src_path}, total count: {self.bam_count['counter']}"
-                 f"New .bam file detected: {event.src_path}" #, total count: {self.bam_count['counter']}"
+                # f"New .bam file detected: {event.src_path}, total count: {self.bam_count['counter']}"
+                f"New .bam file detected: {event.src_path}"  # , total count: {self.bam_count['counter']}"
             )
-            #except Exception as e:
+            # except Exception as e:
             #    print("Bam error in handler.")
             #    print(e)
 

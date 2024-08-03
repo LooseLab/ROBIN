@@ -308,10 +308,9 @@ class CNVAnalysis(BaseAnalysis):
         # self.file_list.append(bamfile)
         try:
             await self.do_cnv_work(bamfile)
-        except exception as e:
+        except Exception as e:
             logger.error(e)
             logger.error("line 313")
-
 
     async def do_cnv_work(self, bamfile: BinaryIO) -> None:
         """

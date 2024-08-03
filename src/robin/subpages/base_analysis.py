@@ -407,14 +407,16 @@ class BaseAnalysis:
                         .tooltip("Indicates read files not yet processed.")
                         .props("instant-feedback")
                     )
-                    ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
+                    ui.timer(
+                        1, callback=lambda: progressbar3.set_value(self._not_analysed)
+                    )
 
                 if self.batch:
                     with ui.row().classes("w-full"):
                         ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid][self.sampleID][self.name][
-                                "counters"
-                            ],
+                            app.storage.general[self.mainuuid][self.sampleID][
+                                self.name
+                            ]["counters"],
                             "bams_in_processing",
                             backward=lambda n: f"Bam files being processed: {n}",
                         )
@@ -428,7 +430,9 @@ class BaseAnalysis:
                             .tooltip("Indicates read files being processed.")
                             .props("instant-feedback")
                         )
-                        ui.timer(1, callback=lambda: progressbar2.set_value(self._progress2))
+                        ui.timer(
+                            1, callback=lambda: progressbar2.set_value(self._progress2)
+                        )
 
                 with ui.row().classes("w-full"):
                     ui.label().bind_text_from(
@@ -449,9 +453,6 @@ class BaseAnalysis:
                         .props("instant-feedback")
                     )
                     ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
-
-
-
 
     def playback(
         self, data: pd.DataFrame, step_size: int = 2, start_time: Optional[float] = None

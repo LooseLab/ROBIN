@@ -16,9 +16,12 @@ from minknow_api.statistics_pb2 import (
     ReadEndReason,
     DataSelection,
 )
-
+import logging
 import numpy as np
 import math
+
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
 
 
 class MinknowHistograms:
