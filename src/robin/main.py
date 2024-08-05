@@ -244,7 +244,6 @@ class Methnice:
     """
 
     def __init__(
-        self,
         force_sampleid: Optional[str],
         kit: Optional[str],
         centreID: Optional[str],
