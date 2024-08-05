@@ -80,6 +80,7 @@ import os
 from alive_progress import alive_bar
 from nicegui import ui, app, run
 
+
 from robin.utilities.bam_handler import BamEventHandler
 from robin.subpages.MGMT_object import MGMT_Object
 from robin.subpages.Sturgeon_object import Sturgeon_object
@@ -111,7 +112,7 @@ def check_bam(bamfile):
     return baminfo, bamdata
 
 
-def sort_bams(files_and_timestamps, watchfolder, file_endings):
+def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
     import bisect
 
     # Function to insert into sorted list
@@ -125,15 +126,27 @@ def sort_bams(files_and_timestamps, watchfolder, file_endings):
             for f in files:
                 if "".join(Path(f).suffixes) in file_endings:
                     logging.info(f"Reading BAM file: {os.path.join(path, f)}")
-                    bam = ReadBam(os.path.join(path, f))
-                    baminfo = bam.process_reads()
-                    insert_sorted(
-                        (
-                            os.path.join(path, f),
-                            baminfo["last_start"],
-                            baminfo["elapsed_time"],
+                    if simtime:
+                        bam = ReadBam(os.path.join(path, f))
+                        baminfo = bam.process_reads()
+                        insert_sorted(
+                            (
+                                os.path.join(path, f),
+                                baminfo["last_start"],
+                                baminfo["elapsed_time"],
+                            )
                         )
-                    )
+                    else:
+                        filetime = datetime.fromtimestamp(os.path.getctime(os.path.join(path,f)))
+                        elapsedtime = datetime.now() - filetime
+                        insert_sorted(
+                            (
+                                os.path.join(path, f),
+                                filetime.isoformat(),
+                                elapsedtime,
+                            )
+                        )
+
                 bar()
     return files_and_timestamps
 
@@ -351,10 +364,11 @@ class BrainMeth:
             )
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
+            ui.timer(1, callback=self.check_existing_bams, once=True)
             self.observer.start()
 
             ui.timer(1, callback=self.background_process_bams, once=True)
-            ui.timer(1, callback=self.check_existing_bams, once=True)
+
 
             logging.info("Watchfolder setup and added")
 
@@ -1063,6 +1077,7 @@ class BrainMeth:
         :return: None
         """
         file_endings = {".bam"}
+        """
         if sequencing_summary:
             logging.info("Using sequencing summary for existing BAM files")
             df = pd.read_csv(
@@ -1114,21 +1129,22 @@ class BrainMeth:
                     self.check_bam(row["full_path"])
             self.runfinished = True
         else:
-            files_and_timestamps = []
-            files_and_timestamps = await run.cpu_bound(
-                sort_bams, files_and_timestamps, self.watchfolder, file_endings
-            )
+        """
+        files_and_timestamps = []
+        files_and_timestamps = await run.cpu_bound(
+            sort_bams, files_and_timestamps, self.watchfolder, file_endings, self.simtime
+        )
 
-            # Iterate through the sorted list
-            for timestamp, f, elapsed_time in files_and_timestamps:
-                logging.debug(f"Processing existing BAM file: {f} at {timestamp}")
-                app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
-                if "file" not in app.storage.general[self.mainuuid]["bam_count"]:
-                    app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
-                app.storage.general[self.mainuuid]["bam_count"]["file"][
-                    f
-                ] = timestamp.timestamp()  # time.time()
-                if self.simtime:
-                    await asyncio.sleep(1)
-                else:
-                    await asyncio.sleep(0)
+        # Iterate through the sorted list
+        for timestamp, f, elapsed_time in files_and_timestamps:
+            logging.debug(f"Processing existing BAM file: {f} at {timestamp}")
+            app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
+            if "file" not in app.storage.general[self.mainuuid]["bam_count"]:
+                app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
+            app.storage.general[self.mainuuid]["bam_count"]["file"][
+                f
+            ] = timestamp.timestamp()  # time.time()
+            if self.simtime:
+                await asyncio.sleep(1)
+            else:
+                await asyncio.sleep(0)
