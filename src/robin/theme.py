@@ -29,6 +29,8 @@ External Dependencies:
 - pathlib.Path
 - robin.images
 - os
+- psutil
+- platform
 
 Example usage::
 

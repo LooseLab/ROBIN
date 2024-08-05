@@ -5,6 +5,7 @@ import sys
 import signal
 import logging
 
+from typing import Optional, List
 from pathlib import Path
 from nicegui import ui, app, core, observables
 import nicegui.air
@@ -36,14 +37,21 @@ def setup_logging(level: str, log_file: Path) -> None:
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
 
-    logging.basicConfig(
-        level=numeric_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)],
-    )
-    logging.info(f"Logging configured to level: {level}")
-    logging.info(f"Logging to file: {log_file}")
-    logging.debug("Debug logging enabled.")
+    try:
+        logging.basicConfig(
+            level=numeric_level,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)],
+        )
+        logging.info(f"Logging configured to level: {level}")
+        logging.info(f"Logging to file: {log_file}")
+        logging.debug("Debug logging enabled.")
+    except PermissionError:
+        print(f"Error: Unable to write to log file {log_file}. Check permissions.")
+        sys.exit(1)
+    except Exception as e:
+        print(f"Error setting up logging: {str(e)}")
+        sys.exit(1)
 
 
 def clean_up_handler(thingtokill):
@@ -227,21 +235,21 @@ class Methnice:
 
     def __init__(
         self,
-        force_sampleid: str,
-        kit: str,
-        centreID: str,
+        force_sampleid: Optional[str],
+        kit: Optional[str],
+        centreID: Optional[str],
         threads: int,
         simtime: bool,
-        watchfolder: Path,
-        output: Path,
-        sequencing_summary: Path,
+        watchfolder: Optional[Path],
+        output: Optional[Path],
+        sequencing_summary: Optional[Path],
         target_panel: str,
         showerrors: bool,
         browse: bool,
-        exclude: list,
+        exclude: List[str],
         reference: Path,
         unique_id: str,
-        sample_id: str = None,
+        sample_id: Optional[str] = None,
     ):
         self.force_sampleid = force_sampleid
         self.kit = kit
@@ -264,14 +272,14 @@ class Methnice:
             self.sample_id = None
 
     @property
-    def watchfolder(self) -> Path:
+    def watchfolder(self) -> Optional[Path]:
         """
         Getter for watchfolder property.
         """
         return self._watchfolder
 
     @watchfolder.setter
-    def watchfolder(self, value: Path) -> None:
+    def watchfolder(self, value: Optional[Path]) -> None:
         """
         Setter for watchfolder property.
         Triggers on_watchfolder_changed when watchfolder is set.
@@ -293,40 +301,62 @@ class Methnice:
         """
         if self.watchfolder:
             logging.info(f"watchfolder value has been changed! {self.watchfolder}")
-            await self.robin.add_watchfolder(self.watchfolder)
+            try:
+                await self.robin.add_watchfolder(self.watchfolder)
+            except Exception as e:
+                logging.error(f"Error adding watchfolder: {str(e)}")
 
     def setup(self) -> None:
         """
         Setup method for initializing BrainMeth.
         """
-        self.robin = BrainMeth(
-            force_sampleid=self.force_sampleid,
-            kit=self.kit,
-            centreID=self.centreID,
-            mainuuid=self.MAINID,
-            threads=self.threads,
-            simtime=self.simtime,
-            watchfolder=self.watchfolder,
-            output=self.output,
-            sequencing_summary=self.sequencing_summary,
-            target_panel=self.target_panel,
-            showerrors=self.showerrors,
-            browse=self.browse,
-            exclude=self.exclude,
-            minknow_connection=self.minknow_connection,
-            reference=self.reference,
-        )
+        try:
+            self.robin = BrainMeth(
+                force_sampleid=self.force_sampleid,
+                kit=self.kit,
+                centreID=self.centreID,
+                mainuuid=self.MAINID,
+                threads=self.threads,
+                simtime=self.simtime,
+                watchfolder=self.watchfolder,
+                output=self.output,
+                sequencing_summary=self.sequencing_summary,
+                target_panel=self.target_panel,
+                showerrors=self.showerrors,
+                browse=self.browse,
+                exclude=self.exclude,
+                minknow_connection=self.minknow_connection,
+                reference=self.reference,
+            )
+        except Exception as e:
+            logging.error(f"Error initializing BrainMeth: {str(e)}")
+            raise
 
     async def start_analysis(self) -> None:
         """
         Async method to start analysis.
         """
-        # self.timer = ui.timer(1, self._worker)
-        await self.robin.start_background()
+        try:
+            await self.robin.start_background()
+        except Exception as e:
+            logging.error(f"Error starting analysis: {str(e)}")
+            # Consider how to handle this error (e.g., show an error message to the user)
 
     async def browse_page(self) -> None:
         """
-        Async method for rendering the browse page.
+        Async method for rendering the browse page for historic data.
+
+        This method sets up a simplified version of the main page, focused on
+        browsing historic data. It includes:
+        1. Creating the main frame with the ROBIN title.
+        2. Setting up a BrainMeth instance for browsing.
+        3. Rendering the UI for the browse functionality.
+
+        The browse page does not include MinKNOW connection or real-time analysis features.
+
+        Raises:
+            Any exceptions raised during UI rendering are not caught here and should be
+            handled by the caller.
         """
         with theme.frame(
             "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
@@ -350,7 +380,6 @@ class Methnice:
                 minknow_connection=self.minknow_connection,
                 reference=self.reference,
             )
-            # await self.robin_browse.init()
 
             with self.analysis_tab_pane:
                 await self.robin_browse.render_ui()
@@ -396,90 +425,112 @@ class Methnice:
 
     async def index_page(self) -> None:
         """
-        Async method for rendering the index page.
+        Async method for rendering the main index page of the application.
+
+        This method sets up the primary user interface, including:
+        1. Creating the main frame with the ROBIN title.
+        2. Setting up the MinKNOW connection if necessary.
+        3. Creating a splitter layout with tabs for Analysis and MinKNOW data.
+        4. Rendering the analysis tab content.
+        5. Setting up and connecting to the MinKNOW panel if available.
+
+        The layout and content of the page depend on whether a watchfolder is set
+        and if the application is in browse mode.
+
+        Raises:
+            Any exceptions raised during UI rendering or MinKNOW connection are not
+            caught here and should be handled by the caller.
         """
-        with theme.frame(
-            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
-            smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
-        ):
-            await ui.context.client.connected()
-            with ui.column().classes("w-full"):
-                if self.watchfolder is None and not self.browse:
-                    self.minknow_connection = MinKNOWFish(
-                        kit=self.kit,
-                        reference=self.reference,
-                        centreID=self.centreID,
-                    )
-                else:
-                    self.minknow_connection = None
+        try:
+            with theme.frame(
+                "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
+                smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
+            ):
+                await ui.context.client.connected()
+                with ui.column().classes("w-full"):
+                    # Set up MinKNOW connection if necessary
+                    if self.watchfolder is None and not self.browse:
+                        self.minknow_connection = MinKNOWFish(
+                            kit=self.kit,
+                            reference=self.reference,
+                            centreID=self.centreID,
+                        )
+                    else:
+                        self.minknow_connection = None
+                    
+                    # Create splitter layout if MinKNOW connection is available
+                    if self.minknow_connection:
+                        with ui.splitter(value=10).classes("w-full h-full") as splitter:
+                            with splitter.before:
+                                with ui.tabs().props("vertical").classes("w-full") as tabs:
+                                    analysis = ui.tab("Analysis", icon="analytics")
+                                    minknow = ui.tab("minKNOW", icon="set_meal")
+                            with splitter.after:
+                                with ui.tab_panels(tabs, value=minknow).props(
+                                    "vertical"
+                                ).classes("w-full h-full"):
+                                    self.analysis_tab_pane = ui.tab_panel(analysis)
+                                    with self.analysis_tab_pane:
+                                        with ui.row():
+                                            ui.icon("analytics", color="primary").classes(
+                                                "text-h4"
+                                            )
+                                            ui.label("Real Time Analysis").classes(
+                                                "text-h4"
+                                            )
+                                    self.minknow_tab_pane = ui.tab_panel(minknow)
+                                    with self.minknow_tab_pane:
+                                        with ui.row():
+                                            ui.icon("set_meal", color="primary").classes(
+                                                "text-h4"
+                                            )
+                                            ui.label("MinKNOW Data").classes("text-h4")
+                    else:
+                        self.analysis_tab_pane = ui.row().classes("w-full")
+
+                # Set up MinKNOW panel if connection is available
                 if self.minknow_connection:
-                    with ui.splitter(value=10).classes("w-full h-full") as splitter:
-                        with splitter.before:
-                            with ui.tabs().props("vertical").classes("w-full") as tabs:
-                                analysis = ui.tab("Analysis", icon="analytics")
-                                # readfish = ui.tab("ReadFish", icon="phishing")
-                                minknow = ui.tab("minKNOW", icon="set_meal")
-                        with splitter.after:
-                            with ui.tab_panels(tabs, value=minknow).props(
-                                "vertical"
-                            ).classes("w-full h-full"):
-                                self.analysis_tab_pane = ui.tab_panel(analysis)
-                                with self.analysis_tab_pane:
-                                    with ui.row():
-                                        ui.icon("analytics", color="primary").classes(
-                                            "text-h4"
-                                        )
-                                        ui.label("Real Time Analysis").classes(
-                                            "text-h4"
-                                        )
-                                # with ui.tab_panel(readfish):
-                                #    with ui.row():
-                                #        ui.icon("phishing", color="primary").classes(
-                                #            "text-h4"
-                                #        )
-                                #        ui.label("ReadFish Data").classes("text-h4")
-                                #    ui.label("To Be Updated.")
-                                self.minknow_tab_pane = ui.tab_panel(minknow)
-                                with self.minknow_tab_pane:
-                                    with ui.row():
-                                        ui.icon("set_meal", color="primary").classes(
-                                            "text-h4"
-                                        )
-                                        ui.label("MinKNOW Data").classes("text-h4")
+                    with self.minknow_tab_pane:
+                        self.minknow_connection.setup_ui()
+                        try:
+                            await self.minknow_connection.auto_connect()
+                        except Exception as e:
+                            logging.error(f"Error connecting to MinKNOW: {str(e)}")
+                            ui.notify(f"Failed to connect to MinKNOW: {str(e)}", color="negative")
+                        ui.label().bind_text_from(
+                            self.minknow_connection,
+                            "connection_ip",
+                            backward=lambda n: f"Connected to: {n}",
+                        )
 
-                else:
-                    self.analysis_tab_pane = ui.row().classes("w-full")
+                # Render the analysis UI
+                with self.analysis_tab_pane:
+                    try:
+                        await self.robin.render_ui(sample_id=self.sample_id)
+                    except Exception as e:
+                        logging.error(f"Error rendering analysis UI: {str(e)}")
+                        ui.notify("Failed to render analysis UI", color="negative")
 
-            if self.minknow_connection:
-                with self.minknow_tab_pane:
-                    self.minknow_connection.setup_ui()
-                    await self.minknow_connection.auto_connect()
-                    # self.minknow_connection.check_connection()
-                    ui.label().bind_text_from(
-                        self.minknow_connection,
-                        "connection_ip",
-                        backward=lambda n: f"Connected to: {n}",
-                    )
-
-            with self.analysis_tab_pane:
-                await self.robin.render_ui(sample_id=self.sample_id)
+        except Exception as e:
+            logging.error(f"Error rendering index page: {str(e)}")
+            ui.notify("An error occurred while loading the page", color="negative")
 
 
 def run_class(
     port: int,
-    force_sampleid: str,
+    force_sampleid: Optional[str],
     kit: str,
     centreID: str,
     reload: bool,
     threads: int,
     simtime: bool,
-    watchfolder: Path,
-    output: Path,
-    sequencing_summary: Path,
+    watchfolder: Optional[Path],
+    output: Optional[Path],
+    sequencing_summary: Optional[Path],
     target_panel: str,
     showerrors: bool,
     browse: bool,
-    exclude: list,
+    exclude: List[str],
     reference: Path,
 ) -> None:
     """
@@ -491,7 +542,7 @@ def run_class(
     :param simtime: Boolean indicating if simulation mode is enabled.
     :param watchfolder: Path to the watchfolder.
     :param output: Path to the output directory.
-    :param sequencing_summary: Path to the sequencing summary file.
+    :param sequencing_summary: Path to the sequencing summary file. If provided, timestamps will be taken from this file.
     :param target_panel: Analysis gene panel.
     :param showerrors: Boolean indicating if errors should be displayed.
     :param browse: Boolean indicating if browse mode is enabled.
@@ -501,10 +552,18 @@ def run_class(
     try:
         app.storage.general.clear()
     except Exception as e:
-        logging.error(e)
-    iconfile = os.path.join(
-        os.path.dirname(os.path.abspath(images.__file__)), "favicon.ico"
-    )
+        logging.error(f"Error clearing app storage: {str(e)}")
+
+    try:
+        iconfile = os.path.join(
+            os.path.dirname(os.path.abspath(images.__file__)), "favicon.ico"
+        )
+        if not os.path.exists(iconfile):
+            logging.warning(f"Favicon file not found: {iconfile}")
+    except Exception as e:
+        logging.error(f"Error locating favicon: {str(e)}")
+        iconfile = None
+
     app.storage.general[UNIQUE_ID] = {
         "threads": threads,
         "force_sampleid": force_sampleid,
@@ -522,6 +581,7 @@ def run_class(
     }
     app.storage.general[UNIQUE_ID]["samples"] = {}
     app.storage.general[UNIQUE_ID]["sample_list"] = observables.ObservableList([])
+
     ui.add_css(
         """
         .shadows-into light-regular {
@@ -531,18 +591,28 @@ def run_class(
         }
     """
     )
-    app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
+
+    try:
+        app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
+    except Exception as e:
+        logging.error(f"Error adding static files: {str(e)}")
+
     app.on_startup(startup)
-    ui.run(
-        port=port,
-        reload=reload,
-        title="ROBIN",
-        favicon=iconfile,
-        on_air=False,
-        show=False,
-        storage_secret="UNIQUE_ID",
-        reconnect_timeout=60,
-    )
+
+    try:
+        ui.run(
+            port=port,
+            reload=reload,
+            title="ROBIN",
+            favicon=iconfile,
+            on_air=False,
+            show=False,
+            storage_secret="UNIQUE_ID",
+            reconnect_timeout=60,
+        )
+    except Exception as e:
+        logging.error(f"Error running the application: {str(e)}")
+        sys.exit(1)
 
 
 def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None:
@@ -554,11 +624,19 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     :param filename: Path to the configuration file.
     """
     cfg = ConfigParser()
-    cfg.read(filename)
     try:
+        cfg.read(filename)
         options = dict(cfg["options"])
-    except KeyError:
+    except FileNotFoundError:
+        logging.warning(f"Configuration file not found: {filename}")
         options = {}
+    except KeyError:
+        logging.warning("No 'options' section found in the configuration file")
+        options = {}
+    except Exception as e:
+        logging.error(f"Error reading configuration file: {str(e)}")
+        options = {}
+    
     ctx.default_map = options
 
 
@@ -690,7 +768,7 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
 )
 def package_run(
     port: int,
-    force_sampleid: str,
+    force_sampleid: Optional[str],
     kit: str,
     centreid: str,
     threads: int,
@@ -698,12 +776,12 @@ def package_run(
     log_file: Path,
     simtime: bool,
     showerrors: bool,
-    sequencing_summary: Path,
+    sequencing_summary: Optional[Path],
     target_panel: str,
-    watchfolder: Path,
-    output: Path,
+    watchfolder: Optional[Path],
+    output: Optional[Path],
     browse: bool,
-    exclude: list,
+    exclude: List[str],
     reference: Path,
 ) -> None:
     """
