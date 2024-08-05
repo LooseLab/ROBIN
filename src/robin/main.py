@@ -454,6 +454,9 @@ class Methnice:
                             kit=self.kit,
                             reference=self.reference,
                             centreID=self.centreID,
+                            basecall_config = self.basecall_config,
+                            experiment_duration = self.experiment_duration,
+                            bed_file = self.bed_file,
                         )
                     else:
                         self.minknow_connection = None
