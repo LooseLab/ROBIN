@@ -820,6 +820,8 @@ def package_run(
     browse: bool,
     exclude: List[str],
     reference: Path,
+    bed_file: Path,
+    basecall_config: str
 ) -> None:
     """
     Entrypoint for when GUI is launched directly.
@@ -845,6 +847,8 @@ def package_run(
             browse=browse,
             exclude=exclude,
             reference=click.format_filename(reference),
+            bed_file=bed_file,
+            basecall_config=basecall_config,
         )
     else:
         logging.info(f"Watchfolder: {watchfolder}, Output: {output}")
@@ -870,6 +874,8 @@ def package_run(
             browse=browse,
             exclude=exclude,
             reference=click.format_filename(reference),
+            bed_file=bed_file,
+            basecall_config=basecall_config,
         )
 
 
