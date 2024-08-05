@@ -138,12 +138,12 @@ class MinKNOWFish:
 
     def __init__(
         self,
-        kit="SQK-RAD114",
-        centreID="NUH",
+        kit=None,
+        centreID=None,
         experiment_duration=24,
-        bed_file="/home/deepseq/panel_adaptive_nogenenames_20122021_hg38.bed",
-        basecall_config="dna_r10.4.1_e8.2_400bps_5khz_modbases_5hmc_5mc_cg_hac_prom.cfg",
-        reference="mockref.ref",
+        bed_file=None,
+        basecall_config=None,
+        reference=None,
         **kwargs,
     ):
         """
@@ -164,6 +164,7 @@ class MinKNOWFish:
         self.bed_file = bed_file
         self.experiment_duration = experiment_duration
         self.centreID = centreID
+
 
     def _check_ip(self, ip: str) -> None:
         """
@@ -420,7 +421,17 @@ class Position(MinKNOWFish):
     def setup(self):
         with ui.card().classes("w-full"):
             with ui.card().classes("w-full drop-shadow"):
-                # print (self.reference)
+                """
+                self,
+                position,
+                centreID,
+                kit,
+                reference,
+                basecall_config,
+                bed_file,
+                experiment_duration,
+                dev=False,
+                """
                 self.minknow_info_pane = Minknow_Info(
                     self.position,
                     self.centreID,

@@ -162,6 +162,8 @@ def identify_device(device_type, device_name):
     elif device_type == "P2_SOLO":
         if device_name.startswith("P2S"):
             return "P2 Solo", "P2_Solo_Left-45_Open_Full.png"
+        else:
+            return (f"{device_type}", None)
     elif device_type == "PROMETHION":
         return (
             f"{DEVICEDICT[device_type]}",
@@ -217,8 +219,9 @@ class Minknow_Info:
         )
         self.check_instance.daemon = True
         self.check_instance.start()
-
         self.render_me()
+
+
 
     def render_me(self):
         sample_camera = Camera(
@@ -349,6 +352,11 @@ class Minknow_Info:
                             reference=self.reference,
                             sample_id=sampleid.value,
                             flowcell_id=flowcellid.value,
+                            kit=self.kit,
+                            basecall_config=self.basecall_config,
+                            centreID=self.centreID,
+                            experiment_duration=self.experiment_duration,
+                            bed_file=self.bed_file,
                         ),
                     )
 
@@ -532,7 +540,7 @@ class Minknow_Info:
                 self.Estimated_N50 = info.n50.estimated_n50
             if info.HasField("protocol_run_info"):
                 # print(info.protocol_run_info.meta_info.tags)
-                self.kit = info.protocol_run_info.meta_info.tags["kit"].string_value
+                self.running_kit = info.protocol_run_info.meta_info.tags["kit"].string_value
                 self.Flowcell_Type = info.protocol_run_info.meta_info.tags[
                     "flow cell"
                 ].string_value
@@ -591,20 +599,24 @@ class Minknow_Info:
         position=None,
         reference=None,
         sample_id=None,
-        experiment_group_id=None,
+        centreID=None,
         flowcell_id=None,
+        kit=None,
+        basecall_config=None,
+        experiment_duration=None,
+        bed_file = None,
     ):
         ui.notify(f"Starting Run {sample_id} on {flowcell_id}!", type="positive")
         # ToDo: At every stage we need to confirm that the correct values have been entered.
         # position = "1B"
-        kit = self.kit
+        kit = kit
         ###Memo to self... basecall config must not include cfg
-        basecall_config = self.basecall_config
-        alignment_reference = self.reference
-        bed_file = self.bed_file
-        experiment_duration = self.experiment_duration
+        basecall_config = basecall_config
+        alignment_reference = reference
+        bed_file = bed_file
+        experiment_duration = experiment_duration
         current_date = datetime.now()
-        centreID = self.centreID
+        centreID = centreID
         experiment_group_id = (
             f"{centreID}_{current_date.strftime('%B')}_{current_date.year}"
         )
