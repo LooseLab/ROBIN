@@ -78,6 +78,8 @@ async def index() -> None:
         browse=app.storage.general[UNIQUE_ID]["browse"],
         exclude=app.storage.general[UNIQUE_ID]["exclude"],
         reference=app.storage.general[UNIQUE_ID]["reference"],
+        bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
+        basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
         unique_id=UNIQUE_ID,
     )
     GUI.setup()
@@ -127,6 +129,8 @@ async def live_sample(sample_id: str) -> None:
         browse=app.storage.general[UNIQUE_ID]["browse"],
         exclude=app.storage.general[UNIQUE_ID]["exclude"],
         reference=app.storage.general[UNIQUE_ID]["reference"],
+        bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
+        basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
         unique_id=UNIQUE_ID,
         sample_id=sample_id,
     )
@@ -155,6 +159,8 @@ async def live() -> None:
         browse=app.storage.general[UNIQUE_ID]["browse"],
         exclude=app.storage.general[UNIQUE_ID]["exclude"],
         reference=app.storage.general[UNIQUE_ID]["reference"],
+        bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
+        basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
         unique_id=UNIQUE_ID,
     )
     GUI.setup()
@@ -181,6 +187,8 @@ async def test() -> None:
         browse=True,
         exclude=app.storage.general[UNIQUE_ID]["exclude"],
         reference=app.storage.general[UNIQUE_ID]["reference"],
+        bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
+        basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
         unique_id=UNIQUE_ID,
     )
     GUI_browse.setup()
@@ -217,6 +225,8 @@ async def startup() -> None:
         browse=app.storage.general[UNIQUE_ID]["browse"],
         exclude=app.storage.general[UNIQUE_ID]["exclude"],
         reference=app.storage.general[UNIQUE_ID]["reference"],
+        bed_file = app.storage.general[UNIQUE_ID]["bed_file"],
+        basecall_config = app.storage.general[UNIQUE_ID]["basecall_config"],
         unique_id=UNIQUE_ID,
     )
     MAINPAGE.setup()
@@ -250,6 +260,8 @@ class Methnice:
         reference: Path,
         unique_id: str,
         sample_id: Optional[str] = None,
+        basecall_config: str,
+        bed_file: str,
     ):
         self.force_sampleid = force_sampleid
         self.kit = kit
@@ -265,6 +277,8 @@ class Methnice:
         self.browse = browse
         self.exclude = exclude
         self.reference = reference
+        selff.basecall_config = basecall_config
+        self.bed_file = bed_file
         self.minknow_connection = None
         if sample_id:
             self.sample_id = sample_id
