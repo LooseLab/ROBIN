@@ -815,9 +815,11 @@ class TargetCoverage(BaseAnalysis):
         :param covdf: a pandas dataframe of
         :return:
         """
-        sorteddf = covdf.sort_values(
+        pattern = r'^chr([0-9]+|X|Y)$'
+        temp_covdf = covdf[covdf['#rname'].str.match(pattern)]
+        sorteddf = temp_covdf.sort_values(
             by="#rname",
-            key=lambda x: np.argsort(natsort.index_natsorted(covdf["#rname"])),
+            key=lambda x: np.argsort(natsort.index_natsorted(temp_covdf["#rname"])),
         )
         sorteddf = sorteddf[sorteddf["#rname"] != "chrM"]
         self.echart3.options["title"]["text"] = "Per Chromosome Coverage"
@@ -851,9 +853,11 @@ class TargetCoverage(BaseAnalysis):
         )
         groupeddf = groupeddf[groupeddf["chrom"] != "chrM"]
         groupeddf["meandepth"] = groupeddf["bases"] / groupeddf["length"]
-        sorteddf = covdf.sort_values(
+        pattern = r'^chr([0-9]+|X|Y)$'
+        temp_covdf = covdf[covdf['#rname'].str.match(pattern)]
+        sorteddf = temp_covdf.sort_values(
             by="#rname",
-            key=lambda x: np.argsort(natsort.index_natsorted(covdf["#rname"])),
+            key=lambda x: np.argsort(natsort.index_natsorted(temp_covdf["#rname"])),
         )
         sorteddf = sorteddf[sorteddf["#rname"] != "chrM"]
         self.echart4.options["title"]["text"] = "Per Chromosome Target Coverage"
