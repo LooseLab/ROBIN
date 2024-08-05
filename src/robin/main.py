@@ -80,6 +80,7 @@ async def index() -> None:
         reference=app.storage.general[UNIQUE_ID]["reference"],
         bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
         basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
+        experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
     )
     GUI.setup()
@@ -131,6 +132,7 @@ async def live_sample(sample_id: str) -> None:
         reference=app.storage.general[UNIQUE_ID]["reference"],
         bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
         basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
+        experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
         sample_id=sample_id,
     )
@@ -161,6 +163,7 @@ async def live() -> None:
         reference=app.storage.general[UNIQUE_ID]["reference"],
         bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
         basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
+        experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
     )
     GUI.setup()
@@ -189,6 +192,7 @@ async def test() -> None:
         reference=app.storage.general[UNIQUE_ID]["reference"],
         bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
         basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
+        experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
     )
     GUI_browse.setup()
@@ -227,6 +231,7 @@ async def startup() -> None:
         reference=app.storage.general[UNIQUE_ID]["reference"],
         bed_file = app.storage.general[UNIQUE_ID]["bed_file"],
         basecall_config = app.storage.general[UNIQUE_ID]["basecall_config"],
+        experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
     )
     MAINPAGE.setup()
@@ -261,6 +266,7 @@ class Methnice:
         unique_id: str,
         basecall_config: str,
         bed_file: str,
+        experiment_duration: str,
         sample_id: Optional[str] = None,
 
     ):
@@ -278,6 +284,7 @@ class Methnice:
         self.browse = browse
         self.exclude = exclude
         self.reference = reference
+        self.experiment_duration = experiment_duration
         self.basecall_config = basecall_config
         self.bed_file = bed_file
         self.minknow_connection = None
@@ -552,6 +559,7 @@ def run_class(
     reference: Path,
     basecall_config: str,
     bed_file: Path,
+    experiment_duration: int,
 ) -> None:
     """
     Set up and run the ROBIN application.
@@ -599,7 +607,8 @@ def run_class(
         "exclude": exclude,
         "reference": reference,
         "bed_file": bed_file,
-        "basecall_config": basecall_config
+        "basecall_config": basecall_config,
+        "experiment_duration": experiment_duration,
     }
     app.storage.general[UNIQUE_ID]["samples"] = {}
     app.storage.general[UNIQUE_ID]["sample_list"] = observables.ObservableList([])
@@ -772,6 +781,12 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     type=str,
 )
 @click.option(
+    "--experiment_duration",
+    help="The experiment run time in hours.",
+    required=True,
+    type=int,
+)
+@click.option(
     "--browse",
     is_flag=True,
     show_default=True,
@@ -821,7 +836,8 @@ def package_run(
     exclude: List[str],
     reference: Path,
     bed_file: Path,
-    basecall_config: str
+    basecall_config: str,
+    experiment_duration: int,
 ) -> None:
     """
     Entrypoint for when GUI is launched directly.
@@ -847,8 +863,9 @@ def package_run(
             browse=browse,
             exclude=exclude,
             reference=click.format_filename(reference),
-            bed_file=bed_file,
+            bed_file=click.format_filename(bed_file),
             basecall_config=basecall_config,
+            experiment_duration=experiment_duration,
         )
     else:
         logging.info(f"Watchfolder: {watchfolder}, Output: {output}")
@@ -874,8 +891,9 @@ def package_run(
             browse=browse,
             exclude=exclude,
             reference=click.format_filename(reference),
-            bed_file=bed_file,
+            bed_file=click.format_filename(bed_file),
             basecall_config=basecall_config,
+            experiment_duration=experiment_duration,
         )
 
 
