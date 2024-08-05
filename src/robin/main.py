@@ -244,6 +244,7 @@ class Methnice:
     """
 
     def __init__(
+        self,
         force_sampleid: Optional[str],
         kit: Optional[str],
         centreID: Optional[str],
@@ -258,9 +259,10 @@ class Methnice:
         exclude: List[str],
         reference: Path,
         unique_id: str,
-        sample_id: Optional[str] = None,
         basecall_config: str,
         bed_file: str,
+        sample_id: Optional[str] = None,
+
     ):
         self.force_sampleid = force_sampleid
         self.kit = kit
@@ -548,6 +550,8 @@ def run_class(
     browse: bool,
     exclude: List[str],
     reference: Path,
+    basecall_config: str,
+    bed_file: Path,
 ) -> None:
     """
     Set up and run the ROBIN application.
@@ -594,6 +598,8 @@ def run_class(
         "browse": browse,
         "exclude": exclude,
         "reference": reference,
+        "bed_file": bed_file,
+        "basecall_config": basecall_config
     }
     app.storage.general[UNIQUE_ID]["samples"] = {}
     app.storage.general[UNIQUE_ID]["sample_list"] = observables.ObservableList([])
@@ -749,6 +755,21 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     ),
     help="Path to the reference genome and index.",
     required=True,
+)
+@click.option(
+    "--bed_file",
+    "-b",
+    type=click.Path(
+        exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path
+    ),
+    help="Path to the bedfile to use for adaptive sampling.",
+    required=True,
+)
+@click.option(
+    "--basecall_config",
+    help="The basecalling configuration to use.",
+    required=True,
+    type=str,
 )
 @click.option(
     "--browse",
