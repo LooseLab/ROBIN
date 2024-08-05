@@ -160,7 +160,7 @@ def identify_device(device_type, device_name):
             "p2_-left-45_screen-up-1_splash_transparent.png",
         )
     elif device_type == "P2_SOLO":
-        if device_name.startswith("PS2"):
+        if device_name.startswith("P2S"):
             return "P2 Solo", "P2_Solo_Left-45_Open_Full.png"
     elif device_type == "PROMETHION":
         return (
