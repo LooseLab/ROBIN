@@ -432,7 +432,7 @@ class Position(MinKNOWFish):
                 )
 
                 with ui.column().bind_visibility_from(self.minknow_info_pane, "show"):
-                    self.minknowhistogram = c (self.position)
+                    self.minknowhistogram = MinknowHistograms(self.position)
 
                     with ui.row():
                         with ui.card().classes("drop-shadow"):
