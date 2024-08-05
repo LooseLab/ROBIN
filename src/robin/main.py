@@ -278,7 +278,7 @@ class Methnice:
         self.browse = browse
         self.exclude = exclude
         self.reference = reference
-        selff.basecall_config = basecall_config
+        self.basecall_config = basecall_config
         self.bed_file = bed_file
         self.minknow_connection = None
         if sample_id:
