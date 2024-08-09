@@ -212,10 +212,16 @@ class NanoDX_object(BaseAnalysis):
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), self.model
         )
+        logger.info(f"model file: {self.modelfile}")
         self.nanodx_df_store = {}  # pd.DataFrame()
         self.nanodxfile = {}
         self.merged_bed_file = {}
         super().__init__(*args, **kwargs)
+        if self.model != "Capper_et_al_NN.pkl":
+            self.storefile = "PanNanoDX_scores.csv"
+        else:
+            self.storefile = "NanoDX_scores.csv"
+        #    self.output = f"{self.output}_PanCan"
 
     def __del__(self):
         if self.nanodxfile:
@@ -258,9 +264,9 @@ class NanoDX_object(BaseAnalysis):
             output = self.output
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
-        if self.check_file_time(os.path.join(output, "nanoDX_scores.csv")):
+        if self.check_file_time(os.path.join(output, self.storefile)):
             self.nanodx_df_store = pd.read_csv(
-                os.path.join(os.path.join(output, "nanoDX_scores.csv")),
+                os.path.join(os.path.join(output, self.storefile)),
                 index_col=0,
             )
             columns_greater_than_threshold = (
@@ -483,7 +489,7 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_df_store[sampleID].to_csv(
                 os.path.join(
                     self.check_and_create_folder(self.output, sampleID),
-                    "nanoDX_scores.csv",
+                    self.storefile,
                 )
             )
 
@@ -519,6 +525,9 @@ class NanoDX_object(BaseAnalysis):
         self.nanodxchart.options["title"][
             "text"
         ] = f"NanoDX: processed {count} bams and found {int(n_features)} features"
+        self.nanodxchart.options["title"][
+            "subtext"
+        ] = f"Model: {self.model}"
         self.nanodxchart.options["yAxis"]["data"] = x
         self.nanodxchart.options["series"] = [
             {"type": "bar", "name": "NanoDX", "data": y}

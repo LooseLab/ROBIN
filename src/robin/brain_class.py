@@ -250,6 +250,7 @@ class BrainMeth:
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
         self.bamfornanodx = Queue()
+        self.bamforpannanodx = Queue()
         self.bamforcnv = Queue()
         self.bamfortargetcoverage = Queue()
         self.bamformgmt = Queue()
@@ -285,7 +286,15 @@ class BrainMeth:
                 **common_args,
             )
             self.NanoDX.process_data()
-
+        if "pannanodx" not in self.exclude:
+            self.panNanoDX = NanoDX_object(
+                analysis_name="PANNANODX",
+                batch=True,
+                bamqueue=self.bamforpannanodx,
+                model="pancan_devel_v5i_NN.pkl",
+                **common_args,
+            )
+            self.panNanoDX.process_data()
         if "forest" not in self.exclude:
             self.RandomForest = RandomForest_object(
                 analysis_name="FOREST",
@@ -549,6 +558,8 @@ class BrainMeth:
                         sturgeonsummary = ui.column()
                     if "nanodx" not in self.exclude:
                         nanodxsummary = ui.column()
+                    if "pannanodx" not in self.exclude:
+                        pannanodxsummary = ui.column()
                     if "forest" not in self.exclude:
                         forestsummary = ui.column()
 
@@ -728,6 +739,14 @@ class BrainMeth:
                                 ).style(
                                     "color: #000000; font-size: 100%; font-weight: 300"
                                 )
+                            if "pannanodx" not in self.exclude:
+                                ui.label().bind_text_from(
+                                    self,
+                                    "bamforpannanodx",
+                                    backward=lambda n: f"BAM files for Pan NanoDX: {n.qsize()}",
+                                ).style(
+                                    "color: #000000; font-size: 100%; font-weight: 300"
+                                )
 
         if sample_id:
             selectedtab = None
@@ -799,6 +818,15 @@ class BrainMeth:
                                     **display_args,
                                 )
                                 await self.NanoDX.render_ui(sample_id=self.sampleID)
+                            if "pannanodx" not in self.exclude:
+                                self.PanNanoDX = NanoDX_object(
+                                    analysis_name="PANNANODX",
+                                    batch=True,
+                                    summary=pannanodxsummary,
+                                    model="pancan_devel_v5i_NN.pkl",
+                                    **display_args,
+                                )
+                                await self.PanNanoDX.render_ui(sample_id=self.sampleID)
                             if "forest" not in self.exclude:
                                 self.RandomForest = RandomForest_object(
                                     analysis_name="FOREST",
@@ -1056,6 +1084,8 @@ class BrainMeth:
                     self.bamforsturgeon.put([file[0], file[1], sample_id])
                 if "nanodx" not in self.exclude:
                     self.bamfornanodx.put([file[0], file[1], sample_id])
+                if "pannanodx" not in self.exclude:
+                    self.bamforpannanodx.put([file[0], file[1], sample_id])
                 if "cnv" not in self.exclude:
                     self.bamforcnv.put([file[0], file[1], sample_id])
                 if "coverage" not in self.exclude:

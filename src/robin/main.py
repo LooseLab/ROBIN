@@ -799,7 +799,7 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     multiple=True,
     help="Exclude analysis types with one or more of these options.",
     type=click.Choice(
-        ["sturgeon", "forest", "nanodx", "cnv", "fusion", "coverage", "mgmt"],
+        ["sturgeon", "forest", "nanodx", "pannanodx", "cnv", "fusion", "coverage", "mgmt"],
         case_sensitive=False,
     ),
 )
