@@ -154,14 +154,14 @@ def parse_vcf(vcf_file):
                 col for col in vcf.columns if col not in shared_columns
             ]
 
-            vcf = vcf.replace({np.nan: None})
+            vcf = vcf.replace({np.nan: "Missing"})
             result = (
                 vcf.groupby(shared_columns)[non_shared_columns]
                 .agg(set_unique_values)
                 .reset_index()
             )
 
-            vcf = result
+            vcf = result.replace({"Missing": None})
 
             try:
                 vcf.to_csv(f"{vcf_file}.csv", index=False)
