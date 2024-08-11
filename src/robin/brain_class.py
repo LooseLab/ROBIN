@@ -124,7 +124,7 @@ def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
     for path, dirs, files in os.walk(watchfolder):
         with alive_bar(len(files)) as bar:
             for f in files:
-                if "".join(Path(f).suffixes) in file_endings:
+                if "".join(Path(f).suffix) in file_endings:
                     logging.info(f"Reading BAM file: {os.path.join(path, f)}")
                     if simtime:
                         bam = ReadBam(os.path.join(path, f))
