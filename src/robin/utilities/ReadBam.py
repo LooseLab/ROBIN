@@ -1,13 +1,9 @@
-"""
-Original code written by: Thomas Murray and taken from https://github.com/tom-murray98/minFQ_BAM/blob/master/BAM_RG_tag_extractor.py
-"""
-
 import pysam
 import os
 from typing import Optional, Tuple, Dict, Any, Generator, Set
 from dataclasses import dataclass, field, asdict
 import logging
-from datetime import datetime
+from dateutil import parser
 
 # Create a logger for this module
 logger = logging.getLogger(__name__)
@@ -133,6 +129,8 @@ class ReadBam:
             logger.error("BAM file path is not set")
             return
 
+        logger.debug(f"Read Bam {self.bam_file}")
+
         index_file = f"{self.bam_file}.bai"
         if not os.path.isfile(index_file):
             logger.warning(
@@ -195,9 +193,7 @@ class ReadBam:
 
             logger.info(f"Mapped reads: {self.mapped_reads}")
             logger.info(f"Total reads: {self.mapped_reads + self.unmapped_reads}")
-            bam_read.elapsed_time = datetime.fromisoformat(
-                bam_read.last_start
-            ) - datetime.fromisoformat(bam_read.time_of_run)
+            bam_read.elapsed_time = parser.parse(bam_read.last_start) - parser.parse(bam_read.time_of_run)
 
             return asdict(bam_read)
 

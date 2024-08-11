@@ -243,7 +243,7 @@ class NanoDX_object(BaseAnalysis):
                     self.create_nanodx_time_chart("NanoDX Time Series")
         if self.summary:
             with self.summary:
-                ui.label("NanoDX classification: Unknown")
+                ui.label(f"NanoDX classification {self.model}: Unknown")
         if self.browse:
             self.show_previous_data()
         else:
@@ -284,7 +284,7 @@ class NanoDX_object(BaseAnalysis):
                 with self.summary:
                     self.summary.clear()
                     ui.label(
-                        f"NanoDX classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                        f"NanoDX classification ({self.model}): {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
                     )
             self.update_nanodx_plot(
                 lastrow_plot.index.to_list(),
