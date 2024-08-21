@@ -81,10 +81,12 @@ import pickle
 import ruptures as rpt
 from typing import Optional, Tuple, List, BinaryIO
 import re
+from collections import defaultdict
 
 os.environ["CI"] = "1"
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
+
 
 
 class Result:
@@ -94,6 +96,16 @@ class Result:
 
     def __init__(self, cnv_dict: dict) -> None:
         self.cnv = cnv_dict
+
+
+def run_ruptures(r_cnv, penalty_value, bin_width):
+    algo_c = ruptures_plotting(np.array(r_cnv))
+
+    ruptures_result = algo_c.predict(pen=penalty_value)
+
+    scaled_changepoints = [cp * bin_width for cp in ruptures_result]
+
+    return [(cp - bin_width, cp + bin_width) for cp in scaled_changepoints]
 
 
 def iterate_bam(
@@ -119,7 +131,8 @@ def iterate_bam(
         copy_numbers=copy_numbers,
         log_level=log_level,
     )
-    return result.cnv, result.bin_width, result.variance, copy_numbers
+
+    return result.cnv, result.bin_width, result.variance, copy_numbers, result.genome_length
 
 
 def iterate_bam_bin(
@@ -226,10 +239,14 @@ def ruptures_plotting(data: np.ndarray) -> rpt.KernelCPD:
     Returns:
         rpt.KernelCPD: The change point detection algorithm object.
     """
-    x_coords = range(0, (data.size + 1))
-    signal = np.array(list(zip(x_coords, data)))
+    #x_coords = range(0, (data.size + 1))
+    #signal = np.array(list(zip(x_coords, data)))
+    #try:
+    #    algo_c = rpt.KernelCPD(kernel="linear", min_size=10).fit(signal)
+    #except Exception as e:
+    #    print(f"e")
 
-    algo_c = rpt.KernelCPD(kernel="linear", min_size=10).fit(signal)
+    algo_c = rpt.KernelCPD(kernel="rbf").fit(data) #, min_size=10)
 
     return algo_c
 
@@ -249,6 +266,8 @@ class CNVAnalysis(BaseAnalysis):
         self.result2 = None
         self.result3 = CNV_Difference()
         self.XYestimate = "Unknown"
+        self.dtype = [('name', 'U10'), ('start', 'i8'), ('end', 'i8')]
+        self.DATA_ARRAY = np.empty(0, dtype=self.dtype)
 
         with open(
             os.path.join(
@@ -272,6 +291,17 @@ class CNVAnalysis(BaseAnalysis):
         self.gene_bed = pd.read_table(
             self.gene_bed_file,
             names=["chrom", "start_pos", "end_pos", "gene"],
+            header=None,
+            sep="\s+",
+        )
+        self.centromeres_file = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "cenSatRegions.bed",
+        )
+        self.centromere_bed = pd.read_csv(
+            self.centromeres_file,
+            usecols=[0,1,2,3],
+            names=["chrom", "start_pos", "end_pos", "name"],
             header=None,
             sep="\s+",
         )
@@ -307,11 +337,11 @@ class CNVAnalysis(BaseAnalysis):
             timestamp (float): The timestamp indicating when the file was generated.
         """
         # self.file_list.append(bamfile)
-        try:
-            await self.do_cnv_work(bamfile)
-        except Exception as e:
-            logger.error(e)
-            logger.error("line 313")
+        #try:
+        await self.do_cnv_work(bamfile)
+        #except Exception as e:
+        #    logger.error(e)
+        #    logger.error("line 313")
 
     async def do_cnv_work(self, bamfile: BinaryIO) -> None:
         """
@@ -323,7 +353,7 @@ class CNVAnalysis(BaseAnalysis):
         if self.sampleID not in self.update_cnv_dict.keys():
             self.update_cnv_dict[self.sampleID] = {}
         # print("Running CNV analysis on", self.sampleID, bamfile)
-        r_cnv, r_bin, r_var, self.update_cnv_dict[self.sampleID] = await run.cpu_bound(
+        r_cnv, r_bin, r_var, self.update_cnv_dict[self.sampleID], genome_length = await run.cpu_bound(
             iterate_bam,
             bamfile,
             self.threads,
@@ -334,6 +364,7 @@ class CNVAnalysis(BaseAnalysis):
 
         self.cnv_dict["bin_width"] = r_bin
         self.cnv_dict["variance"] = r_var
+
         r2_cnv, r2_bin, r2_var, self.ref_cnv_dict = await run.cpu_bound(
             iterate_bam_bin,
             bamfile,
@@ -344,6 +375,7 @@ class CNVAnalysis(BaseAnalysis):
             bin_width=self.cnv_dict["bin_width"],
         )
 
+
         for key in r_cnv.keys():
             if key != "chrM" and re.match(r'^chr(\d+|X|Y)$', key):
                 moving_avg_data1 = await run.cpu_bound(moving_average, r_cnv[key])
@@ -353,7 +385,31 @@ class CNVAnalysis(BaseAnalysis):
                 )
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
 
+                if len(r_cnv[key]) > 3:
+                    penalty_value = 5
+                    paired_changepoints = await run.cpu_bound(run_ruptures, r_cnv[key], penalty_value, self.cnv_dict["bin_width"])
+                    approx_chrom_length=len(r_cnv[key]) * r_bin
+                    if len(paired_changepoints) > 0:
+                        for (start, end) in paired_changepoints:
+                           if start < approx_chrom_length < end:
+                               pass
+                           elif start < 0 :
+                               pass
+                           elif start < self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["end_pos"].max() and end > self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["start_pos"].min():
+                               pass
+                           else:
+                               item = np.array([(key, start, end)], dtype=self.dtype)
+                               self.DATA_ARRAY = np.append(self.DATA_ARRAY, item)
+
+
         self.estimate_XY()
+
+        np.save(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID), "ruptures.npy"
+            ),
+            self.DATA_ARRAY,
+        )
 
         np.save(
             os.path.join(
@@ -495,15 +551,26 @@ class CNVAnalysis(BaseAnalysis):
                     "grid": {"containLabel": True},
                     "title": {"text": f"{title}"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
+                    "tooltip": {"trigger": "axis"},
                     "xAxis": {
                         "type": f"{type}",
                         "max": "dataMax",
                         "splitLine": {"show": False},
                     },
-                    "yAxis": {
+                    "yAxis": [{
                         "type": "value",
                         "logBase": 2,
+                        "name": "Ploidy",
+                        "position": "left",
                     },
+                    {
+                        "type": "value",  # Secondary y-axis for the line plot
+                        "name": "Candidate Break Points",
+                        "position": "right",
+                        "axisLine": {"lineStyle": {"color": "blue"}},  # Color the axis line to distinguish it
+                        "splitLine": {"show": False},  # Optionally hide the grid lines for the secondary axis
+                    },
+                    ],
                     "dataZoom": [
                         {"type": "slider", "filterMode": "none"},
                         {
@@ -528,13 +595,13 @@ class CNVAnalysis(BaseAnalysis):
         )
 
     def _update_cnv_plot(
-        self,
-        plot_to_update: ui.echart,
-        result: Optional[Result] = None,
-        gene_target: Optional[str] = None,
-        title: Optional[str] = None,
-        min: Optional[float] = 0,
-        ui_mode: bool = True,
+            self,
+            plot_to_update: ui.echart,
+            result: Optional[Result] = None,
+            gene_target: Optional[str] = None,
+            title: Optional[str] = None,
+            min: Optional[float] = 0,
+            ui_mode: bool = True,
     ) -> None:
         """
         Update CNV plots with new data and annotations.
@@ -547,42 +614,64 @@ class CNVAnalysis(BaseAnalysis):
             min (Optional[float]): Minimum value for the x-axis.
             ui_mode (bool): Flag to indicate if in UI mode.
         """
+
+        # Check if there is CNV result data available, either passed to the function or stored in the instance
         if result or self.result:
-            total = 0
-            valueslist = {"All": "All"}
-            genevalueslist = {"All": "All"}
+            # Initialize variables for data accumulation and dropdown options
+            total = 0  # Accumulates the total length of the CNV data
+            valueslist = {"All": "All"}  # Dictionary to store chromosome dropdown options
+            genevalueslist = {"All": "All"}  # Dictionary to store gene dropdown options
+
+            # Try to set the chromosome filter from the UI selection, default to "All" if not available
             try:
                 self.chrom_filter = self.chrom_select.value
             except AttributeError:
                 self.chrom_filter = "All"
 
-            min = min
-            max = "dataMax"
+            # Set initial min and max values for the x-axis
+            min = min  # This can be modified later based on gene targeting
+            max = "dataMax"  # Placeholder to automatically determine the maximum value
 
+            # If a specific gene is targeted, adjust the plot to focus on the region around that gene
             if gene_target:
+                # Retrieve the start and end positions and chromosome of the targeted gene
                 start_pos = self.gene_bed.iloc[int(gene_target)].start_pos
                 end_pos = self.gene_bed.iloc[int(gene_target)].end_pos
                 chrom = self.gene_bed.iloc[int(gene_target)].chrom
+
+                # Loop through the sorted CNV data to find the chromosome of the targeted gene
                 for counter, contig in enumerate(
-                    natsort.natsorted(result.cnv), start=1
+                        natsort.natsorted(result.cnv), start=1
                 ):
-                    valueslist[counter] = contig
-                    if contig == chrom:
+                    valueslist[counter] = contig  # Add chromosome to the dropdown options
+                    if contig == chrom:  # Stop when the target chromosome is found
                         break
+
+                # Set the chromosome filter to the index of the target chromosome
                 self.chrom_filter = counter
+
+                # Adjust the x-axis min and max to focus on the region around the gene target
                 min = start_pos - 10 * self.cnv_dict["bin_width"]
                 max = end_pos + 10 * self.cnv_dict["bin_width"]
-            if self.chrom_filter == "All":
-                counter = 0
 
+            # If all chromosomes are selected, prepare the plot to display all chromosomes
+            if self.chrom_filter == "All":
+                counter = 0  # Reset counter for chromosome loop
+
+                # Update the plot title to reflect that all chromosomes are being shown
                 plot_to_update.options["title"]["text"] = f"{title} - All Chromosomes"
-                plot_to_update.options["series"] = []
+                plot_to_update.options["series"] = []  # Clear any existing series in the plot
+
+                # Loop through the sorted CNV data and plot each chromosome
                 for contig, cnv in natsort.natsorted(result.cnv.items()):
+                    # Skip non-standard chromosomes (e.g., mitochondrial DNA or unrecognized chromosomes)
                     if contig == "chrM" or not re.match(r'^chr(\d+|X|Y)$', contig):
                         continue
-                    counter += 1
-                    valueslist[counter] = contig
 
+                    counter += 1  # Increment chromosome counter
+                    valueslist[counter] = contig  # Add chromosome to dropdown options
+
+                    # Prepare data for plotting, adjusting positions by bin width
                     data = list(
                         zip(
                             (np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"],
@@ -590,18 +679,20 @@ class CNVAnalysis(BaseAnalysis):
                         )
                     )
 
-                    data = reduce_list(data)
+                    data = reduce_list(data)  # Reduce the data points for more efficient plotting
+                    total += len(cnv)  # Update total length with current chromosome data length
 
-                    total += len(cnv)
-
+                    # Set the x-axis min and max values
                     plot_to_update.options["xAxis"]["max"] = max
                     plot_to_update.options["xAxis"]["min"] = min
+
+                    # Append the current chromosome data as a scatter plot series
                     plot_to_update.options["series"].append(
                         {
                             "type": "scatter",
                             "name": contig,
                             "data": data,
-                            "symbolSize": 5,
+                            "symbolSize": 5,  # Size of the scatter plot points
                             "markLine": {
                                 "symbol": "none",
                                 "data": [
@@ -610,8 +701,8 @@ class CNVAnalysis(BaseAnalysis):
                                         "label": {"formatter": contig},
                                         "name": contig,
                                         "xAxis": (
-                                            (total - len(cnv) / 2)
-                                            * self.cnv_dict["bin_width"]
+                                                (total - len(cnv) / 2)
+                                                * self.cnv_dict["bin_width"]
                                         ),
                                     },
                                     {
@@ -623,20 +714,24 @@ class CNVAnalysis(BaseAnalysis):
                             },
                         }
                     )
+
+                    # Add gene information to the dropdown options for the current chromosome
                     for index, gene in self.gene_bed[
                         self.gene_bed["chrom"] == contig
                     ].iterrows():
                         genevalueslist[index] = f"{gene.chrom} - {gene.gene}"
-            else:
-                plot_to_update.options["series"] = []
 
+            # If a specific chromosome is selected, plot only that chromosome
+            else:
+                plot_to_update.options["series"] = []  # Clear existing series in the plot
+
+                # Update dropdown options for chromosomes
                 for counter, contig in enumerate(
-                    natsort.natsorted(result.cnv), start=1
+                        natsort.natsorted(result.cnv), start=1
                 ):
                     valueslist[counter] = contig
 
-                #print (result.cnv.items())
-
+                # Define the main chromosomes to be included in the plot
                 main_chromosomes = [
                     "chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7",
                     "chr8", "chr9", "chr10", "chr11", "chr12", "chr13",
@@ -644,71 +739,83 @@ class CNVAnalysis(BaseAnalysis):
                     "chr20", "chr21", "chr22", "chrX", "chrY"
                 ]
 
-                # Filter the dictionary
+                # Filter CNV data to include only the main chromosomes
                 filtered_data = {k: v for k, v in result.cnv.items() if k in main_chromosomes}
 
+                # Select the data for the filtered chromosome based on the user's selection
                 contig, cnv = natsort.natsorted(filtered_data.items())[
                     int(self.chrom_filter) - 1
-                ]
+                    ]
 
+                # Prepare the data for plotting
                 data = list(
                     zip((np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"], cnv)
                 )
 
+                # If no specific gene target is selected, keep the default axis limits
                 if not gene_target:
                     min = min
                     max = "dataMax"
-
                 else:
+                    # If the gene target is "All", adjust axis limits to show the entire chromosome
                     if gene_target == "All":
                         min = min
                         max = "dataMax"
                     else:
+                        # For a specific gene, adjust the axis limits to zoom in on the gene
                         start_pos = self.gene_bed.iloc[int(gene_target)].start_pos
                         end_pos = self.gene_bed.iloc[int(gene_target)].end_pos
 
                         chrom = self.gene_bed.iloc[int(gene_target)].chrom
                         counter = 0
                         for counter, contig in enumerate(
-                            natsort.natsorted(result.cnv), start=1
+                                natsort.natsorted(result.cnv), start=1
                         ):
                             if contig == chrom:
                                 self.chrom_filter = counter
                                 break
 
+                        # Set axis limits to focus on the gene, with a margin of 10 times the bin width
                         min = start_pos - 10 * self.cnv_dict["bin_width"]
                         max = end_pos + 10 * self.cnv_dict["bin_width"]
 
+                        # Further adjust the axis limits if the gene region is large
                         if start_pos - min > 2_000_000:
                             min = start_pos - 2_000_000
                         if max - end_pos > 2_000_000:
                             max = end_pos + 2_000_000
 
                         if min < 0:
-                            min = 0
+                            min = 0  # Ensure the minimum x-axis value is not negative
 
+                # Update the plot title to reflect the selected chromosome
                 plot_to_update.options["title"][
                     "text"
                 ] = f"Copy Number Variation - {contig}"
-                plot_to_update.options["xAxis"]["max"] = max
-                plot_to_update.options["xAxis"]["min"] = min
+                plot_to_update.options["xAxis"]["max"] = max  # Set x-axis maximum
+                plot_to_update.options["xAxis"]["min"] = min  # Set x-axis minimum
+
+                # Add the data for the selected chromosome as a scatter plot series
                 plot_to_update.options["series"].append(
                     {
                         "type": "scatter",
                         "name": contig,
                         "data": data,
-                        "symbolSize": 3,
+                        "symbolSize": 3,  # Smaller point size for this view
                         "markArea": {
                             "itemStyle": {"color": "rgba(255, 173, 177, 0.4)"},
                             "data": [],
                         },
                     }
                 )
+
+                # Add gene information to the dropdown options and highlight gene regions in the plot
                 for index, gene in self.gene_bed[
                     self.gene_bed["chrom"] == contig
                 ].iterrows():
                     genevalueslist[index] = f"{gene.chrom} - {gene.gene}"
 
+                # Highlight the regions of the genes in the plot with shaded areas
                 for _, row in self.gene_bed[
                     self.gene_bed["chrom"] == contig
                 ].iterrows():
@@ -723,18 +830,112 @@ class CNVAnalysis(BaseAnalysis):
                             },
                         ]
                     )
+
+                plot_to_update.options["series"].append(
+                    {
+                        "type": "scatter",
+                        "name": contig + "_highlight",
+                        "data": [],  # Empty data because this series is just for highlighting
+                        "symbolSize": 3,
+                        "markArea": {
+                            "itemStyle": {"color": "rgba(135, 206, 250, 0.4)"},  # Light blue color
+                            "data": [],
+                        },
+                    }
+                )
+
+                # Highlight the centromeres with another shaded area:
+                for _, row in self.centromere_bed[
+                    self.centromere_bed["chrom"] == contig
+                ].iterrows():
+                    plot_to_update.options["series"][1]["markArea"]["data"].append(
+                        [
+                            {
+                                "name": row["name"],
+                                "xAxis": row["start_pos"],
+                            },
+                            {
+                                "xAxis": row["end_pos"],
+                            },
+                        ]
+                    )
+                #print(self.DATA_ARRAY[contig])
+                # Prepare the data for plotting
+                breakpoints = self.DATA_ARRAY[self.DATA_ARRAY['name'] == contig]
+
+                # Use defaultdict to accumulate increments and decrements
+                increments = defaultdict(int)
+                for entry in breakpoints:
+                    increments[entry['start']] += 1
+                    increments[entry['end'] + 1] -= 1
+
+                # Generate the coordinates directly
+                coordinates = []
+                current_value = 0
+                sorted_positions = sorted(increments.keys())
+                for position in sorted_positions:
+                    current_value += increments[position]
+                    coordinates.append((position, current_value))
+
+                if len(coordinates)>0:
+
+                    print(f"Max value: {data[-1]}")
+                    # Extract y-values
+                    x_values, y_values = zip(*coordinates)
+
+                    # Define the threshold
+                    #threshold_value = np.percentile(y_values, 99)
+
+                    threshold_value = 5
+
+                    # Find where the y_values cross the threshold
+                    above_threshold = np.array(y_values) > threshold_value
+
+                    # Extract the x-values where y-values are above the threshold
+                    x_above_threshold = np.array(x_values)[above_threshold]
+
+                    # Determine the x-range where y crosses above the threshold
+                    if x_above_threshold.size > 0:
+                        x_range_min = np.min(x_above_threshold)
+                        x_range_max = np.max(x_above_threshold)
+                        x_range = x_range_max - x_range_min
+
+                        print(f"Threshold Value: {threshold_value}")
+                        print(f"X-Range where Y crosses above the threshold: {x_range}")
+                        print(f"X-Range Min: {x_range_min}")
+                        print(f"X-Range Max: {x_range_max}")
+                    else:
+                        print("No x-values are above the threshold.")
+
+                plot_to_update.options["series"].append(
+                    {
+                        "type": "line",
+                        "name": "Line Plot",
+                        "data": coordinates,  # Your line plot data (e.g., [(x1, y1), (x2, y2), ...])
+                        "yAxisIndex": 1,  # Specify to use the secondary y-axis (index 1)
+                        "lineStyle": {"color": "blue"},  # Color the line to match the y-axis
+                        "symbol": "none",  # Optionally remove symbols from the line plot
+                    }
+                )
+
+            # Update the chromosome dropdown options in the UI
             try:
                 self.chrom_select.set_options(valueslist)
             except AttributeError:
-                pass
+                pass  # Ignore if the UI component is not available
+
+            # Update the gene dropdown options in the UI
             try:
                 self.gene_select.set_options(genevalueslist)
             except AttributeError:
-                pass
+                pass  # Ignore if the UI component is not available
+
+            # If in UI mode, update the plot in the UI
             if ui_mode:
                 ui.update(plot_to_update)
             else:
-                return plot_to_update
+                return plot_to_update  # If not in UI mode, return the updated plot object
+
 
     async def show_previous_data(self) -> None:
         """
@@ -751,7 +952,7 @@ class CNVAnalysis(BaseAnalysis):
             output = self.output
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
-        # print(output, self.sampleID)
+
         if self.check_file_time(os.path.join(output, "CNV.npy")):
             result = np.load(
                 os.path.join(output, "CNV.npy"), allow_pickle="TRUE"
@@ -783,10 +984,13 @@ class CNVAnalysis(BaseAnalysis):
                         moving_avg_data1, moving_avg_data2
                     )
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                    # if len(self.result3.cnv[key]) > 20:
-                    #    algo_c = ruptures_plotting(self.result3.cnv[key])
-                    #    penalty_value = 5
-                    #    result = algo_c.predict(pen=penalty_value)
+
+            if self.check_file_time(os.path.join(output, "ruptures.npy")):
+                self.DATA_ARRAY = np.load(
+                    os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
+                )
+
+
 
             self.update_plots()
             if self.summary:
