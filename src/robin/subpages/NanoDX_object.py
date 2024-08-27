@@ -293,7 +293,7 @@ class NanoDX_object(BaseAnalysis):
                 self.nanodx_df_store.iloc[-1]["number_probes"],
             )
 
-    async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
+    async def process_ (self, bamfile: List[Tuple[str, float]]) -> None:
         """
         Processes the BAM files and performs the NanoDX analysis.
 
