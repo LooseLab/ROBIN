@@ -80,6 +80,7 @@ import os
 from alive_progress import alive_bar
 from nicegui import ui, app, run
 
+
 from robin.utilities.bam_handler import BamEventHandler
 from robin.subpages.MGMT_object import MGMT_Object
 from robin.subpages.Sturgeon_object import Sturgeon_object
@@ -111,7 +112,7 @@ def check_bam(bamfile):
     return baminfo, bamdata
 
 
-def sort_bams(files_and_timestamps, watchfolder, file_endings):
+def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
     import bisect
 
     # Function to insert into sorted list
@@ -123,17 +124,29 @@ def sort_bams(files_and_timestamps, watchfolder, file_endings):
     for path, dirs, files in os.walk(watchfolder):
         with alive_bar(len(files)) as bar:
             for f in files:
-                if "".join(Path(f).suffixes) in file_endings:
+                if "".join(Path(f).suffix) in file_endings:
                     logging.info(f"Reading BAM file: {os.path.join(path, f)}")
-                    bam = ReadBam(os.path.join(path, f))
-                    baminfo = bam.process_reads()
-                    insert_sorted(
-                        (
-                            os.path.join(path, f),
-                            baminfo["last_start"],
-                            baminfo["elapsed_time"],
+                    if simtime:
+                        bam = ReadBam(os.path.join(path, f))
+                        baminfo = bam.process_reads()
+                        insert_sorted(
+                            (
+                                os.path.join(path, f),
+                                baminfo["last_start"],
+                                baminfo["elapsed_time"],
+                            )
                         )
-                    )
+                    else:
+                        filetime = datetime.fromtimestamp(os.path.getctime(os.path.join(path,f)))
+                        elapsedtime = datetime.now() - filetime
+                        insert_sorted(
+                            (
+                                os.path.join(path, f),
+                                filetime.isoformat(),
+                                elapsedtime,
+                            )
+                        )
+
                 bar()
     return files_and_timestamps
 
@@ -143,6 +156,8 @@ class BrainMeth:
         self,
         threads=4,
         force_sampleid=None,
+        kit=None,
+        centreID=None,
         simtime=False,
         watchfolder=None,
         output=None,
@@ -174,6 +189,8 @@ class BrainMeth:
         """
         self.mainuuid = mainuuid
         self.force_sampleid = force_sampleid
+        self.kit = kit
+        self.centreID = centreID
         self.threads = threads
         self.simtime = simtime
         self.watchfolder = watchfolder
@@ -233,6 +250,7 @@ class BrainMeth:
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
         self.bamfornanodx = Queue()
+        self.bamforpannanodx = Queue()
         self.bamforcnv = Queue()
         self.bamfortargetcoverage = Queue()
         self.bamformgmt = Queue()
@@ -268,7 +286,15 @@ class BrainMeth:
                 **common_args,
             )
             self.NanoDX.process_data()
-
+        if "pannanodx" not in self.exclude:
+            self.panNanoDX = NanoDX_object(
+                analysis_name="PANNANODX",
+                batch=True,
+                bamqueue=self.bamforpannanodx,
+                model="pancan_devel_v5i_NN.pkl",
+                **common_args,
+            )
+            self.panNanoDX.process_data()
         if "forest" not in self.exclude:
             self.RandomForest = RandomForest_object(
                 analysis_name="FOREST",
@@ -340,17 +366,18 @@ class BrainMeth:
             self.watchfolder = watchfolder
             if "file" not in app.storage.general[self.mainuuid]["bam_count"].keys():
                 app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
-            #ToDo: Replace this with a queue.
+            # ToDo: Replace this with a queue.
             self.event_handler = BamEventHandler(
                 self.watchdogbamqueue
-                #app.storage.general[self.mainuuid]["bam_count"]
+                # app.storage.general[self.mainuuid]["bam_count"]
             )
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
+            ui.timer(1, callback=self.check_existing_bams, once=True)
             self.observer.start()
 
             ui.timer(1, callback=self.background_process_bams, once=True)
-            ui.timer(1, callback=self.check_existing_bams, once=True)
+
 
             logging.info("Watchfolder setup and added")
 
@@ -531,6 +558,8 @@ class BrainMeth:
                         sturgeonsummary = ui.column()
                     if "nanodx" not in self.exclude:
                         nanodxsummary = ui.column()
+                    if "pannanodx" not in self.exclude:
+                        pannanodxsummary = ui.column()
                     if "forest" not in self.exclude:
                         forestsummary = ui.column()
 
@@ -710,6 +739,14 @@ class BrainMeth:
                                 ).style(
                                     "color: #000000; font-size: 100%; font-weight: 300"
                                 )
+                            if "pannanodx" not in self.exclude:
+                                ui.label().bind_text_from(
+                                    self,
+                                    "bamforpannanodx",
+                                    backward=lambda n: f"BAM files for Pan NanoDX: {n.qsize()}",
+                                ).style(
+                                    "color: #000000; font-size: 100%; font-weight: 300"
+                                )
 
         if sample_id:
             selectedtab = None
@@ -781,6 +818,15 @@ class BrainMeth:
                                     **display_args,
                                 )
                                 await self.NanoDX.render_ui(sample_id=self.sampleID)
+                            if "pannanodx" not in self.exclude:
+                                self.PanNanoDX = NanoDX_object(
+                                    analysis_name="PANNANODX",
+                                    batch=True,
+                                    summary=pannanodxsummary,
+                                    model="pancan_devel_v5i_NN.pkl",
+                                    **display_args,
+                                )
+                                await self.PanNanoDX.render_ui(sample_id=self.sampleID)
                             if "forest" not in self.exclude:
                                 self.RandomForest = RandomForest_object(
                                     analysis_name="FOREST",
@@ -1038,6 +1084,8 @@ class BrainMeth:
                     self.bamforsturgeon.put([file[0], file[1], sample_id])
                 if "nanodx" not in self.exclude:
                     self.bamfornanodx.put([file[0], file[1], sample_id])
+                if "pannanodx" not in self.exclude:
+                    self.bamforpannanodx.put([file[0], file[1], sample_id])
                 if "cnv" not in self.exclude:
                     self.bamforcnv.put([file[0], file[1], sample_id])
                 if "coverage" not in self.exclude:
@@ -1059,6 +1107,7 @@ class BrainMeth:
         :return: None
         """
         file_endings = {".bam"}
+        """
         if sequencing_summary:
             logging.info("Using sequencing summary for existing BAM files")
             df = pd.read_csv(
@@ -1110,21 +1159,22 @@ class BrainMeth:
                     self.check_bam(row["full_path"])
             self.runfinished = True
         else:
-            files_and_timestamps = []
-            files_and_timestamps = await run.cpu_bound(
-                sort_bams, files_and_timestamps, self.watchfolder, file_endings
-            )
+        """
+        files_and_timestamps = []
+        files_and_timestamps = await run.cpu_bound(
+            sort_bams, files_and_timestamps, self.watchfolder, file_endings, self.simtime
+        )
 
-            # Iterate through the sorted list
-            for timestamp, f, elapsed_time in files_and_timestamps:
-                logging.debug(f"Processing existing BAM file: {f} at {timestamp}")
-                app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
-                if "file" not in app.storage.general[self.mainuuid]["bam_count"]:
-                    app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
-                app.storage.general[self.mainuuid]["bam_count"]["file"][
-                    f
-                ] = timestamp.timestamp()  # time.time()
-                if self.simtime:
-                    await asyncio.sleep(1)
-                else:
-                    await asyncio.sleep(0)
+        # Iterate through the sorted list
+        for timestamp, f, elapsed_time in files_and_timestamps:
+            logging.debug(f"Processing existing BAM file: {f} at {timestamp}")
+            app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
+            if "file" not in app.storage.general[self.mainuuid]["bam_count"]:
+                app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
+            app.storage.general[self.mainuuid]["bam_count"]["file"][
+                f
+            ] = timestamp.timestamp()  # time.time()
+            if self.simtime:
+                await asyncio.sleep(1)
+            else:
+                await asyncio.sleep(0)

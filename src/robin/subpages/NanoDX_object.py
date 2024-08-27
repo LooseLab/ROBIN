@@ -67,22 +67,31 @@ logger = logging.getLogger(__name__)
 
 # Code to edit the NN_model to use cpu and not gpu
 edit_file_path = os.path.join(
-            os.path.dirname(os.path.abspath(theme.__file__)), "submodules", "nanoDX", "workflow", "scripts", "NN_model.py"
-        )
+    os.path.dirname(os.path.abspath(theme.__file__)),
+    "submodules",
+    "nanoDX",
+    "workflow",
+    "scripts",
+    "NN_model.py",
+)
 if not os.path.exists(edit_file_path):
     raise FileNotFoundError(f"The file {edit_file_path} does not exist.")
 
-with open(edit_file_path, 'r') as file:
+with open(edit_file_path, "r") as file:
     lines = file.readlines()
 
 # Check if the line matches the target content
 line_number = 28
-target_content = 'self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")'
+target_content = (
+    'self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")'
+)
 if lines[line_number - 1].strip() == target_content.strip():
     target_substring = '("cuda:0" if torch.cuda.is_available() else "cpu")'
     new_substring = '("cpu")'
-    lines[line_number - 1] = lines[line_number - 1].replace(target_substring, new_substring)
-    with open(edit_file_path, 'w') as file:
+    lines[line_number - 1] = lines[line_number - 1].replace(
+        target_substring, new_substring
+    )
+    with open(edit_file_path, "w") as file:
         file.writelines(lines)
     logger.info(f"Line {line_number} was modified.")
 else:
@@ -95,7 +104,6 @@ from robin.utilities.merge_bedmethyl import (
     collapse_bedmethyl,
 )
 from typing import List, Tuple, Optional, Dict, Any
-
 
 
 def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
@@ -204,10 +212,16 @@ class NanoDX_object(BaseAnalysis):
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), self.model
         )
+        logger.info(f"model file: {self.modelfile}")
         self.nanodx_df_store = {}  # pd.DataFrame()
         self.nanodxfile = {}
         self.merged_bed_file = {}
         super().__init__(*args, **kwargs)
+        if self.model != "Capper_et_al_NN.pkl":
+            self.storefile = "PanNanoDX_scores.csv"
+        else:
+            self.storefile = "NanoDX_scores.csv"
+        #    self.output = f"{self.output}_PanCan"
 
     def __del__(self):
         if self.nanodxfile:
@@ -229,7 +243,7 @@ class NanoDX_object(BaseAnalysis):
                     self.create_nanodx_time_chart("NanoDX Time Series")
         if self.summary:
             with self.summary:
-                ui.label("NanoDX classification: Unknown")
+                ui.label(f"NanoDX classification {self.model}: Unknown")
         if self.browse:
             self.show_previous_data()
         else:
@@ -250,9 +264,9 @@ class NanoDX_object(BaseAnalysis):
             output = self.output
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
-        if self.check_file_time(os.path.join(output, "nanoDX_scores.csv")):
+        if self.check_file_time(os.path.join(output, self.storefile)):
             self.nanodx_df_store = pd.read_csv(
-                os.path.join(os.path.join(output, "nanoDX_scores.csv")),
+                os.path.join(os.path.join(output, self.storefile)),
                 index_col=0,
             )
             columns_greater_than_threshold = (
@@ -270,7 +284,7 @@ class NanoDX_object(BaseAnalysis):
                 with self.summary:
                     self.summary.clear()
                     ui.label(
-                        f"NanoDX classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                        f"NanoDX classification ({self.model}): {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
                     )
             self.update_nanodx_plot(
                 lastrow_plot.index.to_list(),
@@ -475,7 +489,7 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_df_store[sampleID].to_csv(
                 os.path.join(
                     self.check_and_create_folder(self.output, sampleID),
-                    "nanoDX_scores.csv",
+                    self.storefile,
                 )
             )
 
@@ -511,6 +525,9 @@ class NanoDX_object(BaseAnalysis):
         self.nanodxchart.options["title"][
             "text"
         ] = f"NanoDX: processed {count} bams and found {int(n_features)} features"
+        self.nanodxchart.options["title"][
+            "subtext"
+        ] = f"Model: {self.model}"
         self.nanodxchart.options["yAxis"]["data"] = x
         self.nanodxchart.options["series"] = [
             {"type": "bar", "name": "NanoDX", "data": y}

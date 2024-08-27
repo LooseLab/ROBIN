@@ -80,6 +80,7 @@ from pathlib import Path
 import pickle
 import ruptures as rpt
 from typing import Optional, Tuple, List, BinaryIO
+import re
 
 os.environ["CI"] = "1"
 # Use the main logger configured in the main application
@@ -308,10 +309,9 @@ class CNVAnalysis(BaseAnalysis):
         # self.file_list.append(bamfile)
         try:
             await self.do_cnv_work(bamfile)
-        except exception as e:
+        except Exception as e:
             logger.error(e)
             logger.error("line 313")
-
 
     async def do_cnv_work(self, bamfile: BinaryIO) -> None:
         """
@@ -345,7 +345,7 @@ class CNVAnalysis(BaseAnalysis):
         )
 
         for key in r_cnv.keys():
-            if key != "chrM":
+            if key != "chrM" and re.match(r'^chr(\d+|X|Y)$', key):
                 moving_avg_data1 = await run.cpu_bound(moving_average, r_cnv[key])
                 moving_avg_data2 = await run.cpu_bound(moving_average, r2_cnv[key])
                 moving_avg_data1, moving_avg_data2 = await run.cpu_bound(
@@ -578,7 +578,7 @@ class CNVAnalysis(BaseAnalysis):
                 plot_to_update.options["title"]["text"] = f"{title} - All Chromosomes"
                 plot_to_update.options["series"] = []
                 for contig, cnv in natsort.natsorted(result.cnv.items()):
-                    if contig == "chrM":
+                    if contig == "chrM" or not re.match(r'^chr(\d+|X|Y)$', contig):
                         continue
                     counter += 1
                     valueslist[counter] = contig
@@ -635,7 +635,19 @@ class CNVAnalysis(BaseAnalysis):
                 ):
                     valueslist[counter] = contig
 
-                contig, cnv = natsort.natsorted(result.cnv.items())[
+                #print (result.cnv.items())
+
+                main_chromosomes = [
+                    "chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7",
+                    "chr8", "chr9", "chr10", "chr11", "chr12", "chr13",
+                    "chr14", "chr15", "chr16", "chr17", "chr18", "chr19",
+                    "chr20", "chr21", "chr22", "chrX", "chrY"
+                ]
+
+                # Filter the dictionary
+                filtered_data = {k: v for k, v in result.cnv.items() if k in main_chromosomes}
+
+                contig, cnv = natsort.natsorted(filtered_data.items())[
                     int(self.chrom_filter) - 1
                 ]
 
@@ -764,7 +776,7 @@ class CNVAnalysis(BaseAnalysis):
             self.result2 = Result(r2_cnv)
 
             for key in self.result.cnv.keys():
-                if key != "chrM":
+                if key != "chrM" and re.match(r'^chr(\d+|X|Y)$', key):
                     moving_avg_data1 = moving_average(self.result.cnv[key])
                     moving_avg_data2 = moving_average(r2_cnv[key])
                     moving_avg_data1, moving_avg_data2 = pad_arrays(

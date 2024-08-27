@@ -16,9 +16,12 @@ from minknow_api.statistics_pb2 import (
     ReadEndReason,
     DataSelection,
 )
-
+import logging
 import numpy as np
 import math
+
+# Use the main logger configured in the main application
+logger = logging.getLogger(__name__)
 
 
 class MinknowHistograms:
@@ -60,7 +63,7 @@ class MinknowHistograms:
         self.renderme()
 
     def renderme(self):
-        with ui.card().classes("flat border-[2px] no-shadow"):
+        with ui.card().classes("w-full flat border-[2px] no-shadow"):
             with ui.card().tight().classes("flat border-[2px] no-shadow"):
                 ui.label("Histograms").classes("text-h6")
                 with ui.row().props("align-middle"):

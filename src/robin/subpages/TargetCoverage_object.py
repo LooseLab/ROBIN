@@ -16,7 +16,7 @@ import logging
 import click
 import time
 from pathlib import Path
-from nicegui import ui, run, app, context  # , background_tasks
+from nicegui import ui, run, app  # , background_tasks
 from io import StringIO
 import pysam
 import tempfile
@@ -29,7 +29,10 @@ os.environ["CI"] = "1"
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
-decompress_gzip_file(os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf.gz'))
+decompress_gzip_file(
+    os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), "clinvar.vcf.gz")
+)
+
 
 def process_annotations(record: dict) -> dict:
     """
@@ -151,14 +154,14 @@ def parse_vcf(vcf_file):
                 col for col in vcf.columns if col not in shared_columns
             ]
 
-            vcf = vcf.replace({np.nan: None})
+            vcf = vcf.replace({np.nan: "Missing"})
             result = (
                 vcf.groupby(shared_columns)[non_shared_columns]
                 .agg(set_unique_values)
                 .reset_index()
             )
 
-            vcf = result
+            vcf = result.replace({"Missing": None})
 
             try:
                 vcf.to_csv(f"{vcf_file}.csv", index=False)
@@ -296,7 +299,9 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
 
 
 class TargetCoverage(BaseAnalysis):
-    def __init__(self, *args, showerrors=False,target_panel=None, reference=None, **kwargs):
+    def __init__(
+        self, *args, showerrors=False, target_panel=None, reference=None, **kwargs
+    ):
         self.callthreshold = 10
         self.clair3running = False
         self.targets_exceeding_threshold = {}
@@ -346,15 +351,14 @@ class TargetCoverage(BaseAnalysis):
         client = docker.from_env()
         status = False
         for image in client.images.list():
-            if 'hkubal/clairs-to:latest' in image.tags:
-                logger.info(f"Docker image found.")
+            if "hkubal/clairs-to:latest" in image.tags:
+                logger.info("Docker image found.")
                 status = True
                 return
         if not status:
-            logger.info(f"Docker image not found. Pulling...")
+            logger.info("Docker image not found. Pulling...")
             client.images.pull("hkubal/clairs-to:latest")
             logger.info("Docker image pulled.")
-
 
     def SNP_timer_run(self):
         self.snp_timer = ui.timer(0.1, self._snp_worker)
@@ -431,14 +435,16 @@ class TargetCoverage(BaseAnalysis):
         ui.label("IGV visualisations").style(
             "color: #6E93D6; font-size: 150%; font-weight: 300"
         ).tailwind("drop-shadow", "font-bold")
-        self.igvvizcard = ui.card().tight().classes("no-shadow border-[2px] w-full overflow-x-auto")
+        self.igvvizcard = (
+            ui.card().tight().classes("no-shadow border-[2px] w-full overflow-x-auto")
+        )
         with self.igvvizcard:
             with ui.row().classes("w-full"):
                 with ui.card().classes("w-full"):
                     ui.label(
-                        "If sufficient data have been generated, bam files for coverage over targets can be visualised.")
-                    self.igvelem = ui.element('div').classes("w-full")
-
+                        "If sufficient data have been generated, bam files for coverage over targets can be visualised."
+                    )
+                    self.igvelem = ui.element("div").classes("w-full")
 
         with ui.card().classes("w-full"):
             ui.label("Candidate SNPs").style(
@@ -809,9 +815,11 @@ class TargetCoverage(BaseAnalysis):
         :param covdf: a pandas dataframe of
         :return:
         """
-        sorteddf = covdf.sort_values(
+        pattern = r'^chr([0-9]+|X|Y)$'
+        temp_covdf = covdf[covdf['#rname'].str.match(pattern)]
+        sorteddf = temp_covdf.sort_values(
             by="#rname",
-            key=lambda x: np.argsort(natsort.index_natsorted(covdf["#rname"])),
+            key=lambda x: np.argsort(natsort.index_natsorted(temp_covdf["#rname"])),
         )
         sorteddf = sorteddf[sorteddf["#rname"] != "chrM"]
         self.echart3.options["title"]["text"] = "Per Chromosome Coverage"
@@ -845,9 +853,11 @@ class TargetCoverage(BaseAnalysis):
         )
         groupeddf = groupeddf[groupeddf["chrom"] != "chrM"]
         groupeddf["meandepth"] = groupeddf["bases"] / groupeddf["length"]
-        sorteddf = covdf.sort_values(
+        pattern = r'^chr([0-9]+|X|Y)$'
+        temp_covdf = covdf[covdf['#rname'].str.match(pattern)]
+        sorteddf = temp_covdf.sort_values(
             by="#rname",
-            key=lambda x: np.argsort(natsort.index_natsorted(covdf["#rname"])),
+            key=lambda x: np.argsort(natsort.index_natsorted(temp_covdf["#rname"])),
         )
         sorteddf = sorteddf[sorteddf["#rname"] != "chrM"]
         self.echart4.options["title"]["text"] = "Per Chromosome Target Coverage"
@@ -1112,8 +1122,8 @@ class TargetCoverage(BaseAnalysis):
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
         if os.path.exists(os.path.join(output, "clair3")):
-            app.add_static_files('/output_files', f'{output}/clair3/')
-            js_code = f'''                      
+            app.add_static_files("/output_files", f"{output}/clair3/")
+            js_code = f"""                      
                                                   var igvDiv = getElement("{self.igvelem.id}");
                                                   var options = {{
                                                     genome: "hg38",
@@ -1124,9 +1134,9 @@ class TargetCoverage(BaseAnalysis):
                                                     then(function (browser) {{
                                                         igv.browser = browser;
                                                    }});
-                                            '''
+                                            """
 
-            js_code_track = f'''
+            js_code_track = f"""
                                  
                                                       tracks =  {{
                                                             "name": "{self.sampleID}",
@@ -1140,18 +1150,19 @@ class TargetCoverage(BaseAnalysis):
                                                                                             .catch(function (error)  {{
                                                                                             console.log(error);
                                                                                             }});
-            '''
+            """
 
-            js_clear_track = f'''
+            js_clear_track = f"""
                                 igv.browser.removeTrackByName("{self.sampleID}");
                                 return 1;
-            '''
+            """
 
             async def clear_and_reload():
                 await ui.context.client.connected()
                 ui.run_javascript(js_code, timeout=30.0)
                 self.mybutton.disable()
                 dataload.enable()
+
             async def data_load():
                 ui.notify("Data Loading")
                 await ui.context.client.connected()
@@ -1159,14 +1170,15 @@ class TargetCoverage(BaseAnalysis):
                 ui.run_javascript(js_code_track, timeout=100)
                 ui.notify("Data Loaded")
 
-
         if not self.mybutton:
             with self.igvvizcard:
-                #ui.button('Load IGV').on('click', lambda: ui.run_javascript(js_code))
-                self.mybutton = ui.button('Load IGV').on('click', lambda: clear_and_reload())
-                dataload = ui.button('Re/Load Data').on('click', lambda: data_load())
+                # ui.button('Load IGV').on('click', lambda: ui.run_javascript(js_code))
+                self.mybutton = ui.button("Load IGV").on(
+                    "click", lambda: clear_and_reload()
+                )
+                dataload = ui.button("Re/Load Data").on("click", lambda: data_load())
                 dataload.disable()
-                #ui.link('AI interface', '/output_files/sorted_targets_exceeding.bam.bai')
+                # ui.link('AI interface', '/output_files/sorted_targets_exceeding.bam.bai')
         # ToDo: This function needs to run in background threads.
         if self.check_file_time(os.path.join(output, "coverage_main.csv")):
             self.cov_df_main = pd.read_csv(os.path.join(output, "coverage_main.csv"))

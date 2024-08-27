@@ -2,6 +2,7 @@ from multiprocessing import Manager
 from queue import Empty, Queue
 from typing import Callable, Generator
 from nicegui import background_tasks, run
+import asyncio
 
 
 class Worker:
@@ -33,8 +34,7 @@ class Worker:
         while self.progress < 1.0:
             try:
                 msg = self._queue.get_nowait()
+                self.progress = msg["progress"]
             except Empty:
-                # await asyncio.sleep(0.1)
-                continue
-            self.progress = msg["progress"]
+                await asyncio.sleep(0.1)
         self.is_running = False

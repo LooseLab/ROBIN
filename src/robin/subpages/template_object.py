@@ -5,6 +5,7 @@ import sys
 from nicegui import ui, app
 import click
 from pathlib import Path
+import logging
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)

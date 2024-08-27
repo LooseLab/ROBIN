@@ -247,7 +247,7 @@ class Sturgeon_object(BaseAnalysis):
                     return
 
                 self.st_num_probes[sampleID] = mydf.iloc[-1]["number_probes"]
-                lastrow = mydf.iloc[-1].drop("number_probes")
+                #lastrow = mydf.iloc[-1].drop("number_probes")
                 mydf_to_save = mydf
                 mydf_to_save["timestamp"] = currenttime
 

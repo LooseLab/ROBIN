@@ -63,7 +63,6 @@ from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
 import matplotlib
 from matplotlib.ticker import FuncFormatter
-from matplotlib.patches import ConnectionPatch
 from robin.subpages.base_analysis import BaseAnalysis
 from robin.utilities.decompress import decompress_gzip_file
 from collections import Counter
@@ -77,10 +76,11 @@ logger = logging.getLogger(__name__)
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
 
-decompress_gzip_file(os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)),
-            "gencode.v45.basic.annotation.gff3.gz",
-        )
+decompress_gzip_file(
+    os.path.join(
+        os.path.dirname(os.path.abspath(resources.__file__)),
+        "gencode.v45.basic.annotation.gff3.gz",
+    )
 )
 
 
@@ -406,7 +406,6 @@ def fusion_work(
                 if os.path.isfile(f"{tempbamfile}.csi"):
                     logger.debug(f"removing {tempbamfile}.csi")
                     os.remove(f"{tempbamfile}.csi")
-
 
                 samfile.close()
 
@@ -1194,7 +1193,7 @@ class FusionObject(BaseAnalysis):
                         gene_counter[row["gene"]] += 1
                         gene_counter[row["Join_Gene"]] += 1
 
-                        '''
+                        """
                         if row["Join_Gene"] in axdict.keys():
                             # Create an arc connection
                             con = ConnectionPatch(
@@ -1212,7 +1211,7 @@ class FusionObject(BaseAnalysis):
                             # Add the arc connection to the second subplot (ax2)
                             # axdict[row["Join_Gene"]].add_artist(con)
                             # plt.tight_layout()
-                        '''
+                        """
 
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
