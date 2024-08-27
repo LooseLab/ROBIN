@@ -67,6 +67,7 @@ if __name__ in {"__main__", "__mp_main__"}:
 
 from cnv_from_bam import iterate_bam_file
 from robin.subpages.base_analysis import BaseAnalysis
+from robin.utilities.break_point_detector import ChangeDetector, CNVChangeDetectorTracker
 import natsort
 from robin import theme, resources
 import pandas as pd
@@ -105,7 +106,7 @@ def run_ruptures(r_cnv, penalty_value, bin_width):
 
     scaled_changepoints = [cp * bin_width for cp in ruptures_result]
 
-    return [(cp - bin_width, cp + bin_width) for cp in scaled_changepoints]
+    return [(cp - (bin_width/2), cp + (bin_width/2)) for cp in scaled_changepoints]
 
 
 def iterate_bam(
@@ -375,6 +376,7 @@ class CNVAnalysis(BaseAnalysis):
             bin_width=self.cnv_dict["bin_width"],
         )
 
+        CNVchangedetector=CNVChangeDetectorTracker()
 
         for key in r_cnv.keys():
             if key != "chrM" and re.match(r'^chr(\d+|X|Y)$', key):
@@ -384,23 +386,30 @@ class CNVAnalysis(BaseAnalysis):
                     pad_arrays, moving_avg_data1, moving_avg_data2
                 )
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-
+                approx_chrom_length = 0
                 if len(r_cnv[key]) > 3:
                     penalty_value = 5
                     paired_changepoints = await run.cpu_bound(run_ruptures, r_cnv[key], penalty_value, self.cnv_dict["bin_width"])
                     approx_chrom_length=len(r_cnv[key]) * r_bin
                     if len(paired_changepoints) > 0:
+                        padding = 2_500_000
                         for (start, end) in paired_changepoints:
                            if start < approx_chrom_length < end:
                                pass
                            elif start < 0 :
                                pass
-                           elif start < self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["end_pos"].max() and end > self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["start_pos"].min():
+                           elif start < self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["end_pos"].max() + padding and end > self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["start_pos"].min() - padding:
                                pass
                            else:
                                item = np.array([(key, start, end)], dtype=self.dtype)
                                self.DATA_ARRAY = np.append(self.DATA_ARRAY, item)
 
+                breakpoints = self.DATA_ARRAY[self.DATA_ARRAY['name'] == key]
+                if len(breakpoints)>0:
+                    try:
+                        CNVchangedetector.add_breakpoints(key, breakpoints, approx_chrom_length)
+                    except Exception as e:
+                        raise(e)
 
         self.estimate_XY()
 
@@ -408,7 +417,7 @@ class CNVAnalysis(BaseAnalysis):
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID), "ruptures.npy"
             ),
-            self.DATA_ARRAY,
+            CNVchangedetector.coordinates,
         )
 
         np.save(
@@ -551,7 +560,7 @@ class CNVAnalysis(BaseAnalysis):
                     "grid": {"containLabel": True},
                     "title": {"text": f"{title}"},
                     "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "tooltip": {"trigger": "axis"},
+                    #"tooltip": {"trigger": "axis"},
                     "xAxis": {
                         "type": f"{type}",
                         "max": "dataMax",
@@ -572,10 +581,15 @@ class CNVAnalysis(BaseAnalysis):
                     },
                     ],
                     "dataZoom": [
-                        {"type": "slider", "filterMode": "none"},
+                        {"type": "slider",
+                         "yAxisIndex": 'none',
+                         "xAxisIndex": '0',
+                         "filterMode": "none",
+                        },
                         {
                             "type": "slider",
-                            "yAxisIndex": 0,
+                            "yAxisIndex": '0',
+                            "xAxisIndex": 'none',
                             "filterMode": "none",
                             "startValue": initmin,
                             "endValue": initmax,
@@ -859,64 +873,63 @@ class CNVAnalysis(BaseAnalysis):
                             },
                         ]
                     )
-                #print(self.DATA_ARRAY[contig])
-                # Prepare the data for plotting
-                breakpoints = self.DATA_ARRAY[self.DATA_ARRAY['name'] == contig]
 
-                # Use defaultdict to accumulate increments and decrements
-                increments = defaultdict(int)
-                for entry in breakpoints:
-                    increments[entry['start']] += 1
-                    increments[entry['end'] + 1] -= 1
+                if contig in self.CNVResults.keys():
+                    coordinates = self.CNVResults[contig]["positions"]
+                    threshold = self.CNVResults[contig]["threshold"]
+                    plot_to_update.options["series"].append(
+                        {
+                            "type": "line",
+                            "name": "Line Plot",
+                            "data": coordinates,  # Your line plot data (e.g., [(x1, y1), (x2, y2), ...])
+                            "yAxisIndex": 1,  # Specify to use the secondary y-axis (index 1)
+                            "lineStyle": {"color": "blue"},  # Color the line to match the y-axis
+                            "symbol": "none",  # Optionally remove symbols from the line plot
+                            "markLine":{
+                                "symbol": "none",
+                                "data": [
+                                {
+                                    "lineStyle": {"width": 2},
+                                    "label": {"formatter": "Selection Threshold"},
+                                    "name": "Threshold",
+                                    "color": "green",
+                                    "yAxis": (
+                                        threshold
+                                    ),
+                                },
+                                ],
+                            },
+                        }
+                    )
+                    starts = self.CNVResults[contig]["start_positions"]
+                    ends = self.CNVResults[contig]["end_positions"]
+                    #(starts, ends) = detector.get_breakpoints()
+                    #(starts, ends) = [],[]
+                    for start in starts:
+                        plot_to_update.options["series"][2]["markLine"]["data"].append(
+                            {
+                                "lineStyle": {"width": 2},
+                                "label": {"formatter": "s"},
+                                "name": "Target",
+                                "color": "green",
+                                "xAxis": (
+                                    start
+                                ),
+                            },
+                        )
 
-                # Generate the coordinates directly
-                coordinates = []
-                current_value = 0
-                sorted_positions = sorted(increments.keys())
-                for position in sorted_positions:
-                    current_value += increments[position]
-                    coordinates.append((position, current_value))
-
-                if len(coordinates)>0:
-
-                    print(f"Max value: {data[-1]}")
-                    # Extract y-values
-                    x_values, y_values = zip(*coordinates)
-
-                    # Define the threshold
-                    #threshold_value = np.percentile(y_values, 99)
-
-                    threshold_value = 5
-
-                    # Find where the y_values cross the threshold
-                    above_threshold = np.array(y_values) > threshold_value
-
-                    # Extract the x-values where y-values are above the threshold
-                    x_above_threshold = np.array(x_values)[above_threshold]
-
-                    # Determine the x-range where y crosses above the threshold
-                    if x_above_threshold.size > 0:
-                        x_range_min = np.min(x_above_threshold)
-                        x_range_max = np.max(x_above_threshold)
-                        x_range = x_range_max - x_range_min
-
-                        print(f"Threshold Value: {threshold_value}")
-                        print(f"X-Range where Y crosses above the threshold: {x_range}")
-                        print(f"X-Range Min: {x_range_min}")
-                        print(f"X-Range Max: {x_range_max}")
-                    else:
-                        print("No x-values are above the threshold.")
-
-                plot_to_update.options["series"].append(
-                    {
-                        "type": "line",
-                        "name": "Line Plot",
-                        "data": coordinates,  # Your line plot data (e.g., [(x1, y1), (x2, y2), ...])
-                        "yAxisIndex": 1,  # Specify to use the secondary y-axis (index 1)
-                        "lineStyle": {"color": "blue"},  # Color the line to match the y-axis
-                        "symbol": "none",  # Optionally remove symbols from the line plot
-                    }
-                )
+                    for end in ends:
+                        plot_to_update.options["series"][2]["markLine"]["data"].append(
+                            {
+                                "lineStyle": {"width": 2},
+                                "label": {"formatter": "e"},
+                                "name": "Target",
+                                "color": "red",
+                                "xAxis": (
+                                    end
+                                ),
+                            },
+                        )
 
             # Update the chromosome dropdown options in the UI
             try:
@@ -985,10 +998,15 @@ class CNVAnalysis(BaseAnalysis):
                     )
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
 
+            #self.CNVDetectorResults = CNVChangeDetectorTracker()
+            self.CNVResults = {}
             if self.check_file_time(os.path.join(output, "ruptures.npy")):
-                self.DATA_ARRAY = np.load(
+                #self.DATA_ARRAY = np.load(
+                #    os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
+                #)
+                self.CNVResults = np.load(
                     os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
-                )
+                ).item()
 
 
 
