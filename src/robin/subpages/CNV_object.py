@@ -394,11 +394,11 @@ class CNVAnalysis(BaseAnalysis):
                     if len(paired_changepoints) > 0:
                         padding = 2_500_000
                         for (start, end) in paired_changepoints:
-                           if start < approx_chrom_length < end:
+                           if start < approx_chrom_length < end: # Captures change points that overlap with the very end of the chromosome
                                pass
-                           elif start < 0 :
+                           elif start < 0 :# Captures change points that overlap with the very start of the chromosome
                                pass
-                           elif start < self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["end_pos"].max() + padding and end > self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["start_pos"].min() - padding:
+                           elif start < self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["end_pos"].max() + padding and end > self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["start_pos"].min() - padding: # This ignores any event that may be occuring within a centromere.
                                pass
                            else:
                                item = np.array([(key, start, end)], dtype=self.dtype)
