@@ -1,227 +1,266 @@
 import numpy as np
-import pandas as pd
 import os
 from collections import defaultdict
+from typing import Dict, List, Tuple
 
 
 class CNVChangeDetectorTracker:
     """
-    This class is designed to store breakpoints detected from copy
-    number variation analysis in real time. It will identify candidate
-    start and end points for targets that are likely to include structural
-    variants of importance.
-    The class will automatically limit the range of targets detected to a given
-    proportion of the target genome.
-    """
-    def __init__(self, proportion = 0.01):
-        """
-        The proportion value will be used to scale the targets provided back to the
-        user.
-        """
-        self.proportion = proportion
-        self.coordinates = {}
+    Tracks and analyzes copy number variation (CNV) breakpoints in genomic data.
 
-    def add_breakpoints(self, chromosome, breakpoints, length):
+    This class handles the detection and tracking of CNV breakpoints across different chromosomes.
+    It uses a binning approach to manage large genomic data efficiently, allowing for the analysis
+    of CNV patterns by calculating a threshold based on scaled genomic proportions.
+
+    Attributes:
+        base_proportion (float): The base proportion of the genome considered for CNV analysis.
+        bin_width (int): The bin width used for segmenting the genome.
+        max_bin_width (int): The maximum bin width used in the analysis.
+        coordinates (Dict[str, Dict[str, any]]): A dictionary storing breakpoint data and analysis results.
+    """
+
+    def __init__(self, base_proportion: float = 0.01, bin_width: int = 1_000_000):
+        """
+        Initializes the CNVChangeDetectorTracker with a specified base proportion and bin width.
+
+        Args:
+            base_proportion (float): The proportion of the genome to be used as a base for CNV analysis.
+            bin_width (int): The width of the bins to be used for genomic segmentation.
+        """
+        self.base_proportion: float = base_proportion
+        self.bin_width: int = bin_width
+        self.max_bin_width: int = bin_width  # Used to track the largest bin width during updates
+        self.coordinates: Dict[str, Dict[str, any]] = {}  # Stores CNV data per chromosome
+
+    def _calculate_scaled_proportion(self, length: int) -> int:
+        """
+        Calculates a scaled proportion of the genome based on the current bin width.
+
+        The proportion scales with the bin width, allowing for adaptive analysis depending on the
+        granularity of the data.
+
+        Args:
+            length (int): The length of the chromosome or genomic region.
+
+        Returns:
+            int: The scaled proportion of the genome.
+        """
+        # The proportion is scaled by a factor dependent on the bin width
+        proportion = self.base_proportion * ((self.bin_width / 1_000_000) ** (1/4))
+        return int(length * proportion)
+
+    def add_breakpoints(self, chromosome: str, breakpoints: List[Dict[str, int]], length: int, bin_width: int) -> None:
+        """
+        Adds detected CNV breakpoints to the tracker and updates internal structures accordingly.
+
+        This method handles new breakpoints for a given chromosome, ensuring that internal structures
+        are updated and the analysis is recalculated as necessary.
+
+        Args:
+            chromosome (str): The name of the chromosome (e.g., 'chr1').
+            breakpoints (List[Dict[str, int]]): A list of breakpoint dictionaries with 'start' and 'end' positions.
+            length (int): The total length of the chromosome or genomic region.
+            bin_width (int): The width of the bins used for this set of breakpoints.
+        """
+        if bin_width != self.bin_width:
+            self._update_bin_width(bin_width)
+
         increments = defaultdict(int)
         for entry in breakpoints:
             increments[entry['start']] += 1
             increments[entry['end']] -= 1
 
-        current_value = 0
-        if chromosome not in self.coordinates:
-            self.coordinates[chromosome] = {}
-            self.coordinates[chromosome]["positions"] = []
-            self.coordinates[chromosome]["length"] = length
-            self.coordinates[chromosome]['target'] = int(length * self.proportion)
+        # Convert the increments dictionary to NumPy arrays for efficient processing
+        positions_array = np.array(list(increments.keys()))
+        values_array = np.array(list(increments.values()))
 
-        sorted_positions = sorted(increments.keys())
-        for position in sorted_positions:
-            current_value += increments[position]
-            self.coordinates[chromosome]["positions"].append((position, current_value))
+        # Sort positions to ensure proper ordering of breakpoints
+        sorted_indices = np.argsort(positions_array)
+        sorted_positions = positions_array[sorted_indices]
+        sorted_values = values_array[sorted_indices]
+
+        # Initialize chromosome data if not already present
+        self._initialize_chromosome(chromosome, length)
+
+        # Process positions and calculate cumulative values
+        positions = self.coordinates[chromosome]["positions"]
+        cumulative_values = np.cumsum(sorted_values)
+        final_positions = np.vstack((sorted_positions, cumulative_values)).T
+
+        # Store the processed positions and values
+        positions.extend(map(tuple, final_positions))
+
+        # Recalculate the threshold and update BED data
         self._calculate_threshold(chromosome)
+        self.coordinates[chromosome]["bed_data"] = self.get_bed_targets(chromosome)
 
-    def _init_positions(self, chromosome):
-        self.coordinates[chromosome]["current_value"] = 0
-        self.coordinates[chromosome]["flush"] = True
-        self.coordinates[chromosome]["current_value"] = 0
-        self.coordinates[chromosome]["previous_value"] = 0
-        self.coordinates[chromosome]["start_value"] = 0
-        self.coordinates[chromosome]["end_value"] = 0
-        self.coordinates[chromosome]["cumulative_sum"] = 0
-        self.coordinates[chromosome]["start_positions"] = []
-        self.coordinates[chromosome]["end_positions"] = []
+    def _initialize_chromosome(self, chromosome: str, length: int) -> None:
+        """
+        Initializes internal data structures for tracking a new chromosome.
 
-    def _calculate_threshold(self, chromosome):
-        self.coordinates[chromosome]["threshold"] = 0
-        length = self.coordinates[chromosome]["length"]
+        Args:
+            chromosome (str): The name of the chromosome to initialize.
+            length (int): The total length of the chromosome.
+        """
+        self.coordinates[chromosome] = {
+            "positions": [],
+            "length": length,
+            "target": self._calculate_scaled_proportion(length),
+            "threshold": 0,
+            "current_value": 0,
+            "flush": True,
+            "previous_value": 0,
+            "start_value": 0,
+            "end_value": 0,
+            "cumulative_sum": 0,
+            "start_positions": [],
+            "end_positions": [],
+            "bed_data": ""
+        }
 
-        while length > self.coordinates[chromosome]["target"]:
+    def _update_chromosome_target(self, chromosome: str) -> None:
+        """
+        Updates the target proportion for a chromosome based on the current bin width.
+
+        Args:
+            chromosome (str): The name of the chromosome.
+        """
+        if chromosome in self.coordinates:
+            length = self.coordinates[chromosome]["length"]
+            self.coordinates[chromosome]["target"] = self._calculate_scaled_proportion(length)
+            self._calculate_threshold(chromosome)
+
+    def _update_bin_width(self, new_bin_width: int) -> None:
+        """
+        Updates the bin width and recalculates the target proportion for all chromosomes.
+
+        Args:
+            new_bin_width (int): The new bin width to be applied.
+        """
+        if new_bin_width < self.max_bin_width:
+            self.bin_width = new_bin_width
+            for chromosome in self.coordinates:
+                self._update_chromosome_target(chromosome)
+
+    def _calculate_threshold(self, chromosome: str) -> None:
+        """
+        Calculates the threshold for detecting significant CNVs for a specific chromosome.
+
+        The threshold is incrementally adjusted until the cumulative sum of positions meets the target proportion.
+
+        Args:
+            chromosome (str): The name of the chromosome.
+        """
+        data = self.coordinates[chromosome]
+        length = data["length"]
+        target = data["target"]
+
+        while length > target:
             self._init_positions(chromosome)
-            for (pos, depth) in self.coordinates[chromosome]["positions"]:
-                if depth > self.coordinates[chromosome]["threshold"]:
-                    self.update(chromosome, 1, pos)
-                else:
-                    self.update(chromosome,0, pos)
+            for pos, depth in data["positions"]:
+                self.update(chromosome, 1 if depth > data["threshold"] else 0, pos)
             length = self.get_cumulative_sum(chromosome)
-            self.coordinates[chromosome]["threshold"] += 1
+            data["threshold"] += 1
 
-    def get_threshold(self,chromosome):
+    def _init_positions(self, chromosome: str) -> None:
+        """
+        Resets internal tracking variables for a chromosome before recalculating thresholds.
+        """
+        data = self.coordinates[chromosome]
+        data.update({
+            "current_value": 0,
+            "flush": True,
+            "previous_value": 0,
+            "start_value": 0,
+            "end_value": 0,
+            "cumulative_sum": 0,
+            "start_positions": [],
+            "end_positions": []
+        })
+
+    def get_threshold(self, chromosome: str) -> int:
+        """
+        Retrieves the current threshold used for detecting significant CNVs on a chromosome.
+
+        Args:
+            chromosome (str): The name of the chromosome.
+
+        Returns:
+            int: The current threshold value for CNV detection.
+        """
         return self.coordinates[chromosome]["threshold"]
 
-    def get_cumulative_sum(self, chromosome):
-        if self.coordinates[chromosome]["flush"]:
-            return self.coordinates[chromosome]["cumulative_sum"]
-        else:
-            return self.coordinates[chromosome]["cumulative_sum"] + (self.coordinates[chromosome]["end_value"] - self.coordinates[chromosome]["start_value"] + 1)
+    def get_cumulative_sum(self, chromosome: str) -> int:
+        """
+        Calculates the cumulative sum of CNVs for a chromosome, which reflects the total length of regions with CNVs.
 
-    def update(self, chromosome, new_value, position):
-        if new_value != self.coordinates[chromosome]["current_value"]:
-            if new_value == 1 and self.coordinates[chromosome]["current_value"] == 0:
-                #print("Change detected: 0 -> 1")
-                self.coordinates[chromosome]["start_value"] = position
-                self.coordinates[chromosome]["end_value"] = position
-                self.coordinates[chromosome]["start_positions"].append(position)
-                self.coordinates[chromosome]["flush"] = False
-            elif new_value == 0 and self.coordinates[chromosome]["current_value"] == 1:
-                #print("Change detected: 1 -> 0")
-                self.coordinates[chromosome]["end_value"] = position
-                self.coordinates[chromosome]["cumulative_sum"] += (self.coordinates[chromosome]["end_value"] - self.coordinates[chromosome]["start_value"] + 1)
-                self.coordinates[chromosome]["end_positions"].append(position)
-                self.coordinates[chromosome]["flush"] = False
-            self.coordinates[chromosome]["previous_value"] = self.coordinates[chromosome]["current_value"]
-            self.coordinates[chromosome]["current_value"] = new_value
-        else:
-            #print("No change detected")
-            if new_value == 1:
-                self.coordinates[chromosome]["end_value"] = position
+        Args:
+            chromosome (str): The name of the chromosome.
 
-    def get_breakpoints(self, chromosome):
-        return (self.coordinates[chromosome]["start_positions"], self.coordinates[chromosome]["end_positions"])
+        Returns:
+            int: The cumulative sum of detected CNVs.
+        """
+        data = self.coordinates[chromosome]
+        return data["cumulative_sum"] if data["flush"] else data["cumulative_sum"] + (data["end_value"] - data["start_value"] + 1)
 
-    def get_bed_targets(self, chromosome):
-        if chromosome in self.coordinates.keys():
-            bedlist = [(chromosome, first, second) for first, second in zip(self.coordinates[chromosome]["start_positions"],self.coordinates[chromosome]["end_positions"])]
-            # Convert the list to BED format
-            bed_lines = []
-            for idx, (chrom, start, end) in enumerate(bedlist):
-                name = "." #f"region_{idx + 1}"  # Create a name for each region
-                score = "." #0  # You can adjust the score as needed
-                bed_lines.append(f"{chrom}\t{start}\t{end}\t{name}\t{score}\t+")
-                bed_lines.append(f"{chrom}\t{start}\t{end}\t{name}\t{score}\t-")
+    def update(self, chromosome: str, new_value: int, position: int) -> None:
+        """
+        Updates the internal tracking variables for a chromosome based on the latest position and CNV state.
 
+        Args:
+            chromosome (str): The name of the chromosome.
+            new_value (int): The new CNV state at the given position (0 or 1).
+            position (int): The genomic position where the update occurs.
+        """
+        data = self.coordinates[chromosome]
+
+        if new_value != data["current_value"]:
+            if new_value == 1 and data["current_value"] == 0:
+                # Starting a new CNV region
+                data["start_value"] = position
+                data["end_value"] = position
+                data["start_positions"].append(position)
+                data["flush"] = False
+            elif new_value == 0 and data["current_value"] == 1:
+                # Ending the current CNV region
+                data["end_value"] = position
+                data["cumulative_sum"] += (data["end_value"] - data["start_value"] + 1)
+                data["end_positions"].append(position)
+                data["flush"] = False
+            data["previous_value"] = data["current_value"]
+            data["current_value"] = new_value
+        elif new_value == 1:
+            # Extending the current CNV region
+            data["end_value"] = position
+
+    def get_breakpoints(self, chromosome: str) -> Tuple[List[int], List[int]]:
+        """
+        Retrieves the start and end positions of all detected CNV breakpoints for a chromosome.
+
+        Args:
+            chromosome (str): The name of the chromosome.
+
+        Returns:
+            Tuple[List[int], List[int]]: Two lists containing start and end positions of CNV breakpoints.
+        """
+        data = self.coordinates[chromosome]
+        return data["start_positions"], data["end_positions"]
+
+    def get_bed_targets(self, chromosome: str) -> str:
+        """
+        Generates BED format data for detected CNV regions on a chromosome.
+
+        Args:
+            chromosome (str): The name of the chromosome.
+
+        Returns:
+            str: A string containing BED format lines for each CNV region.
+        """
+        if chromosome in self.coordinates:
+            data = self.coordinates[chromosome]
+            bedlist = [(chromosome, start, end) for start, end in zip(
+                data["start_positions"], data["end_positions"])]
+            bed_lines = [f"{chrom}\t{start}\t{end}\t.\t.\t+"
+                         f"\n{chrom}\t{start}\t{end}\t.\t.\t-" for chrom, start, end in bedlist]
             return "\n".join(bed_lines)
-        #return (list(zip(*(self.coordinates[chromosome]["start_positions"],self.coordinates[chromosome]["end_positions"]))))
-
-class ChangeDetector:
-    def __init__(self, breakpoints, proportion = 0.01, length = 1_000_000_000):
-        self.length = length
-        self.target = int(self.length * proportion)
-        self._init_positions()
-        self.flush = True
-        self.threshold = 0
-        self.increments = defaultdict(int)
-        for entry in breakpoints:
-            self.increments[entry['start']] += 1
-            self.increments[entry['end'] + 1] -= 1
-        self.coordinates = []
-        self.current_value = 0
-        self.sorted_positions = sorted(self.increments.keys())
-        for position in self.sorted_positions:
-            self.current_value += self.increments[position]
-            self.coordinates.append((position, self.current_value))
-
-    def update(self, new_value, position):
-        if new_value != self.current_value:
-            if new_value == 1 and self.current_value == 0:
-                #print("Change detected: 0 -> 1")
-                self.start_value = position
-                self.end_value = position
-                self.start_positions.append(position)
-                self.flush = False
-            elif new_value == 0 and self.current_value == 1:
-                #print("Change detected: 1 -> 0")
-                self.end_value = position
-                self.cumulative_sum += (self.end_value - self.start_value + 1)
-                self.end_positions.append(position)
-                self.flush = False
-            self.previous_value = self.current_value
-            self.current_value = new_value
-        else:
-            #print("No change detected")
-            if new_value == 1:
-                self.end_value = position
-
-    def _init_positions(self):
-        self.flush = True
-        self.current_value = 0
-        self.previous_value = 0
-        self.start_value = 0
-        self.end_value = 0
-        self.cumulative_sum = 0
-        self.start_positions = []
-        self.end_positions = []
-
-    def calculate_threshold(self):
-        length = self.length
-
-        while length > self.target:
-            self._init_positions()
-            for (pos, depth) in self.coordinates:
-                if depth > self.threshold:
-                    self.update(1, pos)
-                else:
-                    self.update(0, pos)
-            length = self.get_cumulative_sum()
-            self.threshold += 1
-        return self.threshold
-
-    def get_cumulative_sum(self):
-        if self.flush:
-            return self.cumulative_sum
-        else:
-            return self.cumulative_sum + (self.end_value - self.start_value + 1)
-
-    def get_breakpoints(self):
-        return (self.start_positions, self.end_positions)
-
-    def get_bed_targets(self):
-        return (list(zip(*(self.start_positions,self.end_positions))))
-
-
-
-if __name__ == "__main__":
-    output = "/Users/mattloose/GIT/niceGUI/cnsmeth/robin_output_test/_ds1305_Intraop0051_c_ULK_2_highFRA"
-    DATA_ARRAY = np.load(os.path.join(output, "ruptures.npy"), allow_pickle="TRUE").item()
-    #print(type(DATA_ARRAY))
-    #print(DATA_ARRAY)
-    #print(DATA_ARRAY["chr9"])
-    #print(DATA_ARRAY["chr9"].keys())
-    #for item in list(range(1, 23)) + ['X', 'Y']:
-    #    contig = f"chr{item}"
-    #    breakpoints = DATA_ARRAY[contig]
-    #    detector = ChangeDetector(breakpoints)
-    #    print(f"Chromosome {contig}")
-    #    print(f"Threshold now is {detector.calculate_threshold()}")
-    #    print(f"Breakpoints are {detector.get_breakpoints()}")
-    #    print(f"Bed targets are {detector.get_bed_targets()}")
-
-    """
-    detector2 = CNVChangeDetectorTracker()
-    for item in list(range(1, 23)) + ['X', 'Y']:
-        contig = f"chr{item}"
-        breakpoints = DATA_ARRAY[contig]
-        detector2.add_breakpoints(contig,breakpoints,1_000_000_000)
-
-
-    for item in list(range(1, 23)) + ['X', 'Y']:
-        contig = f"chr{item}"
-        print (f"contig - {contig}, {detector2.get_threshold(contig)}, {detector2.get_cumulative_sum(contig)}")
-        print(detector2.get_bed_targets(contig))
-    """
-    detector2 = CNVChangeDetectorTracker()
-    detector2.coordinates = DATA_ARRAY
-    for item in list(range(1, 23)) + ['X', 'Y']:
-        contig = f"chr{item}"
-        result = detector2.get_bed_targets(contig)
-        if result:
-            print(result)
+        return ""

@@ -64,10 +64,10 @@ Example usage::
 if __name__ in {"__main__", "__mp_main__"}:
     main()
 """
-
+import pysam
 from cnv_from_bam import iterate_bam_file
 from robin.subpages.base_analysis import BaseAnalysis
-from robin.utilities.break_point_detector import ChangeDetector, CNVChangeDetectorTracker
+from robin.utilities.break_point_detector import CNVChangeDetectorTracker
 import natsort
 from robin import theme, resources
 import pandas as pd
@@ -82,7 +82,9 @@ import pickle
 import ruptures as rpt
 from typing import Optional, Tuple, List, BinaryIO
 import re
-from collections import defaultdict
+from collections import defaultdict, Counter
+import time
+from scipy.ndimage import uniform_filter1d
 
 os.environ["CI"] = "1"
 # Use the main logger configured in the main application
@@ -98,15 +100,29 @@ class Result:
     def __init__(self, cnv_dict: dict) -> None:
         self.cnv = cnv_dict
 
+def run_ruptures(r_cnv: list, penalty_value: int, bin_width: int) -> List[Tuple[int, int]]:
+    """
+    Detect change points in a time series using the Kernel Change Point Detection algorithm from the ruptures library.
 
-def run_ruptures(r_cnv, penalty_value, bin_width):
-    algo_c = ruptures_plotting(np.array(r_cnv))
+    Args:
+        r_cnv: A list containing the time series data.
+        penalty_value (int): The penalty value for the change point detection algorithm.
+        bin_width (int): The width of the bins used to scale the detected change points.
 
+    Returns:
+        List[Tuple[float, float]]: A list of tuples where each tuple represents a detected change point range
+                                    as (start, end) with respect to the bin width.
+    """
+    # Initialize the Kernel Change Point Detection algorithm with the Radial Basis Function (RBF) kernel
+    #x_coords = range(0, (len(r_cnv) + 1))
+    #signal = np.array(list(zip(x_coords, r_cnv)))
+    algo_c = rpt.KernelCPD(kernel="rbf").fit(np.array(r_cnv))
+
+    # Predict the change points using the provided penalty value
     ruptures_result = algo_c.predict(pen=penalty_value)
 
-    scaled_changepoints = [cp * bin_width for cp in ruptures_result]
-
-    return [(cp - (bin_width/2), cp + (bin_width/2)) for cp in scaled_changepoints]
+    # Compute the ranges around each change point
+    return [(cp * bin_width - bin_width, cp * bin_width + bin_width) for cp in ruptures_result]
 
 
 def iterate_bam(
@@ -196,6 +212,19 @@ class CNV_Difference:
 
 def moving_average(data: np.ndarray, n: int = 3) -> np.ndarray:
     """
+    Calculate the moving average of a given data array using scipy's uniform_filter1d.
+
+    Args:
+        data (np.ndarray): The data array.
+        n (int): The window size for the moving average.
+
+    Returns:
+        np.ndarray: The array of moving averages.
+    """
+    return uniform_filter1d(data, size=n, mode='nearest')
+
+def moving_average_orig(data: np.ndarray, n: int = 3) -> np.ndarray:
+    """
     Calculate the moving average of a given data array.
 
     Args:
@@ -209,6 +238,30 @@ def moving_average(data: np.ndarray, n: int = 3) -> np.ndarray:
 
 
 def pad_arrays(
+        arr1: np.ndarray, arr2: np.ndarray, pad_value: int = 0
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Pad two arrays to the same length with a specified value.
+
+    Args:
+        arr1 (np.ndarray): The first array.
+        arr2 (np.ndarray): The second array.
+        pad_value (int): The value to pad with.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray]: The padded arrays.
+    """
+    len1, len2 = len(arr1), len(arr2)
+    max_len = max(len1, len2)
+
+    if len1 < max_len:
+        arr1 = np.pad(arr1, (0, max_len - len1), mode="constant", constant_values=pad_value)
+    if len2 < max_len:
+        arr2 = np.pad(arr2, (0, max_len - len2), mode="constant", constant_values=pad_value)
+
+    return arr1, arr2
+
+def pad_arrays_orig(
     arr1: np.ndarray, arr2: np.ndarray, pad_value: int = 0
 ) -> Tuple[np.ndarray, np.ndarray]:
     """
@@ -230,28 +283,6 @@ def pad_arrays(
     return arr1, arr2
 
 
-def ruptures_plotting(data: np.ndarray) -> rpt.KernelCPD:
-    """
-    Apply the Kernel Change Point Detection (CPD) algorithm to identify change points in data.
-
-    Args:
-        data (np.ndarray): The data array.
-
-    Returns:
-        rpt.KernelCPD: The change point detection algorithm object.
-    """
-    #x_coords = range(0, (data.size + 1))
-    #signal = np.array(list(zip(x_coords, data)))
-    #try:
-    #    algo_c = rpt.KernelCPD(kernel="linear", min_size=10).fit(signal)
-    #except Exception as e:
-    #    print(f"e")
-
-    algo_c = rpt.KernelCPD(kernel="rbf").fit(data) #, min_size=10)
-
-    return algo_c
-
-
 class CNVAnalysis(BaseAnalysis):
     """
     Class for analyzing copy number variations (CNVs) from BAM files.
@@ -269,6 +300,10 @@ class CNVAnalysis(BaseAnalysis):
         self.XYestimate = "Unknown"
         self.dtype = [('name', 'U10'), ('start', 'i8'), ('end', 'i8')]
         self.DATA_ARRAY = np.empty(0, dtype=self.dtype)
+        #self.len_tracker = defaultdict(lambda: 0)
+        self.map_tracker = Counter()
+        self.load_data = False
+
 
         with open(
             os.path.join(
@@ -351,9 +386,14 @@ class CNVAnalysis(BaseAnalysis):
         Args:
             bamfile (BinaryIO): The BAM file to process.
         """
+        #main_start_time = time.time()
         if self.sampleID not in self.update_cnv_dict.keys():
             self.update_cnv_dict[self.sampleID] = {}
-        # print("Running CNV analysis on", self.sampleID, bamfile)
+
+        bamdata = pysam.AlignmentFile(bamfile, "rb")
+
+        self.map_tracker.update(Counter({stat.contig: stat.mapped for stat in bamdata.get_index_statistics()}))
+
         r_cnv, r_bin, r_var, self.update_cnv_dict[self.sampleID], genome_length = await run.cpu_bound(
             iterate_bam,
             bamfile,
@@ -376,8 +416,13 @@ class CNVAnalysis(BaseAnalysis):
             bin_width=self.cnv_dict["bin_width"],
         )
 
-        CNVchangedetector=CNVChangeDetectorTracker()
-
+        self.CNVchangedetector = CNVChangeDetectorTracker()
+        if self.load_data:
+            if os.path.exists(os.path.join(self.output, self.sampleID, "ruptures.npy")):
+                self.CNVchangedetector.coordinates = np.load(
+                    os.path.join(self.output, self.sampleID, "ruptures.npy"), allow_pickle="TRUE"
+                ).item()
+        cnvupdate = False
         for key in r_cnv.keys():
             if key != "chrM" and re.match(r'^chr(\d+|X|Y)$', key):
                 moving_avg_data1 = await run.cpu_bound(moving_average, r_cnv[key])
@@ -389,36 +434,41 @@ class CNVAnalysis(BaseAnalysis):
                 approx_chrom_length = 0
                 if len(r_cnv[key]) > 3:
                     penalty_value = 5
-                    paired_changepoints = await run.cpu_bound(run_ruptures, r_cnv[key], penalty_value, self.cnv_dict["bin_width"])
-                    approx_chrom_length=len(r_cnv[key]) * r_bin
-                    if len(paired_changepoints) > 0:
-                        padding = 2_500_000
-                        for (start, end) in paired_changepoints:
-                           if start < approx_chrom_length < end: # Captures change points that overlap with the very end of the chromosome
-                               pass
-                           elif start < 0 :# Captures change points that overlap with the very start of the chromosome
-                               pass
-                           elif start < self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["end_pos"].max() + padding and end > self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["start_pos"].min() - padding: # This ignores any event that may be occuring within a centromere.
-                               pass
-                           else:
-                               item = np.array([(key, start, end)], dtype=self.dtype)
-                               self.DATA_ARRAY = np.append(self.DATA_ARRAY, item)
-
-                breakpoints = self.DATA_ARRAY[self.DATA_ARRAY['name'] == key]
-                if len(breakpoints)>0:
-                    try:
-                        CNVchangedetector.add_breakpoints(key, breakpoints, approx_chrom_length)
-                    except Exception as e:
-                        raise(e)
+                    if self.map_tracker[key] > 2000: # Make sure we have this number of new reads at least on a chromosome before updating.
+                        paired_changepoints = await run.cpu_bound(run_ruptures, r_cnv[key], penalty_value,
+                                                                  self.cnv_dict["bin_width"])
+                        if len(paired_changepoints) > 0:
+                            approx_chrom_length = len(r_cnv[key]) * r_bin
+                            padding = 2_500_000
+                            for (start, end) in paired_changepoints:
+                               if start < approx_chrom_length < end: # Captures change points that overlap with the very end of the chromosome
+                                   pass
+                               elif start < 0 :# Captures change points that overlap with the very start of the chromosome
+                                   pass
+                               elif start < self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["end_pos"].max() + padding and end > self.centromere_bed[self.centromere_bed['chrom'].eq(key)]["start_pos"].min() - padding: # This ignores any event that may be occuring within a centromere.
+                                   pass
+                               else:
+                                   item = np.array([(key, start, end)], dtype=self.dtype)
+                                   self.DATA_ARRAY = np.append(self.DATA_ARRAY, item)
+                        self.map_tracker[key]=0
+                        cnvupdate = True
+                        breakpoints = self.DATA_ARRAY[self.DATA_ARRAY['name'] == key]
+                        if len(breakpoints)>0:
+                            try:
+                                self.CNVchangedetector.add_breakpoints(key, breakpoints, approx_chrom_length, r_bin)
+                            except Exception as e:
+                                raise(e)
 
         self.estimate_XY()
 
-        np.save(
-            os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID), "ruptures.npy"
-            ),
-            CNVchangedetector.coordinates,
-        )
+        if cnvupdate:
+            self.load_data = True
+            np.save(
+                os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID), "ruptures.npy"
+                ),
+                self.CNVchangedetector.coordinates,
+            )
 
         np.save(
             os.path.join(
@@ -482,11 +532,7 @@ class CNVAnalysis(BaseAnalysis):
         """
         Set up the user interface for CNV analysis.
         """
-        # if not self.browse:
-        #    for item in app.storage.general[self.mainuuid]:
-        #        if item == 'sample_ids':
-        #            for run in app.storage.general[self.mainuuid][item]:
-        #                self.sampleID = run
+
         self.display_row = ui.row().style("width: 100")
         if self.summary:
             with self.summary:
@@ -528,6 +574,11 @@ class CNVAnalysis(BaseAnalysis):
             self.reference_scatter_echart = self.generate_chart(
                 title="Reference CNV Scatter Plot"
             )
+
+        with ui.row():
+            self.BEDDisplay = ui.markdown('A list of targets in bed file format derived from the CNV plots will be shown here.').style('white-space: pre-wrap')
+            self.BEDDisplay
+
         if self.browse:
             ui.timer(0.1, lambda: self.show_previous_data(), once=True)
         else:
@@ -931,6 +982,8 @@ class CNVAnalysis(BaseAnalysis):
                             },
                         )
 
+
+
             # Update the chromosome dropdown options in the UI
             try:
                 self.chrom_select.set_options(valueslist)
@@ -1011,6 +1064,13 @@ class CNVAnalysis(BaseAnalysis):
 
 
             self.update_plots()
+            bedcontent = ""
+            for chrom in natsort.natsorted(self.CNVResults):
+                if len(self.CNVResults[chrom]["bed_data"])>0:
+                    bedcontent += f'{self.CNVResults[chrom]["bed_data"]}\n'
+
+            self.BEDDisplay.set_content(f"{bedcontent}")
+
             if self.summary:
                 with self.summary:
                     self.summary.clear()
