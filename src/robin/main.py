@@ -229,8 +229,8 @@ async def startup() -> None:
         browse=app.storage.general[UNIQUE_ID]["browse"],
         exclude=app.storage.general[UNIQUE_ID]["exclude"],
         reference=app.storage.general[UNIQUE_ID]["reference"],
-        bed_file = app.storage.general[UNIQUE_ID]["bed_file"],
-        basecall_config = app.storage.general[UNIQUE_ID]["basecall_config"],
+        bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
+        basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
     )
@@ -268,7 +268,6 @@ class Methnice:
         bed_file: str,
         experiment_duration: str,
         sample_id: Optional[str] = None,
-
     ):
         self.force_sampleid = force_sampleid
         self.kit = kit
@@ -476,18 +475,20 @@ class Methnice:
                             kit=self.kit,
                             reference=self.reference,
                             centreID=self.centreID,
-                            basecall_config = self.basecall_config,
-                            experiment_duration = self.experiment_duration,
-                            bed_file = self.bed_file,
+                            basecall_config=self.basecall_config,
+                            experiment_duration=self.experiment_duration,
+                            bed_file=self.bed_file,
                         )
                     else:
                         self.minknow_connection = None
-                    
+
                     # Create splitter layout if MinKNOW connection is available
                     if self.minknow_connection:
                         with ui.splitter(value=10).classes("w-full h-full") as splitter:
                             with splitter.before:
-                                with ui.tabs().props("vertical").classes("w-full") as tabs:
+                                with ui.tabs().props("vertical").classes(
+                                    "w-full"
+                                ) as tabs:
                                     analysis = ui.tab("Analysis", icon="analytics")
                                     minknow = ui.tab("minKNOW", icon="set_meal")
                             with splitter.after:
@@ -497,18 +498,18 @@ class Methnice:
                                     self.analysis_tab_pane = ui.tab_panel(analysis)
                                     with self.analysis_tab_pane:
                                         with ui.row():
-                                            ui.icon("analytics", color="primary").classes(
-                                                "text-h4"
-                                            )
+                                            ui.icon(
+                                                "analytics", color="primary"
+                                            ).classes("text-h4")
                                             ui.label("Real Time Analysis").classes(
                                                 "text-h4"
                                             )
                                     self.minknow_tab_pane = ui.tab_panel(minknow)
                                     with self.minknow_tab_pane:
                                         with ui.row():
-                                            ui.icon("set_meal", color="primary").classes(
-                                                "text-h4"
-                                            )
+                                            ui.icon(
+                                                "set_meal", color="primary"
+                                            ).classes("text-h4")
                                             ui.label("MinKNOW Data").classes("text-h4")
                     else:
                         self.analysis_tab_pane = ui.row().classes("w-full")
@@ -521,7 +522,10 @@ class Methnice:
                             await self.minknow_connection.auto_connect()
                         except Exception as e:
                             logging.error(f"Error connecting to MinKNOW: {str(e)}")
-                            ui.notify(f"Failed to connect to MinKNOW: {str(e)}", color="negative")
+                            ui.notify(
+                                f"Failed to connect to MinKNOW: {str(e)}",
+                                color="negative",
+                            )
                         ui.label().bind_text_from(
                             self.minknow_connection,
                             "connection_ip",
@@ -667,7 +671,7 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     except Exception as e:
         logging.error(f"Error reading configuration file: {str(e)}")
         options = {}
-    
+
     ctx.default_map = options
 
 
@@ -799,7 +803,16 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     multiple=True,
     help="Exclude analysis types with one or more of these options.",
     type=click.Choice(
-        ["sturgeon", "forest", "nanodx", "pannanodx", "cnv", "fusion", "coverage", "mgmt"],
+        [
+            "sturgeon",
+            "forest",
+            "nanodx",
+            "pannanodx",
+            "cnv",
+            "fusion",
+            "coverage",
+            "mgmt",
+        ],
         case_sensitive=False,
     ),
 )

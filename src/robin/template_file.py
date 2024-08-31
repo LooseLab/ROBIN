@@ -13,12 +13,16 @@ from pathlib import Path
 import theme
 
 
+@ui.page("/", response_timeout=30)
 def index_page() -> None:
     # from check_connection import ConnectionDialog
     # initial_ip = "127.0.0.1"
     # my_connection = ConnectionDialog(initial_ip)
     # my_connection = None
-    with theme.frame("MethClass Interactive"):
+    with theme.frame(
+        "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
+        smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
+    ):
         # my_connection.connect_to_minknow()
         ui.label("Hello")
         with ui.card().classes("w-full"):
@@ -46,9 +50,12 @@ def run_class(port: int, reload: bool):
     )
     app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
     # app.on_startup(mainpage.index_page)
-    index_page()
+    # index_page()
     ui.run(
-        port=port, reload=reload, title="MethClass NiceGUI"
+        port=port,
+        reload=reload,
+        title="MethClass NiceGUI",
+        storage_secret="slartibartfast",
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
 
 

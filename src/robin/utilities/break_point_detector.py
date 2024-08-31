@@ -1,5 +1,4 @@
 import numpy as np
-import os
 from collections import defaultdict
 from typing import Dict, List, Tuple
 
@@ -29,8 +28,12 @@ class CNVChangeDetectorTracker:
         """
         self.base_proportion: float = base_proportion
         self.bin_width: int = bin_width
-        self.max_bin_width: int = bin_width  # Used to track the largest bin width during updates
-        self.coordinates: Dict[str, Dict[str, any]] = {}  # Stores CNV data per chromosome
+        self.max_bin_width: int = (
+            bin_width  # Used to track the largest bin width during updates
+        )
+        self.coordinates: Dict[str, Dict[str, any]] = (
+            {}
+        )  # Stores CNV data per chromosome
 
     def _calculate_scaled_proportion(self, length: int) -> int:
         """
@@ -46,10 +49,16 @@ class CNVChangeDetectorTracker:
             int: The scaled proportion of the genome.
         """
         # The proportion is scaled by a factor dependent on the bin width
-        proportion = self.base_proportion * ((self.bin_width / 1_000_000) ** (1/4))
+        proportion = self.base_proportion * ((self.bin_width / 1_000_000) ** (1 / 4))
         return int(length * proportion)
 
-    def add_breakpoints(self, chromosome: str, breakpoints: List[Dict[str, int]], length: int, bin_width: int) -> None:
+    def add_breakpoints(
+        self,
+        chromosome: str,
+        breakpoints: List[Dict[str, int]],
+        length: int,
+        bin_width: int,
+    ) -> None:
         """
         Adds detected CNV breakpoints to the tracker and updates internal structures accordingly.
 
@@ -67,8 +76,8 @@ class CNVChangeDetectorTracker:
 
         increments = defaultdict(int)
         for entry in breakpoints:
-            increments[entry['start']] += 1
-            increments[entry['end']] -= 1
+            increments[entry["start"]] += 1
+            increments[entry["end"]] -= 1
 
         # Convert the increments dictionary to NumPy arrays for efficient processing
         positions_array = np.array(list(increments.keys()))
@@ -115,7 +124,7 @@ class CNVChangeDetectorTracker:
             "cumulative_sum": 0,
             "start_positions": [],
             "end_positions": [],
-            "bed_data": ""
+            "bed_data": "",
         }
 
     def _update_chromosome_target(self, chromosome: str) -> None:
@@ -127,7 +136,9 @@ class CNVChangeDetectorTracker:
         """
         if chromosome in self.coordinates:
             length = self.coordinates[chromosome]["length"]
-            self.coordinates[chromosome]["target"] = self._calculate_scaled_proportion(length)
+            self.coordinates[chromosome]["target"] = self._calculate_scaled_proportion(
+                length
+            )
             self._calculate_threshold(chromosome)
 
     def _update_bin_width(self, new_bin_width: int) -> None:
@@ -167,16 +178,18 @@ class CNVChangeDetectorTracker:
         Resets internal tracking variables for a chromosome before recalculating thresholds.
         """
         data = self.coordinates[chromosome]
-        data.update({
-            "current_value": 0,
-            "flush": True,
-            "previous_value": 0,
-            "start_value": 0,
-            "end_value": 0,
-            "cumulative_sum": 0,
-            "start_positions": [],
-            "end_positions": []
-        })
+        data.update(
+            {
+                "current_value": 0,
+                "flush": True,
+                "previous_value": 0,
+                "start_value": 0,
+                "end_value": 0,
+                "cumulative_sum": 0,
+                "start_positions": [],
+                "end_positions": [],
+            }
+        )
 
     def get_threshold(self, chromosome: str) -> int:
         """
@@ -201,7 +214,11 @@ class CNVChangeDetectorTracker:
             int: The cumulative sum of detected CNVs.
         """
         data = self.coordinates[chromosome]
-        return data["cumulative_sum"] if data["flush"] else data["cumulative_sum"] + (data["end_value"] - data["start_value"] + 1)
+        return (
+            data["cumulative_sum"]
+            if data["flush"]
+            else data["cumulative_sum"] + (data["end_value"] - data["start_value"] + 1)
+        )
 
     def update(self, chromosome: str, new_value: int, position: int) -> None:
         """
@@ -224,7 +241,7 @@ class CNVChangeDetectorTracker:
             elif new_value == 0 and data["current_value"] == 1:
                 # Ending the current CNV region
                 data["end_value"] = position
-                data["cumulative_sum"] += (data["end_value"] - data["start_value"] + 1)
+                data["cumulative_sum"] += data["end_value"] - data["start_value"] + 1
                 data["end_positions"].append(position)
                 data["flush"] = False
             data["previous_value"] = data["current_value"]
@@ -258,9 +275,14 @@ class CNVChangeDetectorTracker:
         """
         if chromosome in self.coordinates:
             data = self.coordinates[chromosome]
-            bedlist = [(chromosome, start, end) for start, end in zip(
-                data["start_positions"], data["end_positions"])]
-            bed_lines = [f"{chrom}\t{start}\t{end}\t.\t.\t+"
-                         f"\n{chrom}\t{start}\t{end}\t.\t.\t-" for chrom, start, end in bedlist]
+            bedlist = [
+                (chromosome, start, end)
+                for start, end in zip(data["start_positions"], data["end_positions"])
+            ]
+            bed_lines = [
+                f"{chrom}\t{start}\t{end}\t.\t.\t+"
+                f"\n{chrom}\t{start}\t{end}\t.\t.\t-"
+                for chrom, start, end in bedlist
+            ]
             return "\n".join(bed_lines)
         return ""

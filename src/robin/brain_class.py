@@ -137,7 +137,9 @@ def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
                             )
                         )
                     else:
-                        filetime = datetime.fromtimestamp(os.path.getctime(os.path.join(path,f)))
+                        filetime = datetime.fromtimestamp(
+                            os.path.getctime(os.path.join(path, f))
+                        )
                         elapsedtime = datetime.now() - filetime
                         insert_sorted(
                             (
@@ -377,7 +379,6 @@ class BrainMeth:
             self.observer.start()
 
             ui.timer(1, callback=self.background_process_bams, once=True)
-
 
             logging.info("Watchfolder setup and added")
 
@@ -1162,7 +1163,11 @@ class BrainMeth:
         """
         files_and_timestamps = []
         files_and_timestamps = await run.cpu_bound(
-            sort_bams, files_and_timestamps, self.watchfolder, file_endings, self.simtime
+            sort_bams,
+            files_and_timestamps,
+            self.watchfolder,
+            file_endings,
+            self.simtime,
         )
 
         # Iterate through the sorted list
