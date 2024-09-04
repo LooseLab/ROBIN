@@ -348,6 +348,7 @@ class Methnice:
                 exclude=self.exclude,
                 minknow_connection=self.minknow_connection,
                 reference=self.reference,
+                bed_file=self.bed_file,
             )
         except Exception as e:
             logging.error(f"Error initializing BrainMeth: {str(e)}")
@@ -400,6 +401,7 @@ class Methnice:
                 exclude=self.exclude,
                 minknow_connection=self.minknow_connection,
                 reference=self.reference,
+                bed_file=self.bed_file
             )
 
             with self.analysis_tab_pane:
