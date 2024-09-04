@@ -69,6 +69,7 @@ import pysam
 from cnv_from_bam import iterate_bam_file
 from robin.subpages.base_analysis import BaseAnalysis
 from robin.utilities.break_point_detector import CNVChangeDetectorTracker
+from robin.utilities.bed_file import BedTree
 import natsort
 from robin import theme, resources
 import pandas as pd
@@ -125,7 +126,7 @@ def run_ruptures(
 
     # Compute the ranges around each change point
     return [
-        (cp * bin_width - bin_width, cp * bin_width + bin_width)
+        (cp  * bin_width - (bin_width), cp * bin_width + (bin_width))
         for cp in ruptures_result
     ]
 
@@ -307,20 +308,22 @@ class CNVAnalysis(BaseAnalysis):
     Inherits from `BaseAnalysis` and provides specific methods for CNV analysis.
     """
 
-    def __init__(self, *args, target_panel: Optional[str] = None, **kwargs) -> None:
+    def __init__(self, *args, target_panel: Optional[str] = None, reference_file: Optional[str] = None, bed_file: Optional[str] = None,**kwargs) -> None:
         # self.file_list = []
         self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.update_cnv_dict = {}
         self.result = None
         self.result2 = None
         self.result3 = CNV_Difference()
+        self.reference_file = reference_file
+        self.bed_file = bed_file
         self.XYestimate = "Unknown"
         self.dtype = [("name", "U10"), ("start", "i8"), ("end", "i8")]
         self.DATA_ARRAY = np.empty(0, dtype=self.dtype)
+
         # self.len_tracker = defaultdict(lambda: 0)
         self.map_tracker = Counter()
         self.load_data = False
-
         with open(
             os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)),
@@ -358,6 +361,9 @@ class CNVAnalysis(BaseAnalysis):
             sep="\s+",
         )
         super().__init__(*args, **kwargs)
+        self.NewBed = BedTree(preserve_original_tree=True, reference_file=f"{self.reference_file}.fai")
+        self.NewBed.load_from_file(self.bed_file)
+        self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
 
     def estimate_XY(self) -> None:
         """
@@ -406,6 +412,8 @@ class CNVAnalysis(BaseAnalysis):
         if self.sampleID not in self.update_cnv_dict.keys():
             self.update_cnv_dict[self.sampleID] = {}
 
+
+
         bamdata = pysam.AlignmentFile(bamfile, "rb")
 
         self.map_tracker.update(
@@ -438,7 +446,7 @@ class CNVAnalysis(BaseAnalysis):
             bin_width=self.cnv_dict["bin_width"],
         )
 
-        self.CNVchangedetector = CNVChangeDetectorTracker()
+
         if self.load_data:
             if os.path.exists(os.path.join(self.output, self.sampleID, "ruptures.npy")):
                 self.CNVchangedetector.coordinates = np.load(
@@ -447,6 +455,7 @@ class CNVAnalysis(BaseAnalysis):
                 ).item()
         cnvupdate = False
         for key in r_cnv.keys():
+            self.local_data_array = np.empty(0, dtype=self.dtype)
             if key != "chrM" and re.match(r"^chr(\d+|X|Y)$", key):
                 moving_avg_data1 = await run.cpu_bound(moving_average, r_cnv[key])
                 moving_avg_data2 = await run.cpu_bound(moving_average, r2_cnv[key])
@@ -495,14 +504,16 @@ class CNVAnalysis(BaseAnalysis):
                                     item = np.array(
                                         [(key, start, end)], dtype=self.dtype
                                     )
+                                    self.local_data_array = np.append(self.local_data_array, item)
                                     self.DATA_ARRAY = np.append(self.DATA_ARRAY, item)
                         self.map_tracker[key] = 0
                         cnvupdate = True
                         breakpoints = self.DATA_ARRAY[self.DATA_ARRAY["name"] == key]
+                        local_breakpoints = self.local_data_array[self.local_data_array["name"] == key]
                         if len(breakpoints) > 0:
                             try:
                                 self.CNVchangedetector.add_breakpoints(
-                                    key, breakpoints, approx_chrom_length, r_bin
+                                    key, breakpoints, local_breakpoints, approx_chrom_length, r_bin
                                 )
                             except Exception as e:
                                 raise (e)
@@ -510,7 +521,32 @@ class CNVAnalysis(BaseAnalysis):
         self.estimate_XY()
 
         if cnvupdate:
+            bedcontent = ""
+            bedcontent2 = ""
             self.load_data = True
+            for chrom in r_cnv.keys():
+                tempbedcontent = self.CNVchangedetector.get_bed_targets(chrom)
+                if len(tempbedcontent)>0:
+                    bedcontent += tempbedcontent
+                    bedcontent += "\n"
+
+                tempbedcontent2 = self.CNVchangedetector.get_bed_targets_breakpoints(chrom)
+                if len(tempbedcontent2)>0:
+                    bedcontent2 += tempbedcontent2
+                    bedcontent2 += "\n"
+
+            #if len(bedcontent)>0:
+            #    print ("bedcontent")
+            #    print(f"{bedcontent}")
+            #if len(bedcontent2)>0:
+            #    print ("bedcontent2")
+            #    print(f"{bedcontent2}")
+            if len(bedcontent2)>0:
+                #print(bedcontent2)
+                self.NewBed.load_from_string(bedcontent2, merge=False, write_files=True, output_location=os.path.join(
+                              self.check_and_create_folder(self.output, self.sampleID))
+                                             )
+
             np.save(
                 os.path.join(
                     self.check_and_create_folder(self.output, self.sampleID),
@@ -624,16 +660,128 @@ class CNVAnalysis(BaseAnalysis):
                 title="Reference CNV Scatter Plot"
             )
 
-        with ui.row():
-            self.BEDDisplay = ui.markdown(
-                "A list of targets in bed file format derived from the CNV plots will be shown here."
-            ).style("white-space: pre-wrap")
-            self.BEDDisplay
+
+
+        with ui.card().classes("w-full"):
+
+            ui.label("New Target Information")
+            self.orig_tree = ui.tree(
+                [self.NewBed.tree_data]
+                , label_key="id",
+            )
+            self.orig_tree.add_slot(
+                "default-body",
+                """
+                <div v-if="props.node.description">
+                        <span class="text-weight-bold">{{ props.node.description }}</span>
+                    </div>
+                <div v-if="props.node.range_sum">
+                        <span class="text-weight-bold">{{props.node.range_sum}} bases</span>
+                </div>
+                <div v-if="props.node.count">
+                        <span class="text-weight-bold">{{ props.node.count }} targets</span>
+                </div>
+                <div v-if="props.node.proportion">
+                        <span class="text-weight-bold">{{ props.node.proportion }} proportion</span>
+                </div>
+                <div v-if="props.node.chromosome_length">
+                        <span class="text-weight-bold">{{ props.node.chromosome_length }} chromosome length</span>
+                </div>
+
+            """,
+            )
+
+
+        with ui.card().classes("w-full"):
+            ui.label("Proportion Over Time Information")
+            self.create_proportion_time_chart2("Proportions over time - Genome Wide.")
+            self.create_proportion_time_chart("Proportions over time.")
+
 
         if self.browse:
             ui.timer(0.1, lambda: self.show_previous_data(), once=True)
         else:
             ui.timer(15, lambda: self.show_previous_data())
+
+    def create_proportion_time_chart(self, title: str) -> None:
+        """
+        Creates the NanoDX time series chart.
+
+        Args:
+            title (str): Title of the chart.
+        """
+        self.proportion_time_chart = self.create_time_chart(title)
+
+    def update_proportion_time_chart(self, datadf: pd.DataFrame) -> None:
+        """
+        Updates the NanoDX time series chart with new data.
+
+        Args:
+            datadf (pd.DataFrame): DataFrame containing the data to plot.
+        """
+        self.proportion_time_chart.options["series"] = []
+        for series, data in datadf.to_dict().items():
+            data_list = [[key, value] for key, value in data.items()]
+            if series != "number_probes":
+                self.proportion_time_chart.options["series"].append(
+                    {
+                        "animation": False,
+                        "type": "line",
+                        "smooth": True,
+                        "name": series,
+                        "emphasis": {"focus": "series"},
+                        "endLabel": {
+                            "show": True,
+                            "formatter": "{a}",
+                            "distance": 20,
+                        },
+                        "lineStyle": {
+                            "width": 2,
+                        },
+                        "data": data_list,
+                    }
+                )
+        self.proportion_time_chart.update()
+
+    def create_proportion_time_chart2(self, title: str) -> None:
+        """
+        Creates the NanoDX time series chart.
+
+        Args:
+            title (str): Title of the chart.
+        """
+        self.proportion_time_chart2 = self.create_time_chart(title)
+
+    def update_proportion_time_chart2(self, datadf: pd.DataFrame) -> None:
+        """
+        Updates the NanoDX time series chart with new data.
+
+        Args:
+            datadf (pd.DataFrame): DataFrame containing the data to plot.
+        """
+        self.proportion_time_chart2.options["series"] = []
+        for series, data in datadf.to_dict().items():
+            data_list = [[key, value] for key, value in data.items()]
+            if series != "number_probes":
+                self.proportion_time_chart2.options["series"].append(
+                    {
+                        "animation": False,
+                        "type": "line",
+                        "smooth": True,
+                        "name": series,
+                        "emphasis": {"focus": "series"},
+                        "endLabel": {
+                            "show": True,
+                            "formatter": "{a}",
+                            "distance": 20,
+                        },
+                        "lineStyle": {
+                            "width": 2,
+                        },
+                        "data": data_list,
+                    }
+                )
+        self.proportion_time_chart2.update()
 
     def generate_chart(
         self,
@@ -1150,12 +1298,43 @@ class CNVAnalysis(BaseAnalysis):
                 ).item()
 
             self.update_plots()
+
             bedcontent = ""
+            local_update = False
             for chrom in natsort.natsorted(self.CNVResults):
                 if len(self.CNVResults[chrom]["bed_data"]) > 0:
-                    bedcontent += f'{self.CNVResults[chrom]["bed_data"]}\n'
+                    bedcontent += f'{self.CNVResults[chrom]["bed_data_breakpoints"]}\n'
+                    local_update = True
 
-            self.BEDDisplay.set_content(f"{bedcontent}")
+            self.NewBed.load_from_string(bedcontent, merge=False)
+                    #self.NewBed.load_from_string("chr2\t1\t1000000\t.\t.\t+", merge=True)
+
+            self.orig_tree.update()
+
+            if self.check_file_time(os.path.join(output, "bedranges.csv")):
+                self.proportions_df_store = pd.read_csv(
+                    os.path.join(os.path.join(output, "bedranges.csv")),
+                    index_col=0,
+                )
+
+                #print (self.proportions_df_store)
+
+                df_filtered = self.proportions_df_store[self.proportions_df_store['chromosome'] != 'Genome-wide']
+                # Pivot the dataframe
+                pivot_df = df_filtered.pivot(index='timestamp', columns='chromosome', values='proportion')
+
+                df_filtered2 = self.proportions_df_store[self.proportions_df_store['chromosome'] == 'Genome-wide']
+                # Pivot the dataframe
+                pivot_df2 = df_filtered2.pivot(index='timestamp', columns='chromosome', values='proportion')
+
+                self.update_proportion_time_chart(
+                    pivot_df
+                )
+                self.update_proportion_time_chart2(
+                    pivot_df2
+                )
+
+            #self.BEDDisplay.set_content(f"{bedcontent}")
 
             if self.summary:
                 with self.summary:

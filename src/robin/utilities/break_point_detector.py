@@ -34,6 +34,7 @@ class CNVChangeDetectorTracker:
         self.coordinates: Dict[str, Dict[str, any]] = (
             {}
         )  # Stores CNV data per chromosome
+        self.ruptures_breakpoints = {}
 
     def _calculate_scaled_proportion(self, length: int) -> int:
         """
@@ -56,6 +57,7 @@ class CNVChangeDetectorTracker:
         self,
         chromosome: str,
         breakpoints: List[Dict[str, int]],
+        local_breakpoints: List[Dict[str, int]],
         length: int,
         bin_width: int,
     ) -> None:
@@ -78,6 +80,12 @@ class CNVChangeDetectorTracker:
         for entry in breakpoints:
             increments[entry["start"]] += 1
             increments[entry["end"]] -= 1
+
+        breakpointlist = []
+        for entry in local_breakpoints:
+            breakpointlist.append((entry["start"], entry["end"]))
+
+        self.ruptures_breakpoints[entry['name']]=breakpointlist
 
         # Convert the increments dictionary to NumPy arrays for efficient processing
         positions_array = np.array(list(increments.keys()))
@@ -102,6 +110,7 @@ class CNVChangeDetectorTracker:
         # Recalculate the threshold and update BED data
         self._calculate_threshold(chromosome)
         self.coordinates[chromosome]["bed_data"] = self.get_bed_targets(chromosome)
+        self.coordinates[chromosome]["bed_data_breakpoints"] = self.get_bed_targets_breakpoints(chromosome)
 
     def _initialize_chromosome(self, chromosome: str, length: int) -> None:
         """
@@ -278,6 +287,30 @@ class CNVChangeDetectorTracker:
             bedlist = [
                 (chromosome, start, end)
                 for start, end in zip(data["start_positions"], data["end_positions"])
+            ]
+            bed_lines = [
+                f"{chrom}\t{start}\t{end}\t.\t.\t+"
+                f"\n{chrom}\t{start}\t{end}\t.\t.\t-"
+                for chrom, start, end in bedlist
+            ]
+            return "\n".join(bed_lines)
+        return ""
+
+    def get_bed_targets_breakpoints(self, chromosome: str) -> str:
+        """
+        Generates BED format data for detected CNV regions on a chromosome.
+
+        Args:
+            chromosome (str): The name of the chromosome.
+
+        Returns:
+            str: A string containing BED format lines for each CNV region.
+        """
+        if chromosome in self.ruptures_breakpoints:
+            data = self.ruptures_breakpoints[chromosome]
+            bedlist = [
+                (chromosome, start, end)
+                for start, end in data
             ]
             bed_lines = [
                 f"{chrom}\t{start}\t{end}\t.\t.\t+"

@@ -10,313 +10,280 @@ from __future__ import annotations
 from nicegui import ui, app
 from pathlib import Path
 
-import theme
+from robin import theme
 import numpy as np
 import os
-from natsort import natsorted
-import csv
 
+from nicegui import ui
+import csv
+from natsort import natsorted
 from io import StringIO
+import copy
+import hashlib
+import logging
+from datetime import datetime
+import pandas as pd
 
 
 class BedTree:
-    def __init__(self):
-        self.tree_dict = {}
+    def __init__(self, preserve_original_tree=False, reference_file=None, output_location=None):
         self.total_count = 0
         self.total_range_sum = 0
-        self.tree_data = []
-        self.original_tree_data = None
-
-    def _reset(self):
-        """Resets the tree data, count, and range sum."""
+        self.tree_data = {'id': "Chromosomes", 'description': 'Summary of currently used targets.', 'children': [], 'count': 0, 'range_sum': 0, 'proportion': 0}
         self.tree_dict = {}
-        self.total_count = 0
-        self.total_range_sum = 0
-        self.tree_data = []
+        self.preserve_original_tree = preserve_original_tree
+        self.reference_tree = None
+        self.file_counter = 0  # Counter for the file naming
+        self.previous_targets_hash = None  # To track changes in targets
+        self.proportions_df = pd.DataFrame()  # DataFrame to store the proportions and timestamps
+        self.output_location = output_location
+        if reference_file:
+            self.chromosome_lengths = self._get_chromosome_lengths(reference_file)
+            self.total_length = sum(self.chromosome_lengths.values())
+        else:
+            self.chromosome_lengths = None
+            self.total_length = None
 
-    def _merge_ranges(self, existing_ranges, new_range, chromosome, strand):
-        """Merges a new range with existing ranges if they overlap, with logging."""
+    def _hash_current_targets(self):
+        """Generates a hash for the current targets to detect changes."""
+        m = hashlib.md5()
+        for chromosome, chromosome_data in sorted(self.tree_dict.items()):
+            m.update(chromosome.encode())
+            for strand_group in sorted(chromosome_data['children'], key=lambda x: x['id']):
+                m.update(strand_group['id'].encode())
+                for target in sorted(strand_group['children'], key=lambda x: x['id']):
+                    m.update(target['id'].encode())
+        return m.hexdigest()
+
+    def _check_and_create_folder(self, path, folder_name=None):
+        # Check if the path exists
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"The specified path does not exist: {path}")
+
+        # If folder_name is provided
+        if folder_name:
+            full_path = os.path.join(path, folder_name)
+            # Create the folder if it doesn't exist
+            if not os.path.exists(full_path):
+                os.makedirs(full_path)
+                #logger.info(f"Folder created: {full_path}")
+            return full_path
+        else:
+            return path
+
+    def _write_bed_file(self):
+        """Writes the current targets to a new BED file if they have changed."""
+        current_hash = self._hash_current_targets()
+        if current_hash != self.previous_targets_hash:
+            self.file_counter += 1
+            if self.output_location:
+                filename = os.path.join(self._check_and_create_folder(self.output_location, folder_name="bed_files"), f"new_file_{self.file_counter}.bed")
+            else:
+                filename = f"new_file_{self.file_counter}.bed"
+            with open(filename, 'w') as f:
+                for chromosome, chromosome_data in sorted(self.tree_dict.items()):
+                    for strand_group in sorted(chromosome_data['children'], key=lambda x: x['id']):
+                        for target in sorted(strand_group['children'], key=lambda x: x['id']):
+                            start, end = map(int, target['id'].split('-'))
+                            f.write(f"{chromosome}\t{start}\t{end}\t.\t.\t{strand_group['id'].split()[-1]}\n")
+            self.previous_targets_hash = current_hash
+            self._update_proportions_df()
+            #print(f"Wrote new BED file: {filename}")
+
+    def _get_chromosome_lengths(self, fai_file):
+        chromosome_lengths = {}
+        with open(fai_file, 'r') as f:
+            for line in f:
+                parts = line.split('\t')
+                chromosome = parts[0]
+                length = int(parts[1])
+                chromosome_lengths[chromosome] = length
+        return chromosome_lengths
+
+    def _merge_ranges(self, existing_ranges, new_range):
         start, end = new_range
         merged_ranges = []
         i = 0
 
         while i < len(existing_ranges):
             existing_start, existing_end = existing_ranges[i]
-            if not (end < existing_start or start > existing_end):  # Check if overlapping
-                # Merge the ranges
-                print(
-                    f"Merging range {start}-{end} with existing range {existing_start}-{existing_end} on {chromosome} {strand}")
+            if not (end < existing_start or start > existing_end):
                 start = min(existing_start, start)
                 end = max(existing_end, end)
             else:
-                # If there's no overlap, keep the existing range
                 merged_ranges.append((existing_start, existing_end))
             i += 1
 
-        # Add the new merged range
         merged_ranges.append((start, end))
-
-        # Sort the merged ranges by start position
         merged_ranges.sort()
 
         return merged_ranges
 
     def _process_bed_data(self, reader):
-        """Processes the BED data from a CSV reader."""
         for row in reader:
-            chromosome = row[0]
-            start = int(row[1])
-            end = int(row[2])
-            strand = row[5] if len(row) > 5 else '.'  # If strand is not available, use '.' as default
+            if len(row)>0:
+                chromosome = row[0]
+                start = int(row[1])
+                end = int(row[2])
+                strand = row[5] if len(row) > 5 else '.'
 
-            # Calculate the range (end - start)
-            target_range = end - start
+                if chromosome not in self.tree_dict:
+                    self.tree_dict[chromosome] = {'id': chromosome, 'children': [], 'count': 0, 'range_sum': 0, 'description': "chromosome"}
 
-            # Create the ID for the range including the strand
-            range_id = f'{start}-{end}'
+                strand_id = f'{chromosome} {strand}'
+                strand_group = next((child for child in self.tree_dict[chromosome]['children'] if child['id'] == strand_id), None)
+                if not strand_group:
+                    strand_group = {'id': strand_id, 'children': [], 'count': 0, 'range_sum': 0}
+                    self.tree_dict[chromosome]['children'].append(strand_group)
 
-            # Check if the chromosome is already in the dictionary
-            if chromosome not in self.tree_dict:
-                self.tree_dict[chromosome] = {'id': chromosome, 'children': [], 'count': 0, 'range_sum': 0}
+                existing_ranges = [(int(r['id'].split('-')[0]), int(r['id'].split('-')[1])) for r in strand_group['children']]
+                merged_ranges = self._merge_ranges(existing_ranges, (start, end))
 
-            # Create the id for the strand with the chromosome name
-            strand_id = f'{chromosome} {strand}'
+                strand_group['children'] = [{'id': f'{s}-{e}', 'description': 'target region', "chromosome_length": self.chromosome_lengths.get(chromosome, 0), 'range_sum': e - s + 1, "proportion": (e - s + 1 )/self.chromosome_lengths.get(chromosome, 0) * 100  } for s, e in merged_ranges]
+                #strand_group['count'] = len(merged_ranges)
+                #strand_group['range_sum'] = sum(e - s + 1 for s, e in merged_ranges)
+                #strand_group['proportion'] = sum(e - s + 1 for s, e in merged_ranges)/self.chromosome_lengths.get(chromosome, 0) * 100
 
-            # Check if the strand is already a child of the chromosome
-            strand_group = next((child for child in self.tree_dict[chromosome]['children'] if child['id'] == strand_id),
-                                None)
-            if not strand_group:
-                strand_group = {'id': strand_id, 'children': [], 'count': 0, 'range_sum': 0}
-                self.tree_dict[chromosome]['children'].append(strand_group)
+                self.tree_dict[chromosome]['count'] = sum(c['count'] for c in self.tree_dict[chromosome]['children'])
+                self.tree_dict[chromosome]['range_sum'] = sum(c['range_sum'] for c in self.tree_dict[chromosome]['children'])
 
-            # Merge the new range into the existing ranges within the specific chromosome and strand
-            existing_ranges = [(int(r['id'].split('-')[0]), int(r['id'].split('-')[1])) for r in
-                               strand_group['children']]
-            merged_ranges = self._merge_ranges(existing_ranges, (start, end), chromosome, strand)
+        self.total_count = sum(v['count'] for v in self.tree_dict.values())
+        self.total_range_sum = sum(v['range_sum'] for v in self.tree_dict.values())
 
-            # Update the strand group with merged ranges
-            strand_group['children'] = [{'id': f'{s}-{e}', 'range_sum': e - s} for s, e in merged_ranges]
+    def _add_if_not_exists(self, entries, new_item, description, chromosome):
+        if not any(entry['id'] == new_item for entry in entries):
+            entries.append({'id': new_item, 'children': [], 'description': description, 'count': 0, 'range_sum': 0, 'proportion': 0, "chromosome_length":self.chromosome_lengths.get(chromosome, 0)})
 
-            # Recalculate the counts and range sums for this specific chromosome and strand
-            strand_group['count'] = len(merged_ranges)
-            strand_group['range_sum'] = sum(e - s for s, e in merged_ranges)
-            self.tree_dict[chromosome]['count'] = sum(c['count'] for c in self.tree_dict[chromosome]['children'])
-            self.tree_dict[chromosome]['range_sum'] = sum(
-                c['range_sum'] for c in self.tree_dict[chromosome]['children'])
+    def _propagate_values(self, node):
+        if 'children' not in node or not node['children']: # Here we are looking at an individual target on a chromosome.
+            node['count'] = node.get('count', 1)
+            node['range_sum'] = node.get('range_sum', 0)
+            #node['proportion'] = node['range_sum'] / self.total_length if self.total_length else 0
+            return node['count'], node['range_sum']
 
-            # Recalculate the total count and range sums across all chromosomes and strands
-            self.total_count = sum(v['count'] for v in self.tree_dict.values())
-            self.total_range_sum = sum(v['range_sum'] for v in self.tree_dict.values())
+        total_count = 0
+        total_range_sum = 0
+
+        for child in node['children']: # Here we are not in a tiny node - we are in a bigger node.
+            child_count, child_range_sum = self._propagate_values(child)
+            total_count += child_count
+            total_range_sum += child_range_sum
+
+        node['count'] = total_count
+        node['range_sum'] = total_range_sum
+
+        if node['description'] == "Stranded Targets": # We are looking at a stranded chromosome.
+            node['proportion'] = node['range_sum']/node['chromosome_length']* 100 if self.total_length else 0
+        elif node['description'] == "chromosome":
+            node['proportion'] = node['range_sum'] / (2*node['chromosome_length']) * 100 if self.total_length else 0
+        elif node['description'] == "Summary of currently used targets.":
+            node['proportion'] = node['range_sum'] / (2 * self.total_length) * 100 if self.total_length else 0
+
+        return node['count'], node['range_sum']
+
+    def _build_tree(self):
+        for chromosome_data in self.tree_dict.values():
+            self._add_if_not_exists(self.tree_data['children'], chromosome_data['id'], "chromosome",chromosome_data['id'])
+
+            for strand_group in natsorted(chromosome_data['children']):
+                strand_group['children'] = natsorted(strand_group['children'], key=lambda x: int(x['id'].split('-')[0]))
+                self._update_strands(chromosome_data['id'], strand_group['id'])
+                self._update_targets(chromosome_data['id'], strand_group['id'], strand_group)
+
+        self.tree_data["children"] = natsorted(self.tree_data["children"], key=lambda x: x['id'])
+
+        self._propagate_values(self.tree_data)
+
+    def _update_strands(self, chromosome, strand):
+        chromosome_entry = next(item for item in self.tree_data['children'] if item["id"] == chromosome)
+        self._add_if_not_exists(chromosome_entry['children'], strand, "Stranded Targets", chromosome)
+
+    def _update_targets(self, chromosome, strand, strand_group):
+        chromosome_entry = next(item for item in self.tree_data['children'] if item["id"] == chromosome)
+        strand_entry = next(orientation for orientation in chromosome_entry['children'] if orientation['id'] == strand)
+        strand_entry['children'] = strand_group['children']
+        strand_entry['count'] = strand_group['count']
+        strand_entry['range_sum'] = strand_group['range_sum']
+        strand_entry['chromosome_length'] = self.chromosome_lengths.get(chromosome, 0)  # Add chromosome length
 
     def load_from_file(self, file_path, merge=False):
-        """Loads and processes a BED file from the given file path."""
         if not merge:
-            self._reset()
-        else:
-            self._preserve_original_tree()
-
+            if 'children' in self.tree_data.keys():
+                self.tree_data['children'] = []
+            self.tree_dict = {}
         with open(file_path, 'r') as bed_file:
             reader = csv.reader(bed_file, delimiter='\t')
             self._process_bed_data(reader)
         self._build_tree()
+        self._propagate_values(self.tree_data)
+        if self.preserve_original_tree:
+            self.reference_tree = copy.deepcopy(self.tree_dict)
+        self._propagate_values(self.tree_data)
+        #self._write_bed_file()
 
-    def load_from_string(self, bed_string, merge=False):
-        """Loads and processes a BED file from a string."""
+    def load_from_string(self, bed_string, merge=False, write_files=False, output_location=None):
+        if output_location:
+            self.output_location = output_location
         if not merge:
-            self._reset()
-        else:
-            self._preserve_original_tree()
+            if 'children' in self.tree_data.keys():
+                self.tree_data['children'] = []
+            self.tree_dict = {}
+            if self.preserve_original_tree:
+                if self.reference_tree:
+                    self.tree_dict = copy.deepcopy(self.reference_tree)
 
         bed_file = StringIO(bed_string)
         reader = csv.reader(bed_file, delimiter='\t')
         self._process_bed_data(reader)
         self._build_tree()
-
-    def merge_with_original(self, bed_string):
-        """Merges new BED data with the original tree only."""
-        if self.original_tree_data is None:
-            raise ValueError("No original tree data available to merge with. Load initial data first.")
-
-        # Temporarily store the current tree
-        current_tree_dict = self.tree_dict
-
-        # Restore the original tree structure
-        self.tree_dict = self._restore_original_tree_dict()
-
-        # Process the new BED data and merge it with the original tree
-        bed_file = StringIO(bed_string)
-        reader = csv.reader(bed_file, delimiter='\t')
-        self._process_bed_data(reader)
-
-        # Build the tree with the merged data
-        self._build_tree()
-
-        # Optionally, you could restore the current tree if you want to keep it
-        # self.tree_dict = current_tree_dict
-
-    def _restore_original_tree_dict(self):
-        """Helper method to restore the original tree dictionary."""
-        restored_tree_dict = {}
-        for chromosome_data in self.original_tree_data[0]['children']:
-            chromosome = chromosome_data['id']
-            restored_tree_dict[chromosome] = {
-                'id': chromosome,
-                'children': [],
-                'count': chromosome_data['count'],
-                'range_sum': chromosome_data['range_sum']
-            }
-            for strand_group in chromosome_data['children']:
-                restored_tree_dict[chromosome]['children'].append({
-                    'id': strand_group['id'],
-                    'children': list(strand_group['children']),
-                    'count': strand_group['count'],
-                    'range_sum': strand_group['range_sum']
-                })
-        return restored_tree_dict
-
-    def _preserve_original_tree(self):
-        """Preserve the original tree before any updates."""
-        if self.original_tree_data is None:
-            self.original_tree_data = self.get_tree().copy()
-
-    def _build_tree(self):
-        """Builds the tree structure from the processed data."""
-        for chromosome_data in self.tree_dict.values():
-            for strand_group in chromosome_data['children']:
-                # Sort children within each strand group by the start position
-                strand_group['children'] = sorted(strand_group['children'], key=lambda x: int(x['id'].split('-')[0]))
-
-        original_bed_tree = [
-            {
-                'id': k,
-                'children': v['children'],
-                'count': v['count'],
-                'range_sum': v['range_sum']
-            }
-            for k, v in natsorted(self.tree_dict.items())
-        ]
-
-        # Add the top-level node
-        self.tree_data = [
-            {
-                "id": "chromosome",
-                "description": "Targets On Each Chromosome",
-                "count": self.total_count,
-                "range_sum": self.total_range_sum,
-                "children": original_bed_tree,
-            }
-        ]
-
-    def get_tree(self):
-        """Returns the current tree structure with sorted coordinates."""
-        self._build_tree()  # Ensure the tree is built with sorted data
-        return self.tree_data
-
-    def save_to_bed_file(self, file_path):
-        """Saves the current tree structure to a sorted BED file."""
-        bed_entries = []
-
-        # Collect all BED entries
-        for chromosome, data in self.tree_dict.items():
-            for strand_group in data['children']:
-                strand = strand_group['id'].split()[1]
-                for range_item in strand_group['children']:
-                    start, end = map(int, range_item['id'].split('-'))
-                    bed_entries.append((chromosome, start, end, '.', '.', strand))
-
-        # Sort the entries by chromosome, start position, and strand
-        sorted_bed_entries = natsorted(bed_entries, key=lambda x: (x[0], x[1], x[5]))
-
-        # Write the sorted entries to the BED file
-        with open(file_path, 'w', newline='') as bed_file:
-            writer = csv.writer(bed_file, delimiter='\t')
-            for entry in sorted_bed_entries:
-                writer.writerow(entry)
+        self._propagate_values(self.tree_data)
+        if write_files:
+            self._write_bed_file()
 
 
-def bed_to_tree_dict_with_ranges_and_chromosome_strand(bed_file_path):
-    # Initialize an empty dictionary to hold the tree structure
-    tree_dict = {}
-    total_count = 0  # To keep track of the total count of all ranges
-    total_range_sum = 0  # To keep track of the total range sum of all ranges
+    def _update_proportions_df(self):
+        """Updates the proportions DataFrame with the current data and timestamp."""
+        timestamp = datetime.now()
 
-    # Open and parse the BED file
-    with open(bed_file_path, 'r') as bed_file:
-        reader = csv.reader(bed_file, delimiter='\t')
-        for row in reader:
-            chromosome = row[0]
-            start = int(row[1])
-            end = int(row[2])
-            strand = row[5] if len(row) > 5 else '.'  # If strand is not available, use '.' as default
-
-            # Calculate the range (end - start)
-            target_range = end - start
-
-            # Create the ID for the range including the strand
-            range_id = f'{start}-{end}'
-
-            # Check if the chromosome is already in the dictionary
-            if chromosome not in tree_dict:
-                tree_dict[chromosome] = {'id': chromosome, 'children': [], 'count': 0, 'range_sum': 0}
-
-            # Create the id for the strand with the chromosome name
-            strand_id = f'{chromosome} {strand}'
-
-            # Check if the strand is already a child of the chromosome
-            strand_group = next((child for child in tree_dict[chromosome]['children'] if child['id'] == strand_id),
-                                None)
-            if not strand_group:
-                strand_group = {'id': strand_id, 'children': [], 'count': 0, 'range_sum': 0}
-                tree_dict[chromosome]['children'].append(strand_group)
-
-            # Add the range to the strand group
-            strand_group['children'].append({'id': range_id, 'range_sum': target_range})
-            # Increment the count and range sum for both the strand group and the chromosome
-            strand_group['count'] += 1
-            strand_group['range_sum'] += target_range
-            tree_dict[chromosome]['count'] += 1
-            tree_dict[chromosome]['range_sum'] += target_range
-            total_count += 1  # Increment the total count
-            total_range_sum += target_range  # Increment the total range sum
-
-    # Convert the dictionary to a list of dictionaries as required by NiceGUI
-    # Sort the chromosomes in natural order
-    original_bed_tree = [
-        {'id': k, 'children': v['children'], 'count': v['count'], 'range_sum': v['range_sum']}
-        for k, v in natsorted(tree_dict.items())
-    ]
-
-    # Add the top-level node
-    tree_data = [
-        {
-            "id": "chromosome",
-            "description": "Targets On Each Chromosome",
-            "count": total_count,
-            "range_sum": total_range_sum,
-            "children": original_bed_tree,
+        # Top-level (genome-wide) proportion
+        top_level_proportion = {
+            'timestamp': timestamp,
+            'chromosome': 'Genome-wide',
+            'proportion': self.tree_data['proportion']
         }
-    ]
 
-    return tree_data
+        # List to hold the rows
+        rows = [top_level_proportion]
 
-def add_child(data_structure, strand_id, new_child):
-    """
-    Adds a new child to the children list of the specified strand (+ or -) in the given data structure.
+        # Proportions for each chromosome
+        for chromosome in self.tree_data['children']:
+            chromosome_proportion = {
+                'timestamp': timestamp,
+                'chromosome': chromosome['id'],
+                'proportion': chromosome['proportion']
+            }
+            rows.append(chromosome_proportion)
 
-    Args:
-        data_structure (list): The list containing dictionaries for each strand.
-        strand_id (str): The strand identifier, either '+' or '-'.
-        new_child (dict): The new child item to be added to the children list.
+        # Create a DataFrame from the rows and append it to the existing DataFrame
+        new_df = pd.DataFrame(rows)
+        self.proportions_df = pd.concat([self.proportions_df, new_df], ignore_index=True)
+        if self.output_location:
+            self.proportions_df.to_csv(
+                os.path.join(self.output_location,"bedranges.csv")
+                )
 
-    Returns:
-        bool: True if the item was added successfully, False if the strand_id was not found.
-    """
-    for item in data_structure:
-        if item["id"] == strand_id:
-            item["children"].append(new_child)
-            return True
-    return False
 
+
+        #print(self.proportions_df)
+
+    #def _log_proportions(self):
+    #    """Logs the top-level proportion and the proportion for each chromosome along with the time."""
+    #    # Log the top-level proportion (for the whole genome)
+    #    print(f"Total genome proportion covered: {self.tree_data['proportion']:.6f}")#
+
+        # Log proportions for each chromosome
+    #    for chromosome in self.tree_data['children']:
+    #        print(f"Chromosome {chromosome['id']} proportion covered: {chromosome['proportion']:.6f}")
 
 @ui.page("/", response_timeout=30)
 def index_page() -> None:
@@ -326,19 +293,16 @@ def index_page() -> None:
     # my_connection = None
     existing_bed = "/Users/mattloose/GIT/niceGUI/cnsmeth/panel_adaptive_nogenenames_20122021_hg38_VGL_CHD7_5kb_pad.bed"
 
-    original_bed_tree = bed_to_tree_dict_with_ranges_and_chromosome_strand(existing_bed)
+    original_bed_tree = BedTree(preserve_original_tree=True, reference_file="/Users/mattloose/references/hg38_simple.fa.fai")
 
-    new_bed_tree = BedTree()
-    new_bed_tree.load_from_file(existing_bed)
-
-    new_bed_tree.load_from_string("chr1\t1\t1000000\t.\t.\t+", merge=True)
-
-    new_bed_tree.save_to_bed_file("testingbedoutput.bed")
+    original_bed_tree.load_from_file(existing_bed)
 
     output = "/Users/mattloose/GIT/niceGUI/cnsmeth/robin_output_test/_ds1305_Intraop0051_c_ULK_2_highFRA"
+
     CNVResults = np.load(
         os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
     ).item()
+
     with theme.frame(
         "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
         smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
@@ -347,121 +311,31 @@ def index_page() -> None:
 
             ui.label("New Target Information")
             orig_tree = ui.tree(
-                new_bed_tree.get_tree()
+                [original_bed_tree.tree_data]
                ,label_key="id",
                             )
             orig_tree.add_slot(
                 "default-body",
                 """
                 <div v-if="props.node.description">
-                        <span class="text-weight-bold">{{ props.node.description }}.</span>
+                        <span class="text-weight-bold">{{ props.node.description }}</span>
                     </div>
-                <div v-if="props.node.count">
-                        <span class="text-weight-bold">{{ props.node.count }} targets covering {{props.node.range_sum}} bases.</span>
+                <div v-if="props.node.range_sum">
+                        <span class="text-weight-bold">{{props.node.range_sum}} bases</span>
                 </div>
-                    
+                <div v-if="props.node.count">
+                        <span class="text-weight-bold">{{ props.node.count }} targets</span>
+                </div>
+                <div v-if="props.node.proportion">
+                        <span class="text-weight-bold">{{ props.node.proportion }} proportion</span>
+                </div>
+                <div v-if="props.node.chromosome_length">
+                        <span class="text-weight-bold">{{ props.node.chromosome_length }} chromosome length</span>
+                </div>
+        
             """,
             )
-            orig_tree.add_slot('default-header', r'''
-                    <div class="text-weight-bold text-primary">{{ props.node.id }}</div>
-                                    
-            ''')
 
-            ui.label("Control Target Information")
-            cont_tree = ui.tree(
-                original_bed_tree
-                , label_key="id",
-            )
-            cont_tree.add_slot(
-                "default-body",
-                """
-                <div v-if="props.node.description">
-                        <span class="text-weight-bold">{{ props.node.description }}.</span>
-                    </div>
-                <div v-if="props.node.count">
-                        <span class="text-weight-bold">{{ props.node.count }} targets covering {{props.node.range_sum}} bases.</span>
-                </div>
-
-            """,
-            )
-            cont_tree.add_slot('default-header', r'''
-                                <div class="text-weight-bold text-primary">{{ props.node.id }}</div>
-
-                        ''')
-
-        # my_connection.connect_to_minknow()
-        with ui.card().classes("w-full"):
-
-            ui.label("Target Information")
-
-            trees = []
-            for key in natsorted(CNVResults):
-                tree_dict = {}
-                # print(key)
-                tree_dict["id"] = key
-                tree_dict["description"] = f"Targets On Chromosome {key}"
-                tree_dict["children"] = [
-                    {"id": "+", "description": "Forward Strand", "children": []},
-                    {"id": "-", "description": "Reverse Strand", "children": []},
-                ]
-                # print(CNVResults[key])
-                for line in CNVResults[key]["bed_data"].split("\n"):
-                    # print(line)
-                    # print(tree_dict['children'])
-                    # Split each line into its components
-                    chrom, start, end, _, _, strand = line.split("\t")
-                    if strand == "+":
-                        add_child(
-                            tree_dict["children"],
-                            strand,
-                            {"id": f"{chrom}:{start}-{end}"},
-                        )
-                    else:
-                        add_child(
-                            tree_dict["children"],
-                            strand,
-                            {"id": f"{chrom}:{start}-{end}"},
-                        )
-
-                # print(dir(tree))
-                # print(tree.id)
-                trees.append(tree_dict)
-            with ui.card().classes("w-full border-[1px]"):
-                tree = ui.tree(
-                    [
-                        {
-                            "id": "chromosome",
-                            "description": "Targets On Each Chromosome",
-                            "children": trees,
-                        }
-                    ],
-                    label_key="id",
-                    on_select=lambda e: ui.notify(e.value),
-                )
-
-                tree.add_slot(
-                    "default-header",
-                    """
-                    <span :props="props"><strong>{{ props.node.id }}</strong></span>
-                """,
-                )
-                tree.add_slot(
-                    "default-body",
-                    """
-                    <span :props="props">Description: "{{ props.node.description }}"</span>
-                """,
-                )
-                # ui.label(f"{CNVResults}")
-
-                with ui.row():
-                    ui.button("+ all", on_click=tree.expand)
-                    ui.button("- all", on_click=tree.collapse)
-                    ui.button("open + strand", on_click=lambda: tree.expand(["+"]))
-                    ui.button("close + strand", on_click=lambda: tree.collapse(["+"]))
-
-        new_bed_tree.load_from_string("chr2\t1\t1000000\t.\t.\t+", merge=True)
-        new_bed_tree.load_from_string("chr1\t1\t100000000\t.\t.\t+", merge=True)
-        # my_object = MinknowHistograms(my_connection.positions[0])
 
 
 def run_class(port: int, reload: bool):
@@ -480,7 +354,7 @@ def run_class(port: int, reload: bool):
         }
     """
     )
-    app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
+    app.add_static_files("/fonts", str(Path(__file__).parent / "../fonts"))
     # app.on_startup(mainpage.index_page)
     # index_page()
     ui.run(
@@ -488,6 +362,7 @@ def run_class(port: int, reload: bool):
         reload=reload,
         title="MethClass NiceGUI",
         storage_secret="slartibartfast",
+        native=True, window_size=(1200, 800), fullscreen=False
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
 
 
