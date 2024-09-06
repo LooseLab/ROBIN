@@ -172,6 +172,7 @@ class BrainMeth:
         reference=None,
         bed_file=None,
         mainuuid=None,
+        readfish_toml=None,
     ):
         """
         Initialize the BrainMeth class.
@@ -210,6 +211,7 @@ class BrainMeth:
         if self.browse:
             self.runsfolder = self.output
         self.sampleID = None
+        self.readfish_toml = readfish_toml
         self.watchdogbamqueue = Queue()
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
@@ -316,6 +318,7 @@ class BrainMeth:
                 target_panel=self.target_panel,
                 reference_file=self.reference,
                 bed_file=self.bed_file,
+                readfish_toml=self.readfish_toml,
                 **common_args,
             )
             self.CNV.process_data()

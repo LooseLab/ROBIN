@@ -8,7 +8,6 @@ Needs to be refactored.
 # Python imports.
 from __future__ import annotations
 from nicegui import ui, app
-from pathlib import Path
 
 from robin import theme
 import numpy as np
@@ -24,9 +23,14 @@ import logging
 from datetime import datetime
 import pandas as pd
 
+from typing import Optional
+import tomli
+import tomli_w
+from pathlib import Path
+
 
 class BedTree:
-    def __init__(self, preserve_original_tree=False, reference_file=None, output_location=None):
+    def __init__(self, preserve_original_tree=False, reference_file=None, output_location=None, readfish_toml: Optional[Path] = None):
         self.total_count = 0
         self.total_range_sum = 0
         self.tree_data = {'id': "Chromosomes", 'description': 'Summary of currently used targets.', 'children': [], 'count': 0, 'range_sum': 0, 'proportion': 0}
@@ -37,6 +41,13 @@ class BedTree:
         self.previous_targets_hash = None  # To track changes in targets
         self.proportions_df = pd.DataFrame()  # DataFrame to store the proportions and timestamps
         self.output_location = output_location
+        self.readfish_toml: Optional[Path] = readfish_toml
+        if self.readfish_toml:
+            with open(self.readfish_toml, "rb") as f:
+                self.toml_dict = tomli.load(f)
+                print(self.toml_dict)
+        else:
+            self.toml_dict = None
         if reference_file:
             self.chromosome_lengths = self._get_chromosome_lengths(reference_file)
             self.total_length = sum(self.chromosome_lengths.values())
@@ -88,6 +99,13 @@ class BedTree:
                             f.write(f"{chromosome}\t{start}\t{end}\t.\t.\t{strand_group['id'].split()[-1]}\n")
             self.previous_targets_hash = current_hash
             self._update_proportions_df()
+            if self.toml_dict:
+                print (self.toml_dict["regions"])
+                for region in self.toml_dict["regions"]:
+                    print (region)
+                    region["targets"]=filename
+                with open(f"{self.readfish_toml}_live", "wb") as f:
+                    tomli_w.dump(self.toml_dict, f)
             #print(f"Wrote new BED file: {filename}")
 
     def _get_chromosome_lengths(self, fai_file):
