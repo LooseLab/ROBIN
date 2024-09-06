@@ -31,10 +31,15 @@ class CNVChangeDetectorTracker:
         self.max_bin_width: int = (
             bin_width  # Used to track the largest bin width during updates
         )
+
         self.coordinates: Dict[str, Dict[str, any]] = (
             {}
         )  # Stores CNV data per chromosome
         self.ruptures_breakpoints = {}
+
+
+
+
 
     def _calculate_scaled_proportion(self, length: int) -> int:
         """
@@ -289,8 +294,8 @@ class CNVChangeDetectorTracker:
                 for start, end in zip(data["start_positions"], data["end_positions"])
             ]
             bed_lines = [
-                f"{chrom}\t{start}\t{end}\t.\t.\t+"
-                f"\n{chrom}\t{start}\t{end}\t.\t.\t-"
+                f"{chrom}\t{start - self.bin_width}\t{end}\t.\t.\t+"
+                f"\n{chrom}\t{start}\t{end + self.bin_width}\t.\t.\t-"
                 for chrom, start, end in bedlist
             ]
             return "\n".join(bed_lines)
@@ -313,8 +318,8 @@ class CNVChangeDetectorTracker:
                 for start, end in data
             ]
             bed_lines = [
-                f"{chrom}\t{start}\t{end}\t.\t.\t+"
-                f"\n{chrom}\t{start}\t{end}\t.\t.\t-"
+                f"{chrom}\t{start - self.bin_width}\t{end}\t.\t.\t+"
+                f"\n{chrom}\t{start}\t{end + self.bin_width}\t.\t.\t-"
                 for chrom, start, end in bedlist
             ]
             return "\n".join(bed_lines)

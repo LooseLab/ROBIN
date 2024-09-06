@@ -87,6 +87,7 @@ import re
 from collections import Counter
 from scipy.ndimage import uniform_filter1d
 
+
 os.environ["CI"] = "1"
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -308,7 +309,7 @@ class CNVAnalysis(BaseAnalysis):
     Inherits from `BaseAnalysis` and provides specific methods for CNV analysis.
     """
 
-    def __init__(self, *args, target_panel: Optional[str] = None, reference_file: Optional[str] = None, bed_file: Optional[str] = None,**kwargs) -> None:
+    def __init__(self, *args, target_panel: Optional[str] = None, reference_file: Optional[str] = None, bed_file: Optional[str] = None, readfish_toml: Optional[Path] = None, **kwargs) -> None:
         # self.file_list = []
         self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.update_cnv_dict = {}
@@ -317,6 +318,7 @@ class CNVAnalysis(BaseAnalysis):
         self.result3 = CNV_Difference()
         self.reference_file = reference_file
         self.bed_file = bed_file
+        self.readfish_toml = readfish_toml
         self.XYestimate = "Unknown"
         self.dtype = [("name", "U10"), ("start", "i8"), ("end", "i8")]
         self.DATA_ARRAY = np.empty(0, dtype=self.dtype)
@@ -361,9 +363,10 @@ class CNVAnalysis(BaseAnalysis):
             sep="\s+",
         )
         super().__init__(*args, **kwargs)
-        self.NewBed = BedTree(preserve_original_tree=True, reference_file=f"{self.reference_file}.fai")
+        self.NewBed = BedTree(preserve_original_tree=True, reference_file=f"{self.reference_file}.fai", readfish_toml=self.readfish_toml)
         self.NewBed.load_from_file(self.bed_file)
         self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
+
 
     def estimate_XY(self) -> None:
         """

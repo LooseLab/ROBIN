@@ -232,6 +232,7 @@ async def startup() -> None:
         bed_file=app.storage.general[UNIQUE_ID]["bed_file"],
         basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
+        readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         unique_id=UNIQUE_ID,
     )
     MAINPAGE.setup()
@@ -267,6 +268,7 @@ class Methnice:
         basecall_config: str,
         bed_file: str,
         experiment_duration: str,
+        readfish_toml: Optional[Path],
         sample_id: Optional[str] = None,
     ):
         self.force_sampleid = force_sampleid
@@ -286,6 +288,7 @@ class Methnice:
         self.experiment_duration = experiment_duration
         self.basecall_config = basecall_config
         self.bed_file = bed_file
+        self.readfish_toml = readfish_toml
         self.minknow_connection = None
         if sample_id:
             self.sample_id = sample_id
@@ -349,6 +352,7 @@ class Methnice:
                 minknow_connection=self.minknow_connection,
                 reference=self.reference,
                 bed_file=self.bed_file,
+                readfish_toml=self.readfish_toml,
             )
         except Exception as e:
             logging.error(f"Error initializing BrainMeth: {str(e)}")
@@ -401,7 +405,8 @@ class Methnice:
                 exclude=self.exclude,
                 minknow_connection=self.minknow_connection,
                 reference=self.reference,
-                bed_file=self.bed_file
+                bed_file=self.bed_file,
+                readfish_toml=self.readfish_toml
             )
 
             with self.analysis_tab_pane:
@@ -565,6 +570,7 @@ def run_class(
     reference: Path,
     basecall_config: str,
     bed_file: Path,
+    readfish_toml: Optional[Path],
     experiment_duration: int,
 ) -> None:
     """
@@ -614,6 +620,7 @@ def run_class(
         "reference": reference,
         "bed_file": bed_file,
         "basecall_config": basecall_config,
+        "readfish_toml": readfish_toml,
         "experiment_duration": experiment_duration,
     }
     app.storage.general[UNIQUE_ID]["samples"] = {}
@@ -787,6 +794,15 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     type=str,
 )
 @click.option(
+    "--readfish_toml",
+    "-rt",
+    type=click.Path(
+        exists=True, file_okay=True, dir_okay=False, resolve_path=True, path_type=Path
+    ),
+    help="Path to the TOML file used to control readfish.",
+    required=False,
+)
+@click.option(
     "--experiment_duration",
     help="The experiment run time in hours.",
     required=True,
@@ -852,6 +868,7 @@ def package_run(
     reference: Path,
     bed_file: Path,
     basecall_config: str,
+    readfish_toml: Optional[Path],
     experiment_duration: int,
 ) -> None:
     """
@@ -880,6 +897,7 @@ def package_run(
             reference=click.format_filename(reference),
             bed_file=click.format_filename(bed_file),
             basecall_config=basecall_config,
+            readfish_toml=click.format_filename(readfish_toml),
             experiment_duration=experiment_duration,
         )
     else:
@@ -908,6 +926,7 @@ def package_run(
             reference=click.format_filename(reference),
             bed_file=click.format_filename(bed_file),
             basecall_config=basecall_config,
+            readfish_toml=click.format_filename(readfish_toml),
             experiment_duration=experiment_duration,
         )
 
