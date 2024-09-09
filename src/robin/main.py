@@ -805,6 +805,7 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     ),
     help="Path to the TOML file used to control readfish.",
     required=False,
+    default=None  # <-- This ensures no error when the argument is not provided
 )
 @click.option(
     "--experiment_duration",
