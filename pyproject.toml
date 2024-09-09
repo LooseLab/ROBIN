@@ -50,7 +50,8 @@ dependencies = [
   "networkx",
   "docker",
   "opencv-python",
-  "zxing-cpp"
+  "zxing-cpp",
+  "tomli-w",
 ]
 
 [project.scripts]
