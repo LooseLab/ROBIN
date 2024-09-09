@@ -82,6 +82,7 @@ async def index() -> None:
         basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
+        readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
     )
     GUI.setup()
 
@@ -135,6 +136,7 @@ async def live_sample(sample_id: str) -> None:
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
         sample_id=sample_id,
+        readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
     )
     GUI.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
@@ -165,6 +167,7 @@ async def live() -> None:
         basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
+        readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
     )
     GUI.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
@@ -194,6 +197,7 @@ async def test() -> None:
         basecall_config=app.storage.general[UNIQUE_ID]["basecall_config"],
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
+        readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
     )
     GUI_browse.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI_browse))
