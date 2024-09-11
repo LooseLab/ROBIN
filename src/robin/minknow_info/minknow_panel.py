@@ -25,12 +25,12 @@ import uuid
 from datetime import datetime
 
 
-
 # We need `find_protocol` to search for the required protocol given a kit + product code.
 from minknow_api.tools import protocols
 
 
 UNIQUE_ID: str = str(uuid.uuid4())
+
 
 class ExperimentSpec(object):
     def __init__(self, position):
@@ -164,7 +164,6 @@ class MinKNOWFish:
         self.bed_file = bed_file
         self.experiment_duration = experiment_duration
         self.centreID = centreID
-
 
     def _check_ip(self, ip: str) -> None:
         """

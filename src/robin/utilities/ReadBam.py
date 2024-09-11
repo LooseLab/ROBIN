@@ -193,7 +193,9 @@ class ReadBam:
 
             logger.info(f"Mapped reads: {self.mapped_reads}")
             logger.info(f"Total reads: {self.mapped_reads + self.unmapped_reads}")
-            bam_read.elapsed_time = parser.parse(bam_read.last_start) - parser.parse(bam_read.time_of_run)
+            bam_read.elapsed_time = parser.parse(bam_read.last_start) - parser.parse(
+                bam_read.time_of_run
+            )
 
             return asdict(bam_read)
 

@@ -815,8 +815,8 @@ class TargetCoverage(BaseAnalysis):
         :param covdf: a pandas dataframe of
         :return:
         """
-        pattern = r'^chr([0-9]+|X|Y)$'
-        temp_covdf = covdf[covdf['#rname'].str.match(pattern)]
+        pattern = r"^chr([0-9]+|X|Y)$"
+        temp_covdf = covdf[covdf["#rname"].str.match(pattern)]
         sorteddf = temp_covdf.sort_values(
             by="#rname",
             key=lambda x: np.argsort(natsort.index_natsorted(temp_covdf["#rname"])),
@@ -853,8 +853,8 @@ class TargetCoverage(BaseAnalysis):
         )
         groupeddf = groupeddf[groupeddf["chrom"] != "chrM"]
         groupeddf["meandepth"] = groupeddf["bases"] / groupeddf["length"]
-        pattern = r'^chr([0-9]+|X|Y)$'
-        temp_covdf = covdf[covdf['#rname'].str.match(pattern)]
+        pattern = r"^chr([0-9]+|X|Y)$"
+        temp_covdf = covdf[covdf["#rname"].str.match(pattern)]
         sorteddf = temp_covdf.sort_values(
             by="#rname",
             key=lambda x: np.argsort(natsort.index_natsorted(temp_covdf["#rname"])),

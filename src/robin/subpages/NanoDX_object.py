@@ -525,9 +525,7 @@ class NanoDX_object(BaseAnalysis):
         self.nanodxchart.options["title"][
             "text"
         ] = f"NanoDX: processed {count} bams and found {int(n_features)} features"
-        self.nanodxchart.options["title"][
-            "subtext"
-        ] = f"Model: {self.model}"
+        self.nanodxchart.options["title"]["subtext"] = f"Model: {self.model}"
         self.nanodxchart.options["yAxis"]["data"] = x
         self.nanodxchart.options["series"] = [
             {"type": "bar", "name": "NanoDX", "data": y}

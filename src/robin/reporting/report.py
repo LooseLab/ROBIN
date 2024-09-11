@@ -674,11 +674,11 @@ def create_pdf(filename, output):
 
                             for index, row in lines.iterrows():
                                 # Coordinates in data space of each subplot
-                                #xyB = (
+                                # xyB = (
                                 #    row["Join_Start"],
                                 #    row["rank"],
-                                #)  # Point in subplot 1
-                                #xyA = (row["Join_End"], row["rankB"])
+                                # )  # Point in subplot 1
+                                # xyA = (row["Join_End"], row["rankB"])
 
                                 gene_counter[row["gene"]] += 1
                                 gene_counter[row["Join_Gene"]] += 1
@@ -732,7 +732,7 @@ def create_pdf(filename, output):
     # Add run data summary
     if masterdf is not None and isinstance(masterdf, pd.DataFrame):
         elements_summary.append(Paragraph("Run Data Summary", styles["Heading2"]))
-        #start_time = "Placeholder"
+        # start_time = "Placeholder"
         masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[
             sample_id
         ]

@@ -221,8 +221,6 @@ class Minknow_Info:
         self.check_instance.start()
         self.render_me()
 
-
-
     def render_me(self):
         sample_camera = Camera(
             icon="photo_camera",
@@ -540,7 +538,9 @@ class Minknow_Info:
                 self.Estimated_N50 = info.n50.estimated_n50
             if info.HasField("protocol_run_info"):
                 # print(info.protocol_run_info.meta_info.tags)
-                self.running_kit = info.protocol_run_info.meta_info.tags["kit"].string_value
+                self.running_kit = info.protocol_run_info.meta_info.tags[
+                    "kit"
+                ].string_value
                 self.Flowcell_Type = info.protocol_run_info.meta_info.tags[
                     "flow cell"
                 ].string_value
@@ -604,7 +604,7 @@ class Minknow_Info:
         kit=None,
         basecall_config=None,
         experiment_duration=None,
-        bed_file = None,
+        bed_file=None,
     ):
         ui.notify(f"Starting Run {sample_id} on {flowcell_id}!", type="positive")
         # ToDo: At every stage we need to confirm that the correct values have been entered.

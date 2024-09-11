@@ -18,8 +18,6 @@ import uuid
 from datetime import datetime
 
 
-
-
 import cv2
 import zxingcpp
 
@@ -29,12 +27,12 @@ import numpy as np
 import base64
 
 
-
 # We need `find_protocol` to search for the required protocol given a kit + product code.
 from minknow_api.tools import protocols
 
 
 UNIQUE_ID: str = str(uuid.uuid4())
+
 
 class ExperimentSpec(object):
     def __init__(self, position):
