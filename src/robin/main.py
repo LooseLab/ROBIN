@@ -910,7 +910,8 @@ def package_run(
         if output is None:
             logging.error("Output is required when --browse is not set.")
             sys.exit(1)
-
+        if readfish_toml:
+            readfish_toml = click.format_filename(readfish_toml)
         run_class(
             port=port,
             force_sampleid=force_sampleid,
@@ -931,7 +932,7 @@ def package_run(
             reference=click.format_filename(reference),
             bed_file=click.format_filename(bed_file),
             basecall_config=basecall_config,
-            readfish_toml=click.format_filename(readfish_toml),
+            readfish_toml=readfish_toml,
             experiment_duration=experiment_duration,
         )
 
