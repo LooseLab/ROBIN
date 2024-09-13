@@ -667,32 +667,33 @@ class CNVAnalysis(BaseAnalysis):
 
         with ui.card().classes("w-full"):
 
-            ui.label("New Target Information")
-            self.orig_tree = ui.tree(
-                [self.NewBed.tree_data]
-                , label_key="id",
-            )
-            self.orig_tree.add_slot(
-                "default-body",
-                """
-                <div v-if="props.node.description">
-                        <span class="text-weight-bold">{{ props.node.description }}</span>
-                    </div>
-                <div v-if="props.node.range_sum">
-                        <span class="text-weight-bold">{{props.node.range_sum}} bases</span>
-                </div>
-                <div v-if="props.node.count">
-                        <span class="text-weight-bold">{{ props.node.count }} targets</span>
-                </div>
-                <div v-if="props.node.proportion">
-                        <span class="text-weight-bold">{{ props.node.proportion }} proportion</span>
-                </div>
-                <div v-if="props.node.chromosome_length">
-                        <span class="text-weight-bold">{{ props.node.chromosome_length }} chromosome length</span>
-                </div>
+            ui.label("New Target Information - intentionally blank.")
 
-            """,
-            )
+            # self.orig_tree = ui.tree(
+            #     [self.NewBed.tree_data]
+            #     , label_key="id",
+            # )
+            # self.orig_tree.add_slot(
+            #     "default-body",
+            #     """
+            #     <div v-if="props.node.description">
+            #             <span class="text-weight-bold">{{ props.node.description }}</span>
+            #         </div>
+            #     <div v-if="props.node.range_sum">
+            #             <span class="text-weight-bold">{{props.node.range_sum}} bases</span>
+            #     </div>
+            #     <div v-if="props.node.count">
+            #             <span class="text-weight-bold">{{ props.node.count }} targets</span>
+            #     </div>
+            #     <div v-if="props.node.proportion">
+            #             <span class="text-weight-bold">{{ props.node.proportion }} proportion</span>
+            #     </div>
+            #     <div v-if="props.node.chromosome_length">
+            #             <span class="text-weight-bold">{{ props.node.chromosome_length }} chromosome length</span>
+            #     </div>
+            #
+            # """,
+            # )
 
 
         with ui.card().classes("w-full"):
