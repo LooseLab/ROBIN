@@ -94,7 +94,8 @@ def create_CNV_plot(result, cnv_dict):
     contig_centers = {}
 
     for contig, values in result.cnv.items():
-        if contig != "chrM":
+        #if contig != "chrM":
+        if contig in ['chr' + str(i) for i in range(0, 23)] + ['chrX', 'chrY']:
             start_offset = offset
             for i, value in enumerate(values):
                 plot_data.append((contig, i + offset, value))
@@ -166,7 +167,8 @@ def create_CNV_plot_per_chromosome(result, cnv_dict):
     """
     plots = []
     for contig, values in result.cnv.items():
-        if contig != "chrM":
+        #if contig != "chrM":,
+        if contig in ['chr' + str(i) for i in range(0, 23)] + ['chrX', 'chrY']:
             plt.figure(figsize=(10, 2))
             sns.scatterplot(x=range(len(values)), y=values, s=2)
             plt.title(f"Copy Number Variation - {contig}")
@@ -249,7 +251,8 @@ def coverage_plot(df):
     Returns:
         io.BytesIO: Buffer containing the plot image.
     """
-    df = df[df["#rname"] != "chrM"].copy()
+    #df = df[df["#rname"] != "chrM"].copy()
+    df = df[df["#rname"].isin(['chr' + str(i) for i in range(0, 23)] + ['chrX', 'chrY'])].copy()
 
     # Sort chromosomes naturally
     df["#rname"] = pd.Categorical(
