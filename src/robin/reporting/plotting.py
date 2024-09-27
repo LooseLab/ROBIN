@@ -94,7 +94,6 @@ def create_CNV_plot(result, cnv_dict):
     contig_centers = {}
 
     for contig, values in result.cnv.items():
-        # if contig != "chrM":
         if contig in ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]:
             start_offset = offset
             for i, value in enumerate(values):
