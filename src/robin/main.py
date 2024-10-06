@@ -443,6 +443,7 @@ class Methnice:
                             "ROBIN_logo_small.png",
                         )
                     ).classes("rounded-full w-16 h-16 ml-4")
+            
 
     async def index_page(self) -> None:
         """
