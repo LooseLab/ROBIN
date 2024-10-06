@@ -192,9 +192,7 @@ class LocalFilePicker(ui.dialog):
         Submits the selected file(s) from the grid.
         """
         try:
-            rows = await ui.run_javascript(
-                f"getElement({self.grid.id}).gridOptions.api.getSelectedRows()"
-            )
+            rows = await self.grid.get_selected_rows()
             selected_paths = [r["path"] for r in rows]
             self.submit(selected_paths)
             logger.info(f"Selected files: {selected_paths}")
