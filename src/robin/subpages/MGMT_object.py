@@ -176,8 +176,8 @@ class MGMT_Object(BaseAnalysis):
         """
         # logger.debug("Setting up UI")
         with ui.card().style("width: 100%"):
-            ui.label("MGMT Methylation").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ui.label("MGMT Methylation").classes('text-sky-600 dark:text-white').style(
+                "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             self.mgmtable = ui.row().classes("w-full")
             with self.mgmtable:

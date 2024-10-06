@@ -427,8 +427,8 @@ class CNVAnalysis(BaseAnalysis):
             with self.summary:
                 ui.label("No CNV data available.")
         with self.display_row:
-            ui.label("Copy Number Variation").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ui.label("Copy Number Variation").classes('text-sky-600 dark:text-white').style(
+                "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
         with ui.row():
             self.chrom_select = ui.select(

@@ -565,7 +565,7 @@ class BaseAnalysis:
                     "series": [],
                 }
             )
-            .style("color: #6E93D6; font-size: 150%; font-weight: 300; height: 350px")
+            .style("font-size: 150%; font-weight: 300; height: 350px")
             .classes("border-double")
         )
 

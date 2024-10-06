@@ -400,8 +400,8 @@ class TargetCoverage(BaseAnalysis):
             with self.summary:
                 ui.label("Current coverage estimates: Unknown")
         with ui.card().classes("w-full"):
-            ui.label("Coverage Data").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ui.label("Coverage Data").classes('text-sky-600 dark:text-white').style(
+                "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.grid(columns=2).classes("w-full h-auto"):
                 with ui.card().classes(
@@ -414,26 +414,26 @@ class TargetCoverage(BaseAnalysis):
                 ):
                     self.create_coverage_plot_targets("Target Coverage")
         with ui.card().classes("w-full"):
-            ui.label("Target Outliers").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ui.label("Target Outliers").classes('text-sky-600 dark:text-white').style(
+                "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.column().classes("w-full"):
                 with ui.card().classes("w-full"):
                     self.create_target_boxplot()
         with ui.card().classes("w-full"):
-            ui.label("Coverage over time").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ui.label("Coverage over time").classes('text-sky-600 dark:text-white').style(
+                "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.column().classes("w-full"):
                 with ui.card().classes("w-full"):
                     self.create_coverage_time_chart()
         with ui.card().classes("w-full"):
-            ui.label("Coverage over targets").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ui.label("Coverage over targets").classes('text-sky-600 dark:text-white').style(
+                "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             self.targ_df = ui.row().classes("w-full").style("height: 900px")
-        ui.label("IGV visualisations").style(
-            "color: #6E93D6; font-size: 150%; font-weight: 300"
+        ui.label("IGV visualisations").classes('text-sky-600 dark:text-white').style(
+            "font-size: 150%; font-weight: 300"
         ).tailwind("drop-shadow", "font-bold")
         self.igvvizcard = (
             ui.card().tight().classes("no-shadow border-[2px] w-full overflow-x-auto")
@@ -447,8 +447,8 @@ class TargetCoverage(BaseAnalysis):
                     self.igvelem = ui.element("div").classes("w-full")
 
         with ui.card().classes("w-full"):
-            ui.label("Candidate SNPs").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ui.label("Candidate SNPs").classes('text-sky-600 dark:text-white').style(
+                "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
                 self.SNPplaceholder = (
@@ -460,8 +460,8 @@ class TargetCoverage(BaseAnalysis):
                     )
                 # self.SNPview = SNPview(self.SNPplaceholder)
                 # ui.timer(0.1,lambda: self.SNPview.renderme(), once=True)
-            ui.label("Candidate IN/DELs").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ui.label("Candidate IN/DELs").classes('text-sky-600 dark:text-white').style(
+                "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
                 self.INDELplaceholder = (
