@@ -61,7 +61,7 @@ IMAGEFILE = os.path.join(
 )
 
 
-MENU_BREAKPOINT = 520
+MENU_BREAKPOINT = 1200
 
 # Read the HTML content for the header
 HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
