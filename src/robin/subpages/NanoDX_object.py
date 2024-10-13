@@ -225,7 +225,8 @@ class NanoDX_object(BaseAnalysis):
 
     def __del__(self):
         if self.nanodxfile:
-            self.nanodxfile.close()
+            pass
+            #self.nanodxfile.close()
 
     def setup_ui(self) -> None:
         """

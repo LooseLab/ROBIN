@@ -150,7 +150,7 @@ def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     colors = result.groupby(7).apply(lambda x: _generate_random_color())
     result = result.map(lambda x: x.strip() if isinstance(x, str) else x)
     result["Color"] = result[7].map(colors.get)
-    goodpairs = result.groupby("tag")[7].transform("nunique") > 1
+    goodpairs = result.groupby("tag")[7].transform("nunique") > 2
     # gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
     return result, goodpairs
 

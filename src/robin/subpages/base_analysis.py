@@ -125,7 +125,7 @@ class BaseAnalysis:
         self.browse = browse
         self.progress = progress
         self.file_mod_times = {}
-        self.MENU_BREAKPOINT = 520
+        self.MENU_BREAKPOINT = 1200
         self.running = False
         self.force_sampleid = force_sampleid
         self.threads = max(1, threads // 2)
