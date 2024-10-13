@@ -759,7 +759,7 @@ class CNVAnalysis(BaseAnalysis):
                 plot_to_update.options["xAxis"]["max"] = max
                 plot_to_update.options["xAxis"]["min"] = min
                 #print(plot_to_update.options["dataZoom"][1])
-                plot_to_update.options["dataZoom"][1]["startValue"] = 0
+                #plot_to_update.options["dataZoom"][1]["startValue"] = 0
                 plot_to_update.options["dataZoom"][1]["endValue"] = ymax
                 plot_to_update.options["series"].append(
                     {
