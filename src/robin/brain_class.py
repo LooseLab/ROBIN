@@ -458,7 +458,7 @@ class BrainMeth:
                         card = ui.card().classes("max-w-sm rounded shadow-lg")
                     with card:
                         with ui.expansion(f"{item}", icon="topic").style(
-                            "color: #6E93D6; font-size: 120%; font-weight: 300"
+                            "font-size: 120%; font-weight: 300"
                         ).classes("w-full"):
                             for element in [
                                 "devices",
@@ -483,7 +483,7 @@ class BrainMeth:
                                             else "Default Value"
                                         ),
                                     ).style(
-                                        "color: #000000; font-size: 75%; font-weight: 100"
+                                        "font-size: 75%; font-weight: 100"
                                     ).classes(
                                         "font-normal text-sm w-full"
                                     )
@@ -525,7 +525,7 @@ class BrainMeth:
 
         if sample_id:
             self.frontpage = ui.card().classes("rounded w-full")
-            with self.frontpage:
+            with (self.frontpage):
                 if not self.browse:
                     if (
                         self.sampleID
@@ -537,23 +537,23 @@ class BrainMeth:
 
                 ui.label(
                     f"CNS Tumor Methylation Classification - {self.sampleID}"
-                ).style("color: #6E93D6; font-size: 150%; font-weight: 300").classes(
-                    "drop-shadow font-bold"
-                )
+                ).classes('text-sky-600 dark:text-white').style(
+                    "font-size: 150%; font-weight: 300"
+                ).tailwind("drop-shadow", "font-bold")
 
                 ui.label(
                     "This tool enables classification of brain tumors in real time from Oxford Nanopore Data."
-                ).style("color: #000000; font-size: 100%; font-weight: 300").classes(
+                ).style("font-size: 100%; font-weight: 300").classes(
                     "drop-shadow font-bold"
                 )
 
                 with ui.row():
-                    ui.label("Results Summary").style(
-                        "color: #6E93D6; font-size: 150%; font-weight: 300"
-                    ).classes("drop-shadow font-bold")
+                    ui.label("Results Summary").classes('text-sky-600 dark:text-white').style(
+                    "font-size: 150%; font-weight: 300"
+                ).tailwind("drop-shadow", "font-bold")
 
                 with ui.row().style(
-                    "color: #000000; font-size: 120%; font-weight: 300"
+                    "font-size: 120%; font-weight: 300"
                 ):
                     if "sturgeon" not in self.exclude:
                         sturgeonsummary = ui.column()
@@ -572,7 +572,7 @@ class BrainMeth:
                             ],
                             "devices",
                             backward=lambda n: [f"Devices: {str(item)}" for item in n],
-                        ).style("color: #000000; font-size: 100%; font-weight: 300")
+                        ).style("font-size: 100%; font-weight: 300")
                         ui.label().bind_text_from(
                             app.storage.general[self.mainuuid]["samples"][
                                 self.sampleID
@@ -581,7 +581,7 @@ class BrainMeth:
                             backward=lambda n: [
                                 f"Basecall Models: {str(item)}" for item in n
                             ],
-                        ).style("color: #000000; font-size: 100%; font-weight: 300")
+                        ).style("font-size: 100%; font-weight: 300")
                         ui.label().bind_text_from(
                             app.storage.general[self.mainuuid]["samples"][
                                 self.sampleID
@@ -590,7 +590,7 @@ class BrainMeth:
                             backward=lambda n: [
                                 f"Flowcell IDs: {str(item)}" for item in n
                             ],
-                        ).style("color: #000000; font-size: 100%; font-weight: 300")
+                        ).style("font-size: 100%; font-weight: 300")
                         ui.label().bind_text_from(
                             app.storage.general[self.mainuuid]["samples"][
                                 self.sampleID
@@ -600,7 +600,7 @@ class BrainMeth:
                                 f"Run Start Time: {parser.parse(date).astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S %Z')}"
                                 for date in n
                             ],
-                        ).style("color: #000000; font-size: 100%; font-weight: 300")
+                        ).style("font-size: 100%; font-weight: 300")
                         ui.label().bind_text_from(
                             app.storage.general[self.mainuuid]["samples"][
                                 self.sampleID
@@ -609,26 +609,26 @@ class BrainMeth:
                             backward=lambda n: [
                                 f"Sample ID: {str(item)}" for item in n
                             ],
-                        ).style("color: #000000; font-size: 100%; font-weight: 300")
+                        ).style("font-size: 100%; font-weight: 300")
 
                 if "mgmt" not in self.exclude:
                     with ui.row().style(
-                        "color: #000000; font-size: 120%; font-weight: 300"
+                        "font-size: 120%; font-weight: 300"
                     ):
                         mgmt = ui.column()
                 if "cnv" not in self.exclude:
                     with ui.row().style(
-                        "color: #000000; font-size: 120%; font-weight: 300"
+                        "font-size: 120%; font-weight: 300"
                     ):
                         cnvsummary = ui.column()
                 if "fusion" not in self.exclude:
                     with ui.row().style(
-                        "color: #000000; font-size: 120%; font-weight: 300"
+                        "font-size: 120%; font-weight: 300"
                     ):
                         fusions = ui.column()
                 if "coverage" not in self.exclude:
                     with ui.row().style(
-                        "color: #000000; font-size: 120%; font-weight: 300"
+                        "font-size: 120%; font-weight: 300"
                     ):
                         coverage = ui.column()
 
@@ -640,27 +640,27 @@ class BrainMeth:
                     ):
                         with ui.row():
                             ui.label(f"Outputting to: {self.output}").style(
-                                "color: #000000; font-size: 100%; font-weight: 300"
+                                "font-size: 100%; font-weight: 300"
                             )
                             ui.label().bind_text_from(
                                 app.storage.general[self.mainuuid]["bam_count"],
                                 "counter",
                                 backward=lambda n: f"BAM files seen: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
                                 app.storage.general[self.mainuuid]["samples"][
                                     self.sampleID
                                 ]["file_counters"],
                                 "bam_passed",
                                 backward=lambda n: f"BAM pass: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
                                 app.storage.general[self.mainuuid]["samples"][
                                     self.sampleID
                                 ]["file_counters"],
                                 "bam_failed",
                                 backward=lambda n: f"BAM fail: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
 
                         with ui.row():
                             ui.label().bind_text_from(
@@ -669,28 +669,28 @@ class BrainMeth:
                                 ]["file_counters"],
                                 "mapped_count",
                                 backward=lambda n: f"Mapped Read Count: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
                                 app.storage.general[self.mainuuid]["samples"][
                                     self.sampleID
                                 ]["file_counters"],
                                 "unmapped_count",
                                 backward=lambda n: f"Unmapped Read Count: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
                                 app.storage.general[self.mainuuid]["samples"][
                                     self.sampleID
                                 ]["file_counters"],
                                 "pass_mapped_count",
                                 backward=lambda n: f"Pass Mapped Read Count: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
                                 app.storage.general[self.mainuuid]["samples"][
                                     self.sampleID
                                 ]["file_counters"],
                                 "fail_mapped_count",
                                 backward=lambda n: f"Fail Mapped Read Count: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
 
                         with ui.row():
                             ui.label().bind_text_from(
@@ -699,21 +699,21 @@ class BrainMeth:
                                 ]["file_counters"],
                                 "bases_count",
                                 backward=lambda n: f"Total Mapped Bases: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
                                 app.storage.general[self.mainuuid]["samples"][
                                     self.sampleID
                                 ]["file_counters"],
                                 "pass_bases_count",
                                 backward=lambda n: f"Total Mapped Pass Bases: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
                             ui.label().bind_text_from(
                                 app.storage.general[self.mainuuid]["samples"][
                                     self.sampleID
                                 ]["file_counters"],
                                 "fail_bases_count",
                                 backward=lambda n: f"Total Mapped Fail Bases: {n:,}",
-                            ).style("color: #000000; font-size: 100%; font-weight: 300")
+                            ).style("font-size: 100%; font-weight: 300")
 
                         with ui.row():
                             if "forest" not in self.exclude:
@@ -722,7 +722,7 @@ class BrainMeth:
                                     "bamforcns",
                                     backward=lambda n: f"BAM files for CNS: {n.qsize()}",
                                 ).style(
-                                    "color: #000000; font-size: 100%; font-weight: 300"
+                                    "font-size: 100%; font-weight: 300"
                                 )
                             if "sturgeon" not in self.exclude:
                                 ui.label().bind_text_from(
@@ -730,7 +730,7 @@ class BrainMeth:
                                     "bamforsturgeon",
                                     backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
                                 ).style(
-                                    "color: #000000; font-size: 100%; font-weight: 300"
+                                    "font-size: 100%; font-weight: 300"
                                 )
                             if "nanodx" not in self.exclude:
                                 ui.label().bind_text_from(
@@ -738,7 +738,7 @@ class BrainMeth:
                                     "bamfornanodx",
                                     backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
                                 ).style(
-                                    "color: #000000; font-size: 100%; font-weight: 300"
+                                    "font-size: 100%; font-weight: 300"
                                 )
                             if "pannanodx" not in self.exclude:
                                 ui.label().bind_text_from(
@@ -746,7 +746,7 @@ class BrainMeth:
                                     "bamforpannanodx",
                                     backward=lambda n: f"BAM files for Pan NanoDX: {n.qsize()}",
                                 ).style(
-                                    "color: #000000; font-size: 100%; font-weight: 300"
+                                    "font-size: 100%; font-weight: 300"
                                 )
 
         if sample_id:
@@ -755,32 +755,32 @@ class BrainMeth:
                 if not (
                     set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
                 ):
-                    methylationtab = ui.tab("Methylation Classification").style(
-                        "color: #6E93D6; font-size: 150%; font-weight: 600"
+                    methylationtab = ui.tab("Methylation Classification").classes('text-sky-600 dark:text-white').style(
+                        "font-size: 150%; font-weight: 600"
                     )
                     if not selectedtab:
                         selectedtab = methylationtab
                 if "cnv" not in self.exclude:
-                    copy_numbertab = ui.tab("Copy Number Variation").style(
-                        "color: #6E93D6; font-size: 150%; font-weight: 600"
+                    copy_numbertab = ui.tab("Copy Number Variation").classes('text-sky-600 dark:text-white').style(
+                        "font-size: 150%; font-weight: 600"
                     )
                     if not selectedtab:
                         selectedtab = copy_numbertab
                 if "coverage" not in self.exclude:
-                    coveragetab = ui.tab("Target Coverage").style(
-                        "color: #6E93D6; font-size: 150%; font-weight: 600"
+                    coveragetab = ui.tab("Target Coverage").classes('text-sky-600 dark:text-white').style(
+                        "font-size: 150%; font-weight: 600"
                     )
                     if not selectedtab:
                         selectedtab = coveragetab
                 if "mgmt" not in self.exclude:
-                    mgmttab = ui.tab("MGMT").style(
-                        "color: #6E93D6; font-size: 150%; font-weight: 600"
+                    mgmttab = ui.tab("MGMT").classes('text-sky-600 dark:text-white').style(
+                        "font-size: 150%; font-weight: 600"
                     )
                     if not selectedtab:
                         selectedtab = mgmttab
                 if "fusion" not in self.exclude:
-                    fusionstab = ui.tab("Fusions").style(
-                        "color: #6E93D6; font-size: 150%; font-weight: 600"
+                    fusionstab = ui.tab("Fusions").classes('text-sky-600 dark:text-white').style(
+                        "font-size: 150%; font-weight: 600"
                     )
                     if not selectedtab:
                         selectedtab = fusionstab
@@ -800,8 +800,8 @@ class BrainMeth:
                 ):
                     with ui.tab_panel(methylationtab).classes("w-full"):
                         with ui.card().classes("rounded w-full"):
-                            ui.label("Methylation Classifications").style(
-                                "color: #6E93D6; font-size: 150%; font-weight: 300"
+                            ui.label("Methylation Classifications").classes('text-sky-600 dark:text-white').style(
+                                "font-size: 150%; font-weight: 300"
                             ).tailwind("drop-shadow", "font-bold")
                             if "sturgeon" not in self.exclude:
                                 self.Sturgeon = Sturgeon_object(

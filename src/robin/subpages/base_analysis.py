@@ -538,8 +538,8 @@ class BaseAnalysis:
                     "series": [],
                 }
             )
+            .classes('border-double text-sky-600 dark:text-white dark:bg-black')
             .style("height: 350px")
-            .classes("border-double")
         )
 
     def create_chart(self, title: str) -> ui.echart:
@@ -565,8 +565,9 @@ class BaseAnalysis:
                     "series": [],
                 }
             )
-            .style("color: #6E93D6; font-size: 150%; font-weight: 300; height: 350px")
-            .classes("border-double")
+            .classes('border-double text-sky-600 dark:text-white dark:bg-black')
+            .style("font-size: 150%; font-weight: 300; height: 350px")
+            #.classes("border-double")
         )
 
     def process_bam(self, bamfile: BinaryIO, timestamp: float) -> None:
