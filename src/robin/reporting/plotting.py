@@ -5,13 +5,16 @@ This module contains functions for creating plots used in the PDF report.
 """
 
 import pandas as pd
+import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import io
+import math
 
 import natsort
 
 from matplotlib import gridspec
+from robin.subpages.CNV_object import filter_and_find_max
 
 
 def target_distribution_plot(df):
@@ -172,7 +175,8 @@ def create_CNV_plot_per_chromosome(result, cnv_dict):
             plt.title(f"Copy Number Variation - {contig}")
             plt.xlabel("Position")
             plt.ylabel("Estimated Ploidy")
-            plt.ylim(0, None)  # Adjust as needed
+            ymax = math.ceil(filter_and_find_max(np.array(values)))
+            plt.ylim(0, ymax)  # Adjust as needed
 
             buf = io.BytesIO()
             plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")

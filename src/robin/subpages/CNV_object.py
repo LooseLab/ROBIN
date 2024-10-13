@@ -81,11 +81,53 @@ import pickle
 import ruptures as rpt
 from typing import Optional, Tuple, List, BinaryIO
 import re
+import math
 
 os.environ["CI"] = "1"
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
+
+def filter_and_find_max(data, window_size=50, z_threshold=2):
+    """
+    Removes outliers based on a rolling window of local statistics (mean and standard deviation).
+    Uses the z-score within each window to classify outliers. Contiguous regions of outliers
+    are retained if they consistently deviate in the window. Returns the maximum value
+    from the filtered data.
+
+    Args:
+        data (np.ndarray): Array of points to process.
+        window_size (int): Size of the rolling window for local statistics.
+        z_threshold (float): The z-score threshold to classify a point as an outlier.
+
+    Returns:
+        float: The maximum value after filtering.
+    """
+    # Ensure data is a numpy array
+    data = np.array(data)
+
+    # Step 1: Convert to pandas Series for rolling calculations
+    data_series = pd.Series(data)
+
+    # Step 2: Calculate rolling mean and standard deviation
+    rolling_mean = data_series.rolling(window=window_size, center=True).mean()
+    rolling_std = data_series.rolling(window=window_size, center=True).std()
+
+    # Fill NaN values for edge cases where rolling window cannot be applied
+    rolling_mean.fillna(data_series.mean(), inplace=True)
+    rolling_std.fillna(data_series.std(), inplace=True)
+
+    # Step 3: Calculate z-scores based on rolling statistics
+    z_scores = np.abs((data_series - rolling_mean) / rolling_std)
+
+    # Step 4: Identify points where the z-score exceeds the threshold
+    outlier_mask = z_scores > z_threshold
+
+    # Step 5: Filter out outliers
+    filtered_data = data[~outlier_mask]
+
+    # Step 6: Calculate and return the maximum value from the filtered data
+    return np.max(filtered_data) if filtered_data.size > 0 else None
 
 class Result:
     """
@@ -471,7 +513,7 @@ class CNVAnalysis(BaseAnalysis):
     def generate_chart(
         self,
         title: Optional[str] = None,
-        initmax: int = 8,
+        initmax: Optional[int] = None,
         initmin: int = 0,
         type: str = "value",
     ) -> ui.echart:
@@ -677,6 +719,8 @@ class CNVAnalysis(BaseAnalysis):
                     zip((np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"], cnv)
                 )
 
+                ymax = math.ceil(filter_and_find_max(np.array(cnv)))
+
                 if not gene_target:
                     min = min
                     max = "dataMax"
@@ -714,6 +758,9 @@ class CNVAnalysis(BaseAnalysis):
                 ] = f"Copy Number Variation - {contig}"
                 plot_to_update.options["xAxis"]["max"] = max
                 plot_to_update.options["xAxis"]["min"] = min
+                #print(plot_to_update.options["dataZoom"][1])
+                plot_to_update.options["dataZoom"][1]["startValue"] = 0
+                plot_to_update.options["dataZoom"][1]["endValue"] = ymax
                 plot_to_update.options["series"].append(
                     {
                         "type": "scatter",
