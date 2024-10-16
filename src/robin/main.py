@@ -106,7 +106,7 @@ async def index() -> None:
             else:
                 nicegui.air.disconnect()
 
-    ui.timer(10, use_on_air)
+    ui.timer(1, use_on_air)
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
     await GUI.splash_screen()
 
@@ -420,18 +420,18 @@ class Methnice:
         """
         Async method for rendering the splash screen.
         """
-        with theme.frame(
+        with ((((theme.frame(
             "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
             smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
-        ):
+        ))))):
             self.frontpage = ui.card().classes("w-full")
             with self.frontpage:
-                ui.label("Welcome to R.O.B.I.N").style(
-                    "color: #6E93D6; font-size: 150%; font-weight: 300"
+                ui.label("Welcome to R.O.B.I.N").classes('text-sky-600 dark:text-white').style(
+                    "font-size: 150%; font-weight: 300"
                 ).tailwind("drop-shadow", "font-bold")
                 ui.label(
                     "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
-                ).style("color: #000000; font-size: 100%; font-weight: 300").tailwind(
+                ).classes('text-black-600 dark:text-white').style("font-size: 100%; font-weight: 300").tailwind(
                     "drop-shadow", "font-bold"
                 )
                 with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
@@ -454,6 +454,7 @@ class Methnice:
                             "ROBIN_logo_small.png",
                         )
                     ).classes("rounded-full w-16 h-16 ml-4")
+            
 
     async def index_page(self) -> None:
         """

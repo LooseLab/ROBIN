@@ -5,13 +5,16 @@ This module contains functions for creating plots used in the PDF report.
 """
 
 import pandas as pd
+import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import io
+import math
 
 import natsort
 
 from matplotlib import gridspec
+from robin.subpages.CNV_object import filter_and_find_max
 
 
 def target_distribution_plot(df):
@@ -94,7 +97,7 @@ def create_CNV_plot(result, cnv_dict):
     contig_centers = {}
 
     for contig, values in result.cnv.items():
-        if contig != "chrM":
+        if contig in ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]:
             start_offset = offset
             for i, value in enumerate(values):
                 plot_data.append((contig, i + offset, value))
@@ -166,13 +169,15 @@ def create_CNV_plot_per_chromosome(result, cnv_dict):
     """
     plots = []
     for contig, values in result.cnv.items():
-        if contig != "chrM":
+        # if contig != "chrM":,
+        if contig in ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]:
             plt.figure(figsize=(10, 2))
             sns.scatterplot(x=range(len(values)), y=values, s=2)
             plt.title(f"Copy Number Variation - {contig}")
             plt.xlabel("Position")
             plt.ylabel("Estimated Ploidy")
-            plt.ylim(0, None)  # Adjust as needed
+            ymax = math.ceil(filter_and_find_max(np.array(values)))
+            plt.ylim(0, ymax)  # Adjust as needed
 
             buf = io.BytesIO()
             plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")
@@ -249,7 +254,10 @@ def coverage_plot(df):
     Returns:
         io.BytesIO: Buffer containing the plot image.
     """
-    df = df[df["#rname"] != "chrM"].copy()
+    # df = df[df["#rname"] != "chrM"].copy()
+    df = df[
+        df["#rname"].isin(["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"])
+    ].copy()
 
     # Sort chromosomes naturally
     df["#rname"] = pd.Categorical(

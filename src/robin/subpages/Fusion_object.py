@@ -150,7 +150,7 @@ def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     colors = result.groupby(7).apply(lambda x: _generate_random_color())
     result = result.map(lambda x: x.strip() if isinstance(x, str) else x)
     result["Color"] = result[7].map(colors.get)
-    goodpairs = result.groupby("tag")[7].transform("nunique") > 1
+    goodpairs = result.groupby("tag")[7].transform("nunique") > 2
     # gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
     return result, goodpairs
 
@@ -545,8 +545,8 @@ class FusionObject(BaseAnalysis):
                         backward=lambda n: f" {n} low confidence fusions observed.",
                     )
         with ui.card().style("width: 100%"):
-            ui.label("Gene Fusion Candidates").style(
-                "color: #6E93D6; font-size: 150%; font-weight: 300"
+            ui.label("Gene Fusion Candidates").classes('text-sky-600 dark:text-white').style(
+                "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             ui.label(
                 "This panel identifies gene fusion candidates from the input bam files. "
@@ -554,10 +554,10 @@ class FusionObject(BaseAnalysis):
                 "Fusions are identified on a streaming basis derived from reads with supplementary alignments. "
                 "The plots are indicative of the presence of a fusion and should be interpreted with care. "
                 "The tables show the reads that are indicative of a fusion."
-            ).style("color: #000000; font-size: 125%; font-weight: 300")
+            ).style("font-size: 125%; font-weight: 300")
             with ui.tabs().classes("w-full") as tabs:
                 one = ui.tab("Within Target Fusions").style(
-                    "color: #000000; font-size: 125%; font-weight: 300"
+                    "font-size: 125%; font-weight: 300"
                 )
                 with one:
                     self.badge_one = (
@@ -566,7 +566,7 @@ class FusionObject(BaseAnalysis):
                         .props("floating rounded outline")
                     )
                 two = ui.tab("Genome Wide Fusions").style(
-                    "color: #000000; font-size: 125%; font-weight: 300"
+                    "font-size: 125%; font-weight: 300"
                 )
                 with two:
                     self.badge_two = (
@@ -580,45 +580,45 @@ class FusionObject(BaseAnalysis):
                 with ui.tab_panel(one):
                     with ui.card().style("width: 100%"):
                         ui.label("Fusion Candidates (within targets)").style(
-                            "color: #000000; font-size: 125%; font-weight: 300"
+                            "font-size: 125%; font-weight: 300"
                         ).tailwind("drop-shadow", "font-bold")
                         ui.separator()
                         ui.label(
                             "Fusion Candidates are identified by looking for reads that map to two different genes from within the target panel. "
                             "Plots illustrate the alignments of reads to each region of the genome and individual reads are identified by colour. "
                             "These plots should be interpreted with care and are only indicative of the presence of a fusion."
-                        ).style("color: #000000; font-size: 125%; font-weight: 300")
+                        ).style("font-size: 125%; font-weight: 300")
                         self.fusionplot = ui.row()
                         with self.fusionplot.classes("w-full"):
                             ui.label("Plot not yet available.").style(
-                                "color: #000000; font-size: 125%; font-weight: 300"
+                                "font-size: 125%; font-weight: 300"
                             )
                         self.fusiontable = ui.row().classes("w-full")
                         with self.fusiontable:
                             ui.label("Table not yet available.").style(
-                                "color: #000000; font-size: 125%; font-weight: 300"
+                                "font-size: 125%; font-weight: 300"
                             )
 
                 with ui.tab_panel(two):
                     with ui.card().style("width: 100%"):
                         ui.label("Fusion Candidates (genome wide)").style(
-                            "color: #000000; font-size: 125%; font-weight: 300"
+                            "font-size: 125%; font-weight: 300"
                         ).tailwind("drop-shadow", "font-bold")
                         ui.separator()
                         ui.label(
                             "Fusion Candidates are identified by looking for reads that map to at least one gene from within the target panel. "
                             "Plots illustrate the alignments of reads to each region of the genome and individual reads are identified by colour. "
                             "These plots should be interpreted with care and are only indicative of the presence of a fusion."
-                        ).style("color: #000000; font-size: 125%; font-weight: 300")
+                        ).style("font-size: 125%; font-weight: 300")
                         self.fusionplot_all = ui.row()
                         with self.fusionplot_all.classes("w-full"):
                             ui.label("Plot not yet available.").style(
-                                "color: #000000; font-size: 125%; font-weight: 300"
+                                "font-size: 125%; font-weight: 300"
                             )
                         self.fusiontable_all = ui.row().classes("w-full")
                         with self.fusiontable_all:
                             ui.label("Table not yet available.").style(
-                                "color: #000000; font-size: 125%; font-weight: 300"
+                                "font-size: 125%; font-weight: 300"
                             )
 
         if self.browse:

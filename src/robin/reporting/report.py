@@ -138,6 +138,7 @@ def create_pdf(filename, output):
     for name, df_name in [
         ("Sturgeon", "sturgeon_scores.csv"),
         ("NanoDX", "nanoDX_scores.csv"),
+        ("PanNanoDX", "pannanodx_scores.csv"),
         ("Forest", "random_forest_scores.csv"),
     ]:
         # print (name)
