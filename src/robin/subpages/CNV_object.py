@@ -1360,7 +1360,7 @@ class CNVAnalysis(BaseAnalysis):
             self.NewBed.load_from_string(bedcontent, merge=False)
                     #self.NewBed.load_from_string("chr2\t1\t1000000\t.\t.\t+", merge=True)
 
-            self.orig_tree.update()
+            #self.orig_tree.update()
 
             if self.check_file_time(os.path.join(output, "bedranges.csv")):
                 self.proportions_df_store = pd.read_csv(
