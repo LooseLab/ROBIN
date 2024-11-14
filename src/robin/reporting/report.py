@@ -134,6 +134,8 @@ def create_pdf(filename, output):
     elements_summary.append(Spacer(1, 12))
 
     threshold = 0.05
+
+
     # Add classification plots and details
     for name, df_name in [
         ("Sturgeon", "sturgeon_scores.csv"),
@@ -141,10 +143,16 @@ def create_pdf(filename, output):
         ("PanNanoDX", "pannanodx_scores.csv"),
         ("Forest", "random_forest_scores.csv"),
     ]:
-        # print (name)
-        if os.path.exists(os.path.join(output, df_name)):
-            # print (df_name)
-            df_store = pd.read_csv(os.path.join(output, df_name))
+        # List files in the directory and convert them to lowercase
+        files_in_directory = [f.lower() for f in os.listdir(output)]
+
+        # Check if the lowercase version of df_name exists in the directory
+        if df_name.lower() in files_in_directory:
+            file_path = os.path.join(output, df_name)
+
+            # Read the CSV file
+            df_store = pd.read_csv(file_path)
+
             df_store2 = df_store.drop(columns=["timestamp"])
 
             if "number_probes" in df_store2.columns:
