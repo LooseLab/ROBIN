@@ -7,6 +7,7 @@ This module contains the main function for creating the PDF report.
 import os
 import io
 import pickle
+from pathlib import Path
 import numpy as np
 import pandas as pd
 from PIL import Image as PILImage
@@ -148,7 +149,13 @@ def create_pdf(filename, output):
 
         # Check if the lowercase version of df_name exists in the directory
         if df_name.lower() in files_in_directory:
-            file_path = os.path.join(output, df_name)
+            def find_case_insensitive_file(target_name, search_path):
+                target_name_lower = target_name.lower()
+                for path in Path(search_path).rglob('*'):
+                    if path.is_file() and path.name.lower() == target_name_lower:
+                        return str(path)
+                return None
+            file_path = find_case_insensitive_file(df_name, output) or os.path.join(output, df_name)
 
             # Read the CSV file
             df_store = pd.read_csv(file_path)
