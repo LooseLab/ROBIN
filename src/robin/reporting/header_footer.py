@@ -11,6 +11,9 @@ from reportlab.lib.units import inch
 from datetime import datetime
 import os
 from robin import images
+from reportlab.lib import colors
+from PIL import Image as PILImage
+import io
 
 
 class HeaderFooterCanvas(canvas.Canvas):
@@ -39,53 +42,66 @@ class HeaderFooterCanvas(canvas.Canvas):
 
     def draw_canvas(self, page_count):
         width, height = A4
-
-        # Add first line of the header in bold
+        
+        # Add header background - 1.0 inch height
+        self.setFillColor(colors.HexColor('#F5F6FA'))
+        self.rect(0, height-1.0*inch, width, 1.0*inch, fill=True, stroke=0)
+        
+        # Calculate center point of header (header spans 1 inch)
+        header_center = height - 0.5*inch
+        
+        # Add ROBIN logo - centered vertically
+        logo_path = os.path.join(os.path.dirname(images.__file__), "robin_logo.png")
+        if os.path.exists(logo_path):
+            # Open and convert logo to RGBA if it isn't already
+            img = PILImage.open(logo_path)
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+                
+            # Create a new image with white background
+            bg = PILImage.new('RGBA', img.size, (245, 246, 250, 255))
+            composite = PILImage.alpha_composite(bg, img)
+            
+            # Save to temporary file
+            temp_path = os.path.join(os.path.dirname(logo_path), 'temp_logo.png')
+            composite.save(temp_path, format='PNG')
+            
+            # Draw the processed logo - increased size and kept lower position
+            logo_offset = 25.0
+            self.drawImage(temp_path, 0.5*inch, header_center - logo_offset, width=0.9*inch, height=0.7*inch, preserveAspectRatio=True)
+            
+            # Clean up temporary file
+            os.remove(temp_path)
+        
+        # Title text - centered vertically with consistent styling
         header1 = Paragraph(
-            "R.O.B.I.N Reports... RESEARCH USE ONLY", self.styles["Bold"]
+            '<font name="FiraSans-Bold" color="#2C3E50" size="14">ROBIN Reports</font><br/>'
+            '<font name="FiraSans" color="#E74C3C" size="10">RESEARCH USE ONLY</font>', 
+            self.styles["Bold"]
         )
-        w, h = header1.wrap(width - 2 * inch, inch)
-        header1.drawOn(self, inch, height - h - inch + 36)
+        w, h = header1.wrap(width - 3*inch, inch)
+        header1.drawOn(self, 2*inch, header_center + 0.1*inch)
+        
+        # Metadata section - centered vertically with consistent styling
+        metadata = [
+            f"Sample ID: {self.sample_id}",
+            datetime.now().strftime("Generated: %Y-%m-%d %H:%M:%S")
+        ]
+        y_position = header_center - 0.1*inch
+        for line in metadata:
+            self.setFont("FiraSans", 9)  # Consistent with BodyText style
+            self.setFillColor(colors.HexColor('#2C3E50'))  # Consistent color scheme
+            self.drawString(2*inch, y_position, line)
+            y_position -= 12
 
-        # Add second line of the header
-        header2 = Paragraph(f"Sample ID: {self.sample_id}", self.styles["Normal"])
-        w, h = header2.wrap(width - 2 * inch, inch)
-        header2.drawOn(self, inch, height - h - inch + 24)
-
-        # Add third line of the header with date and time
-        report_date = datetime.now().strftime(
-            "R.O.B.I.N. Report Generated: %Y-%m-%d %H:%M:%S"
-        )
-        header3 = Paragraph(report_date, self.styles["Smaller"])
-        w, h = header3.wrap(width - 2 * inch, inch)
-        header3.drawOn(self, inch, height - h - inch + 12)
-
-        # Add logo to the top right corner of the header
-        logo_path = os.path.join(
-            os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
-        )
-        # logo_path = "src/robin/images/Robin_logo_small.png"  # Replace with the path to your logo
-        max_logo_size = 50  # Maximum width and height in pixels
-        self.drawImage(
-            logo_path,
-            width - max_logo_size - inch,
-            height - max_logo_size - inch + 36,
-            width=max_logo_size,
-            height=max_logo_size,
-            preserveAspectRatio=True,
-            mask="auto",
-        )
-
-        # Add footer
-        page = f"SampleID: {self.sample_id} - Page {self._pageNumber} of {page_count}"
-        x = 190
-        self.saveState()
-        self.setStrokeColorRGB(0, 0, 0)
-        self.setLineWidth(0.5)
-        self.line(66, 78, A4[0] - 66, 78)
-        self.setFont("FiraSans", 7)
-        self.drawString(A4[0] - x, 65, page)
-        self.restoreState()
+        # Footer - reduced to 0.35 inch
+        self.setFillColor(colors.HexColor('#F5F6FA'))
+        self.rect(0, 0, width, 0.35*inch, fill=True, stroke=0)
+        
+        page = f"Sample: {self.sample_id} | Page {self._pageNumber} of {page_count}"
+        self.setFont("FiraSans", 8)
+        self.setFillColor(colors.HexColor('#2C3E50'))
+        self.drawString(width/2 - len(page)*2.5, 0.15*inch, page)
 
 
 def header_footer_canvas_factory(sample_id, styles, fonts_dir):
