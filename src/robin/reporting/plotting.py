@@ -10,12 +10,76 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import io
 import math
+import matplotlib.font_manager as fm
+import os
+from robin import fonts
 
 import natsort
 
 from matplotlib import gridspec
 from robin.subpages.CNV_object import filter_and_find_max
 
+# Define consistent color scheme and style
+MODERN_COLORS = {
+    'primary': '#2C3E50',    # Dark blue-grey (matching report text)
+    'secondary': '#E2E8F0',  # Light grey (matching table grid)
+    'background': '#F8FAFC', # Light background (matching table alternate rows)
+    'accent': '#3498DB',     # Blue accent
+    'grid': '#E2E8F0'       # Grid color
+}
+
+def set_modern_style():
+    """Set consistent modern style for all plots"""
+    # Register FiraSans font
+    font_path = os.path.join(
+        os.path.dirname(os.path.abspath(fonts.__file__)),
+        "fira-sans-v16-latin-regular.ttf"
+    )
+    
+    # Add font to matplotlib's font manager
+    fm.fontManager.addfont(font_path)
+    prop = fm.FontProperties(fname=font_path)
+    plt.rcParams['font.family'] = prop.get_name()
+    
+    plt.style.use('seaborn-v0_8-whitegrid')
+    sns.set_theme(style="whitegrid")
+    
+    plt.rcParams.update({
+        # Figure settings
+        'figure.facecolor': 'white',
+        'figure.dpi': 300,
+        
+        # Axes settings
+        'axes.facecolor': 'white',
+        'axes.edgecolor': MODERN_COLORS['primary'],
+        'axes.labelcolor': MODERN_COLORS['primary'],
+        'axes.titlecolor': MODERN_COLORS['primary'],
+        'axes.grid': True,
+        'axes.labelsize': 10,
+        'axes.titlesize': 12,
+        
+        # Grid settings
+        'grid.color': MODERN_COLORS['grid'],
+        'grid.linestyle': '--',
+        'grid.linewidth': 0.5,
+        'grid.alpha': 0.5,
+        
+        # Tick settings
+        'xtick.color': MODERN_COLORS['primary'],
+        'ytick.color': MODERN_COLORS['primary'],
+        'xtick.labelsize': 8,
+        'ytick.labelsize': 8,
+        
+        # Legend settings
+        'legend.frameon': True,
+        'legend.facecolor': 'white',
+        'legend.edgecolor': MODERN_COLORS['grid'],
+        'legend.fontsize': 8,
+        
+        # Line settings
+        'lines.linewidth': 1.5,
+        'lines.markersize': 6
+    })
 
 def target_distribution_plot(df):
     """
@@ -27,6 +91,8 @@ def target_distribution_plot(df):
     Returns:
         io.BytesIO: Buffer containing the plot image.
     """
+    set_modern_style()
+    
     df["chrom"] = pd.Categorical(
         df["chrom"], categories=natsort.natsorted(df["chrom"].unique()), ordered=True
     )
@@ -34,11 +100,21 @@ def target_distribution_plot(df):
 
     # Generate the plot
     plt.figure(figsize=(16, 8))
-    boxplot = sns.boxplot(x="chrom", y="coverage", data=df)
-    plt.title("Distribution of Target Coverage on Each Chromosome")
-    plt.xlabel("Chromosome")
-    plt.ylabel("Coverage")
-    plt.xticks(rotation=90)
+    boxplot = sns.boxplot(
+        x="chrom", 
+        y="coverage", 
+        data=df,
+        color=MODERN_COLORS['accent'],
+        flierprops={'marker': 'o', 'markerfacecolor': MODERN_COLORS['primary']}
+    )
+    
+    plt.title("Distribution of Target Coverage on Each Chromosome", 
+              fontsize=12, 
+              color=MODERN_COLORS['primary'],
+              pad=20)
+    plt.xlabel("Chromosome", color=MODERN_COLORS['primary'])
+    plt.ylabel("Coverage", color=MODERN_COLORS['primary'])
+    plt.xticks(rotation=45)
 
     # Identify and annotate outliers
     def annotate_outliers(df, boxplot):
@@ -91,6 +167,8 @@ def create_CNV_plot(result, cnv_dict):
     Returns:
         io.BytesIO: Buffer containing the plot image.
     """
+    set_modern_style()
+    
     # Prepare data for plotting
     plot_data = []
     offset = 0
@@ -120,16 +198,16 @@ def create_CNV_plot(result, cnv_dict):
 
     # Create scatter plot
     width = 16
-    sns.set_theme(style="whitegrid", palette="colorblind")
     plt.figure(figsize=(width, width / 4))
     sns.scatterplot(
         data=df,
         x="Position_Corrected",
         y="Value",
         hue="Contig",
-        palette="colorblind",
+        palette="Set2",  # Modern color palette
         legend=False,
-        s=1,
+        s=2,
+        alpha=0.6
     )
 
     min_y = df["Value"].min()  # Minimum y-value
@@ -167,12 +245,21 @@ def create_CNV_plot_per_chromosome(result, cnv_dict):
     Returns:
         List[Tuple[str, io.BytesIO]]: List of tuples containing chromosome names and plot buffers.
     """
+    set_modern_style()
+    
     plots = []
     for contig, values in result.cnv.items():
         # if contig != "chrM":,
         if contig in ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]:
             plt.figure(figsize=(10, 2))
-            sns.scatterplot(x=range(len(values)), y=values, s=2)
+            sns.scatterplot(
+                x=range(len(values)), 
+                y=values, 
+                s=2, 
+                color=MODERN_COLORS['accent'],
+                alpha=0.6
+            )
+            
             plt.title(f"Copy Number Variation - {contig}")
             plt.xlabel("Position")
             plt.ylabel("Estimated Ploidy")
@@ -200,6 +287,8 @@ def classification_plot(df, title, threshold):
     Returns:
         io.BytesIO: Buffer containing the plot image.
     """
+    set_modern_style()
+    
     df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
 
     # Reshape the data to long format
@@ -217,10 +306,15 @@ def classification_plot(df, title, threshold):
     ].unique()
     df_filtered = df_filtered[df_filtered["Condition"].isin(conditions_above_threshold)]
 
-    sns.set_theme(style="whitegrid", palette="colorblind")
-    # Create the timecourse plot
     plt.figure(figsize=(12, 9))
-    sns.lineplot(data=df_filtered, x="timestamp", y="Value", hue="Condition")
+    sns.lineplot(
+        data=df_filtered, 
+        x="timestamp", 
+        y="Value", 
+        hue="Condition",
+        palette="Set2"
+    )
+    
     plt.title(f"{title} Classifications over Time")
     plt.xlabel("Timestamp")
     plt.ylabel("Value")
@@ -254,6 +348,8 @@ def coverage_plot(df):
     Returns:
         io.BytesIO: Buffer containing the plot image.
     """
+    set_modern_style()
+    
     # df = df[df["#rname"] != "chrM"].copy()
     df = df[
         df["#rname"].isin(["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"])
@@ -266,7 +362,7 @@ def coverage_plot(df):
     df = df.sort_values("#rname")
 
     # Create subplots
-    plt.figure(figsize=(10, 6))
+    plt.figure(figsize=(18, 6))
     gs = gridspec.GridSpec(3, 1, height_ratios=[1, 1, 1])
 
     # Font size settings
@@ -276,7 +372,13 @@ def coverage_plot(df):
 
     # Plot number of reads per chromosome
     ax0 = plt.subplot(gs[0])
-    sns.barplot(x="#rname", y="numreads", data=df, ax=ax0)
+    sns.barplot(
+        x="#rname", 
+        y="numreads", 
+        data=df, 
+        ax=ax0,
+        color=MODERN_COLORS['accent']
+    )
     ax0.set_title("Number of Reads per Chromosome", fontsize=title_fontsize)
     ax0.set_xlabel("", fontsize=label_fontsize)
     ax0.set_ylabel("Number of Reads", fontsize=label_fontsize)

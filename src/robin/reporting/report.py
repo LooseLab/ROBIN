@@ -99,6 +99,86 @@ def format_timestamp(timestamp_str):
         return str(timestamp_str)
 
 
+def create_auto_adjusting_table(data, style, max_width=None):
+    """
+    Creates a table that automatically adjusts its column widths based on content and page width.
+    
+    Args:
+        data (List[List]): Table data as a list of rows
+        style (TableStyle): Style to apply to the table
+        max_width (float, optional): Maximum width for the table. Defaults to A4 width - 1 inch margins.
+    
+    Returns:
+        Table: A reportlab Table object with optimized column widths
+    """
+    if not data or not data[0]:  # Check if data is empty or first row is empty
+        return None
+        
+    # Get page width if max_width not specified
+    if max_width is None:
+        page_width, _ = A4
+        max_width = page_width - inch  # 0.5 inch margin on each side
+    
+    # Calculate minimum column widths based on content
+    num_cols = len(data[0])
+    min_widths = [0] * num_cols
+    
+    for row in data:
+        for i, cell in enumerate(row):
+            if cell is not None:  # Handle None values
+                cell_str = str(cell)
+                # Estimate width based on character count (approximate)
+                min_widths[i] = max(min_widths[i], len(cell_str) * 7)  # 7 points per character
+    
+    # Ensure minimum width of 30 points per column
+    min_widths = [max(30, w) for w in min_widths]
+    
+    # Calculate total width
+    total_width = sum(min_widths)
+    
+    if total_width > max_width:
+        # Scale columns proportionally
+        scale = max_width / total_width
+        col_widths = [w * scale for w in min_widths]
+    else:
+        col_widths = min_widths
+    
+    # Create table with calculated widths
+    table = Table(data, colWidths=col_widths)
+    table.setStyle(style)
+    
+    return table
+
+# Modern table style definition
+MODERN_TABLE_STYLE = TableStyle([
+    # Header styling
+    ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5F6FA')),
+    ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),
+    ('FONTNAME', (0, 0), (-1, 0), 'FiraSans-Bold'),
+    ('FONTSIZE', (0, 0), (-1, 0), 8),
+    ('TOPPADDING', (0, 0), (-1, 0), 6),
+    ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+    
+    # Body styling
+    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+    ('TEXTCOLOR', (0, 1), (-1, -1), colors.HexColor('#2C3E50')),
+    ('FONTNAME', (0, 1), (-1, -1), 'FiraSans'),
+    ('FONTSIZE', (0, 1), (-1, -1), 7),
+    ('TOPPADDING', (0, 1), (-1, -1), 4),
+    ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
+    
+    # Grid styling
+    ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),
+    ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#CBD5E1')),
+    
+    # Alignment
+    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+    
+    # Alternating row colors
+    ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+])
+
 def create_pdf(filename, output):
     """
     Creates a PDF report.
@@ -124,29 +204,50 @@ def create_pdf(filename, output):
 
     styles = getSampleStyleSheet()
     
-    # Update all text styles for consistency
-    styles["Heading1"].fontSize = 14
-    styles["Heading1"].spaceAfter = 6
-    styles["Heading1"].spaceBefore = 12
+    # Update all text styles for consistency with Apple HIG
+    styles["Heading1"].fontSize = 14  # Apple's recommended large title size
+    styles["Heading1"].spaceAfter = 5
+    styles["Heading1"].spaceBefore = 7
     styles["Heading1"].fontName = "FiraSans-Bold"
-    styles["Heading1"].textColor = colors.HexColor('#2C3E50')  # Consistent with header
+    styles["Heading1"].textColor = colors.HexColor('#000000')  # Apple prefers true black for important text
 
-    styles["Heading2"].fontSize = 12
+    styles["Heading2"].fontSize = 12  # Apple's recommended title size
     styles["Heading2"].spaceAfter = 4
-    styles["Heading2"].spaceBefore = 8
+    styles["Heading2"].spaceBefore = 6
     styles["Heading2"].fontName = "FiraSans-Bold"
-    styles["Heading2"].textColor = colors.HexColor('#2C3E50')
+    styles["Heading2"].textColor = colors.HexColor('#000000')
 
-    styles["Heading3"].fontSize = 10
-    styles["Heading3"].spaceAfter = 3
-    styles["Heading3"].spaceBefore = 6
-    styles["Heading3"].fontName = "FiraSans-Bold"
-    styles["Heading3"].textColor = colors.HexColor('#2C3E50')
-
-    styles["BodyText"].fontSize = 9
-    styles["BodyText"].leading = 11
+    styles["BodyText"].fontSize = 10  # Apple's recommended body text size
     styles["BodyText"].fontName = "FiraSans"
-    styles["BodyText"].textColor = colors.HexColor('#2C3E50')
+    styles["BodyText"].textColor = colors.HexColor('#000000')
+
+    # Add styles for summary results
+    styles.add(
+        ParagraphStyle(
+            name='SummaryResult',
+            parent=styles['BodyText'],
+            fontSize=13,
+            leading=16,
+            fontName="FiraSans",
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=8,
+            bulletIndent=12,
+            leftIndent=24
+        )
+    )
+
+    # Add style for important metrics
+    styles.add(
+        ParagraphStyle(
+            name='Metric',
+            parent=styles['BodyText'],
+            fontSize=15,
+            leading=18,
+            fontName="FiraSans-Bold",
+            textColor=colors.HexColor('#000000'),
+            spaceAfter=4
+        )
+    )
 
     # Update custom styles
     styles.add(
@@ -197,19 +298,34 @@ def create_pdf(filename, output):
         )
     )
 
-    # Update table styles for consistency
-    table_style = TableStyle([
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5F6FA')),  # Match header background
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),   # Match header text color
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+    # Define a consistent modern table style
+    MODERN_TABLE_STYLE = TableStyle([
+        # Header styling
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5F6FA')),  # Light blue-grey header
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),   # Dark blue-grey text
         ('FONTNAME', (0, 0), (-1, 0), 'FiraSans-Bold'),
         ('FONTSIZE', (0, 0), (-1, 0), 8),
+        ('TOPPADDING', (0, 0), (-1, 0), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+        
+        # Body styling
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.HexColor('#2C3E50')),
         ('FONTNAME', (0, 1), (-1, -1), 'FiraSans'),
         ('FONTSIZE', (0, 1), (-1, -1), 7),
-        ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#DEE2E6')),
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8F9FA')]),
-        ('TOPPADDING', (0, 0), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+        ('TOPPADDING', (0, 1), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
+        
+        # Grid styling
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),  # Light grey grid
+        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#CBD5E1')), # Slightly darker line below header
+        
+        # Alignment
+        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        
+        # Alternating row colors
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
     ])
 
     # Update document margins for more compact but safe layout
@@ -223,12 +339,12 @@ def create_pdf(filename, output):
     )
 
     # Update image handling function for more compact but safe layout
-    def add_figure(elements, img, caption=None, width_scale=0.95):
+    def add_figure(elements, img, caption=None, width_scale=0.8):
         """Helper function for consistent image formatting"""
-        elements.append(Spacer(1, 12))  # Added space before figure
+        elements.append(Spacer(1, 16))  # Increased spacing
         width, height = A4
-        img_width = width * width_scale
-        elements.append(Image(img, width=img_width, height=img_width/1.6, kind="proportional"))
+        img_width = width * width_scale  # More compact images
+        elements.append(Image(img, width=img_width, height=img_width/1.6))
         if caption:
             elements.append(Spacer(1, 4))
             elements.append(Paragraph(caption, styles["Caption"]))
@@ -243,6 +359,12 @@ def create_pdf(filename, output):
         if os.path.exists(os.path.join(output, "master.csv"))
         else None
     )
+    
+    print(masterdf)
+    try:
+        centreID = masterdf.loc['centreID'][1]
+    except KeyError:
+        centreID = None  # or some default value
 
     elements_summary.append(Paragraph("Classification Summary", styles["Heading1"]))
     elements_summary.append(Spacer(1, 12))
@@ -310,23 +432,7 @@ def create_pdf(filename, output):
                 df_transposed.columns = [split_text(col) for col in df_transposed.columns]
                 df_transposed.columns.name = None
                 data = [df_transposed.columns.to_list()] + df_transposed.values.tolist()
-                table = Table(data)
-                style = TableStyle(
-                    [
-                        ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-                        ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                        ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),
-                        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                        ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),
-                        ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),
-                        ("FONTSIZE", (0, 0), (-1, 0), 6),
-                        ("FONTSIZE", (0, 1), (-1, -1), 5),
-                        ("BOTTOMPADDING", (0, 0), (-1, 0), 1),
-                        ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-                        ("GRID", (0, 0), (-1, -1), 1, colors.black),
-                    ]
-                )
-                table.setStyle(style)
+                table = create_auto_adjusting_table(data, MODERN_TABLE_STYLE)
                 elements.append(table)
                 elements.append(Spacer(1, 12))
                 elements.append(PageBreak())
@@ -360,10 +466,32 @@ def create_pdf(filename, output):
             elements.append(img)
             elements.append(Spacer(1, 6))
 
+            # Create CNV per chromosome plots in a 2-column grid
             cnv_plots = create_CNV_plot_per_chromosome(CNVresult, cnv_dict)
-            for contig, img_buf in cnv_plots:
-                img = Image(img_buf, width=6 * inch, height=1.5 * inch)
-                elements.append(img)
+            
+            # Calculate dimensions for 2-column layout
+            width, height = A4
+            col_width = (width * 0.95) / 2  # 95% of page width split into 2 columns
+            plot_height = col_width / 4  # Maintain aspect ratio
+            
+            # Process plots two at a time
+            for i in range(0, len(cnv_plots), 2):
+                # Create a list to hold the current row's plots
+                row_plots = []
+                
+                # Add plots for this row (either 1 or 2 plots)
+                for j in range(2):
+                    if i + j < len(cnv_plots):
+                        contig, img_buf = cnv_plots[i + j]
+                        row_plots.append((contig, Image(img_buf, width=col_width, height=plot_height)))
+                
+                # Create a table for this row of plots
+                plot_data = [[plot[1] for plot in row_plots]]
+                if len(plot_data[0]) < 2:  # If odd number of plots, add empty cell
+                    plot_data[0].append('')
+                
+                table = Table(plot_data, colWidths=[col_width] * 2)
+                elements.append(table)
                 elements.append(Spacer(1, 6))
 
             if XYestimate != "Unknown":
@@ -465,23 +593,7 @@ def create_pdf(filename, output):
             outliers["coverage"] = outliers["coverage"].apply(lambda x: round(x, 1))
             outliers = outliers.sort_values(by="coverage", ascending=False)
             data = [outliers.columns.to_list()] + outliers.values.tolist()
-            table = Table(data)
-            style = TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),
-                    ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 6),
-                    ("FONTSIZE", (0, 1), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 1),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
-                ]
-            )
-            table.setStyle(style)
+            table = create_auto_adjusting_table(data, MODERN_TABLE_STYLE)
             elements.append(table)
             elements.append(Spacer(1, 12))
         else:
@@ -571,7 +683,7 @@ def create_pdf(filename, output):
         # Add run data summary with more compact spacing
         if masterdf is not None and isinstance(masterdf, pd.DataFrame):
             elements_summary.append(Paragraph("Run Data Summary", styles["Heading1"]))
-            elements_summary.append(Spacer(1, 6))  # Reduced from default spacing
+            #elements_summary.append(Spacer(1, 6))  # Reduced from default spacing
             
             masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[sample_id]
             
@@ -658,23 +770,7 @@ def create_pdf(filename, output):
             image = Image(plot_out, 6 * inch, 4 * inch)
             elements.append(image)
             data_list = [results.columns.values.tolist()] + results.values.tolist()
-            table = Table(data_list)
-            style = TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, -1), colors.white),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.black),
-                    ("TEXTCOLOR", (0, 1), (-1, -1), colors.black),
-                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                    ("FONTNAME", (0, 0), (-1, 0), "FiraSans-Bold"),
-                    ("FONTNAME", (0, 1), (-1, -1), "FiraSans"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 6),
-                    ("FONTSIZE", (0, 1), (-1, -1), 5),
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 1),
-                    ("BACKGROUND", (0, 1), (-1, -1), colors.white),
-                    ("GRID", (0, 0), (-1, -1), 1, colors.black),
-                ]
-            )
-            table.setStyle(style)
+            table = create_auto_adjusting_table(data_list, MODERN_TABLE_STYLE)
             elements.append(table)
 
     except Exception as e:
@@ -685,7 +781,7 @@ def create_pdf(filename, output):
         final_elements = elements_summary + elements
         doc.multiBuild(
             final_elements,
-            canvasmaker=header_footer_canvas_factory(sample_id, styles, fonts_dir),
+            canvasmaker=header_footer_canvas_factory(sample_id, centreID,styles, fonts_dir),
         )
         logger.info(f"PDF created: {filename}")
     except Exception as e:
