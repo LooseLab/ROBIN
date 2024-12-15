@@ -15,6 +15,10 @@ from reportlab.lib import colors
 from PIL import Image as PILImage
 import io
 
+from robin.__about__ import __version__
+
+VERSION = __version__
+
 
 class HeaderFooterCanvas(canvas.Canvas):
     """
@@ -101,7 +105,7 @@ class HeaderFooterCanvas(canvas.Canvas):
         self.rect(0, 0, width, 0.35*inch, fill=True, stroke=0)
         
         # Footer text
-        page = f"Sample: {self.sample_id} | Page {self._pageNumber} of {page_count}"
+        page = f"Sample: {self.sample_id} | Centre: {self.centreID}  | ROBIN Version: v{VERSION} | Page {self._pageNumber} of {page_count}"
         self.setFont("FiraSans", 8)
         self.setFillColor(colors.HexColor('#2C3E50'))
         self.drawString(width/2 - len(page)*2.5, 0.15*inch, page)
