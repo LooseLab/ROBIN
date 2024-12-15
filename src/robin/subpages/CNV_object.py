@@ -505,6 +505,10 @@ class CNVAnalysis(BaseAnalysis):
             self.reference_scatter_echart = self.generate_chart(
                 title="Reference CNV Scatter Plot"
             )
+        
+        # Add the deviation statistics display here
+        self.display_deviation_stats()
+        
         if self.browse:
             ui.timer(0.1, lambda: self.show_previous_data(), once=True)
         else:
@@ -852,12 +856,11 @@ class CNVAnalysis(BaseAnalysis):
                         moving_avg_data1, moving_avg_data2
                     )
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                    # if len(self.result3.cnv[key]) > 20:
-                    #    algo_c = ruptures_plotting(self.result3.cnv[key])
-                    #    penalty_value = 5
-                    #    result = algo_c.predict(pen=penalty_value)
 
             self.update_plots()
+            # Update the deviation statistics after new data is loaded
+            self.display_deviation_stats()
+            
             if self.summary:
                 with self.summary:
                     self.summary.clear()
@@ -874,6 +877,137 @@ class CNVAnalysis(BaseAnalysis):
                             ui.label(
                                 f"Current Variance: {round(self.cnv_dict['variance'], 3)}"
                             )
+
+    def calculate_deviation_proportions(self, data: np.ndarray, chromosome: str, n_std: float = 1.0) -> dict:
+        """
+        Calculate the amount of DNA (in megabases) that deviates from the mean by more than n standard deviations.
+        
+        Args:
+            data (np.ndarray): Array of CNV values
+            chromosome (str): Chromosome name for the data
+            n_std (float): Number of standard deviations to use as threshold (default: 1.0)
+        
+        Returns:
+            dict: Dictionary containing:
+                - mean: mean value of the data
+                - std: standard deviation of the data
+                - above_threshold_mb: megabases of DNA above mean + n*std
+                - below_threshold_mb: megabases of DNA below mean - n*std
+                - total_deviating_mb: total megabases of deviating DNA
+                - total_mb: total megabases analyzed
+        """
+        # Remove zero values which might skew the calculations
+        non_zero_data = data[data != 0]
+        
+        if len(non_zero_data) == 0:
+            return {
+                'mean': 0,
+                'std': 0,
+                'above_threshold_mb': 0,
+                'below_threshold_mb': 0,
+                'total_deviating_mb': 0,
+                'total_mb': 0
+            }
+        
+        mean = np.mean(non_zero_data)
+        std = np.std(non_zero_data)
+        
+        upper_threshold = mean + (n_std * std)
+        lower_threshold = mean - (n_std * std)
+        
+        # Convert bin counts to megabases
+        bin_size_mb = self.cnv_dict['bin_width'] / 1_000_000  # Convert bin width from bp to Mb
+        
+        above_count = np.sum(non_zero_data > upper_threshold)
+        below_count = np.sum(non_zero_data < lower_threshold)
+        total_bins = len(non_zero_data)
+        
+        above_mb = above_count * bin_size_mb
+        below_mb = below_count * bin_size_mb
+        total_mb = total_bins * bin_size_mb
+        
+        return {
+            'mean': mean,
+            'std': std,
+            'above_threshold_mb': above_mb,
+            'below_threshold_mb': below_mb,
+            'total_deviating_mb': above_mb + below_mb,
+            'total_mb': total_mb,
+            'proportion_deviating': (above_count + below_count) / total_bins
+        }
+
+    def analyze_deviations(self) -> dict:
+        """
+        Analyze deviations across all chromosomes in the current CNV data.
+        
+        Returns:
+            dict: Dictionary with chromosome-wise deviation statistics and total genome statistics
+        """
+        if not self.result or not self.result.cnv:
+            return {}
+        
+        deviation_stats = {}
+        total_genome_stats = {
+            'total_mb': 0,
+            'total_deviating_mb': 0,
+            'above_threshold_mb': 0,
+            'below_threshold_mb': 0
+        }
+        
+        for contig, cnv in self.result.cnv.items():
+            if contig == "chrM" or not re.match(r"^chr(\d+|X|Y)$", contig):
+                continue
+            
+            stats = self.calculate_deviation_proportions(np.array(cnv), contig)
+            deviation_stats[contig] = stats
+            
+            # Update genome-wide totals
+            total_genome_stats['total_mb'] += stats['total_mb']
+            total_genome_stats['total_deviating_mb'] += stats['total_deviating_mb']
+            total_genome_stats['above_threshold_mb'] += stats['above_threshold_mb']
+            total_genome_stats['below_threshold_mb'] += stats['below_threshold_mb']
+        
+        # Add genome-wide statistics
+        total_genome_stats['proportion_deviating'] = (
+            total_genome_stats['total_deviating_mb'] / total_genome_stats['total_mb']
+            if total_genome_stats['total_mb'] > 0 else 0
+        )
+        
+        deviation_stats['genome_wide'] = total_genome_stats
+        
+        return deviation_stats
+
+    def display_deviation_stats(self):
+        """
+        Display deviation statistics in the UI with megabase measurements
+        """
+        stats = self.analyze_deviations()
+        
+        # If this is the first time, create the expansion
+        if not hasattr(self, 'deviation_stats_expansion'):
+            self.deviation_stats_expansion = ui.expansion("CNV Deviation Statistics", icon="analytics").classes("w-full")
+        
+        # Clear existing content
+        with self.deviation_stats_expansion:
+            self.deviation_stats_expansion.clear()
+            
+            # First display genome-wide statistics
+            if 'genome_wide' in stats:
+                with ui.card().classes('w-full'):
+                    ui.label("Genome-wide Statistics").classes('text-xl font-bold')
+                    ui.label(f"Total: {stats['genome_wide']['total_mb']:.1f} Mb | "
+                            f"Deviating: {stats['genome_wide']['total_deviating_mb']:.1f} Mb ({stats['genome_wide']['proportion_deviating']:.1%}) | "
+                            f"Above: {stats['genome_wide']['above_threshold_mb']:.1f} Mb | "
+                            f"Below: {stats['genome_wide']['below_threshold_mb']:.1f} Mb")
+            
+            # Then display chromosome-specific statistics
+            with ui.grid(columns=4).classes('w-full gap-1'):
+                for chrom, stat in stats.items():
+                    if chrom == 'genome_wide':
+                        continue
+                    with ui.card().classes('p-2'):
+                        ui.label(f"{chrom}: {stat['total_deviating_mb']:.1f}/{stat['total_mb']:.1f} Mb ({stat['proportion_deviating']:.1%})"
+                                f" [+{stat['above_threshold_mb']:.1f}/-{stat['below_threshold_mb']:.1f}]")
 
 
 def test_me(
