@@ -361,21 +361,21 @@ def create_pdf(filename, output):
         else None
     )
     
-    print(masterdf)
     try:
         centreID = masterdf.loc['centreID'][1]
     except KeyError:
         centreID = None  # or some default value
 
-    elements_summary.append(Paragraph("Classification Summary", styles["Heading1"]))
+    elements_summary.append(Paragraph("Classification Details", styles["Heading1"]))
     elements_summary.append(
         Paragraph(f"Sample {sample_id} has the following classifications:", styles["BodyText"])
     )
-    elements_summary.append(Spacer(1, 12))
 
     threshold = 0.05
 
     try:
+        elements.append(PageBreak())
+        elements.append(Paragraph("Classification Summary", styles["Heading2"]))
         # Add classification plots and details
         for name, df_name in [
             ("Sturgeon", "sturgeon_scores.csv"),
@@ -383,6 +383,7 @@ def create_pdf(filename, output):
             ("PanNanoDX", "pannanodx_scores.csv"),
             ("Forest", "random_forest_scores.csv"),
         ]:
+            elements.append(Paragraph(name, styles["Heading3"]))
             # List files in the directory and convert them to lowercase
             files_in_directory = [f.lower() for f in os.listdir(output)]
 
@@ -435,7 +436,7 @@ def create_pdf(filename, output):
                 table = create_auto_adjusting_table(data, MODERN_TABLE_STYLE)
                 elements.append(table)
                 elements.append(Spacer(1, 12))
-                elements.append(PageBreak())
+                #elements.append(PageBreak())
             else:
                 elements.append(
                     Paragraph(f"No {name} Classification Available", styles["BodyText"])
@@ -445,6 +446,8 @@ def create_pdf(filename, output):
         raise
 
     try:
+        elements.append(PageBreak())
+        elements.append(Paragraph("Copy Number Variation Detail", styles["Heading2"]))
         # Add CNV plots
         if os.path.exists(os.path.join(output, "CNV.npy")):
             CNVresult = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
@@ -825,42 +828,42 @@ def create_pdf(filename, output):
     try:
         # Add run data summary with more compact spacing
         if masterdf is not None and isinstance(masterdf, pd.DataFrame):
-            elements_summary.append(Paragraph("Run Data Summary", styles["Heading1"]))
+            elements_summary.append(Paragraph("Run Data Summary", styles["Heading2"]))
             
             masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[sample_id]
             
             # Sample Information - combine sections with less spacing
-            elements_summary.append(Paragraph("Sample Information", styles["Heading2"]))
+            elements_summary.append(Paragraph("Sample Information", styles["Heading3"]))
             elements_summary.append(
                 Paragraph(
                     f"Sample ID: {sample_id} • "
                     f"Run Start: {format_timestamp(masterdf_dict['run_time'])} • "
                     f"Target Panel: {' '.join(masterdf.loc[(masterdf.index == 'target_panel')][1].values)}",
-                    styles["BodyText"],
+                    styles["Smaller"],
                 )
             )
             elements_summary.append(Spacer(1, 6))
             
             # Device Details
-            elements_summary.append(Paragraph("Device Details", styles["Heading2"]))
+            elements_summary.append(Paragraph("Device Details", styles["Heading3"]))
             elements_summary.append(
                 Paragraph(
                     f"Sequencing Device: {convert_to_space_separated_string(masterdf_dict['devices'])} • "
                     f"Flowcell ID: {convert_to_space_separated_string(masterdf_dict['flowcell_ids'])} • "
                     f"Basecalling Model: {convert_to_space_separated_string(masterdf_dict['basecall_models'])}",
-                    styles["BodyText"],
+                    styles["Smaller"],
                 )
             )
             elements_summary.append(Spacer(1, 6))
             
             # File Locations
-            elements_summary.append(Paragraph("File Locations", styles["Heading2"]))
+            elements_summary.append(Paragraph("File Locations", styles["Heading3"]))
             elements_summary.append(
                 Paragraph(
                     f"Run: {' '.join(masterdf.loc[(masterdf.index == 'watchfolder')][1].values)}<br/>"
                     f"Out: {' '.join(masterdf.loc[(masterdf.index == 'output')][1].values)}<br/>"
                     f"Ref: {' '.join(masterdf.loc[(masterdf.index == 'reference')][1].values)}",
-                    styles["BodyText"],
+                    styles["Smaller"],
                 )
             )
             elements_summary.append(Spacer(1, 6))
@@ -883,14 +886,14 @@ def create_pdf(filename, output):
                         f"Total Bases: {format_number(file_counters.get('bases_count', 0))} "
                         f"({format_number(file_counters.get('pass_bases_count', 0))} passed, "
                         f"{format_number(file_counters.get('fail_bases_count', 0))} failed)",
-                        styles["BodyText"],
+                        styles["Smaller"],
                     )
                 )
                 
             except Exception as e:
                 logger.info(f"Error parsing file counters: {e}")
 
-            elements_summary.append(Spacer(1, 12))  # Final spacing before next section
+            #elements_summary.append(Spacer(1, 12))  # Final spacing before next section
 
     except Exception as e:
         logger.error(f"Error processing run data summary: {e}")
