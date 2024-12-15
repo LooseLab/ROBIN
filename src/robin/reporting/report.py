@@ -63,6 +63,7 @@ import natsort
 
 import logging
 from datetime import datetime
+import textwrap
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -515,7 +516,9 @@ def create_pdf(filename, output):
     try:
         # Add fusion gene plots and summary
         fusion_file = os.path.join(output, "fusion_candidates_master.csv")
-        if os.path.exists(fusion_file):
+        fusion_file_all = os.path.join(output, "fusion_candidates_all.csv")
+        
+        if os.path.exists(fusion_file) or os.path.exists(fusion_file_all):
             logger.info("Processing fusion gene data")
             
             # Load gene annotation data
@@ -537,104 +540,260 @@ def create_pdf(filename, output):
                 gene_table = None
 
             try:
-                # Read fusion candidates
-                fusion_candidates = pd.read_csv(
-                    fusion_file,
-                    dtype=str,
-                    header=None,
-                    skiprows=1,
-                    on_bad_lines='warn'
-                )
-                logger.info(f"Loaded fusion candidates with shape: {fusion_candidates.shape}")
+                significant_fusions = []
+                significant_fusions_all = []
+                total_supporting_reads = 0
+                total_supporting_reads_all = 0
+
+                # Process targeted fusions
+                if os.path.exists(fusion_file):
+                    fusion_candidates = pd.read_csv(
+                        fusion_file,
+                        dtype=str,
+                        header=None,
+                        skiprows=1,
+                        on_bad_lines='warn'
+                    )
+                    logger.info(f"Loaded targeted fusion candidates with shape: {fusion_candidates.shape}")
+                    
+                    result, goodpairs = _annotate_results(fusion_candidates)
+                    logger.info(f"Processed targeted fusion results. Good pairs: {goodpairs.sum()}")
+                    
+                    if not result.empty:
+                        gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                        stripped_list = [item.replace(" ", "") for item in gene_pairs]
+                        gene_pairs = [pair.split(",") for pair in stripped_list]
+                        gene_groups = get_gene_network(gene_pairs)
+                        
+                        for gene_group in gene_groups:
+                            reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
+                            supporting_reads = count_supporting_reads(reads)
+                            if supporting_reads >= 3:
+                                significant_fusions.append((gene_group, supporting_reads))
+                                total_supporting_reads += supporting_reads
+
+                # Process genome-wide fusions
+                if os.path.exists(fusion_file_all):
+                    fusion_candidates_all = pd.read_csv(
+                        fusion_file_all,
+                        dtype=str,
+                        header=None,
+                        skiprows=1,
+                        on_bad_lines='warn'
+                    )
+                    logger.info(f"Loaded genome-wide fusion candidates with shape: {fusion_candidates_all.shape}")
+                    
+                    result_all, goodpairs_all = _annotate_results(fusion_candidates_all)
+                    logger.info(f"Processed genome-wide fusion results. Good pairs: {goodpairs_all.sum()}")
+                    
+                    if not result_all.empty:
+                        gene_pairs_all = result_all[goodpairs_all].sort_values(by=7)["tag"].unique().tolist()
+                        stripped_list_all = [item.replace(" ", "") for item in gene_pairs_all]
+                        gene_pairs_all = [pair.split(",") for pair in stripped_list_all]
+                        gene_groups_all = get_gene_network(gene_pairs_all)
+                        
+                        for gene_group in gene_groups_all:
+                            reads = result_all[goodpairs_all][result_all[goodpairs_all][3].isin(gene_group)]
+                            supporting_reads = count_supporting_reads(reads)
+                            if supporting_reads >= 3:
+                                significant_fusions_all.append((gene_group, supporting_reads))
+                                total_supporting_reads_all += supporting_reads
+
+                # Add fusion summaries to report
+                elements_summary.append(Paragraph("Fusion Summary", styles["Heading2"]))
                 
-                # Process fusion results
-                result, goodpairs = _annotate_results(fusion_candidates)
-                logger.info(f"Processed fusion results. Good pairs: {goodpairs.sum()}")
-                
-                # Add Fusion Summary to elements_summary first
-                if not result.empty:
-                    gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
-                    stripped_list = [item.replace(" ", "") for item in gene_pairs]
-                    gene_pairs = [pair.split(",") for pair in stripped_list]
-                    gene_groups = get_gene_network(gene_pairs)
-                    
-                    elements_summary.append(Paragraph("Fusion Summary", styles["Heading2"]))
-                    
-                    # Filter and count fusions with ≥3 supporting reads
-                    significant_fusions = []
-                    total_supporting_reads = 0
-                    
-                    for gene_group in gene_groups:
-                        reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
-                        supporting_reads = count_supporting_reads(reads)
-                        if supporting_reads >= 3:  # Only include fusions with 3 or more unique supporting reads
-                            significant_fusions.append((gene_group, supporting_reads))
-                            total_supporting_reads += supporting_reads
-                    
-                    # Summary statistics
-                    total_significant_fusions = len(significant_fusions)
-                    
+                # Targeted fusions summary
+                if significant_fusions:
+                    elements_summary.append(Paragraph("Targeted Gene Fusions:", styles["Heading3"]))
                     elements_summary.append(
                         Paragraph(
-                            f"Total Significant Fusion Events (at least 3 reads): {total_significant_fusions}<br/>"
+                            f"Total Significant Fusion Events (at least 3 reads): {len(significant_fusions)}<br/>"
                             f"Total Supporting Reads: {total_supporting_reads}",
                             styles["BodyText"],
                         )
                     )
-                    
-                    # List of significant fusion pairs
-                    if significant_fusions:
-                        elements_summary.append(Paragraph("Detected Fusions:", styles["Heading3"]))
-                        fusion_list = []
-                        # Sort by number of supporting reads, descending
-                        significant_fusions.sort(key=lambda x: x[1], reverse=True)
-                        for gene_group, supporting_reads in significant_fusions:
-                            fusion_list.append(
-                                f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
-                            )
-                        elements_summary.append(
-                            Paragraph(
-                                "<br/>".join(fusion_list),
-                                styles["BodyText"],
-                            )
+                    fusion_list = []
+                    significant_fusions.sort(key=lambda x: x[1], reverse=True)
+                    for gene_group, supporting_reads in significant_fusions:
+                        fusion_list.append(
+                            f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
                         )
-                    else:
-                        elements_summary.append(
-                            Paragraph(
-                                "No significant fusion events detected (minimum 3 supporting reads required)",
-                                styles["BodyText"],
-                            )
-                        )
-                else:
                     elements_summary.append(
                         Paragraph(
-                            "No fusion events detected",
+                            "<br/>".join(fusion_list),
                             styles["BodyText"],
                         )
                     )
-                
+
+                # Genome-wide fusions summary
+                if significant_fusions_all:
+                    elements_summary.append(Paragraph("Genome-wide Gene Fusions:", styles["Heading3"]))
+                    elements_summary.append(
+                        Paragraph(
+                            f"Total Significant Fusion Events (at least 3 reads): {len(significant_fusions_all)}<br/>"
+                            f"Total Supporting Reads: {total_supporting_reads_all}",
+                            styles["BodyText"],
+                        )
+                    )
+                    fusion_list = []
+                    significant_fusions_all.sort(key=lambda x: x[1], reverse=True)
+                    for gene_group, supporting_reads in significant_fusions_all:
+                        fusion_list.append(
+                            f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
+                        )
+                    elements_summary.append(
+                        Paragraph(
+                            "<br/>".join(fusion_list),
+                            styles["BodyText"],
+                        )
+                    )
+
+                if not significant_fusions and not significant_fusions_all:
+                    elements_summary.append(
+                        Paragraph(
+                            "No significant fusion events detected (minimum 3 supporting reads required)",
+                            styles["BodyText"],
+                        )
+                    )
+
                 elements_summary.append(Spacer(1, 12))
-                
-                # Now add the fusion plots to the main elements, but only for significant fusions
-                if significant_fusions and gene_table is not None:
-                    for gene_group, supporting_reads in significant_fusions:
-                        reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
-                        fig = create_fusion_plot(reads, gene_table)
-                        img_buf = io.BytesIO()
-                        fig.savefig(img_buf, format='png', dpi=300, bbox_inches='tight')
-                        plt.close(fig)
-                        img_buf.seek(0)
-                        
+
+                # Add fusion plots
+                if gene_table is not None:
+                    # Targeted fusion plots
+                    if significant_fusions:
+                        elements.append(Paragraph("Targeted Gene Fusion Plots", styles["Heading2"]))
+                        for gene_group, supporting_reads in significant_fusions:
+                            # Skip if too many genes involved
+                            if len(gene_group) > 5:
+                                elements.append(
+                                    Paragraph(
+                                        f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads) - "
+                                        "Plot skipped due to complexity",
+                                        styles["Heading3"]
+                                    )
+                                )
+                                continue
+                                
+                            reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
+                            fig = create_fusion_plot(reads, gene_table)
+                            img_buf = io.BytesIO()
+                            fig.savefig(img_buf, format='png', dpi=150, bbox_inches=None)  # Changed to 150 DPI
+                            plt.close(fig)
+                            img_buf.seek(0)
+                            
+                            elements.append(
+                                Paragraph(
+                                    f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads)", 
+                                    styles["Heading3"]
+                                )
+                            )
+                            elements.append(
+                                Image(img_buf, width=5*inch, height=2.5*inch)  # Reduced from 7x3.5 to 5x2.5
+                            )
+                            elements.append(Spacer(1, 12))
+
+                    # Genome-wide fusion summary table
+                    if significant_fusions_all:
+                        elements.append(Paragraph("Genome-wide Gene Fusions", styles["Heading2"]))
                         elements.append(
                             Paragraph(
-                                f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads)", 
-                                styles["Heading2"]
+                                "Summary of detected genome-wide fusion events (minimum 3 supporting reads):",
+                                styles["BodyText"]
                             )
                         )
-                        elements.append(
-                            Image(img_buf, width=7*inch, height=3.5*inch)
-                        )
-                        elements.append(Spacer(1, 12))
+                        
+                        # Create table data with wrapped text
+                        table_data = [["Fusion Partners", "Supporting\nReads", "Chromosomes"]]
+                        
+                        # Calculate available width
+                        page_width, _ = A4
+                        available_width = page_width - 2*inch  # 1 inch margins on each side
+                        col_widths = [available_width * 0.5, available_width * 0.2, available_width * 0.3]
+                        
+                        MAX_GENES_PER_FUSION = 5  # Limit number of genes shown
+                        ROWS_PER_TABLE = 20  # Limit rows per table
+                        
+                        current_table_data = [table_data[0]]  # Start with header
+                        table_count = 1
+                        
+                        for gene_group, supporting_reads in significant_fusions_all:
+                            # Get chromosome information
+                            gene_chroms = []
+                            for gene in gene_group:
+                                gene_info = gene_table[gene_table["gene_name"] == gene]
+                                if not gene_info.empty:
+                                    gene_chroms.append(gene_info.iloc[0]["Seqid"])
+                            
+                            # Limit and format gene list
+                            if len(gene_group) > MAX_GENES_PER_FUSION:
+                                gene_text = ' - '.join(gene_group[:MAX_GENES_PER_FUSION]) + f'\n(+{len(gene_group)-MAX_GENES_PER_FUSION} more)'
+                            else:
+                                gene_text = ' - '.join(gene_group)
+                            
+                            # Format chromosomes
+                            chrom_text = ', '.join(sorted(set(gene_chroms)))
+                            
+                            current_table_data.append([
+                                gene_text,
+                                str(supporting_reads),
+                                chrom_text
+                            ])
+                            
+                            # Create new table when limit reached
+                            if len(current_table_data) >= ROWS_PER_TABLE:
+                                table = Table(current_table_data, colWidths=col_widths)
+                                table.setStyle(TableStyle([
+                                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                    ('FONTSIZE', (0, 0), (-1, 0), 10),
+                                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                                    ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                                    ('FONTSIZE', (0, 1), (-1, -1), 8),
+                                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                    ('WORDWRAP', (0, 0), (-1, -1), True),
+                                    ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                                    ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                                    ('TOPPADDING', (0, 0), (-1, -1), 3),
+                                    ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                                ]))
+                                
+                                elements.append(table)
+                                elements.append(PageBreak())
+                                current_table_data = [table_data[0]]  # Reset with header
+                                table_count += 1
+                        
+                        # Add remaining rows
+                        if len(current_table_data) > 1:
+                            table = Table(current_table_data, colWidths=col_widths)
+                            table.setStyle(TableStyle([
+                                # Same style as above
+                                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                                ('FONTSIZE', (0, 0), (-1, 0), 10),
+                                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                                ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+                                ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
+                                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
+                                ('FONTSIZE', (0, 1), (-1, -1), 8),
+                                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                                ('WORDWRAP', (0, 0), (-1, -1), True),
+                                ('LEFTPADDING', (0, 0), (-1, -1), 6),
+                                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+                                ('TOPPADDING', (0, 0), (-1, -1), 3),
+                                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                            ]))
+                            elements.append(table)
 
             except pd.errors.EmptyDataError:
                 logger.warning("Fusion candidates file is empty")
@@ -852,17 +1011,38 @@ def create_fusion_plot(reads: pd.DataFrame, gene_table: pd.DataFrame) -> plt.Fig
     # Process reads to get result format
     result = _get_reads(reads)
     
-    # Create figure
-    plt.figure(figsize=(19, 5))
+    # Calculate reasonable width based on data
+    max_span = 0
+    for _, data in result.iterrows():
+        span = data["end"] - data["start"]
+        max_span = max(max_span, span)
+    
+    # Limit the figure size based on data span
+    # Use log scale to prevent extremely wide plots
+    width = min(6, max(4, np.log10(max_span/1000)))  # Scale based on span in kb
+    height = width / 2  # Maintain aspect ratio
+    
+    # Create figure with moderate size and DPI
+    plt.figure(figsize=(width, height), dpi=150)  # Changed to 150 DPI
+    
     num_plots = 2 * len(result)
     num_cols = len(result)
     num_rows = (num_plots + num_cols - 1) // num_cols
     
-    # Dict to store axes for potential connection lines
-    axdict = {}
+    # Use a font that supports arrows
+    plt.rcParams['font.family'] = ['DejaVu Sans', 'Arial', 'sans-serif']
+    RIGHT_ARROW = '→'
+    LEFT_ARROW = '←'
     
-    def human_readable_format(x, pos):
-        return f"{x / 1e6:.2f}"  # Mb
+    # Create subplots with generous spacing
+    plt.subplots_adjust(
+        left=0.2,     # More left margin
+        right=0.8,    # Less right margin
+        bottom=0.25,  # More bottom margin
+        top=0.75,     # Less top margin
+        wspace=0.6,   # More space between plots
+        hspace=0.5    # More vertical space
+    )
     
     # Create subplots for each gene
     for i, ax in enumerate(range(num_plots), start=1):
@@ -891,7 +1071,7 @@ def create_fusion_plot(reads: pd.DataFrame, gene_table: pd.DataFrame) -> plt.Fig
                             thickness=8,
                             color="#ffd700",
                             label=gene_row["gene_name"],
-                            fontdict={'family': 'sans', 'color': 'black', 'fontsize': 8}
+                            fontdict={'family': 'DejaVu Sans', 'fontsize': 8}
                         )
                     )
             
@@ -907,7 +1087,8 @@ def create_fusion_plot(reads: pd.DataFrame, gene_table: pd.DataFrame) -> plt.Fig
                         end=int(exon_row["End"]),
                         strand=STRAND[exon_row["Strand"]],
                         thickness=4,
-                        color="#C0C0C0"
+                        color="#C0C0C0",
+                        arrow_style="simple"
                     )
                 )
             
@@ -919,17 +1100,24 @@ def create_fusion_plot(reads: pd.DataFrame, gene_table: pd.DataFrame) -> plt.Fig
             ax = plt.gca()
             record.plot(ax=ax, with_ruler=False, draw_line=True, strand_in_label_threshold=4)
             
+            # Adjust axis labels
+            ax.set_xlabel("Position (Mb)", fontsize=8)
+            ax.tick_params(axis='both', which='major', labelsize=8)
+            
         else:  # Top row - read alignments
             features = []
             df = reads[reads["chromosome2"].eq(chrom)].sort_values(by="id")
             
             for _, row in df.iterrows():
+                strand_marker = RIGHT_ARROW if row["strand"] == "+" else LEFT_ARROW
                 features.append(
                     GraphicFeature(
                         start=int(row["start2"]),
                         end=int(row["end2"]),
                         strand=STRAND[row["strand"]],
-                        color=row["color"] if "color" in row else "#ffd700"
+                        color=row["color"] if "color" in row else "#ffd700",
+                        label=strand_marker,
+                        fontdict={'family': 'DejaVu Sans', 'fontsize': 8}
                     )
                 )
             
@@ -939,15 +1127,15 @@ def create_fusion_plot(reads: pd.DataFrame, gene_table: pd.DataFrame) -> plt.Fig
                 features=features
             )
             ax = plt.gca()
-            record.plot(ax=ax)
-            ax.xaxis.set_major_formatter(FuncFormatter(human_readable_format))
-            ax.tick_params(axis="x", labelsize=8)
-            ax.set_xlabel(f'Position (Mb) - {chrom} - {data["gene"]}', fontsize=10)
-            ax.set_title(f'{data["gene"]}')
+            record.plot(ax=ax, with_ruler=False, draw_line=True)
             
-            axdict[data["gene"]] = ax
+            # Adjust axis labels
+            ax.set_xlabel("Position (Mb)", fontsize=8)
+            ax.tick_params(axis='both', which='major', labelsize=8)
     
-    plt.tight_layout()
+    # Don't use tight_layout - use the manual adjustments above instead
+    # plt.tight_layout(rect=[0.05, 0.05, 0.95, 0.95])
+    
     return plt.gcf()
 
 
