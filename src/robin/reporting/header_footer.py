@@ -48,46 +48,47 @@ class HeaderFooterCanvas(canvas.Canvas):
     def draw_canvas(self, page_count):
         width, height = A4
         
-        # Add header background - 1.0 inch height
-        self.setFillColor(colors.HexColor('#F5F5F7'))
+        # Add header background - using ROBIN green theme
+        self.setFillColor(colors.HexColor('#4F9153'))  # Match the ROBIN theme green
         self.rect(0, height-1.0*inch, width, 1.0*inch, fill=True, stroke=0)
         
         # Calculate center point of header (header spans 1 inch)
         header_center = height - 0.5*inch
         
         # Add ROBIN logo - centered vertically
-        logo_path = os.path.join(os.path.dirname(images.__file__), "robin_logo.png")
+        logo_path = os.path.join(os.path.dirname(images.__file__), "ROBIN_logo_small.png")  # Use the same logo as theme
         if os.path.exists(logo_path):
             # Open and convert logo to RGBA if it isn't already
             img = PILImage.open(logo_path)
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
                 
-            # Create a new image with white background
-            bg = PILImage.new('RGBA', img.size, (245, 246, 250, 255))
+            # Create a new image with theme-colored background
+            bg = PILImage.new('RGBA', img.size, (79, 145, 83, 255))  # #4F9153 in RGB
             composite = PILImage.alpha_composite(bg, img)
             
             # Save to temporary file
             temp_path = os.path.join(os.path.dirname(logo_path), 'temp_logo.png')
             composite.save(temp_path, format='PNG')
             
-            # Draw the processed logo - increased size and kept lower position
+            # Draw the processed logo
             logo_offset = 25.0
-            self.drawImage(temp_path, 0.5*inch, header_center - logo_offset, width=0.9*inch, height=0.7*inch, preserveAspectRatio=True)
+            self.drawImage(temp_path, width-1.4*inch, header_center - logo_offset, 
+                         width=0.9*inch, height=0.7*inch, preserveAspectRatio=True)
             
             # Clean up temporary file
             os.remove(temp_path)
         
-        # Title text - centered vertically with consistent styling
+        # Title text - white text on green background with red warning
         header1 = Paragraph(
-            '<font name="FiraSans-Bold" color="#2C3E50" size="14">ROBIN Reports</font>'
-            '<font name="FiraSans" color="#E74C3C" size="12"> RESEARCH USE ONLY</font>', 
+            '<font name="FiraSans-Bold" color="#FFFFFF" size="14">ROBIN Reports</font>'
+            '<font name="FiraSans-Bold" color="#FF0000" size="12"> RESEARCH USE ONLY</font>', 
             self.styles["Bold"]
         )
         w, h = header1.wrap(width - 3*inch, inch)
-        header1.drawOn(self, 2*inch, header_center + 0.1*inch)
+        header1.drawOn(self, 0.5*inch, header_center + 1.5*12)  # Shift up by 1.5 lines (12 points per line)
         
-        # Metadata section - centered vertically with consistent styling
+        # Metadata section - white text on green background
         metadata = [
             f"Sample ID: {self.sample_id}",
             f"Centre ID: {self.centreID}",
@@ -95,19 +96,19 @@ class HeaderFooterCanvas(canvas.Canvas):
         ]
         y_position = header_center - 0.1*inch
         for line in metadata:
-            self.setFont("FiraSans", 9)  # Changed from SF Pro Text to FiraSans
-            self.setFillColor(colors.HexColor('#2C3E50'))  # Changed to match header color
-            self.drawString(2*inch, y_position, line)
+            self.setFont("FiraSans", 9)
+            self.setFillColor(colors.white)  # White text on green background
+            self.drawString(0.5*inch, y_position, line)
             y_position -= 12
 
-        # Footer - reduced to 0.35 inch
-        self.setFillColor(colors.HexColor('#F5F6FA'))
+        # Footer - using ROBIN green theme
+        self.setFillColor(colors.HexColor('#4F9153'))
         self.rect(0, 0, width, 0.35*inch, fill=True, stroke=0)
         
-        # Footer text
-        page = f"Sample: {self.sample_id} | Centre: {self.centreID}  | ROBIN Version: v{VERSION} | Page {self._pageNumber} of {page_count}"
+        # Footer text - white on green
+        page = f"Sample: {self.sample_id} | Centre: {self.centreID} | ROBIN Version: v{VERSION} | Page {self._pageNumber} of {page_count}"
         self.setFont("FiraSans", 8)
-        self.setFillColor(colors.HexColor('#2C3E50'))
+        self.setFillColor(colors.white)
         self.drawString(width/2 - len(page)*2.5, 0.15*inch, page)
 
 
