@@ -11,6 +11,13 @@ from reportlab.lib.units import inch
 from datetime import datetime
 import os
 from robin import images
+from reportlab.lib import colors
+from PIL import Image as PILImage
+import io
+
+from robin.__about__ import __version__
+
+VERSION = __version__
 
 
 class HeaderFooterCanvas(canvas.Canvas):
@@ -18,10 +25,11 @@ class HeaderFooterCanvas(canvas.Canvas):
     A custom canvas class for adding headers and footers to the PDF report.
     """
 
-    def __init__(self, sample_id, styles, fonts_dir, *args, **kwargs):
+    def __init__(self, sample_id, centreID, styles, fonts_dir, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.pages = []
         self.sample_id = sample_id  # Store the sample_id
+        self.centreID = centreID  # Store the centreID
         self.styles = styles  # Store the styles
         self.fonts_dir = fonts_dir  # Store the fonts directory
 
@@ -39,56 +47,72 @@ class HeaderFooterCanvas(canvas.Canvas):
 
     def draw_canvas(self, page_count):
         width, height = A4
-
-        # Add first line of the header in bold
+        
+        # Add header background - using ROBIN green theme
+        self.setFillColor(colors.HexColor('#4F9153'))  # Match the ROBIN theme green
+        self.rect(0, height-1.0*inch, width, 1.0*inch, fill=True, stroke=0)
+        
+        # Calculate center point of header (header spans 1 inch)
+        header_center = height - 0.5*inch
+        
+        # Add ROBIN logo - centered vertically
+        logo_path = os.path.join(os.path.dirname(images.__file__), "ROBIN_logo_small.png")  # Use the same logo as theme
+        if os.path.exists(logo_path):
+            # Open and convert logo to RGBA if it isn't already
+            img = PILImage.open(logo_path)
+            if img.mode != 'RGBA':
+                img = img.convert('RGBA')
+                
+            # Create a new image with theme-colored background
+            bg = PILImage.new('RGBA', img.size, (79, 145, 83, 255))  # #4F9153 in RGB
+            composite = PILImage.alpha_composite(bg, img)
+            
+            # Save to temporary file
+            temp_path = os.path.join(os.path.dirname(logo_path), 'temp_logo.png')
+            composite.save(temp_path, format='PNG')
+            
+            # Draw the processed logo
+            logo_offset = 25.0
+            self.drawImage(temp_path, width-1.4*inch, header_center - logo_offset, 
+                         width=0.9*inch, height=0.7*inch, preserveAspectRatio=True)
+            
+            # Clean up temporary file
+            os.remove(temp_path)
+        
+        # Title text - white text on green background with red warning
         header1 = Paragraph(
-            "R.O.B.I.N Reports... RESEARCH USE ONLY", self.styles["Bold"]
+            '<font name="FiraSans-Bold" color="#FFFFFF" size="14">ROBIN Reports</font>'
+            '<font name="FiraSans-Bold" color="#FF0000" size="12"> RESEARCH USE ONLY</font>', 
+            self.styles["Bold"]
         )
-        w, h = header1.wrap(width - 2 * inch, inch)
-        header1.drawOn(self, inch, height - h - inch + 36)
+        w, h = header1.wrap(width - 3*inch, inch)
+        header1.drawOn(self, 0.5*inch, header_center + 1.5*12)  # Shift up by 1.5 lines (12 points per line)
+        
+        # Metadata section - white text on green background
+        metadata = [
+            f"Sample ID: {self.sample_id}",
+            f"Centre ID: {self.centreID}",
+            datetime.now().strftime("Report Generated: %Y-%m-%d %H:%M:%S")
+        ]
+        y_position = header_center - 0.1*inch
+        for line in metadata:
+            self.setFont("FiraSans", 9)
+            self.setFillColor(colors.white)  # White text on green background
+            self.drawString(0.5*inch, y_position, line)
+            y_position -= 12
 
-        # Add second line of the header
-        header2 = Paragraph(f"Sample ID: {self.sample_id}", self.styles["Normal"])
-        w, h = header2.wrap(width - 2 * inch, inch)
-        header2.drawOn(self, inch, height - h - inch + 24)
-
-        # Add third line of the header with date and time
-        report_date = datetime.now().strftime(
-            "R.O.B.I.N. Report Generated: %Y-%m-%d %H:%M:%S"
-        )
-        header3 = Paragraph(report_date, self.styles["Smaller"])
-        w, h = header3.wrap(width - 2 * inch, inch)
-        header3.drawOn(self, inch, height - h - inch + 12)
-
-        # Add logo to the top right corner of the header
-        logo_path = os.path.join(
-            os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
-        )
-        # logo_path = "src/robin/images/Robin_logo_small.png"  # Replace with the path to your logo
-        max_logo_size = 50  # Maximum width and height in pixels
-        self.drawImage(
-            logo_path,
-            width - max_logo_size - inch,
-            height - max_logo_size - inch + 36,
-            width=max_logo_size,
-            height=max_logo_size,
-            preserveAspectRatio=True,
-            mask="auto",
-        )
-
-        # Add footer
-        page = f"SampleID: {self.sample_id} - Page {self._pageNumber} of {page_count}"
-        x = 190
-        self.saveState()
-        self.setStrokeColorRGB(0, 0, 0)
-        self.setLineWidth(0.5)
-        self.line(66, 78, A4[0] - 66, 78)
-        self.setFont("FiraSans", 7)
-        self.drawString(A4[0] - x, 65, page)
-        self.restoreState()
+        # Footer - using ROBIN green theme
+        self.setFillColor(colors.HexColor('#4F9153'))
+        self.rect(0, 0, width, 0.35*inch, fill=True, stroke=0)
+        
+        # Footer text - white on green
+        page = f"Sample: {self.sample_id} | Centre: {self.centreID} | ROBIN Version: v{VERSION} | Page {self._pageNumber} of {page_count}"
+        self.setFont("FiraSans", 8)
+        self.setFillColor(colors.white)
+        self.drawString(width/2 - len(page)*2.5, 0.15*inch, page)
 
 
-def header_footer_canvas_factory(sample_id, styles, fonts_dir):
+def header_footer_canvas_factory(sample_id, centreID, styles, fonts_dir):
     """
     A factory function for creating HeaderFooterCanvas objects.
 
@@ -102,6 +126,6 @@ def header_footer_canvas_factory(sample_id, styles, fonts_dir):
     """
 
     def create_canvas(*args, **kwargs):
-        return HeaderFooterCanvas(sample_id, styles, fonts_dir, *args, **kwargs)
+        return HeaderFooterCanvas(sample_id, centreID, styles, fonts_dir, *args, **kwargs)
 
     return create_canvas
