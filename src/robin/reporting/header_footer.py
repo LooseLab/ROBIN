@@ -80,8 +80,8 @@ class HeaderFooterCanvas(canvas.Canvas):
         
         # Title text - centered vertically with consistent styling
         header1 = Paragraph(
-            '<font name="FiraSans-Bold" color="#2C3E50" size="14">ROBIN Reports</font><br/>'
-            '<font name="FiraSans" color="#E74C3C" size="10">RESEARCH USE ONLY</font>', 
+            '<font name="FiraSans-Bold" color="#2C3E50" size="14">ROBIN Reports</font>'
+            '<font name="FiraSans" color="#E74C3C" size="12"> RESEARCH USE ONLY</font>', 
             self.styles["Bold"]
         )
         w, h = header1.wrap(width - 3*inch, inch)
@@ -91,7 +91,7 @@ class HeaderFooterCanvas(canvas.Canvas):
         metadata = [
             f"Sample ID: {self.sample_id}",
             f"Centre ID: {self.centreID}",
-            datetime.now().strftime("Generated: %Y-%m-%d %H:%M:%S")
+            datetime.now().strftime("Report Generated: %Y-%m-%d %H:%M:%S")
         ]
         y_position = header_center - 0.1*inch
         for line in metadata:

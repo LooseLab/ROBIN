@@ -566,8 +566,8 @@ def create_pdf(filename, output):
                     
                     for gene_group in gene_groups:
                         reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
-                        supporting_reads = len(reads)
-                        if supporting_reads >= 3:  # Only include fusions with 3 or more supporting reads
+                        supporting_reads = count_supporting_reads(reads)
+                        if supporting_reads >= 3:  # Only include fusions with 3 or more unique supporting reads
                             significant_fusions.append((gene_group, supporting_reads))
                             total_supporting_reads += supporting_reads
                     
@@ -576,7 +576,7 @@ def create_pdf(filename, output):
                     
                     elements_summary.append(
                         Paragraph(
-                            f"Total Significant Fusion Events (≥3 reads): {total_significant_fusions}<br/>"
+                            f"Total Significant Fusion Events (at least 3 reads): {total_significant_fusions}<br/>"
                             f"Total Supporting Reads: {total_supporting_reads}",
                             styles["BodyText"],
                         )
@@ -949,6 +949,20 @@ def create_fusion_plot(reads: pd.DataFrame, gene_table: pd.DataFrame) -> plt.Fig
     
     plt.tight_layout()
     return plt.gcf()
+
+
+def count_supporting_reads(reads_df: pd.DataFrame) -> int:
+    """
+    Count unique supporting reads for a fusion.
+    
+    Args:
+        reads_df (pd.DataFrame): DataFrame containing fusion reads
+        
+    Returns:
+        int: Number of unique supporting reads
+    """
+    # Column 7 contains the read IDs
+    return reads_df[7].nunique()
 
 
 import click
