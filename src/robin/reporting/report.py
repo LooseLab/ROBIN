@@ -50,7 +50,7 @@ from matplotlib.font_manager import FontProperties
 
 # Import the Result class
 from robin import fonts
-from robin.subpages.CNV_object import Result
+from robin.subpages.CNV_object import Result, CNVAnalysis
 from robin.subpages.Fusion_object import (
     _annotate_results,
     get_gene_network,
@@ -64,6 +64,7 @@ import natsort
 import logging
 from datetime import datetime
 import textwrap
+import re
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -181,760 +182,909 @@ MODERN_TABLE_STYLE = TableStyle([
 ])
 
 def create_pdf(filename, output):
-    """
-    Creates a PDF report.
-
-    Args:
-        filename (str): The filename for the PDF report.
-        output (str): The directory where the output files are located.
-
-    Returns:
-        str: The filename of the created PDF report.
-    """
-    if filename.startswith("None"):
-        final_folder = os.path.basename(os.path.normpath(output))
-        filename = filename.replace("None", final_folder, 1)
-        sample_id = final_folder
-    else:
-        sample_id = os.path.basename(os.path.normpath(output))
-    logger.info(f"Creating PDF {filename} in {output} for sample {sample_id}")
-
-    fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
-    # images_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
-    register_fonts(fonts_dir)
-
-    styles = getSampleStyleSheet()
-    
-    # Update all text styles for consistency with Apple HIG
-    styles["Heading1"].fontSize = 14  # Apple's recommended large title size
-    styles["Heading1"].spaceAfter = 3
-    styles["Heading1"].spaceBefore = 4
-    styles["Heading1"].fontName = "FiraSans-Bold"
-    styles["Heading1"].textColor = colors.HexColor('#000000')  # Apple prefers true black for important text
-
-    styles["Heading2"].fontSize = 12  # Apple's recommended title size
-    styles["Heading2"].spaceAfter = 2
-    styles["Heading2"].spaceBefore = 3
-    styles["Heading2"].fontName = "FiraSans-Bold"
-    styles["Heading2"].textColor = colors.HexColor('#000000')
-
-    styles["BodyText"].fontSize = 10  # Apple's recommended body text size
-    styles["BodyText"].fontName = "FiraSans"
-    styles["BodyText"].textColor = colors.HexColor('#000000')
-
-    # Add styles for summary results
-    styles.add(
-        ParagraphStyle(
-            name='SummaryResult',
-            parent=styles['BodyText'],
-            fontSize=13,
-            leading=16,
-            fontName="FiraSans",
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=2,
-            bulletIndent=12,
-            leftIndent=24
-        )
-    )
-
-    # Add style for important metrics
-    styles.add(
-        ParagraphStyle(
-            name='Metric',
-            parent=styles['BodyText'],
-            fontSize=15,
-            leading=18,
-            fontName="FiraSans-Bold",
-            textColor=colors.HexColor('#000000'),
-            spaceAfter=2
-        )
-    )
-
-    # Update custom styles
-    styles.add(
-        ParagraphStyle(
-            name='Caption',
-            parent=styles['Normal'],
-            fontSize=8,
-            leading=10,
-            fontName="FiraSans",
-            textColor=colors.HexColor('#666666'),
-            alignment=1,  # Center alignment
-            spaceAfter=2
-        )
-    )
-
-    styles.add(
-        ParagraphStyle(
-            name='Bold',
-            parent=styles['Normal'],
-            fontSize=9,
-            leading=11,
-            fontName="FiraSans-Bold",
-            textColor=colors.HexColor('#2C3E50')
-        )
-    )
-
-    styles.add(
-        ParagraphStyle(
-            name='Smaller',
-            parent=styles['Normal'],
-            fontSize=8,
-            leading=10,
-            fontName="FiraSans",
-            textColor=colors.HexColor('#2C3E50')
-        )
-    )
-
-    # Add Underline style
-    styles.add(
-        ParagraphStyle(
-            name='Underline',
-            parent=styles['Heading2'],  # Based on Heading2 style
-            fontSize=12,
-            fontName="FiraSans-Bold",
-            textColor=colors.HexColor('#2C3E50'),
-            spaceAfter=2,
-            spaceBefore=2
-        )
-    )
-
-    # Define a consistent modern table style
-    MODERN_TABLE_STYLE = TableStyle([
-        # Header styling
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5F6FA')),  # Light blue-grey header
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),   # Dark blue-grey text
-        ('FONTNAME', (0, 0), (-1, 0), 'FiraSans-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 8),
-        ('TOPPADDING', (0, 0), (-1, 0), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-        
-        # Body styling
-        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-        ('TEXTCOLOR', (0, 1), (-1, -1), colors.HexColor('#2C3E50')),
-        ('FONTNAME', (0, 1), (-1, -1), 'FiraSans'),
-        ('FONTSIZE', (0, 1), (-1, -1), 7),
-        ('TOPPADDING', (0, 1), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
-        
-        # Grid styling
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),  # Light grey grid
-        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#CBD5E1')), # Slightly darker line below header
-        
-        # Alignment
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        
-        # Alternating row colors
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
-    ])
-
-    # Update document margins for more compact but safe layout
-    doc = SimpleDocTemplate(
-        filename,
-        pagesize=A4,
-        rightMargin=0.5*inch,
-        leftMargin=0.5*inch,
-        topMargin=1.0*inch,      # Increased to 1 inch
-        bottomMargin=0.5*inch,   # Reduced to 0.5 inch
-    )
-
-    # Update image handling function for more compact but safe layout
-    def add_figure(elements, img, caption=None, width_scale=0.8):
-        """Helper function for consistent image formatting"""
-        elements.append(Spacer(1, 16))  # Increased spacing
-        width, height = A4
-        img_width = width * width_scale  # More compact images
-        elements.append(Image(img, width=img_width, height=img_width/1.6))
-        if caption:
-            elements.append(Spacer(1, 4))
-            elements.append(Paragraph(caption, styles["Caption"]))
-        elements.append(Spacer(1, 12))  # Added space after figure
-        elements.append(CondPageBreak(inch * 1))  # Add conditional page break if not enough space
-
-    elements_summary = []
-    elements = []
-
-    masterdf = (
-        pd.read_csv(os.path.join(output, "master.csv"), index_col=0, header=None)
-        if os.path.exists(os.path.join(output, "master.csv"))
-        else None
-    )
+    """Create a PDF report."""
+    logger = logging.getLogger(__name__)
+    logger.info("Starting PDF creation process")
     
     try:
-        centreID = masterdf.loc['centreID'][1]
-    except KeyError:
-        centreID = None  # or some default value
+        if filename.startswith("None"):
+            final_folder = os.path.basename(os.path.normpath(output))
+            filename = filename.replace("None", final_folder, 1)
+            sample_id = final_folder
+        else:
+            sample_id = os.path.basename(os.path.normpath(output))
+        logger.info(f"Creating PDF {filename} in {output} for sample {sample_id}")
 
-    elements_summary.append(Paragraph("Classification Details", styles["Heading1"]))
-    elements_summary.append(
-        Paragraph(f"Sample {sample_id} has the following classifications:", styles["BodyText"])
-    )
+        fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+        # images_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
+        register_fonts(fonts_dir)
 
-    threshold = 0.05
+        styles = getSampleStyleSheet()
+        
+        # Update all text styles for consistency with Apple HIG
+        styles["Heading1"].fontSize = 14  # Apple's recommended large title size
+        styles["Heading1"].spaceAfter = 3
+        styles["Heading1"].spaceBefore = 4
+        styles["Heading1"].fontName = "FiraSans-Bold"
+        styles["Heading1"].textColor = colors.HexColor('#000000')  # Apple prefers true black for important text
 
-    try:
-        elements.append(PageBreak())
-        elements.append(Paragraph("Classification Summary", styles["Heading2"]))
-        # Add classification plots and details
-        for name, df_name in [
-            ("Sturgeon", "sturgeon_scores.csv"),
-            ("NanoDX", "nanoDX_scores.csv"),
-            ("PanNanoDX", "pannanodx_scores.csv"),
-            ("Forest", "random_forest_scores.csv"),
-        ]:
-            elements.append(Paragraph(name, styles["Heading3"]))
-            # List files in the directory and convert them to lowercase
-            files_in_directory = [f.lower() for f in os.listdir(output)]
+        styles["Heading2"].fontSize = 12  # Apple's recommended title size
+        styles["Heading2"].spaceAfter = 2
+        styles["Heading2"].spaceBefore = 3
+        styles["Heading2"].fontName = "FiraSans-Bold"
+        styles["Heading2"].textColor = colors.HexColor('#000000')
 
-            # Check if the lowercase version of df_name exists in the directory
-            if df_name.lower() in files_in_directory:
-                def find_case_insensitive_file(target_name, search_path):
-                    target_name_lower = target_name.lower()
-                    for path in Path(search_path).rglob('*'):
-                        if path.is_file() and path.name.lower() == target_name_lower:
-                            return str(path)
-                    return None
-                file_path = find_case_insensitive_file(df_name, output) or os.path.join(output, df_name)
+        styles["BodyText"].fontSize = 10  # Apple's recommended body text size
+        styles["BodyText"].fontName = "FiraSans"
+        styles["BodyText"].textColor = colors.HexColor('#000000')
 
-                # Read the CSV file
-                df_store = pd.read_csv(file_path)
-
-                df_store2 = df_store.drop(columns=["timestamp"])
-
-                if "number_probes" in df_store2.columns:
-                    lastrow = df_store2.iloc[-1].drop("number_probes")
-                else:
-                    lastrow = df_store2.iloc[-1]
-
-                lastrow_plot = lastrow.sort_values(ascending=False).head(10)
-                lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-                # print (f"{name} classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}")
-                elements_summary.append(
-                    Paragraph(
-                        f"{name} classification: <b>{lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}</b>",
-                        styles["BodyText"],  # Changed from "Bold" to "BodyText"
-                    )
-                )
-
-                img_buf = classification_plot(df_store, name, 0.05)
-                img_pil = PILImage.open(img_buf)
-                width_img, height_img = img_pil.size
-                width, height = A4
-                height = (width * 0.95) / width_img * height_img
-                img = Image(img_buf, width=width * 0.95, height=height, kind="proportional")
-                elements.append(img)
-
-                elements.append(Spacer(1, 6))
-                df = lastrow_plot.reset_index()
-                df.columns = ["Classification", "Score"]
-                df["Score"] = df["Score"].apply(lambda x: round(x, 5))
-                df_transposed = df.set_index("Classification").T.reset_index()
-                df_transposed.columns = [split_text(col) for col in df_transposed.columns]
-                df_transposed.columns.name = None
-                data = [df_transposed.columns.to_list()] + df_transposed.values.tolist()
-                table = create_auto_adjusting_table(data, MODERN_TABLE_STYLE)
-                elements.append(table)
-                elements.append(Spacer(1, 12))
-                #elements.append(PageBreak())
-            else:
-                elements.append(
-                    Paragraph(f"No {name} Classification Available", styles["BodyText"])
-                )
-    except Exception as e:
-        logger.error(f"Error processing classification plots: {e}")
-        raise
-
-    try:
-        elements.append(PageBreak())
-        elements.append(Paragraph("Copy Number Variation Detail", styles["Heading2"]))
-        # Add CNV plots
-        if os.path.exists(os.path.join(output, "CNV.npy")):
-            CNVresult = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
-            CNVresult = Result(CNVresult)
-            cnv_dict = np.load(
-                os.path.join(output, "CNV_dict.npy"), allow_pickle=True
-            ).item()
-            file = open(os.path.join(output, "XYestimate.pkl"), "rb")
-            XYestimate = pickle.load(file)
-            elements_summary.append(Paragraph("Estimated Genetic Sex", styles["Heading3"]))
-            elements_summary.append(
-                Paragraph(
-                    f"{XYestimate}",
-                    styles["BodyText"],
-                )
+        # Add styles for summary results
+        styles.add(
+            ParagraphStyle(
+                name='SummaryResult',
+                parent=styles['BodyText'],
+                fontSize=13,
+                leading=16,
+                fontName="FiraSans",
+                textColor=colors.HexColor('#000000'),
+                spaceAfter=2,
+                bulletIndent=12,
+                leftIndent=24
             )
+        )
 
-            cnv_summary = create_CNV_plot(CNVresult, cnv_dict)
-            img = Image(cnv_summary, width=6 * inch, height=1.5 * inch)
-            elements.append(img)
-            elements.append(Spacer(1, 6))
+        # Add style for important metrics
+        styles.add(
+            ParagraphStyle(
+                name='Metric',
+                parent=styles['BodyText'],
+                fontSize=15,
+                leading=18,
+                fontName="FiraSans-Bold",
+                textColor=colors.HexColor('#000000'),
+                spaceAfter=2
+            )
+        )
 
-            # Create CNV per chromosome plots in a 2-column grid
-            cnv_plots = create_CNV_plot_per_chromosome(CNVresult, cnv_dict)
+        # Update custom styles
+        styles.add(
+            ParagraphStyle(
+                name='Caption',
+                parent=styles['Normal'],
+                fontSize=8,
+                leading=10,
+                fontName="FiraSans",
+                textColor=colors.HexColor('#666666'),
+                alignment=1,  # Center alignment
+                spaceAfter=2
+            )
+        )
+
+        styles.add(
+            ParagraphStyle(
+                name='Bold',
+                parent=styles['Normal'],
+                fontSize=9,
+                leading=11,
+                fontName="FiraSans-Bold",
+                textColor=colors.HexColor('#2C3E50')
+            )
+        )
+
+        styles.add(
+            ParagraphStyle(
+                name='Smaller',
+                parent=styles['Normal'],
+                fontSize=8,
+                leading=10,
+                fontName="FiraSans",
+                textColor=colors.HexColor('#2C3E50')
+            )
+        )
+
+        # Add Underline style
+        styles.add(
+            ParagraphStyle(
+                name='Underline',
+                parent=styles['Heading2'],  # Based on Heading2 style
+                fontSize=12,
+                fontName="FiraSans-Bold",
+                textColor=colors.HexColor('#2C3E50'),
+                spaceAfter=2,
+                spaceBefore=2
+            )
+        )
+
+        # Define a consistent modern table style
+        MODERN_TABLE_STYLE = TableStyle([
+            # Header styling
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5F6FA')),  # Light blue-grey header
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),   # Dark blue-grey text
+            ('FONTNAME', (0, 0), (-1, 0), 'FiraSans-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 8),
+            ('TOPPADDING', (0, 0), (-1, 0), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
             
-            # Calculate dimensions for 2-column layout
+            # Body styling
+            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+            ('TEXTCOLOR', (0, 1), (-1, -1), colors.HexColor('#2C3E50')),
+            ('FONTNAME', (0, 1), (-1, -1), 'FiraSans'),
+            ('FONTSIZE', (0, 1), (-1, -1), 7),
+            ('TOPPADDING', (0, 1), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
+            
+            # Grid styling
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),  # Light grey grid
+            ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#CBD5E1')), # Slightly darker line below header
+            
+            # Alignment
+            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            
+            # Alternating row colors
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
+        ])
+
+        # Update document margins for more compact but safe layout
+        doc = SimpleDocTemplate(
+            filename,
+            pagesize=A4,
+            rightMargin=0.5*inch,
+            leftMargin=0.5*inch,
+            topMargin=1.0*inch,      # Increased to 1 inch
+            bottomMargin=0.5*inch,   # Reduced to 0.5 inch
+        )
+
+        # Update image handling function for more compact but safe layout
+        def add_figure(elements, img, caption=None, width_scale=0.8):
+            """Helper function for consistent image formatting"""
+            elements.append(Spacer(1, 16))  # Increased spacing
             width, height = A4
-            col_width = (width * 0.95) / 2  # 95% of page width split into 2 columns
-            plot_height = col_width / 4  # Maintain aspect ratio
-            
-            # Process plots two at a time
-            for i in range(0, len(cnv_plots), 2):
-                # Create a list to hold the current row's plots
-                row_plots = []
-                
-                # Add plots for this row (either 1 or 2 plots)
-                for j in range(2):
-                    if i + j < len(cnv_plots):
-                        contig, img_buf = cnv_plots[i + j]
-                        row_plots.append((contig, Image(img_buf, width=col_width, height=plot_height)))
-                
-                # Create a table for this row of plots
-                plot_data = [[plot[1] for plot in row_plots]]
-                if len(plot_data[0]) < 2:  # If odd number of plots, add empty cell
-                    plot_data[0].append('')
-                
-                table = Table(plot_data, colWidths=[col_width] * 2)
-                elements.append(table)
-                elements.append(Spacer(1, 6))
+            img_width = width * width_scale  # More compact images
+            elements.append(Image(img, width=img_width, height=img_width/1.6))
+            if caption:
+                elements.append(Spacer(1, 4))
+                elements.append(Paragraph(caption, styles["Caption"]))
+            elements.append(Spacer(1, 12))  # Added space after figure
+            elements.append(CondPageBreak(inch * 1))  # Add conditional page break if not enough space
 
-            if XYestimate != "Unknown":
-                elements.append(
-                    Paragraph(f"Estimated Genetic Sex: {XYestimate}", styles["Smaller"])
-                )
-            elements.append(
-                Paragraph(f"Current Bin Width: {cnv_dict['bin_width']}", styles["Smaller"])
-            )
-            elements.append(
-                Paragraph(
-                    f"Current Variance: {round(cnv_dict['variance'], 3)}", styles["Smaller"]
-                )
-            )
-            elements.append(Spacer(1, 12))
-            elements.append(PageBreak())
-    except Exception as e:
-        logger.error(f"Error processing CNV plots: {e}")
-        raise
+        elements_summary = []
+        elements = []
 
-    try:
-        # Add fusion gene plots and summary
-        fusion_file = os.path.join(output, "fusion_candidates_master.csv")
-        fusion_file_all = os.path.join(output, "fusion_candidates_all.csv")
+        masterdf = (
+            pd.read_csv(os.path.join(output, "master.csv"), index_col=0, header=None)
+            if os.path.exists(os.path.join(output, "master.csv"))
+            else None
+        )
         
-        if os.path.exists(fusion_file) or os.path.exists(fusion_file_all):
-            logger.info("Processing fusion gene data")
-            
-            # Load gene annotation data
-            datafile = "rCNS2_data.csv.gz"
-            gene_table_path = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)),
-                datafile
-            )
-            
-            if os.path.exists(gene_table_path):
-                try:
-                    gene_table = pd.read_csv(gene_table_path)
-                    logger.info("Loaded gene annotation file")
-                except Exception as e:
-                    logger.error(f"Could not load gene annotation file: {e}")
-                    gene_table = None
-            else:
-                logger.error("Could not find gene annotation file")
-                gene_table = None
+        try:
+            centreID = masterdf.loc['centreID'][1]
+        except KeyError:
+            centreID = None  # or some default value
 
-            try:
-                significant_fusions = []
-                significant_fusions_all = []
-                total_supporting_reads = 0
-                total_supporting_reads_all = 0
+        elements_summary.append(Paragraph("Classification Details", styles["Heading1"]))
+        elements_summary.append(
+            Paragraph(f"Sample {sample_id} has the following classifications:", styles["BodyText"])
+        )
 
-                # Process targeted fusions
-                if os.path.exists(fusion_file):
-                    fusion_candidates = pd.read_csv(
-                        fusion_file,
-                        dtype=str,
-                        header=None,
-                        skiprows=1,
-                        on_bad_lines='warn'
-                    )
-                    logger.info(f"Loaded targeted fusion candidates with shape: {fusion_candidates.shape}")
-                    
-                    result, goodpairs = _annotate_results(fusion_candidates)
-                    logger.info(f"Processed targeted fusion results. Good pairs: {goodpairs.sum()}")
-                    
-                    if not result.empty:
-                        gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
-                        stripped_list = [item.replace(" ", "") for item in gene_pairs]
-                        gene_pairs = [pair.split(",") for pair in stripped_list]
-                        gene_groups = get_gene_network(gene_pairs)
-                        
-                        for gene_group in gene_groups:
-                            reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
-                            supporting_reads = count_supporting_reads(reads)
-                            if supporting_reads >= 3:
-                                significant_fusions.append((gene_group, supporting_reads))
-                                total_supporting_reads += supporting_reads
+        threshold = 0.05
 
-                # Process genome-wide fusions
-                if os.path.exists(fusion_file_all):
-                    fusion_candidates_all = pd.read_csv(
-                        fusion_file_all,
-                        dtype=str,
-                        header=None,
-                        skiprows=1,
-                        on_bad_lines='warn'
-                    )
-                    logger.info(f"Loaded genome-wide fusion candidates with shape: {fusion_candidates_all.shape}")
-                    
-                    result_all, goodpairs_all = _annotate_results(fusion_candidates_all)
-                    logger.info(f"Processed genome-wide fusion results. Good pairs: {goodpairs_all.sum()}")
-                    
-                    if not result_all.empty:
-                        gene_pairs_all = result_all[goodpairs_all].sort_values(by=7)["tag"].unique().tolist()
-                        stripped_list_all = [item.replace(" ", "") for item in gene_pairs_all]
-                        gene_pairs_all = [pair.split(",") for pair in stripped_list_all]
-                        gene_groups_all = get_gene_network(gene_pairs_all)
-                        
-                        for gene_group in gene_groups_all:
-                            reads = result_all[goodpairs_all][result_all[goodpairs_all][3].isin(gene_group)]
-                            supporting_reads = count_supporting_reads(reads)
-                            if supporting_reads >= 3:
-                                significant_fusions_all.append((gene_group, supporting_reads))
-                                total_supporting_reads_all += supporting_reads
+        try:
+            elements.append(PageBreak())
+            elements.append(Paragraph("Classification Summary", styles["Heading2"]))
+            # Add classification plots and details
+            for name, df_name in [
+                ("Sturgeon", "sturgeon_scores.csv"),
+                ("NanoDX", "nanoDX_scores.csv"),
+                ("PanNanoDX", "pannanodx_scores.csv"),
+                ("Forest", "random_forest_scores.csv"),
+            ]:
+                elements.append(Paragraph(name, styles["Heading3"]))
+                # List files in the directory and convert them to lowercase
+                files_in_directory = [f.lower() for f in os.listdir(output)]
 
-                # Add fusion summaries to report
-                #elements_summary.append(Paragraph("Fusion Summary", styles["Heading2"]))
-                
-                # Targeted fusions summary
-                if significant_fusions:
-                    elements_summary.append(Paragraph("Targeted Gene Fusions:", styles["Heading3"]))
+                # Check if the lowercase version of df_name exists in the directory
+                if df_name.lower() in files_in_directory:
+                    def find_case_insensitive_file(target_name, search_path):
+                        target_name_lower = target_name.lower()
+                        for path in Path(search_path).rglob('*'):
+                            if path.is_file() and path.name.lower() == target_name_lower:
+                                return str(path)
+                        return None
+                    file_path = find_case_insensitive_file(df_name, output) or os.path.join(output, df_name)
+
+                    # Read the CSV file
+                    df_store = pd.read_csv(file_path)
+
+                    df_store2 = df_store.drop(columns=["timestamp"])
+
+                    if "number_probes" in df_store2.columns:
+                        lastrow = df_store2.iloc[-1].drop("number_probes")
+                    else:
+                        lastrow = df_store2.iloc[-1]
+
+                    lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+                    lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+                    # print (f"{name} classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}")
                     elements_summary.append(
                         Paragraph(
-                            f"Total Significant Fusion Events (at least 3 reads): {len(significant_fusions)}<br/>"
-                            f"Total Supporting Reads: {total_supporting_reads}",
-                            styles["BodyText"],
-                        )
-                    )
-                    fusion_list = []
-                    significant_fusions.sort(key=lambda x: x[1], reverse=True)
-                    for gene_group, supporting_reads in significant_fusions:
-                        fusion_list.append(
-                            f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
-                        )
-                    elements_summary.append(
-                        Paragraph(
-                            "<br/>".join(fusion_list),
-                            styles["BodyText"],
+                            f"{name} classification: <b>{lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}</b>",
+                            styles["BodyText"],  # Changed from "Bold" to "BodyText"
                         )
                     )
 
-                # Genome-wide fusions summary
-                if significant_fusions_all:
-                    elements_summary.append(Paragraph("Genome-wide Gene Fusions:", styles["Heading3"]))
-                    elements_summary.append(
-                        Paragraph(
-                            f"Total Significant Fusion Events (at least 3 reads): {len(significant_fusions_all)}<br/>"
-                            f"Total Supporting Reads: {total_supporting_reads_all}",
-                            styles["BodyText"],
-                        )
+                    img_buf = classification_plot(df_store, name, 0.05)
+                    img_pil = PILImage.open(img_buf)
+                    width_img, height_img = img_pil.size
+                    width, height = A4
+                    height = (width * 0.95) / width_img * height_img
+                    img = Image(img_buf, width=width * 0.95, height=height, kind="proportional")
+                    elements.append(img)
+
+                    elements.append(Spacer(1, 6))
+                    df = lastrow_plot.reset_index()
+                    df.columns = ["Classification", "Score"]
+                    df["Score"] = df["Score"].apply(lambda x: round(x, 5))
+                    df_transposed = df.set_index("Classification").T.reset_index()
+                    df_transposed.columns = [split_text(col) for col in df_transposed.columns]
+                    df_transposed.columns.name = None
+                    data = [df_transposed.columns.to_list()] + df_transposed.values.tolist()
+                    table = create_auto_adjusting_table(data, MODERN_TABLE_STYLE)
+                    elements.append(table)
+                    elements.append(Spacer(1, 12))
+                    #elements.append(PageBreak())
+                else:
+                    elements.append(
+                        Paragraph(f"No {name} Classification Available", styles["BodyText"])
                     )
-                    fusion_list = []
-                    significant_fusions_all.sort(key=lambda x: x[1], reverse=True)
-                    for gene_group, supporting_reads in significant_fusions_all:
-                        fusion_list.append(
-                            f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
-                        )
-                    #elements_summary.append(
-                    #    Paragraph(
-                    #        "<br/>".join(fusion_list),
-                    #   )
-                    #        styles["BodyText"],
-                    #)
+        except Exception as e:
+            logger.error(f"Error processing classification plots: {e}")
+            raise
 
-                if not significant_fusions and not significant_fusions_all:
-                    elements_summary.append(
-                        Paragraph(
-                            "No significant fusion events detected (minimum 3 supporting reads required)",
-                            styles["BodyText"],
-                        )
-                    )
-
-                # Add fusion plots
-                if gene_table is not None:
-                    # Targeted fusion plots
-                    if significant_fusions:
-                        elements.append(Paragraph("Targeted Gene Fusion Plots", styles["Heading2"]))
-                        for gene_group, supporting_reads in significant_fusions:
-                            # Skip if too many genes involved
-                            if len(gene_group) > 5:
-                                elements.append(
-                                    Paragraph(
-                                        f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads) - "
-                                        "Plot skipped due to complexity",
-                                        styles["BodyText"]
-                                    )
-                                )
-                                continue
-                                
-                            reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
-                            fig = create_fusion_plot(reads, gene_table)
-                            img_buf = io.BytesIO()
-                            fig.savefig(img_buf, format='png', dpi=150, bbox_inches=None)  # Changed to 150 DPI
-                            plt.close(fig)
-                            img_buf.seek(0)
-                            
-                            elements.append(
-                                Paragraph(
-                                    f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads)", 
-                                    styles["BodyText"]
-                                )
-                            )
-                            elements.append(
-                                Image(img_buf, width=5*inch, height=2.5*inch)  # Reduced from 7x3.5 to 5x2.5
-                            )
-                            elements.append(Spacer(1, 12))
-
-                    # Genome-wide fusion summary table
-                    if significant_fusions_all:
-                        elements.append(Paragraph("Genome-wide Gene Fusions", styles["Heading2"]))
-                        
-                        # Add summary statistics
-                        total_pairs = len(significant_fusions_all)
-                        total_genes = len(set([gene for gene_group, _ in significant_fusions_all for gene in gene_group]))
-                        
-                        summary_text = (
-                            f"Summary of genome-wide fusion analysis:\n"
-                            f"• Total fusion pairs detected: {total_pairs}\n"
-                            f"• Total unique genes involved: {total_genes}\n"
-                            f"• Minimum supporting reads threshold: 3"
-                        )
-                        
-                        elements.append(Paragraph(summary_text, styles["BodyText"]))
-                        elements.append(Spacer(1, 12))
-                        
-                        # Add note about complexity
-                        elements.append(
-                            Paragraph(
-                                "Note: Due to the complexity of genome-wide fusion events, "
-                                "please refer to the interactive viewer for detailed visualization "
-                                "and analysis of specific fusion pairs.",
-                                styles["Italic"]
-                            )
-                        )
-                        
-                        elements.append(Spacer(1, 12))
-
-            except pd.errors.EmptyDataError:
-                logger.warning("Fusion candidates file is empty")
-            except Exception as e:
-                logger.error(f"Error processing fusion candidates: {e}")
-                raise
-    except Exception as e:
-        logger.error(f"Error processing fusion plots: {e}")
-        raise
-
-    try:
-        # Add coverage plots
-        if os.path.exists(os.path.join(output, "coverage_main.csv")):
-            cov_df_main = pd.read_csv(os.path.join(output, "coverage_main.csv"))
-            bedcov_df_main = pd.read_csv(os.path.join(output, "bed_coverage_main.csv"))
-            target_coverage_df = pd.read_csv(os.path.join(output, "target_coverage.csv"))
-            elements_summary.append(Paragraph("Coverage Summary", styles["Heading2"]))
-            elements_summary.append(
-                Paragraph(
-                    f"Coverage Depths - Global Estimated Coverage: {(cov_df_main['covbases'].sum() / cov_df_main['endpos'].sum()):.2f}x Targets Estimated Coverage: {(bedcov_df_main['bases'].sum() / bedcov_df_main['length'].sum()):.2f}x",
-                    styles["BodyText"],
-                )
-            )
-
-            if bedcov_df_main["bases"].sum() / bedcov_df_main["length"].sum() < 10:
+        try:
+            elements.append(PageBreak())
+            elements.append(Paragraph("Copy Number Variation Detail", styles["Heading2"]))
+            # Add CNV plots
+            if os.path.exists(os.path.join(output, "CNV.npy")):
+                CNVresult = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
+                CNVresult = Result(CNVresult)
+                cnv_dict = np.load(
+                    os.path.join(output, "CNV_dict.npy"), allow_pickle=True
+                ).item()
+                file = open(os.path.join(output, "XYestimate.pkl"), "rb")
+                XYestimate = pickle.load(file)
+                elements_summary.append(Paragraph("Estimated Genetic Sex", styles["Heading3"]))
                 elements_summary.append(
                     Paragraph(
-                        "Target Coverage is below the recommended 10x threshold",
+                        f"{XYestimate}",
                         styles["BodyText"],
                     )
                 )
 
-            outliers = get_target_outliers(target_coverage_df)
-            outliers["coverage"] = outliers["coverage"].apply(lambda x: round(x, 1))
-            outliers = outliers.sort_values(by="coverage", ascending=False)
-            threshold = bedcov_df_main["bases"].sum() / bedcov_df_main["length"].sum()
-            outliers_above_threshold = outliers[outliers["coverage"] > threshold].copy()
-            outliers_below_threshold = outliers[outliers["coverage"] <= threshold].copy()
-            outliers_above_threshold["name_with_coverage"] = outliers_above_threshold.apply(
-                lambda row: f"{row['name']} ({row['coverage']})", axis=1
-            )
-            outliers_below_threshold["name_with_coverage"] = outliers_below_threshold.apply(
-                lambda row: f"{row['name']} ({row['coverage']})", axis=1
-            )
+                cnv_summary = create_CNV_plot(CNVresult, cnv_dict)
+                img = Image(cnv_summary, width=6 * inch, height=1.5 * inch)
+                elements.append(img)
+                elements.append(Spacer(1, 6))
 
-            gene_names = " - ".join(outliers_above_threshold["name_with_coverage"])
-            elements_summary.append(Spacer(1, 6))
-            elements_summary.append(
-                Paragraph(
-                    f"Outlier genes by coverage (high): {gene_names}", styles["Smaller"]
-                )
-            )
-            elements_summary.append(Spacer(1, 6))
-            gene_names = " - ".join(outliers_below_threshold["name_with_coverage"])
-            elements_summary.append(Spacer(1, 6))
-            elements_summary.append(
-                Paragraph(
-                    f"Outlier genes by coverage (low): {gene_names}", styles["Smaller"]
-                )
-            )
-
-            # Add page break before Target Coverage section
-            elements.append(PageBreak())
-            elements.append(Paragraph("Target Coverage", styles["Underline"]))
-            img_buf = coverage_plot(cov_df_main)
-            width, height = A4
-            img = Image(img_buf, width=width * 0.95, height=width, kind="proportional")
-            elements.append(img)
-            elements.append(Spacer(1, 12))
-            elements.append(
-                Paragraph(
-                    "Coverage over individual targets on each chromosome. Outliers are annotated by gene name.",
-                    styles["Smaller"],
-                )
-            )
-            img_buf = target_distribution_plot(target_coverage_df)
-            width, height = A4
-            img = Image(img_buf, width=width * 0.9, height=width, kind="proportional")
-            elements.append(img)
-            elements.append(Spacer(1, 12))
-            elements.append(
-                Paragraph(
-                    f"The following table identifies potential outliers differing significantly from the mean coverage of {(bedcov_df_main['bases'].sum() / bedcov_df_main['length'].sum()):.2f}x",
-                    styles["Smaller"],
-                )
-            )
-
-            outliers = get_target_outliers(target_coverage_df)
-            outliers["coverage"] = outliers["coverage"].apply(lambda x: round(x, 1))
-            outliers = outliers.sort_values(by="coverage", ascending=False)
-            data = [outliers.columns.to_list()] + outliers.values.tolist()
-            table = create_auto_adjusting_table(data, MODERN_TABLE_STYLE)
-            elements.append(table)
-            elements.append(Spacer(1, 12))
-        else:
-            elements.append(Paragraph("No Coverage Data Available", styles["BodyText"]))
-    except Exception as e:
-        logger.error(f"Error processing coverage plots: {e}")
-        raise
-
-    try:
-        # Add run data summary with more compact spacing
-        if masterdf is not None and isinstance(masterdf, pd.DataFrame):
-            elements_summary.append(Paragraph("Run Data Summary", styles["Heading2"]))
-            
-            masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[sample_id]
-            
-            # Sample Information - combine sections with less spacing
-            elements_summary.append(Paragraph("Sample Information", styles["Heading3"]))
-            elements_summary.append(
-                Paragraph(
-                    f"Sample ID: {sample_id} • "
-                    f"Run Start: {format_timestamp(masterdf_dict['run_time'])} • "
-                    f"Target Panel: {' '.join(masterdf.loc[(masterdf.index == 'target_panel')][1].values)}",
-                    styles["Smaller"],
-                )
-            )
-            elements_summary.append(Spacer(1, 6))
-            
-            # Device Details
-            elements_summary.append(Paragraph("Device Details", styles["Heading3"]))
-            elements_summary.append(
-                Paragraph(
-                    f"Sequencing Device: {convert_to_space_separated_string(masterdf_dict['devices'])} • "
-                    f"Flowcell ID: {convert_to_space_separated_string(masterdf_dict['flowcell_ids'])} • "
-                    f"Basecalling Model: {convert_to_space_separated_string(masterdf_dict['basecall_models'])}",
-                    styles["Smaller"],
-                )
-            )
-            elements_summary.append(Spacer(1, 6))
-            
-            # File Locations
-            elements_summary.append(Paragraph("File Locations", styles["Heading3"]))
-            elements_summary.append(
-                Paragraph(
-                    f"Run: {' '.join(masterdf.loc[(masterdf.index == 'watchfolder')][1].values)}<br/>"
-                    f"Out: {' '.join(masterdf.loc[(masterdf.index == 'output')][1].values)}<br/>"
-                    f"Ref: {' '.join(masterdf.loc[(masterdf.index == 'reference')][1].values)}",
-                    styles["Smaller"],
-                )
-            )
-            elements_summary.append(Spacer(1, 6))
-            
-            # Sequencing Statistics
-            try:
-                file_counters = eval(masterdf[masterdf.index == "samples"][1]["samples"])[sample_id]["file_counters"]
+                # Create CNV per chromosome plots in a 2-column grid
+                cnv_plots = create_CNV_plot_per_chromosome(CNVresult, cnv_dict)
                 
-                elements_summary.append(Paragraph("Sequencing Statistics", styles["Heading2"]))
-                elements_summary.append(
+                # Calculate dimensions for 2-column layout
+                width, height = A4
+                col_width = (width * 0.95) / 2  # 95% of page width split into 2 columns
+                plot_height = col_width / 4  # Maintain aspect ratio
+                
+                # Process plots two at a time
+                for i in range(0, len(cnv_plots), 2):
+                    # Create a list to hold the current row's plots
+                    row_plots = []
+                    
+                    # Add plots for this row (either 1 or 2 plots)
+                    for j in range(2):
+                        if i + j < len(cnv_plots):
+                            contig, img_buf = cnv_plots[i + j]
+                            row_plots.append((contig, Image(img_buf, width=col_width, height=plot_height)))
+                    
+                    # Create a table for this row of plots
+                    plot_data = [[plot[1] for plot in row_plots]]
+                    if len(plot_data[0]) < 2:  # If odd number of plots, add empty cell
+                        plot_data[0].append('')
+                    
+                    table = Table(plot_data, colWidths=[col_width] * 2)
+                    elements.append(table)
+                    elements.append(Spacer(1, 6))
+
+                if XYestimate != "Unknown":
+                    elements.append(
+                        Paragraph(f"Estimated Genetic Sex: {XYestimate}", styles["Smaller"])
+                    )
+                elements.append(
+                    Paragraph(f"Current Bin Width: {cnv_dict['bin_width']}", styles["Smaller"])
+                )
+                elements.append(
                     Paragraph(
-                        f"BAM Files: {format_number(file_counters.get('bam_passed', 0))} passed, "
-                        f"{format_number(file_counters.get('bam_failed', 0))} failed<br/>"
-                        f"Mapped Reads: {format_number(file_counters.get('mapped_count', 0))} total "
-                        f"({format_number(file_counters.get('pass_mapped_count', 0))} passed, "
-                        f"{format_number(file_counters.get('fail_mapped_count', 0))} failed)<br/>"
-                        f"Unmapped Reads: {format_number(file_counters.get('unmapped_count', 0))} total "
-                        f"({format_number(file_counters.get('pass_unmapped_count', 0))} passed, "
-                        f"{format_number(file_counters.get('fail_unmapped_count', 0))} failed)<br/>"
-                        f"Total Bases: {format_number(file_counters.get('bases_count', 0))} "
-                        f"({format_number(file_counters.get('pass_bases_count', 0))} passed, "
-                        f"{format_number(file_counters.get('fail_bases_count', 0))} failed)",
-                        styles["Smaller"],
+                        f"Current Variance: {round(cnv_dict['variance'], 3)}", styles["Smaller"]
                     )
                 )
                 
-            except Exception as e:
-                logger.info(f"Error parsing file counters: {e}")
+                # Add CNV deviation statistics
+                logger.info("Starting CNV deviation analysis section")
+                elements.append(PageBreak())
+                class MinimalCNVAnalysis:
+                    def __init__(self, cnv_dict):
+                        self.cnv_dict = cnv_dict
+                        self.result = None
+                        self.logger = logging.getLogger(__name__)
+                        self.logger.info(f"Initialized MinimalCNVAnalysis with bin width: {cnv_dict.get('bin_width')}")
 
-            #elements_summary.append(Spacer(1, 12))  # Final spacing before next section
+                    def calculate_deviation_proportions(self, data, chromosome, n_std=1.0):
+                        self.logger.info(f"Calculating deviations for {chromosome}")
+                        non_zero_data = data[data != 0]
+                        
+                        if len(non_zero_data) == 0:
+                            self.logger.warning(f"No non-zero data for chromosome {chromosome}")
+                            return {
+                                'mean': 0,
+                                'std': 0,
+                                'above_threshold_mb': 0,
+                                'below_threshold_mb': 0,
+                                'total_deviating_mb': 0,
+                                'total_mb': 0,
+                                'proportion_deviating': 0
+                            }
+                        
+                        mean = np.mean(non_zero_data)
+                        std = np.std(non_zero_data)
+                        
+                        upper_threshold = mean + (n_std * std)
+                        lower_threshold = mean - (n_std * std)
+                        
+                        bin_size_mb = self.cnv_dict['bin_width'] / 1_000_000
+                        
+                        above_count = np.sum(non_zero_data > upper_threshold)
+                        below_count = np.sum(non_zero_data < lower_threshold)
+                        total_bins = len(non_zero_data)
+                        
+                        above_mb = above_count * bin_size_mb
+                        below_mb = below_count * bin_size_mb
+                        total_mb = total_bins * bin_size_mb
+                        
+                        self.logger.info(f"Chromosome {chromosome} stats:")
+                        self.logger.info(f"  Mean: {mean:.2f}, Std: {std:.2f}")
+                        self.logger.info(f"  Above/Below counts: {above_count}/{below_count}")
+                        self.logger.info(f"  Total bins: {total_bins}")
+                        self.logger.info(f"  Bin size (Mb): {bin_size_mb:.3f}")
+                        
+                        return {
+                            'mean': mean,
+                            'std': std,
+                            'above_threshold_mb': above_mb,
+                            'below_threshold_mb': below_mb,
+                            'total_deviating_mb': above_mb + below_mb,
+                            'total_mb': total_mb,
+                            'proportion_deviating': (above_count + below_count) / total_bins
+                        }
+
+                    def analyze_deviations(self):
+                        self.logger.info("Starting CNV deviation analysis")
+                        
+                        if not self.result or not hasattr(self.result, 'cnv'):
+                            self.logger.warning("No CNV data available")
+                            return {}
+                        
+                        deviation_stats = {}
+                        total_genome_stats = {
+                            'total_mb': 0,
+                            'total_deviating_mb': 0,
+                            'above_threshold_mb': 0,
+                            'below_threshold_mb': 0
+                        }
+                        
+                        # Access the chromosome data from the cnv dictionary
+                        cnv_data = self.result.cnv
+                        self.logger.info(f"Processing CNV data with chromosomes: {list(cnv_data.keys())}")
+                        
+                        for contig, data in cnv_data.items():
+                            if contig == "chrM" or not re.match(r"^chr(\d+|X|Y)$", contig):
+                                continue
+                                
+                            self.logger.info(f"Processing {contig} with {len(data)} data points")
+                            
+                            stats = self.calculate_deviation_proportions(np.array(data), contig)
+                            deviation_stats[contig] = stats
+                            
+                            total_genome_stats['total_mb'] += stats['total_mb']
+                            total_genome_stats['total_deviating_mb'] += stats['total_deviating_mb']
+                            total_genome_stats['above_threshold_mb'] += stats['above_threshold_mb']
+                            total_genome_stats['below_threshold_mb'] += stats['below_threshold_mb']
+                        
+                        total_genome_stats['proportion_deviating'] = (
+                            total_genome_stats['total_deviating_mb'] / total_genome_stats['total_mb']
+                            if total_genome_stats['total_mb'] > 0 else 0
+                        )
+                        
+                        self.logger.info("Genome-wide stats:")
+                        self.logger.info(f"  Total Mb: {total_genome_stats['total_mb']:.1f}")
+                        self.logger.info(f"  Deviating Mb: {total_genome_stats['total_deviating_mb']:.1f}")
+                        self.logger.info(f"  Proportion: {total_genome_stats['proportion_deviating']:.3f}")
+                        
+                        deviation_stats['genome_wide'] = total_genome_stats
+                        
+                        return deviation_stats
+                
+                # Use the minimal analysis class
+                logger.info("Creating CNV analysis object")
+                cnv_analysis = MinimalCNVAnalysis(cnv_dict)
+                logger.info("Setting CNV result")
+                logger.info(f"CNVresult type: {type(CNVresult)}")
+                logger.info(f"CNVresult dir: {dir(CNVresult)}")
+                cnv_analysis.result = CNVresult  # Remove the Result() wrapper
+                logger.info("Analyzing deviations")
+                stats = cnv_analysis.analyze_deviations()
+                
+                # Log the stats before adding to the report
+                logger.info("CNV deviation stats for report:")
+                logger.info(f"Stats: {stats}")
+                
+                if 'genome_wide' in stats:
+                    elements.append(
+                        Paragraph("CNV Deviation Analysis", styles["Heading3"])
+                    )
+                    elements.append(
+                        Paragraph(
+                            f"Total DNA analyzed: {stats['genome_wide']['total_mb']:.1f} Mb | "
+                            f"Deviating: {stats['genome_wide']['total_deviating_mb']:.1f} Mb ({stats['genome_wide']['proportion_deviating']:.1%}) | "
+                            f"Above: {stats['genome_wide']['above_threshold_mb']:.1f} Mb | "
+                            f"Below: {stats['genome_wide']['below_threshold_mb']:.1f} Mb",
+                            styles["Smaller"]
+                        )
+                    )
+                    
+                    # Add chromosome-specific statistics in a table format
+                    chrom_data = []
+                    for chrom, stat in stats.items():
+                        if chrom != 'genome_wide':
+                            chrom_data.append([
+                                f"{chrom}",
+                                f"{stat['total_deviating_mb']:.1f}/{stat['total_mb']:.1f}",
+                                f"{stat['proportion_deviating']:.1%}",
+                                f"+{stat['above_threshold_mb']:.1f}/-{stat['below_threshold_mb']:.1f}"
+                            ])
+                    
+                    if chrom_data:
+                        table_data = [["Chr", "Dev/Total (Mb)", "%", "+/-"]] + chrom_data
+                        table = create_auto_adjusting_table(table_data, MODERN_TABLE_STYLE)
+                        elements.append(table)
+                
+                elements.append(Spacer(1, 12))
+                elements.append(PageBreak())
+        except Exception as e:
+            logger.error(f"Error processing CNV plots: {e}")
+            raise
+
+        try:
+            # Add fusion gene plots and summary
+            fusion_file = os.path.join(output, "fusion_candidates_master.csv")
+            fusion_file_all = os.path.join(output, "fusion_candidates_all.csv")
+            
+            if os.path.exists(fusion_file) or os.path.exists(fusion_file_all):
+                logger.info("Processing fusion gene data")
+                
+                # Load gene annotation data
+                datafile = "rCNS2_data.csv.gz"
+                gene_table_path = os.path.join(
+                    os.path.dirname(os.path.abspath(resources.__file__)),
+                    datafile
+                )
+                
+                if os.path.exists(gene_table_path):
+                    try:
+                        gene_table = pd.read_csv(gene_table_path)
+                        logger.info("Loaded gene annotation file")
+                    except Exception as e:
+                        logger.error(f"Could not load gene annotation file: {e}")
+                        gene_table = None
+                else:
+                    logger.error("Could not find gene annotation file")
+                    gene_table = None
+
+                try:
+                    significant_fusions = []
+                    significant_fusions_all = []
+                    total_supporting_reads = 0
+                    total_supporting_reads_all = 0
+
+                    # Process targeted fusions
+                    if os.path.exists(fusion_file):
+                        fusion_candidates = pd.read_csv(
+                            fusion_file,
+                            dtype=str,
+                            header=None,
+                            skiprows=1,
+                            on_bad_lines='warn'
+                        )
+                        logger.info(f"Loaded targeted fusion candidates with shape: {fusion_candidates.shape}")
+                        
+                        result, goodpairs = _annotate_results(fusion_candidates)
+                        logger.info(f"Processed targeted fusion results. Good pairs: {goodpairs.sum()}")
+                        
+                        if not result.empty:
+                            gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                            stripped_list = [item.replace(" ", "") for item in gene_pairs]
+                            gene_pairs = [pair.split(",") for pair in stripped_list]
+                            gene_groups = get_gene_network(gene_pairs)
+                            
+                            for gene_group in gene_groups:
+                                reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
+                                supporting_reads = count_supporting_reads(reads)
+                                if supporting_reads >= 3:
+                                    significant_fusions.append((gene_group, supporting_reads))
+                                    total_supporting_reads += supporting_reads
+
+                    # Process genome-wide fusions
+                    if os.path.exists(fusion_file_all):
+                        fusion_candidates_all = pd.read_csv(
+                            fusion_file_all,
+                            dtype=str,
+                            header=None,
+                            skiprows=1,
+                            on_bad_lines='warn'
+                        )
+                        logger.info(f"Loaded genome-wide fusion candidates with shape: {fusion_candidates_all.shape}")
+                        
+                        result_all, goodpairs_all = _annotate_results(fusion_candidates_all)
+                        logger.info(f"Processed genome-wide fusion results. Good pairs: {goodpairs_all.sum()}")
+                        
+                        if not result_all.empty:
+                            gene_pairs_all = result_all[goodpairs_all].sort_values(by=7)["tag"].unique().tolist()
+                            stripped_list_all = [item.replace(" ", "") for item in gene_pairs_all]
+                            gene_pairs_all = [pair.split(",") for pair in stripped_list_all]
+                            gene_groups_all = get_gene_network(gene_pairs_all)
+                            
+                            for gene_group in gene_groups_all:
+                                reads = result_all[goodpairs_all][result_all[goodpairs_all][3].isin(gene_group)]
+                                supporting_reads = count_supporting_reads(reads)
+                                if supporting_reads >= 3:
+                                    significant_fusions_all.append((gene_group, supporting_reads))
+                                    total_supporting_reads_all += supporting_reads
+
+                    # Add fusion summaries to report
+                    #elements_summary.append(Paragraph("Fusion Summary", styles["Heading2"]))
+                    
+                    # Targeted fusions summary
+                    if significant_fusions:
+                        elements_summary.append(Paragraph("Targeted Gene Fusions:", styles["Heading3"]))
+                        elements_summary.append(
+                            Paragraph(
+                                f"Total Significant Fusion Events (at least 3 reads): {len(significant_fusions)}<br/>"
+                                f"Total Supporting Reads: {total_supporting_reads}",
+                                styles["BodyText"],
+                            )
+                        )
+                        fusion_list = []
+                        significant_fusions.sort(key=lambda x: x[1], reverse=True)
+                        for gene_group, supporting_reads in significant_fusions:
+                            fusion_list.append(
+                                f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
+                            )
+                        elements_summary.append(
+                            Paragraph(
+                                "<br/>".join(fusion_list),
+                                styles["BodyText"],
+                            )
+                        )
+
+                    # Genome-wide fusions summary
+                    if significant_fusions_all:
+                        elements_summary.append(Paragraph("Genome-wide Gene Fusions:", styles["Heading3"]))
+                        elements_summary.append(
+                            Paragraph(
+                                f"Total Significant Fusion Events (at least 3 reads): {len(significant_fusions_all)}<br/>"
+                                f"Total Supporting Reads: {total_supporting_reads_all}",
+                                styles["BodyText"],
+                            )
+                        )
+                        fusion_list = []
+                        significant_fusions_all.sort(key=lambda x: x[1], reverse=True)
+                        for gene_group, supporting_reads in significant_fusions_all:
+                            fusion_list.append(
+                                f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
+                            )
+                        #elements_summary.append(
+                        #    Paragraph(
+                        #        "<br/>".join(fusion_list),
+                        #   )
+                        #        styles["BodyText"],
+                        #)
+
+                    if not significant_fusions and not significant_fusions_all:
+                        elements_summary.append(
+                            Paragraph(
+                                "No significant fusion events detected (minimum 3 supporting reads required)",
+                                styles["BodyText"],
+                            )
+                        )
+
+                    # Add fusion plots
+                    if gene_table is not None:
+                        # Targeted fusion plots
+                        if significant_fusions:
+                            elements.append(Paragraph("Targeted Gene Fusion Plots", styles["Heading2"]))
+                            for gene_group, supporting_reads in significant_fusions:
+                                # Skip if too many genes involved
+                                if len(gene_group) > 5:
+                                    elements.append(
+                                        Paragraph(
+                                            f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads) - "
+                                            "Plot skipped due to complexity",
+                                            styles["BodyText"]
+                                        )
+                                    )
+                                    continue
+                                    
+                                reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
+                                fig = create_fusion_plot(reads, gene_table)
+                                img_buf = io.BytesIO()
+                                fig.savefig(img_buf, format='png', dpi=150, bbox_inches=None)  # Changed to 150 DPI
+                                plt.close(fig)
+                                img_buf.seek(0)
+                                
+                                elements.append(
+                                    Paragraph(
+                                        f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads)", 
+                                        styles["BodyText"]
+                                    )
+                                )
+                                elements.append(
+                                    Image(img_buf, width=5*inch, height=2.5*inch)  # Reduced from 7x3.5 to 5x2.5
+                                )
+                                elements.append(Spacer(1, 12))
+
+                        # Genome-wide fusion summary table
+                        if significant_fusions_all:
+                            elements.append(Paragraph("Genome-wide Gene Fusions", styles["Heading2"]))
+                            
+                            # Add summary statistics
+                            total_pairs = len(significant_fusions_all)
+                            total_genes = len(set([gene for gene_group, _ in significant_fusions_all for gene in gene_group]))
+                            
+                            summary_text = (
+                                f"Summary of genome-wide fusion analysis:\n"
+                                f"• Total fusion pairs detected: {total_pairs}\n"
+                                f"• Total unique genes involved: {total_genes}\n"
+                                f"• Minimum supporting reads threshold: 3"
+                            )
+                            
+                            elements.append(Paragraph(summary_text, styles["BodyText"]))
+                            elements.append(Spacer(1, 12))
+                            
+                            # Add note about complexity
+                            elements.append(
+                                Paragraph(
+                                    "Note: Due to the complexity of genome-wide fusion events, "
+                                    "please refer to the interactive viewer for detailed visualization "
+                                    "and analysis of specific fusion pairs.",
+                                    styles["Italic"]
+                                )
+                            )
+                            
+                            elements.append(Spacer(1, 12))
+
+                except pd.errors.EmptyDataError:
+                    logger.warning("Fusion candidates file is empty")
+                except Exception as e:
+                    logger.error(f"Error processing fusion candidates: {e}")
+                    raise
+        except Exception as e:
+            logger.error(f"Error processing fusion plots: {e}")
+            raise
+
+        try:
+            # Add coverage plots
+            if os.path.exists(os.path.join(output, "coverage_main.csv")):
+                cov_df_main = pd.read_csv(os.path.join(output, "coverage_main.csv"))
+                bedcov_df_main = pd.read_csv(os.path.join(output, "bed_coverage_main.csv"))
+                target_coverage_df = pd.read_csv(os.path.join(output, "target_coverage.csv"))
+                elements_summary.append(Paragraph("Coverage Summary", styles["Heading2"]))
+                elements_summary.append(
+                    Paragraph(
+                        f"Coverage Depths - Global Estimated Coverage: {(cov_df_main['covbases'].sum() / cov_df_main['endpos'].sum()):.2f}x Targets Estimated Coverage: {(bedcov_df_main['bases'].sum() / bedcov_df_main['length'].sum()):.2f}x",
+                        styles["BodyText"],
+                    )
+                )
+
+                if bedcov_df_main["bases"].sum() / bedcov_df_main["length"].sum() < 10:
+                    elements_summary.append(
+                        Paragraph(
+                            "Target Coverage is below the recommended 10x threshold",
+                            styles["BodyText"],
+                        )
+                    )
+
+                outliers = get_target_outliers(target_coverage_df)
+                outliers["coverage"] = outliers["coverage"].apply(lambda x: round(x, 1))
+                outliers = outliers.sort_values(by="coverage", ascending=False)
+                threshold = bedcov_df_main["bases"].sum() / bedcov_df_main["length"].sum()
+                outliers_above_threshold = outliers[outliers["coverage"] > threshold].copy()
+                outliers_below_threshold = outliers[outliers["coverage"] <= threshold].copy()
+                outliers_above_threshold["name_with_coverage"] = outliers_above_threshold.apply(
+                    lambda row: f"{row['name']} ({row['coverage']})", axis=1
+                )
+                outliers_below_threshold["name_with_coverage"] = outliers_below_threshold.apply(
+                    lambda row: f"{row['name']} ({row['coverage']})", axis=1
+                )
+
+                gene_names = " - ".join(outliers_above_threshold["name_with_coverage"])
+                elements_summary.append(Spacer(1, 6))
+                elements_summary.append(
+                    Paragraph(
+                        f"Outlier genes by coverage (high): {gene_names}", styles["Smaller"]
+                    )
+                )
+                elements_summary.append(Spacer(1, 6))
+                gene_names = " - ".join(outliers_below_threshold["name_with_coverage"])
+                elements_summary.append(Spacer(1, 6))
+                elements_summary.append(
+                    Paragraph(
+                        f"Outlier genes by coverage (low): {gene_names}", styles["Smaller"]
+                    )
+                )
+
+                # Add page break before Target Coverage section
+                elements.append(PageBreak())
+                elements.append(Paragraph("Target Coverage", styles["Underline"]))
+                img_buf = coverage_plot(cov_df_main)
+                width, height = A4
+                img = Image(img_buf, width=width * 0.95, height=width, kind="proportional")
+                elements.append(img)
+                elements.append(Spacer(1, 12))
+                elements.append(
+                    Paragraph(
+                        "Coverage over individual targets on each chromosome. Outliers are annotated by gene name.",
+                        styles["Smaller"],
+                    )
+                )
+                img_buf = target_distribution_plot(target_coverage_df)
+                width, height = A4
+                img = Image(img_buf, width=width * 0.9, height=width, kind="proportional")
+                elements.append(img)
+                elements.append(Spacer(1, 12))
+                elements.append(
+                    Paragraph(
+                        f"The following table identifies potential outliers differing significantly from the mean coverage of {(bedcov_df_main['bases'].sum() / bedcov_df_main['length'].sum()):.2f}x",
+                        styles["Smaller"],
+                    )
+                )
+
+                outliers = get_target_outliers(target_coverage_df)
+                outliers["coverage"] = outliers["coverage"].apply(lambda x: round(x, 1))
+                outliers = outliers.sort_values(by="coverage", ascending=False)
+                data = [outliers.columns.to_list()] + outliers.values.tolist()
+                table = create_auto_adjusting_table(data, MODERN_TABLE_STYLE)
+                elements.append(table)
+                elements.append(Spacer(1, 12))
+            else:
+                elements.append(Paragraph("No Coverage Data Available", styles["BodyText"]))
+        except Exception as e:
+            logger.error(f"Error processing coverage plots: {e}")
+            raise
+
+        try:
+            # Add run data summary with more compact spacing
+            if masterdf is not None and isinstance(masterdf, pd.DataFrame):
+                elements_summary.append(Paragraph("Run Data Summary", styles["Heading2"]))
+                
+                masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[sample_id]
+                
+                # Sample Information - combine sections with less spacing
+                elements_summary.append(Paragraph("Sample Information", styles["Heading3"]))
+                elements_summary.append(
+                    Paragraph(
+                        f"Sample ID: {sample_id} • "
+                        f"Run Start: {format_timestamp(masterdf_dict['run_time'])} • "
+                        f"Target Panel: {' '.join(masterdf.loc[(masterdf.index == 'target_panel')][1].values)}",
+                        styles["Smaller"],
+                    )
+                )
+                elements_summary.append(Spacer(1, 6))
+                
+                # Device Details
+                elements_summary.append(Paragraph("Device Details", styles["Heading3"]))
+                elements_summary.append(
+                    Paragraph(
+                        f"Sequencing Device: {convert_to_space_separated_string(masterdf_dict['devices'])} • "
+                        f"Flowcell ID: {convert_to_space_separated_string(masterdf_dict['flowcell_ids'])} • "
+                        f"Basecalling Model: {convert_to_space_separated_string(masterdf_dict['basecall_models'])}",
+                        styles["Smaller"],
+                    )
+                )
+                elements_summary.append(Spacer(1, 6))
+                
+                # File Locations
+                elements_summary.append(Paragraph("File Locations", styles["Heading3"]))
+                elements_summary.append(
+                    Paragraph(
+                        f"Run: {' '.join(masterdf.loc[(masterdf.index == 'watchfolder')][1].values)}<br/>"
+                        f"Out: {' '.join(masterdf.loc[(masterdf.index == 'output')][1].values)}<br/>"
+                        f"Ref: {' '.join(masterdf.loc[(masterdf.index == 'reference')][1].values)}",
+                        styles["Smaller"],
+                    )
+                )
+                elements_summary.append(Spacer(1, 6))
+                
+                # Sequencing Statistics
+                try:
+                    file_counters = eval(masterdf[masterdf.index == "samples"][1]["samples"])[sample_id]["file_counters"]
+                    
+                    elements_summary.append(Paragraph("Sequencing Statistics", styles["Heading2"]))
+                    elements_summary.append(
+                        Paragraph(
+                            f"BAM Files: {format_number(file_counters.get('bam_passed', 0))} passed, "
+                            f"{format_number(file_counters.get('bam_failed', 0))} failed<br/>"
+                            f"Mapped Reads: {format_number(file_counters.get('mapped_count', 0))} total "
+                            f"({format_number(file_counters.get('pass_mapped_count', 0))} passed, "
+                            f"{format_number(file_counters.get('fail_mapped_count', 0))} failed)<br/>"
+                            f"Unmapped Reads: {format_number(file_counters.get('unmapped_count', 0))} total "
+                            f"({format_number(file_counters.get('pass_unmapped_count', 0))} passed, "
+                            f"{format_number(file_counters.get('fail_unmapped_count', 0))} failed)<br/>"
+                            f"Total Bases: {format_number(file_counters.get('bases_count', 0))} "
+                            f"({format_number(file_counters.get('pass_bases_count', 0))} passed, "
+                            f"{format_number(file_counters.get('fail_bases_count', 0))} failed)",
+                            styles["Smaller"],
+                        )
+                    )
+                    
+                except Exception as e:
+                    logger.info(f"Error parsing file counters: {e}")
+
+                #elements_summary.append(Spacer(1, 12))  # Final spacing before next section
+
+        except Exception as e:
+            logger.error(f"Error processing run data summary: {e}")
+            raise
+
+        try:
+            # Add MGMT Promoter Methylation
+            last_seen = 0
+            for file in natsort.natsorted(os.listdir(output)):
+                if file.endswith("_mgmt.csv"):
+                    count = int(file.split("_")[0])
+                    if count > last_seen:
+                        results = pd.read_csv(os.path.join(output, file))
+                        plot_out = os.path.join(output, file.replace(".csv", ".png"))
+                        last_seen = count
+
+            if last_seen > 0:
+                elements.append(PageBreak())  # Add page break here
+                elements.append(Paragraph("MGMT Promoter Methylation", styles["Underline"]))
+                image = Image(plot_out, 6 * inch, 4 * inch)
+                elements.append(image)
+                data_list = [results.columns.values.tolist()]
+                rounded_values = [[round_floats(val) for val in row] for row in results.values.tolist()]
+                data_list.extend(rounded_values)
+                table = create_auto_adjusting_table(data_list, MODERN_TABLE_STYLE)
+                elements.append(table)
+
+        except Exception as e:
+            logger.error(f"Error processing MGMT Promoter Methylation: {e}")
+            raise
+
+        try:
+            final_elements = elements_summary + elements
+            doc.multiBuild(
+                final_elements,
+                canvasmaker=header_footer_canvas_factory(sample_id, centreID,styles, fonts_dir),
+            )
+            logger.info(f"PDF created: {filename}")
+        except Exception as e:
+            logger.error(f"Error finalizing PDF: {e}")
+            raise
+
+        return filename
 
     except Exception as e:
-        logger.error(f"Error processing run data summary: {e}")
+        logger.error(f"Error creating PDF: {e}")
         raise
-
-    try:
-        # Add MGMT Promoter Methylation
-        last_seen = 0
-        for file in natsort.natsorted(os.listdir(output)):
-            if file.endswith("_mgmt.csv"):
-                count = int(file.split("_")[0])
-                if count > last_seen:
-                    results = pd.read_csv(os.path.join(output, file))
-                    plot_out = os.path.join(output, file.replace(".csv", ".png"))
-                    last_seen = count
-
-        if last_seen > 0:
-            elements.append(PageBreak())  # Add page break here
-            elements.append(Paragraph("MGMT Promoter Methylation", styles["Underline"]))
-            image = Image(plot_out, 6 * inch, 4 * inch)
-            elements.append(image)
-            data_list = [results.columns.values.tolist()]
-            rounded_values = [[round_floats(val) for val in row] for row in results.values.tolist()]
-            data_list.extend(rounded_values)
-            table = create_auto_adjusting_table(data_list, MODERN_TABLE_STYLE)
-            elements.append(table)
-
-    except Exception as e:
-        logger.error(f"Error processing MGMT Promoter Methylation: {e}")
-        raise
-
-    try:
-        final_elements = elements_summary + elements
-        doc.multiBuild(
-            final_elements,
-            canvasmaker=header_footer_canvas_factory(sample_id, centreID,styles, fonts_dir),
-        )
-        logger.info(f"PDF created: {filename}")
-    except Exception as e:
-        logger.error(f"Error finalizing PDF: {e}")
-        raise
-
-    return filename
 
 
 def create_fusion_plot(reads: pd.DataFrame, gene_table: pd.DataFrame) -> plt.Figure:
