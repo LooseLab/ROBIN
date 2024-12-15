@@ -513,6 +513,82 @@ def create_pdf(filename, output):
         raise
 
     try:
+        # Add fusion gene plots
+        fusion_file = os.path.join(output, "fusion_candidates_master.csv")
+        if os.path.exists(fusion_file):
+            logger.info("Processing fusion gene data")
+            
+            # Load gene annotation data
+            datafile = "rCNS2_data.csv.gz"
+            gene_table_path = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                datafile
+            )
+            
+            if os.path.exists(gene_table_path):
+                try:
+                    gene_table = pd.read_csv(gene_table_path)
+                    logger.info("Loaded gene annotation file")
+                except Exception as e:
+                    logger.error(f"Could not load gene annotation file: {e}")
+                    gene_table = None
+            else:
+                logger.error("Could not find gene annotation file")
+                gene_table = None
+
+            try:
+                # Read fusion candidates
+                fusion_candidates = pd.read_csv(
+                    fusion_file,
+                    dtype=str,
+                    header=None,
+                    skiprows=1,
+                    on_bad_lines='warn'
+                )
+                logger.info(f"Loaded fusion candidates with shape: {fusion_candidates.shape}")
+                
+                # Process fusion results
+                result, goodpairs = _annotate_results(fusion_candidates)
+                logger.info(f"Processed fusion results. Good pairs: {goodpairs.sum()}")
+                
+                if not result.empty and gene_table is not None:
+                    gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                    stripped_list = [item.replace(" ", "") for item in gene_pairs]
+                    gene_pairs = [pair.split(",") for pair in stripped_list]
+                    gene_groups = get_gene_network(gene_pairs)
+                    
+                    for gene_group in gene_groups:
+                        reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
+                        result_reads = _get_reads(reads)
+                        
+                        if len(result_reads) > 1:
+                            fig = create_fusion_plot(reads, gene_table)
+                            
+                            # Save plot to buffer
+                            img_buf = io.BytesIO()
+                            fig.savefig(img_buf, format='png', dpi=300, bbox_inches='tight')
+                            plt.close()
+                            img_buf.seek(0)
+                            
+                            # Add plot to report
+                            elements.append(
+                                Paragraph(f"Gene Fusion: {' - '.join(gene_group)}", styles["Heading2"])
+                            )
+                            elements.append(
+                                Image(img_buf, width=7*inch, height=3.5*inch)
+                            )
+                            elements.append(Spacer(1, 12))
+
+            except pd.errors.EmptyDataError:
+                logger.warning("Fusion candidates file is empty")
+            except Exception as e:
+                logger.error(f"Error processing fusion candidates: {e}")
+                raise
+    except Exception as e:
+        logger.error(f"Error processing fusion plots: {e}")
+        raise
+
+    try:
         # Add coverage plots
         if os.path.exists(os.path.join(output, "coverage_main.csv")):
             cov_df_main = pd.read_csv(os.path.join(output, "coverage_main.csv"))
@@ -603,87 +679,9 @@ def create_pdf(filename, output):
         raise
 
     try:
-        # Add fusion data
-        fusion_results = []
-        fusion_file = os.path.join(output, "fusion_candidates_master.csv")
-        if os.path.exists(fusion_file):
-            logger.debug(f"Found fusion candidates file: {fusion_file}")
-            try:
-                # Check if file is empty
-                if os.path.getsize(fusion_file) == 0:
-                    logger.warning("fusion_candidates_master.csv is empty")
-                else:
-                    try:
-                        # Try reading with different parameters in case the file structure varies
-                        fusion_candidates = pd.read_csv(
-                            fusion_file,
-                            dtype=str,
-                            header=None,
-                            skiprows=1,
-                            on_bad_lines='warn'
-                        )
-                        if fusion_candidates.empty:
-                            logger.warning("No fusion candidates data found")
-                        else:
-                            print(f"Fusion candidates columns: {fusion_candidates.columns}")
-                            print(f"Fusion candidates head:\n{fusion_candidates.head()}")
-                            fusion_results.append(("High", fusion_candidates))
-                    except pd.errors.EmptyDataError:
-                        logger.warning("fusion_candidates_master.csv contains no data")
-                    except Exception as e:
-                        logger.error(f"Error reading fusion_candidates_master.csv: {e}")
-                        logger.debug("Attempting to read file contents directly:")
-                        with open(fusion_file, 'r') as f:
-                            content = f.read()
-                            logger.debug(f"File contents:\n{content[:1000]}")  # First 1000 chars
-            except Exception as e:
-                logger.error(f"Error accessing fusion_candidates_master.csv: {e}")
-
-            # Continue with fusion processing only if we have results
-            if len(fusion_results) > 0:
-                for confidence, df in fusion_results:
-                    try:
-                        print(f"\nProcessing {confidence} confidence fusions")
-                        print(f"DataFrame columns: {df.columns}")
-                        print(f"DataFrame head:\n{df.head()}")
-                        
-                        result, goodpairs = _annotate_results(df)
-                        print(f"Result columns: {result.columns}")
-                        print(f"Result head:\n{result.head()}")
-                        
-                        if not result.empty:
-                            gene_col = 3
-                            unique_genes = df[gene_col].unique()
-                            print(f"Unique genes: {unique_genes}")
-                            
-                            gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
-                            stripped_list = [item.replace(" ", "") for item in gene_pairs]
-                            gene_pairs = [pair.split(",") for pair in stripped_list]
-                            
-                            gene_groups_test = get_gene_network(gene_pairs)
-                            gene_groups = []
-                            for gene_group in gene_groups_test:
-                                reads = result[goodpairs][result[goodpairs][gene_col].isin(gene_group)]
-                                read_count = len(_get_reads(reads))
-                                if read_count > 1:
-                                    gene_groups.append(gene_group)
-                                    
-                    except Exception as e:
-                        logger.error(f"Error processing fusion data for {confidence} confidence: {e}")
-                        import traceback
-                        print(f"Full traceback:\n{traceback.format_exc()}")
-            else:
-                logger.info("No fusion results to process")
-
-    except Exception as e:
-        logger.error(f"Error processing fusion data: {e}")
-        raise
-
-    try:
         # Add run data summary with more compact spacing
         if masterdf is not None and isinstance(masterdf, pd.DataFrame):
             elements_summary.append(Paragraph("Run Data Summary", styles["Heading1"]))
-            #elements_summary.append(Spacer(1, 6))  # Reduced from default spacing
             
             masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[sample_id]
             
@@ -711,7 +709,7 @@ def create_pdf(filename, output):
             )
             elements_summary.append(Spacer(1, 6))
             
-            # File Locations - single line for each path
+            # File Locations
             elements_summary.append(Paragraph("File Locations", styles["Heading2"]))
             elements_summary.append(
                 Paragraph(
@@ -721,6 +719,85 @@ def create_pdf(filename, output):
                     styles["BodyText"],
                 )
             )
+            elements_summary.append(Spacer(1, 6))
+            
+            # Fusion Summary
+            try:
+                fusion_file = os.path.join(output, "fusion_candidates_master.csv")
+                if os.path.exists(fusion_file):
+                    fusion_candidates = pd.read_csv(
+                        fusion_file,
+                        dtype=str,
+                        header=None,
+                        skiprows=1,
+                        on_bad_lines='warn'
+                    )
+                    result, goodpairs = _annotate_results(fusion_candidates)
+                    
+                    if not result.empty:
+                        gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                        stripped_list = [item.replace(" ", "") for item in gene_pairs]
+                        gene_pairs = [pair.split(",") for pair in stripped_list]
+                        gene_groups = get_gene_network(gene_pairs)
+                        
+                        elements_summary.append(Paragraph("Fusion Summary", styles["Heading2"]))
+                        
+                        # Filter and count fusions with ≥3 supporting reads
+                        significant_fusions = []
+                        total_supporting_reads = 0
+                        
+                        for gene_group in gene_groups:
+                            reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
+                            supporting_reads = len(reads)
+                            if supporting_reads >= 3:  # Only include fusions with 3 or more supporting reads
+                                significant_fusions.append((gene_group, supporting_reads))
+                                total_supporting_reads += supporting_reads
+                        
+                        # Summary statistics
+                        total_significant_fusions = len(significant_fusions)
+                        
+                        elements_summary.append(
+                            Paragraph(
+                                f"Total Significant Fusion Events (≥3 reads): {total_significant_fusions}<br/>"
+                                f"Total Supporting Reads: {total_supporting_reads}",
+                                styles["BodyText"],
+                            )
+                        )
+                        
+                        # List of significant fusion pairs
+                        if significant_fusions:
+                            elements_summary.append(Paragraph("Detected Fusions:", styles["Heading3"]))
+                            fusion_list = []
+                            # Sort by number of supporting reads, descending
+                            significant_fusions.sort(key=lambda x: x[1], reverse=True)
+                            for gene_group, supporting_reads in significant_fusions:
+                                fusion_list.append(
+                                    f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
+                                )
+                            elements_summary.append(
+                                Paragraph(
+                                    "<br/>".join(fusion_list),
+                                    styles["BodyText"],
+                                )
+                            )
+                        else:
+                            elements_summary.append(
+                                Paragraph(
+                                    "No significant fusion events detected (minimum 3 supporting reads required)",
+                                    styles["BodyText"],
+                                )
+                            )
+                    else:
+                        elements_summary.append(
+                            Paragraph(
+                                "No fusion events detected",
+                                styles["BodyText"],
+                            )
+                        )
+                
+            except Exception as e:
+                logger.error(f"Error processing fusion summary: {e}")
+            
             elements_summary.append(Spacer(1, 6))
             
             # Sequencing Statistics
@@ -789,6 +866,112 @@ def create_pdf(filename, output):
         raise
 
     return filename
+
+
+def create_fusion_plot(reads: pd.DataFrame, gene_table: pd.DataFrame) -> plt.Figure:
+    """Creates a fusion plot matching the interactive version from Fusion_object.py"""
+    
+    # Process reads to get result format
+    result = _get_reads(reads)
+    
+    # Create figure
+    plt.figure(figsize=(19, 5))
+    num_plots = 2 * len(result)
+    num_cols = len(result)
+    num_rows = (num_plots + num_cols - 1) // num_cols
+    
+    # Dict to store axes for potential connection lines
+    axdict = {}
+    
+    def human_readable_format(x, pos):
+        return f"{x / 1e6:.2f}"  # Mb
+    
+    # Create subplots for each gene
+    for i, ax in enumerate(range(num_plots), start=1):
+        plt.subplot(num_rows, num_cols, i)
+        row, col = divmod(i - 1, num_cols)
+        data = result.iloc[col]
+        
+        chrom = data["chromosome"]
+        start = data["start"]
+        end = data["end"]
+        
+        if row == 1:  # Bottom row - gene structure
+            features = []
+            # Add gene body
+            for _, gene_row in gene_table[
+                gene_table["Seqid"].eq(chrom) &
+                gene_table["Start"].le(end) &
+                gene_table["End"].ge(start)
+            ].iterrows():
+                if gene_row["Type"] == "gene":
+                    features.append(
+                        GraphicFeature(
+                            start=int(gene_row["Start"]),
+                            end=int(gene_row["End"]),
+                            strand=STRAND[gene_row["Strand"]],
+                            thickness=8,
+                            color="#ffd700",
+                            label=gene_row["gene_name"],
+                            fontdict={'family': 'sans', 'color': 'black', 'fontsize': 8}
+                        )
+                    )
+            
+            # Add exons
+            for _, exon_row in gene_table[
+                gene_table["gene_name"].eq(data["gene"]) &
+                gene_table["Source"].eq("HAVANA") &
+                gene_table["Type"].eq("exon")
+            ].groupby(["Seqid", "Start", "End", "Type", "Strand"]).count().reset_index().iterrows():
+                features.append(
+                    GraphicFeature(
+                        start=int(exon_row["Start"]),
+                        end=int(exon_row["End"]),
+                        strand=STRAND[exon_row["Strand"]],
+                        thickness=4,
+                        color="#C0C0C0"
+                    )
+                )
+            
+            record = GraphicRecord(
+                sequence_length=end - start,
+                first_index=start,
+                features=features
+            )
+            ax = plt.gca()
+            record.plot(ax=ax, with_ruler=False, draw_line=True, strand_in_label_threshold=4)
+            
+        else:  # Top row - read alignments
+            features = []
+            df = reads[reads["chromosome2"].eq(chrom)].sort_values(by="id")
+            
+            for _, row in df.iterrows():
+                features.append(
+                    GraphicFeature(
+                        start=int(row["start2"]),
+                        end=int(row["end2"]),
+                        strand=STRAND[row["strand"]],
+                        color=row["color"] if "color" in row else "#ffd700"
+                    )
+                )
+            
+            record = GraphicRecord(
+                sequence_length=end - start,
+                first_index=start,
+                features=features
+            )
+            ax = plt.gca()
+            record.plot(ax=ax)
+            ax.xaxis.set_major_formatter(FuncFormatter(human_readable_format))
+            ax.tick_params(axis="x", labelsize=8)
+            ax.set_xlabel(f'Position (Mb) - {chrom} - {data["gene"]}', fontsize=10)
+            ax.set_title(f'{data["gene"]}')
+            
+            axdict[data["gene"]] = ax
+    
+    plt.tight_layout()
+    return plt.gcf()
+
 
 import click
 
