@@ -207,14 +207,14 @@ def create_pdf(filename, output):
     
     # Update all text styles for consistency with Apple HIG
     styles["Heading1"].fontSize = 14  # Apple's recommended large title size
-    styles["Heading1"].spaceAfter = 5
-    styles["Heading1"].spaceBefore = 7
+    styles["Heading1"].spaceAfter = 3
+    styles["Heading1"].spaceBefore = 4
     styles["Heading1"].fontName = "FiraSans-Bold"
     styles["Heading1"].textColor = colors.HexColor('#000000')  # Apple prefers true black for important text
 
     styles["Heading2"].fontSize = 12  # Apple's recommended title size
-    styles["Heading2"].spaceAfter = 4
-    styles["Heading2"].spaceBefore = 6
+    styles["Heading2"].spaceAfter = 2
+    styles["Heading2"].spaceBefore = 3
     styles["Heading2"].fontName = "FiraSans-Bold"
     styles["Heading2"].textColor = colors.HexColor('#000000')
 
@@ -231,7 +231,7 @@ def create_pdf(filename, output):
             leading=16,
             fontName="FiraSans",
             textColor=colors.HexColor('#000000'),
-            spaceAfter=8,
+            spaceAfter=2,
             bulletIndent=12,
             leftIndent=24
         )
@@ -246,7 +246,7 @@ def create_pdf(filename, output):
             leading=18,
             fontName="FiraSans-Bold",
             textColor=colors.HexColor('#000000'),
-            spaceAfter=4
+            spaceAfter=2
         )
     )
 
@@ -260,7 +260,7 @@ def create_pdf(filename, output):
             fontName="FiraSans",
             textColor=colors.HexColor('#666666'),
             alignment=1,  # Center alignment
-            spaceAfter=6
+            spaceAfter=2
         )
     )
 
@@ -294,8 +294,8 @@ def create_pdf(filename, output):
             fontSize=12,
             fontName="FiraSans-Bold",
             textColor=colors.HexColor('#2C3E50'),
-            spaceAfter=4,
-            spaceBefore=8
+            spaceAfter=2,
+            spaceBefore=2
         )
     )
 
@@ -658,8 +658,6 @@ def create_pdf(filename, output):
                             styles["BodyText"],
                         )
                     )
-
-                elements_summary.append(Spacer(1, 12))
 
                 # Add fusion plots
                 if gene_table is not None:
