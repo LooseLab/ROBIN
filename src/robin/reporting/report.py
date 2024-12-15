@@ -641,12 +641,12 @@ def create_pdf(filename, output):
                         fusion_list.append(
                             f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
                         )
-                    elements_summary.append(
-                        Paragraph(
-                            "<br/>".join(fusion_list),
-                            styles["BodyText"],
-                        )
-                    )
+                    #elements_summary.append(
+                    #    Paragraph(
+                    #        "<br/>".join(fusion_list),
+                    #   )
+                    #        styles["BodyText"],
+                    #)
 
                 if not significant_fusions and not significant_fusions_all:
                     elements_summary.append(
@@ -696,104 +696,32 @@ def create_pdf(filename, output):
                     # Genome-wide fusion summary table
                     if significant_fusions_all:
                         elements.append(Paragraph("Genome-wide Gene Fusions", styles["Heading2"]))
+                        
+                        # Add summary statistics
+                        total_pairs = len(significant_fusions_all)
+                        total_genes = len(set([gene for gene_group, _ in significant_fusions_all for gene in gene_group]))
+                        
+                        summary_text = (
+                            f"Summary of genome-wide fusion analysis:\n"
+                            f"• Total fusion pairs detected: {total_pairs}\n"
+                            f"• Total unique genes involved: {total_genes}\n"
+                            f"• Minimum supporting reads threshold: 3"
+                        )
+                        
+                        elements.append(Paragraph(summary_text, styles["BodyText"]))
+                        elements.append(Spacer(1, 12))
+                        
+                        # Add note about complexity
                         elements.append(
                             Paragraph(
-                                "Summary of detected genome-wide fusion events (minimum 3 supporting reads):",
-                                styles["BodyText"]
+                                "Note: Due to the complexity of genome-wide fusion events, "
+                                "please refer to the interactive viewer for detailed visualization "
+                                "and analysis of specific fusion pairs.",
+                                styles["Italic"]
                             )
                         )
                         
-                        # Create table data with wrapped text
-                        table_data = [["Fusion Partners", "Supporting\nReads", "Chromosomes"]]
-                        
-                        # Calculate available width
-                        page_width, _ = A4
-                        available_width = page_width - 2*inch  # 1 inch margins on each side
-                        col_widths = [available_width * 0.5, available_width * 0.2, available_width * 0.3]
-                        
-                        MAX_GENES_PER_FUSION = 5  # Limit number of genes shown
-                        ROWS_PER_TABLE = 20  # Limit rows per table
-                        
-                        current_table_data = [table_data[0]]  # Start with header
-                        table_count = 1
-                        
-                        for gene_group, supporting_reads in significant_fusions_all:
-                            # Get chromosome information
-                            gene_chroms = []
-                            for gene in gene_group:
-                                gene_info = gene_table[gene_table["gene_name"] == gene]
-                                if not gene_info.empty:
-                                    gene_chroms.append(gene_info.iloc[0]["Seqid"])
-                            
-                            # Limit and format gene list
-                            if len(gene_group) > MAX_GENES_PER_FUSION:
-                                gene_text = ' - '.join(gene_group[:MAX_GENES_PER_FUSION]) + f'\n(+{len(gene_group)-MAX_GENES_PER_FUSION} more)'
-                            else:
-                                gene_text = ' - '.join(gene_group)
-                            
-                            # Format chromosomes
-                            chrom_text = ', '.join(sorted(set(gene_chroms)))
-                            
-                            current_table_data.append([
-                                gene_text,
-                                str(supporting_reads),
-                                chrom_text
-                            ])
-                            
-                            # Create new table when limit reached
-                            if len(current_table_data) >= ROWS_PER_TABLE:
-                                table = Table(current_table_data, colWidths=col_widths)
-                                table.setStyle(TableStyle([
-                                    ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                                    ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                    ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                                    ('FONTSIZE', (0, 0), (-1, 0), 10),
-                                    ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                                    ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-                                    ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-                                    ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                                    ('FONTSIZE', (0, 1), (-1, -1), 8),
-                                    ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                                    ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                    ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                                    ('WORDWRAP', (0, 0), (-1, -1), True),
-                                    ('LEFTPADDING', (0, 0), (-1, -1), 6),
-                                    ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-                                    ('TOPPADDING', (0, 0), (-1, -1), 3),
-                                    ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-                                ]))
-                                
-                                elements.append(table)
-                                elements.append(PageBreak())
-                                current_table_data = [table_data[0]]  # Reset with header
-                                table_count += 1
-                        
-                        # Add remaining rows
-                        if len(current_table_data) > 1:
-                            table = Table(current_table_data, colWidths=col_widths)
-                            table.setStyle(TableStyle([
-                                # Same style as above
-                                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
-                                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                                ('FONTSIZE', (0, 0), (-1, 0), 10),
-                                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-                                ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-                                ('TEXTCOLOR', (0, 1), (-1, -1), colors.black),
-                                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                                ('FONTSIZE', (0, 1), (-1, -1), 8),
-                                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                                ('WORDWRAP', (0, 0), (-1, -1), True),
-                                ('LEFTPADDING', (0, 0), (-1, -1), 6),
-                                ('RIGHTPADDING', (0, 0), (-1, -1), 6),
-                                ('TOPPADDING', (0, 0), (-1, -1), 3),
-                                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-                            ]))
-                            elements.append(table)
+                        elements.append(Spacer(1, 12))
 
             except pd.errors.EmptyDataError:
                 logger.warning("Fusion candidates file is empty")
