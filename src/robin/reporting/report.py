@@ -513,7 +513,7 @@ def create_pdf(filename, output):
         raise
 
     try:
-        # Add fusion gene plots
+        # Add fusion gene plots and summary
         fusion_file = os.path.join(output, "fusion_candidates_master.csv")
         if os.path.exists(fusion_file):
             logger.info("Processing fusion gene data")
@@ -551,33 +551,90 @@ def create_pdf(filename, output):
                 result, goodpairs = _annotate_results(fusion_candidates)
                 logger.info(f"Processed fusion results. Good pairs: {goodpairs.sum()}")
                 
-                if not result.empty and gene_table is not None:
+                # Add Fusion Summary to elements_summary first
+                if not result.empty:
                     gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
                     stripped_list = [item.replace(" ", "") for item in gene_pairs]
                     gene_pairs = [pair.split(",") for pair in stripped_list]
                     gene_groups = get_gene_network(gene_pairs)
                     
+                    elements_summary.append(Paragraph("Fusion Summary", styles["Heading2"]))
+                    
+                    # Filter and count fusions with ≥3 supporting reads
+                    significant_fusions = []
+                    total_supporting_reads = 0
+                    
                     for gene_group in gene_groups:
                         reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
-                        result_reads = _get_reads(reads)
+                        supporting_reads = len(reads)
+                        if supporting_reads >= 3:  # Only include fusions with 3 or more supporting reads
+                            significant_fusions.append((gene_group, supporting_reads))
+                            total_supporting_reads += supporting_reads
+                    
+                    # Summary statistics
+                    total_significant_fusions = len(significant_fusions)
+                    
+                    elements_summary.append(
+                        Paragraph(
+                            f"Total Significant Fusion Events (≥3 reads): {total_significant_fusions}<br/>"
+                            f"Total Supporting Reads: {total_supporting_reads}",
+                            styles["BodyText"],
+                        )
+                    )
+                    
+                    # List of significant fusion pairs
+                    if significant_fusions:
+                        elements_summary.append(Paragraph("Detected Fusions:", styles["Heading3"]))
+                        fusion_list = []
+                        # Sort by number of supporting reads, descending
+                        significant_fusions.sort(key=lambda x: x[1], reverse=True)
+                        for gene_group, supporting_reads in significant_fusions:
+                            fusion_list.append(
+                                f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
+                            )
+                        elements_summary.append(
+                            Paragraph(
+                                "<br/>".join(fusion_list),
+                                styles["BodyText"],
+                            )
+                        )
+                    else:
+                        elements_summary.append(
+                            Paragraph(
+                                "No significant fusion events detected (minimum 3 supporting reads required)",
+                                styles["BodyText"],
+                            )
+                        )
+                else:
+                    elements_summary.append(
+                        Paragraph(
+                            "No fusion events detected",
+                            styles["BodyText"],
+                        )
+                    )
+                
+                elements_summary.append(Spacer(1, 12))
+                
+                # Now add the fusion plots to the main elements, but only for significant fusions
+                if significant_fusions and gene_table is not None:
+                    for gene_group, supporting_reads in significant_fusions:
+                        reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
+                        fig = create_fusion_plot(reads, gene_table)
+                        img_buf = io.BytesIO()
+                        fig.savefig(img_buf, format='png', dpi=300, bbox_inches='tight')
+                        plt.close(fig)
+                        img_buf.seek(0)
                         
-                        if len(result_reads) > 1:
-                            fig = create_fusion_plot(reads, gene_table)
-                            
-                            # Save plot to buffer
-                            img_buf = io.BytesIO()
-                            fig.savefig(img_buf, format='png', dpi=300, bbox_inches='tight')
-                            plt.close()
-                            img_buf.seek(0)
-                            
-                            # Add plot to report
-                            elements.append(
-                                Paragraph(f"Gene Fusion: {' - '.join(gene_group)}", styles["Heading2"])
+                        elements.append(
+                            Paragraph(
+                                f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads)", 
+                                styles["Heading2"]
                             )
-                            elements.append(
-                                Image(img_buf, width=7*inch, height=3.5*inch)
-                            )
-                            elements.append(Spacer(1, 12))
+                        )
+                        elements.append(
+                            Image(img_buf, width=7*inch, height=3.5*inch)
+                        )
+                        elements.append(Spacer(1, 12))
 
             except pd.errors.EmptyDataError:
                 logger.warning("Fusion candidates file is empty")
@@ -719,85 +776,6 @@ def create_pdf(filename, output):
                     styles["BodyText"],
                 )
             )
-            elements_summary.append(Spacer(1, 6))
-            
-            # Fusion Summary
-            try:
-                fusion_file = os.path.join(output, "fusion_candidates_master.csv")
-                if os.path.exists(fusion_file):
-                    fusion_candidates = pd.read_csv(
-                        fusion_file,
-                        dtype=str,
-                        header=None,
-                        skiprows=1,
-                        on_bad_lines='warn'
-                    )
-                    result, goodpairs = _annotate_results(fusion_candidates)
-                    
-                    if not result.empty:
-                        gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
-                        stripped_list = [item.replace(" ", "") for item in gene_pairs]
-                        gene_pairs = [pair.split(",") for pair in stripped_list]
-                        gene_groups = get_gene_network(gene_pairs)
-                        
-                        elements_summary.append(Paragraph("Fusion Summary", styles["Heading2"]))
-                        
-                        # Filter and count fusions with ≥3 supporting reads
-                        significant_fusions = []
-                        total_supporting_reads = 0
-                        
-                        for gene_group in gene_groups:
-                            reads = result[goodpairs][result[goodpairs][3].isin(gene_group)]
-                            supporting_reads = len(reads)
-                            if supporting_reads >= 3:  # Only include fusions with 3 or more supporting reads
-                                significant_fusions.append((gene_group, supporting_reads))
-                                total_supporting_reads += supporting_reads
-                        
-                        # Summary statistics
-                        total_significant_fusions = len(significant_fusions)
-                        
-                        elements_summary.append(
-                            Paragraph(
-                                f"Total Significant Fusion Events (≥3 reads): {total_significant_fusions}<br/>"
-                                f"Total Supporting Reads: {total_supporting_reads}",
-                                styles["BodyText"],
-                            )
-                        )
-                        
-                        # List of significant fusion pairs
-                        if significant_fusions:
-                            elements_summary.append(Paragraph("Detected Fusions:", styles["Heading3"]))
-                            fusion_list = []
-                            # Sort by number of supporting reads, descending
-                            significant_fusions.sort(key=lambda x: x[1], reverse=True)
-                            for gene_group, supporting_reads in significant_fusions:
-                                fusion_list.append(
-                                    f"• {' - '.join(gene_group)} ({supporting_reads} supporting reads)"
-                                )
-                            elements_summary.append(
-                                Paragraph(
-                                    "<br/>".join(fusion_list),
-                                    styles["BodyText"],
-                                )
-                            )
-                        else:
-                            elements_summary.append(
-                                Paragraph(
-                                    "No significant fusion events detected (minimum 3 supporting reads required)",
-                                    styles["BodyText"],
-                                )
-                            )
-                    else:
-                        elements_summary.append(
-                            Paragraph(
-                                "No fusion events detected",
-                                styles["BodyText"],
-                            )
-                        )
-                
-            except Exception as e:
-                logger.error(f"Error processing fusion summary: {e}")
-            
             elements_summary.append(Spacer(1, 6))
             
             # Sequencing Statistics
