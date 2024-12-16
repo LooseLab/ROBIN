@@ -888,7 +888,8 @@ class CNVAnalysis(BaseAnalysis):
 
     def calculate_deviation_proportions(self, data: np.ndarray, chromosome: str, n_std: float = 1.0) -> dict:
         """
-        Calculate the amount of DNA (in megabases) that deviates from the mean by more than n standard deviations.
+        Calculate the amount of DNA (in megabases) that deviates from the mean by more than n standard deviations,
+        separated into gains and losses.
         """
         # Remove zero values which might skew the calculations
         non_zero_data = data[data != 0]
@@ -900,7 +901,9 @@ class CNVAnalysis(BaseAnalysis):
                 'above_threshold_mb': 0,
                 'below_threshold_mb': 0,
                 'total_deviating_mb': 0,
-                'total_mb': 0
+                'total_mb': 0,
+                'proportion_above': 0,
+                'proportion_below': 0
             }
         
         mean = np.mean(non_zero_data)
@@ -927,7 +930,8 @@ class CNVAnalysis(BaseAnalysis):
             'below_threshold_mb': below_mb,
             'total_deviating_mb': above_mb + below_mb,
             'total_mb': total_mb,
-            'proportion_deviating': (above_count + below_count) / total_bins if total_bins > 0 else 0
+            'proportion_above': above_count / total_bins if total_bins > 0 else 0,
+            'proportion_below': below_count / total_bins if total_bins > 0 else 0
         }
 
     def analyze_deviations(self) -> dict:
@@ -1013,14 +1017,17 @@ class CNVAnalysis(BaseAnalysis):
             with ui.expansion('Chromosome-level Summary', icon='assessment').classes('w-full'):
                 chrom_table_rows = []
                 chrom_columns = [
-                    {'name': 'chromosome', 'label': 'Chromosome', 'field': 'chromosome'},
-                    {'name': 'total_mb', 'label': 'Total Size (Mb)', 'field': 'total_mb'},
-                    {'name': 'deviating_mb', 'label': 'Deviating (Mb)', 'field': 'deviating_mb'},
-                    {'name': 'proportion', 'label': 'Proportion Deviating', 'field': 'proportion'}
+                    {'name': 'chromosome', 'label': 'Chromosome', 'field': 'chromosome', 'sortable': True},
+                    {'name': 'total_mb', 'label': 'Total Size (Mb)', 'field': 'total_mb', 'sortable': True},
+                    {'name': 'gains_mb', 'label': 'Gains (Mb)', 'field': 'gains_mb', 'sortable': True},
+                    {'name': 'losses_mb', 'label': 'Losses (Mb)', 'field': 'losses_mb', 'sortable': True},
+                    {'name': 'prop_gains', 'label': 'Gains (%)', 'field': 'prop_gains', 'sortable': True},
+                    {'name': 'prop_losses', 'label': 'Losses (%)', 'field': 'prop_losses', 'sortable': True}
                 ]
                 
                 total_genome_mb = 0
-                total_deviating_mb = 0
+                total_gains_mb = 0
+                total_losses_mb = 0
                 
                 for chrom, data in self.result3.cnv.items():
                     if not isinstance(data, np.ndarray) or not chrom.startswith('chr'):
@@ -1028,17 +1035,25 @@ class CNVAnalysis(BaseAnalysis):
                         
                     stats = self.calculate_deviation_proportions(data, chrom)
                     total_genome_mb += stats['total_mb']
-                    total_deviating_mb += stats['total_deviating_mb']
+                    total_gains_mb += stats['above_threshold_mb']
+                    total_losses_mb += stats['below_threshold_mb']
                     
                     if stats['total_deviating_mb'] > 0:
                         chrom_table_rows.append({
                             'chromosome': chrom,
-                            'total_mb': f"{stats['total_mb']:.1f}",
-                            'deviating_mb': f"{stats['total_deviating_mb']:.1f}",
-                            'proportion': f"{stats['proportion_deviating']:.2%}"
+                            'total_mb': round(stats['total_mb'], 2),  # Numeric for sorting
+                            'total_mb_display': f"{stats['total_mb']:.2f}",  # For display
+                            'gains_mb': round(stats['above_threshold_mb'], 2),  # Numeric for sorting
+                            'gains_mb_display': f"{stats['above_threshold_mb']:.2f}",  # For display
+                            'losses_mb': round(stats['below_threshold_mb'], 2),  # Numeric for sorting
+                            'losses_mb_display': f"{stats['below_threshold_mb']:.2f}",  # For display
+                            'prop_gains': round(stats['proportion_above'] * 100, 2),  # Numeric for sorting
+                            'prop_gains_display': f"{stats['proportion_above'] * 100:.2f}%",  # For display
+                            'prop_losses': round(stats['proportion_below'] * 100, 2),  # Numeric for sorting
+                            'prop_losses_display': f"{stats['proportion_below'] * 100:.2f}%"  # For display
                         })
                 
-                # Sort rows by natural chromosome order
+                # Sort rows by natural chromosome order initially
                 chrom_table_rows.sort(key=lambda x: natsort.natsort_key(x['chromosome']))
                 
                 if chrom_table_rows:  # Only show table if we have data
@@ -1048,11 +1063,12 @@ class CNVAnalysis(BaseAnalysis):
                         row_key='chromosome',
                         title='Chromosome Summary',
                         selection='none'
-                    ).classes('w-full')
+                    ).props('sort-method=natsort').classes('w-full')
                 
-                ui.label(f"Total genome size analyzed: {total_genome_mb:.1f} Mb").classes('mt-4')
+                ui.label(f"Total genome size analyzed: {total_genome_mb:.2f} Mb").classes('mt-4')
                 if total_genome_mb > 0:
-                    ui.label(f"Total deviating regions: {total_deviating_mb:.1f} Mb ({(total_deviating_mb/total_genome_mb):.2%})")
+                    ui.label(f"Total gains: {total_gains_mb:.2f} Mb ({(total_gains_mb/total_genome_mb):.2%})")
+                    ui.label(f"Total losses: {total_losses_mb:.2f} Mb ({(total_losses_mb/total_genome_mb):.2%})")
                 else:
                     ui.label("No significant deviating regions found")
             
@@ -1060,11 +1076,11 @@ class CNVAnalysis(BaseAnalysis):
             with ui.expansion('Cytoband-level Details', icon='details').classes('w-full mt-4'):
                 cytoband_rows = []
                 cytoband_columns = [
-                    {'name': 'chromosome', 'label': 'Chromosome', 'field': 'chromosome'},
-                    {'name': 'cytoband', 'label': 'Cytoband', 'field': 'cytoband'},
-                    {'name': 'event', 'label': 'Event', 'field': 'event'},
-                    {'name': 'size', 'label': 'Size (Mb)', 'field': 'size'},
-                    {'name': 'cnv', 'label': 'CNV Value', 'field': 'cnv'}
+                    {'name': 'chromosome', 'label': 'Chromosome', 'field': 'chromosome', 'sortable': True},
+                    {'name': 'cytoband', 'label': 'Cytoband', 'field': 'cytoband', 'sortable': True},
+                    {'name': 'event', 'label': 'Event', 'field': 'event', 'sortable': True},
+                    {'name': 'size', 'label': 'Size (Mb)', 'field': 'size', 'sortable': True},
+                    {'name': 'cnv', 'label': 'CNV Value', 'field': 'cnv', 'sortable': True}
                 ]
                 
                 for chrom, stat in cytoband_stats.items():
@@ -1080,15 +1096,18 @@ class CNVAnalysis(BaseAnalysis):
                             region['band']
                         )
                         
+                        # Store both display and sort values
                         cytoband_rows.append({
                             'chromosome': chrom,
                             'cytoband': cytoband_info['cytobands'],
                             'event': cytoband_info['event'],
-                            'size': f"{cytoband_info['size_mb']:.1f}",
-                            'cnv': f"{region['cnv_value']:.2f}"
+                            'size': cytoband_info['size_mb'],  # Numeric for sorting
+                            'size_display': f"{cytoband_info['size_mb']:.1f}",  # For display
+                            'cnv': region['cnv_value'],  # Numeric for sorting
+                            'cnv_display': f"{region['cnv_value']:.2f}"  # For display
                         })
                 
-                # Sort rows by natural chromosome order and cytoband
+                # Sort rows by natural chromosome order and cytoband initially
                 cytoband_rows.sort(key=lambda x: (natsort.natsort_key(x['chromosome']), x['cytoband']))
                 
                 if cytoband_rows:  # Only show table if we have data
@@ -1098,7 +1117,7 @@ class CNVAnalysis(BaseAnalysis):
                         row_key='cytoband',
                         title='Cytoband Details',
                         selection='none'
-                    ).classes('w-full')
+                    ).props('sort-method=natsort').classes('w-full')
                 else:
                     ui.label("No significant cytoband-level changes detected")
 
