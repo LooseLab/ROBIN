@@ -981,6 +981,49 @@ class CNVAnalysis(BaseAnalysis):
         
         return stats
 
+    def collapse_adjacent_regions(self, regions: list) -> list:
+        """
+        Collapse adjacent cytoband regions with the same event type.
+        
+        Args:
+            regions (list): List of cytoband regions with their events
+            
+        Returns:
+            list: Collapsed regions where adjacent regions with same event are merged
+        """
+        if not regions:
+            return []
+        
+        # Sort regions by chromosome and start position
+        sorted_regions = sorted(regions, key=lambda x: (x['chromosome'], x['start']))
+        
+        collapsed = []
+        current = sorted_regions[0].copy()
+        
+        for next_region in sorted_regions[1:]:
+            # Check if regions are adjacent and have same event type
+            if (current['chromosome'] == next_region['chromosome'] and
+                current['event'] == next_region['event'] and
+                current['end'] >= next_region['start']):
+                # Merge regions
+                current['end'] = max(current['end'], next_region['end'])
+                current['size_mb'] = (current['end'] - current['start']) / 1_000_000
+                # Update cytoband range
+                current_band = current['cytobands'].split('-')[0]
+                next_band = next_region['cytobands'].split('-')[-1]
+                current['cytobands'] = f"{current_band}-{next_band}"
+                # Average the CNV values
+                current['cnv'] = (current['cnv'] + next_region['cnv']) / 2
+            else:
+                # Add current region to collapsed list and start new region
+                collapsed.append(current)
+                current = next_region.copy()
+        
+        # Add the last region
+        collapsed.append(current)
+        
+        return collapsed
+
     def get_cytoband_cnv_summary(self, chromosome: str, start: int, end: int, cnv_value: float, band: str = None) -> dict:
         """
         Create summary for a cytoband CNV region
@@ -1000,7 +1043,8 @@ class CNVAnalysis(BaseAnalysis):
             'end': end,
             'event': event_type,
             'size_mb': (end - start) / 1_000_000,
-            'cytobands': f"{chromosome}{band}" if band else 'Unknown band'
+            'cytobands': f"{chromosome}{band}" if band else 'Unknown band',
+            'cnv': cnv_value
         }
 
     def display_deviation_stats(self):
@@ -1074,7 +1118,7 @@ class CNVAnalysis(BaseAnalysis):
             
             # Then, show cytoband-level details
             with ui.expansion('Cytoband-level Details', icon='details').classes('w-full mt-4'):
-                cytoband_rows = []
+                uncollapsed_regions = []
                 cytoband_columns = [
                     {'name': 'chromosome', 'label': 'Chromosome', 'field': 'chromosome', 'sortable': True},
                     {'name': 'cytoband', 'label': 'Cytoband', 'field': 'cytoband', 'sortable': True},
@@ -1095,19 +1139,24 @@ class CNVAnalysis(BaseAnalysis):
                             region['cnv_value'],
                             region['band']
                         )
-                        
-                        # Store both display and sort values
-                        cytoband_rows.append({
-                            'chromosome': chrom,
-                            'cytoband': cytoband_info['cytobands'],
-                            'event': cytoband_info['event'],
-                            'size': cytoband_info['size_mb'],  # Numeric for sorting
-                            'size_display': f"{cytoband_info['size_mb']:.1f}",  # For display
-                            'cnv': region['cnv_value'],  # Numeric for sorting
-                            'cnv_display': f"{region['cnv_value']:.2f}"  # For display
-                        })
+                        uncollapsed_regions.append(cytoband_info)
                 
-                # Sort rows by natural chromosome order and cytoband initially
+                # Collapse adjacent regions
+                cytoband_rows = []
+                collapsed_regions = self.collapse_adjacent_regions(uncollapsed_regions)
+                
+                for region in collapsed_regions:
+                    cytoband_rows.append({
+                        'chromosome': region['chromosome'],
+                        'cytoband': region['cytobands'],
+                        'event': region['event'],
+                        'size': round(region['size_mb'], 2),  # Numeric for sorting
+                        'size_display': f"{region['size_mb']:.2f}",  # For display
+                        'cnv': round(region['cnv'], 2),  # Numeric for sorting
+                        'cnv_display': f"{region['cnv']:.2f}"  # For display
+                    })
+                
+                # Sort rows by natural chromosome order and cytoband
                 cytoband_rows.sort(key=lambda x: (natsort.natsort_key(x['chromosome']), x['cytoband']))
                 
                 if cytoband_rows:  # Only show table if we have data
