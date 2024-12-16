@@ -292,6 +292,14 @@ class CNVAnalysis(BaseAnalysis):
         self.result3 = CNV_Difference()
         self.XYestimate = "Unknown"
 
+        # Load cytoband data
+        cytoband_file = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "cytoBand.txt"
+        )
+        self.cytobands = pd.read_csv(cytoband_file, sep='\t',
+                                    names=['chromosome', 'start', 'end', 'band', 'stain'])
+
         with open(
             os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)),
@@ -881,20 +889,6 @@ class CNVAnalysis(BaseAnalysis):
     def calculate_deviation_proportions(self, data: np.ndarray, chromosome: str, n_std: float = 1.0) -> dict:
         """
         Calculate the amount of DNA (in megabases) that deviates from the mean by more than n standard deviations.
-        
-        Args:
-            data (np.ndarray): Array of CNV values
-            chromosome (str): Chromosome name for the data
-            n_std (float): Number of standard deviations to use as threshold (default: 1.0)
-        
-        Returns:
-            dict: Dictionary containing:
-                - mean: mean value of the data
-                - std: standard deviation of the data
-                - above_threshold_mb: megabases of DNA above mean + n*std
-                - below_threshold_mb: megabases of DNA below mean - n*std
-                - total_deviating_mb: total megabases of deviating DNA
-                - total_mb: total megabases analyzed
         """
         # Remove zero values which might skew the calculations
         non_zero_data = data[data != 0]
@@ -916,7 +910,7 @@ class CNVAnalysis(BaseAnalysis):
         lower_threshold = mean - (n_std * std)
         
         # Convert bin counts to megabases
-        bin_size_mb = self.cnv_dict['bin_width'] / 1_000_000  # Convert bin width from bp to Mb
+        bin_size_mb = self.cnv_dict['bin_width'] / 1_000_000
         
         above_count = np.sum(non_zero_data > upper_threshold)
         below_count = np.sum(non_zero_data < lower_threshold)
@@ -933,81 +927,189 @@ class CNVAnalysis(BaseAnalysis):
             'below_threshold_mb': below_mb,
             'total_deviating_mb': above_mb + below_mb,
             'total_mb': total_mb,
-            'proportion_deviating': (above_count + below_count) / total_bins
+            'proportion_deviating': (above_count + below_count) / total_bins if total_bins > 0 else 0
         }
 
     def analyze_deviations(self) -> dict:
-        """
-        Analyze deviations across all chromosomes in the current CNV data.
-        
-        Returns:
-            dict: Dictionary with chromosome-wise deviation statistics and total genome statistics
-        """
-        if not self.result or not self.result.cnv:
-            return {}
-        
-        deviation_stats = {}
-        total_genome_stats = {
+        """Analyze CNV deviations by cytoband"""
+        stats = {'genome_wide': {
             'total_mb': 0,
             'total_deviating_mb': 0,
-            'above_threshold_mb': 0,
-            'below_threshold_mb': 0
-        }
+            'significant_regions': []
+        }}
         
-        for contig, cnv in self.result.cnv.items():
-            if contig == "chrM" or not re.match(r"^chr(\d+|X|Y)$", contig):
+        for chrom, data in self.result3.cnv.items():
+            if not isinstance(data, np.ndarray) or not chrom.startswith('chr'):
                 continue
             
-            stats = self.calculate_deviation_proportions(np.array(cnv), contig)
-            deviation_stats[contig] = stats
+            # Get cytobands for this chromosome
+            chrom_bands = self.cytobands[self.cytobands['chromosome'] == chrom]
             
-            # Update genome-wide totals
-            total_genome_stats['total_mb'] += stats['total_mb']
-            total_genome_stats['total_deviating_mb'] += stats['total_deviating_mb']
-            total_genome_stats['above_threshold_mb'] += stats['above_threshold_mb']
-            total_genome_stats['below_threshold_mb'] += stats['below_threshold_mb']
+            # For each cytoband, calculate mean CNV
+            for _, band in chrom_bands.iterrows():
+                # Convert positions to array indices
+                start_idx = int(band['start'] / self.cnv_dict['bin_width'])
+                end_idx = int(band['end'] / self.cnv_dict['bin_width'])
+                
+                # Ensure indices are within array bounds
+                if start_idx >= len(data) or end_idx > len(data):
+                    continue
+                    
+                # Calculate mean CNV for this band
+                band_data = data[start_idx:end_idx]
+                mean_cnv = np.mean(band_data)
+                
+                # Only include if significant deviation (>0.2 or <-0.2)
+                if abs(mean_cnv) > 0.2:
+                    stats.setdefault(chrom, {'significant_regions': []})
+                    stats[chrom]['significant_regions'].append({
+                        'start': int(band['start']),
+                        'end': int(band['end']),
+                        'cnv_value': float(mean_cnv),
+                        'band': band['band'],
+                        'size_mb': (band['end'] - band['start']) / 1_000_000
+                    })
+                    
+                    # Update genome-wide statistics
+                    stats['genome_wide']['total_deviating_mb'] += (band['end'] - band['start']) / 1_000_000
+                    
+            stats['genome_wide']['total_mb'] = stats['genome_wide']['total_deviating_mb']
         
-        # Add genome-wide statistics
-        total_genome_stats['proportion_deviating'] = (
-            total_genome_stats['total_deviating_mb'] / total_genome_stats['total_mb']
-            if total_genome_stats['total_mb'] > 0 else 0
-        )
+        return stats
+
+    def get_cytoband_cnv_summary(self, chromosome: str, start: int, end: int, cnv_value: float, band: str = None) -> dict:
+        """
+        Create summary for a cytoband CNV region
         
-        deviation_stats['genome_wide'] = total_genome_stats
+        Args:
+            chromosome: Chromosome name
+            start: Start position
+            end: End position
+            cnv_value: CNV value
+            band: Cytoband name
+        """
+        event_type = 'gain' if cnv_value > 0.2 else 'loss' if cnv_value < -0.2 else 'normal'
         
-        return deviation_stats
+        return {
+            'chromosome': chromosome,
+            'start': start,
+            'end': end,
+            'event': event_type,
+            'size_mb': (end - start) / 1_000_000,
+            'cytobands': f"{chromosome}{band}" if band else 'Unknown band'
+        }
 
     def display_deviation_stats(self):
-        """
-        Display deviation statistics in the UI with megabase measurements
-        """
-        stats = self.analyze_deviations()
+        """Display both chromosome-level and cytoband-level deviation statistics"""
+        cytoband_stats = self.analyze_deviations()
         
-        # If this is the first time, create the expansion
         if not hasattr(self, 'deviation_stats_expansion'):
             self.deviation_stats_expansion = ui.expansion("CNV Deviation Statistics", icon="analytics").classes("w-full")
         
-        # Clear existing content
         with self.deviation_stats_expansion:
             self.deviation_stats_expansion.clear()
             
-            # First display genome-wide statistics
-            if 'genome_wide' in stats:
-                with ui.card().classes('w-full'):
-                    ui.label("Genome-wide Statistics").classes('text-xl font-bold')
-                    ui.label(f"Total: {stats['genome_wide']['total_mb']:.1f} Mb | "
-                            f"Deviating: {stats['genome_wide']['total_deviating_mb']:.1f} Mb ({stats['genome_wide']['proportion_deviating']:.1%}) | "
-                            f"Above: {stats['genome_wide']['above_threshold_mb']:.1f} Mb | "
-                            f"Below: {stats['genome_wide']['below_threshold_mb']:.1f} Mb")
+            # First, show chromosome-level summary
+            with ui.expansion('Chromosome-level Summary', icon='assessment').classes('w-full'):
+                chrom_table_rows = []
+                chrom_columns = [
+                    {'name': 'chromosome', 'label': 'Chromosome', 'field': 'chromosome'},
+                    {'name': 'total_mb', 'label': 'Total Size (Mb)', 'field': 'total_mb'},
+                    {'name': 'deviating_mb', 'label': 'Deviating (Mb)', 'field': 'deviating_mb'},
+                    {'name': 'proportion', 'label': 'Proportion Deviating', 'field': 'proportion'}
+                ]
+                
+                total_genome_mb = 0
+                total_deviating_mb = 0
+                
+                for chrom, data in self.result3.cnv.items():
+                    if not isinstance(data, np.ndarray) or not chrom.startswith('chr'):
+                        continue
+                        
+                    stats = self.calculate_deviation_proportions(data, chrom)
+                    total_genome_mb += stats['total_mb']
+                    total_deviating_mb += stats['total_deviating_mb']
+                    
+                    if stats['total_deviating_mb'] > 0:
+                        chrom_table_rows.append({
+                            'chromosome': chrom,
+                            'total_mb': f"{stats['total_mb']:.1f}",
+                            'deviating_mb': f"{stats['total_deviating_mb']:.1f}",
+                            'proportion': f"{stats['proportion_deviating']:.2%}"
+                        })
+                
+                # Sort rows by natural chromosome order
+                chrom_table_rows.sort(key=lambda x: natsort.natsort_key(x['chromosome']))
+                
+                if chrom_table_rows:  # Only show table if we have data
+                    ui.table(
+                        columns=chrom_columns,
+                        rows=chrom_table_rows,
+                        row_key='chromosome',
+                        title='Chromosome Summary',
+                        selection='none'
+                    ).classes('w-full')
+                
+                ui.label(f"Total genome size analyzed: {total_genome_mb:.1f} Mb").classes('mt-4')
+                if total_genome_mb > 0:
+                    ui.label(f"Total deviating regions: {total_deviating_mb:.1f} Mb ({(total_deviating_mb/total_genome_mb):.2%})")
+                else:
+                    ui.label("No significant deviating regions found")
             
-            # Then display chromosome-specific statistics
-            with ui.grid(columns=4).classes('w-full gap-1'):
-                for chrom, stat in stats.items():
+            # Then, show cytoband-level details
+            with ui.expansion('Cytoband-level Details', icon='details').classes('w-full mt-4'):
+                cytoband_rows = []
+                cytoband_columns = [
+                    {'name': 'chromosome', 'label': 'Chromosome', 'field': 'chromosome'},
+                    {'name': 'cytoband', 'label': 'Cytoband', 'field': 'cytoband'},
+                    {'name': 'event', 'label': 'Event', 'field': 'event'},
+                    {'name': 'size', 'label': 'Size (Mb)', 'field': 'size'},
+                    {'name': 'cnv', 'label': 'CNV Value', 'field': 'cnv'}
+                ]
+                
+                for chrom, stat in cytoband_stats.items():
                     if chrom == 'genome_wide':
                         continue
-                    with ui.card().classes('p-2'):
-                        ui.label(f"{chrom}: {stat['total_deviating_mb']:.1f}/{stat['total_mb']:.1f} Mb ({stat['proportion_deviating']:.1%})"
-                                f" [+{stat['above_threshold_mb']:.1f}/-{stat['below_threshold_mb']:.1f}]")
+                        
+                    for region in stat.get('significant_regions', []):
+                        cytoband_info = self.get_cytoband_cnv_summary(
+                            chrom, 
+                            region['start'], 
+                            region['end'],
+                            region['cnv_value'],
+                            region['band']
+                        )
+                        
+                        cytoband_rows.append({
+                            'chromosome': chrom,
+                            'cytoband': cytoband_info['cytobands'],
+                            'event': cytoband_info['event'],
+                            'size': f"{cytoband_info['size_mb']:.1f}",
+                            'cnv': f"{region['cnv_value']:.2f}"
+                        })
+                
+                # Sort rows by natural chromosome order and cytoband
+                cytoband_rows.sort(key=lambda x: (natsort.natsort_key(x['chromosome']), x['cytoband']))
+                
+                if cytoband_rows:  # Only show table if we have data
+                    ui.table(
+                        columns=cytoband_columns,
+                        rows=cytoband_rows,
+                        row_key='cytoband',
+                        title='Cytoband Details',
+                        selection='none'
+                    ).classes('w-full')
+                else:
+                    ui.label("No significant cytoband-level changes detected")
+
+    def load_cytobands(self):
+        """Load and parse cytoband information"""
+        cytoband_file = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "cytoBand.txt"
+        )
+        self.cytobands = pd.read_csv(cytoband_file, sep='\t',
+                                    names=['chromosome', 'start', 'end', 'band', 'stain'])
 
 
 def test_me(

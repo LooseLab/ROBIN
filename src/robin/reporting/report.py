@@ -627,18 +627,23 @@ def create_pdf(filename, output):
                 logger.info(f"Stats: {stats}")
                 
                 if 'genome_wide' in stats:
-                    elements.append(
+                    elements_summary.append(
                         Paragraph("CNV Deviation Analysis", styles["Heading3"])
                     )
                     elements.append(
-                        Paragraph(
+                        Paragraph("CNV Deviation Analysis", styles["Heading3"])
+                    )
+                    message = Paragraph(
                             f"Total DNA analyzed: {stats['genome_wide']['total_mb']:.1f} Mb | "
                             f"Deviating: {stats['genome_wide']['total_deviating_mb']:.1f} Mb ({stats['genome_wide']['proportion_deviating']:.1%}) | "
                             f"Above: {stats['genome_wide']['above_threshold_mb']:.1f} Mb | "
                             f"Below: {stats['genome_wide']['below_threshold_mb']:.1f} Mb",
                             styles["Smaller"]
                         )
-                    )
+                    elements_summary.append(message)
+                    elements.append(message)
+                        
+                    
                     
                     # Add chromosome-specific statistics in a table format
                     chrom_data = []
@@ -970,15 +975,19 @@ def create_pdf(filename, output):
             raise
 
         try:
+            # Create a separate list for the run data summary sections that will go at the end
+            end_of_report_elements = []
+            
             # Add run data summary with more compact spacing
             if masterdf is not None and isinstance(masterdf, pd.DataFrame):
-                elements_summary.append(Paragraph("Run Data Summary", styles["Heading2"]))
+                end_of_report_elements.append(PageBreak())  # Ensure it starts on a new page
+                end_of_report_elements.append(Paragraph("Run Data Summary", styles["Heading2"]))
                 
                 masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[sample_id]
                 
                 # Sample Information - combine sections with less spacing
-                elements_summary.append(Paragraph("Sample Information", styles["Heading3"]))
-                elements_summary.append(
+                end_of_report_elements.append(Paragraph("Sample Information", styles["Heading3"]))
+                end_of_report_elements.append(
                     Paragraph(
                         f"Sample ID: {sample_id} • "
                         f"Run Start: {format_timestamp(masterdf_dict['run_time'])} • "
@@ -986,11 +995,11 @@ def create_pdf(filename, output):
                         styles["Smaller"],
                     )
                 )
-                elements_summary.append(Spacer(1, 6))
+                end_of_report_elements.append(Spacer(1, 6))
                 
                 # Device Details
-                elements_summary.append(Paragraph("Device Details", styles["Heading3"]))
-                elements_summary.append(
+                end_of_report_elements.append(Paragraph("Device Details", styles["Heading3"]))
+                end_of_report_elements.append(
                     Paragraph(
                         f"Sequencing Device: {convert_to_space_separated_string(masterdf_dict['devices'])} • "
                         f"Flowcell ID: {convert_to_space_separated_string(masterdf_dict['flowcell_ids'])} • "
@@ -998,11 +1007,11 @@ def create_pdf(filename, output):
                         styles["Smaller"],
                     )
                 )
-                elements_summary.append(Spacer(1, 6))
+                end_of_report_elements.append(Spacer(1, 6))
                 
                 # File Locations
-                elements_summary.append(Paragraph("File Locations", styles["Heading3"]))
-                elements_summary.append(
+                end_of_report_elements.append(Paragraph("File Locations", styles["Heading3"]))
+                end_of_report_elements.append(
                     Paragraph(
                         f"Run: {' '.join(masterdf.loc[(masterdf.index == 'watchfolder')][1].values)}<br/>"
                         f"Out: {' '.join(masterdf.loc[(masterdf.index == 'output')][1].values)}<br/>"
@@ -1010,14 +1019,14 @@ def create_pdf(filename, output):
                         styles["Smaller"],
                     )
                 )
-                elements_summary.append(Spacer(1, 6))
+                end_of_report_elements.append(Spacer(1, 6))
                 
                 # Sequencing Statistics
                 try:
                     file_counters = eval(masterdf[masterdf.index == "samples"][1]["samples"])[sample_id]["file_counters"]
                     
-                    elements_summary.append(Paragraph("Sequencing Statistics", styles["Heading2"]))
-                    elements_summary.append(
+                    end_of_report_elements.append(Paragraph("Sequencing Statistics", styles["Heading2"]))
+                    end_of_report_elements.append(
                         Paragraph(
                             f"BAM Files: {format_number(file_counters.get('bam_passed', 0))} passed, "
                             f"{format_number(file_counters.get('bam_failed', 0))} failed<br/>"
@@ -1037,8 +1046,6 @@ def create_pdf(filename, output):
                 except Exception as e:
                     logger.info(f"Error parsing file counters: {e}")
 
-                #elements_summary.append(Spacer(1, 12))  # Final spacing before next section
-
         except Exception as e:
             logger.error(f"Error processing run data summary: {e}")
             raise
@@ -1054,7 +1061,28 @@ def create_pdf(filename, output):
                         plot_out = os.path.join(output, file.replace(".csv", ".png"))
                         last_seen = count
 
-            if last_seen > 0:
+            if last_seen > 0 and results is not None:
+                # Add summary to elements_summary
+                elements_summary.append(Paragraph("MGMT Promoter Methylation", styles["Heading3"]))
+                
+                # Extract key metrics for summary
+                try:
+                    methylation_status = results['status'].iloc[0] if 'status' in results.columns else 'Unknown'
+                    methylation_average = results['average'].iloc[0] if 'average' in results.columns else None
+                    
+                    summary_text = f"Status: {methylation_status}"
+                    if methylation_average is not None:
+                        summary_text += f" (Average methylation: {round(methylation_average, 3)}%)"
+                    
+                    elements_summary.append(
+                        Paragraph(
+                            summary_text,
+                            styles["BodyText"],
+                        )
+                    )
+                except Exception as e:
+                    logger.error(f"Error processing MGMT results: {e}")
+
                 elements.append(PageBreak())  # Add page break here
                 elements.append(Paragraph("MGMT Promoter Methylation", styles["Underline"]))
                 image = Image(plot_out, 6 * inch, 4 * inch)
@@ -1070,10 +1098,12 @@ def create_pdf(filename, output):
             raise
 
         try:
-            final_elements = elements_summary + elements
+            # Combine all elements in the correct order
+            final_elements = elements_summary + elements + end_of_report_elements
+            
             doc.multiBuild(
                 final_elements,
-                canvasmaker=header_footer_canvas_factory(sample_id, centreID,styles, fonts_dir),
+                canvasmaker=header_footer_canvas_factory(sample_id, centreID, styles, fonts_dir),
             )
             logger.info(f"PDF created: {filename}")
         except Exception as e:
