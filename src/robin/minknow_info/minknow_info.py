@@ -222,276 +222,200 @@ class Minknow_Info:
         self.render_me()
 
     def render_me(self):
+        # Initialize camera handlers
         sample_camera = Camera(
             icon="photo_camera",
-            icon_color="blue-5",
+            icon_color="primary",
             background_color="rgba(66, 165, 245, 0.3)",
             for_id="samplefileupload",
             canvas_id="samplecanvas",
             on_change=lambda: generate_sampleID(),
         )
 
-        async def generate_sampleID():
-            await asyncio.sleep(0.1)
-            image = await sample_camera.get_image()
-            base64_data = image.split(",")[1]
-            image_data = base64.b64decode(base64_data)
-            nparr = np.frombuffer(image_data, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            barcodes = zxingcpp.read_barcodes(img)
-            if len(barcodes) == 0:
-                sampleid.value = "Could not find any barcode."
-            elif len(barcodes) == 1:
-                sampleid.value = barcodes[0].text
-            elif len(barcodes) >= 1:
-                sampleid.value = "Too many barcodes - please try again."
-
         flowcell_camera = Camera(
             icon="photo_camera",
-            icon_color="blue-5",
+            icon_color="primary",
             background_color="rgba(66, 165, 245, 0.3)",
             for_id="flowcellfileupload",
             canvas_id="flowcellcanvas",
             on_change=lambda: generate_flowcellID(),
         )
 
-        async def generate_flowcellID():
-            await asyncio.sleep(0.1)
-            image = await flowcell_camera.get_image()
-            base64_data = image.split(",")[1]
-            image_data = base64.b64decode(base64_data)
-            nparr = np.frombuffer(image_data, np.uint8)
-            img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-            barcodes = zxingcpp.read_barcodes(img)
-            if len(barcodes) == 0:
-                flowcellid.value = "Could not find any barcode."
-            elif len(barcodes) == 1:
-                flowcellid.value = barcodes[0].text
-            elif len(barcodes) >= 1:
-                flowcellid.value = "Too many barcodes - please try again."
+        # Create containers for both panels with full width
+        with ui.column().classes('w-full h-full'):
+            # Setup Panel - only visible when not running
+            setup_container = ui.element('div').classes('w-full h-full').bind_visibility_from(self, 'show', value=False)
+            monitor_container = ui.element('div').classes('w-full h-full').bind_visibility_from(self, 'show')
 
-        with ui.dialog() as startup, ui.card().classes("w-full"):
-            ui.label("Sample Setup").style(
-                "color: #6E93D6; font-size: 200%; font-weight: 300"
-            )
-            ui.separator()
-            with ui.stepper().props("vertical").classes("w-full") as stepper:
-                step = ui.step("Sample ID").style(
-                    "color: #000000; font-size: 100%; font-weight: 600"
-                )
-                with step:
-                    ui.label(
-                        "Remember that sample IDs may be shared with others and should not include human identifiable information."
-                    ).style("color: #000000; font-size: 100%; font-weight: 600")
-                    ui.label("Enter the sample ID:").style(
-                        "color: #000000; font-size: 80%; font-weight: 300"
-                    )
-                    sampleid = (
-                        ui.input(
-                            placeholder="start typing",
-                            validation={
-                                "Too short": lambda value: len(value) >= 5,
-                                "Do not use Flowcell IDs as sample IDs": lambda value: re.match(
-                                    r"^[A-Za-z]{3}\d{5}$", value
+            with setup_container:
+                with ui.card().classes('w-full h-full'):
+                    with ui.card_section():
+                        ui.label("Sample Setup").classes('text-h5 text-primary q-mb-md')
+                    
+                    with ui.card_section().classes('q-pa-md'):
+                        with ui.stepper().props('vertical').classes('w-full') as stepper:
+                            # Sample ID Step
+                            with ui.step('Sample ID').classes('text-body1 text-weight-medium'):
+                                ui.label('Sample ID Guidelines').classes('text-subtitle1 text-weight-medium q-mb-sm')
+                                ui.label('IDs should not include human identifiable information').classes('text-caption q-mb-md')
+                                
+                                with ui.row().classes('items-center w-full q-gutter-md'):
+                                    sampleid = ui.input(
+                                        placeholder='Enter sample ID',
+                                        validation={
+                                            "Too short": lambda value: len(value) >= 5,
+                                            "No Flowcell IDs": lambda value: re.match(r"^[A-Za-z]{3}\d{5}$", value) is None,
+                                            "Alphanumeric only": lambda value: value.isalnum() and not any(char.isspace() for char in value),
+                                        }
+                                    ).props('outlined dense').classes('w-full')
+                                    
+                                    sample_camera.show_camera()
+                                    
+                                with ui.stepper_navigation():
+                                    checker = ErrorChecker(sampleid)
+                                    ui.button('Next', on_click=stepper.next).bind_enabled_from(checker, 'no_errors')
+
+                            # Flowcell ID Step
+                            with ui.step('Flowcell').classes('text-body1 text-weight-medium'):
+                                ui.label('Flowcell ID Entry').classes('text-subtitle1 text-weight-medium q-mb-sm')
+                                
+                                with ui.row().classes('items-center w-full q-gutter-md'):
+                                    flowcellid = ui.input(
+                                        placeholder='Enter flowcell ID',
+                                        validation={
+                                            "Not a valid flowcell ID": lambda value: re.match(
+                                                r"^[A-Za-z]{3}\d{5}$", value
+                                            ) is not None
+                                        },
+                                    ).props('outlined dense').classes('w-full')
+                                    
+                                    flowcell_camera.show_camera()
+                                
+                                with ui.stepper_navigation():
+                                    ui.button('Back', on_click=stepper.previous).props('flat')
+                                    checkerflowcell = ErrorChecker(flowcellid)
+                                    ui.button('Next', on_click=stepper.next).bind_enabled_from(
+                                        checkerflowcell, 'no_errors'
+                                    )
+
+                            # Device Position Step
+                            with ui.step('Device Position').classes('text-body1 text-weight-medium'):
+                                ui.label('Position Selection').classes('text-subtitle1 text-weight-medium q-mb-sm')
+                                ui.label('Select the correct device position').classes('text-caption q-mb-md')
+                                
+                                run_button = ui.button(
+                                    'Start Run',
+                                    on_click=lambda: self.start_run(
+                                        position=self.position.name,
+                                        reference=self.reference,
+                                        sample_id=sampleid.value,
+                                        flowcell_id=flowcellid.value,
+                                        kit=self.kit,
+                                        basecall_config=self.basecall_config,
+                                        centreID=self.centreID,
+                                        experiment_duration=self.experiment_duration,
+                                        bed_file=self.bed_file,
+                                    )
+                                ).props('color=primary')
+
+                                ui.radio(
+                                    [self.position.name], 
+                                    value=1
+                                ).on('update:model-value', lambda: run_button.enable()
+                                ).classes('q-mt-md')
+
+                                with ui.stepper_navigation():
+                                    ui.button('Back', on_click=stepper.previous).props('flat')
+                                    run_button.disable()
+
+                        # Settings Summary
+                        with ui.expansion('Fixed Settings', icon='settings').classes('w-full q-mt-md'):
+                            with ui.card().classes('q-pa-md'):
+                                self._render_setting_item('Device', self.device)
+                                current_date = datetime.now()
+                                self._render_setting_item(
+                                    'Experiment Group ID', 
+                                    f"{self.centreID}_{current_date.strftime('%B')}_{current_date.year}"
                                 )
-                                is None,
-                                "No whitespace allowed": lambda value: not any(
-                                    char.isspace() for char in value
-                                ),
-                                "Only alphanumeric characters allowed": lambda value: value.isalnum(),
-                            },
-                        )
-                        .style("color: #000000; font-size: 80%; font-weight: 300")
-                        .props("rounded outlined dense")
-                    )
-                    sample_camera.show_camera()
-                    with ui.stepper_navigation():
-                        checker = ErrorChecker(sampleid)
-                        ui.button("Next", on_click=stepper.next).bind_enabled_from(
-                            checker, "no_errors"
-                        )
+                                self._render_setting_item('Kit', self.kit)
+                                self._render_setting_item('Reference', self.reference)
 
-                with ui.step("Flowcell").style(
-                    "color: #000000; font-size: 100%; font-weight: 600"
-                ):
-                    ui.label("Enter the flowcell ID.").style(
-                        "color: #000000; font-size: 80%; font-weight: 300"
-                    )
-                    flowcellid = (
-                        ui.input(
-                            placeholder="start typing",
-                            validation={
-                                "Not a valid flowcell ID": lambda value: re.match(
-                                    r"^[A-Za-z]{3}\d{5}$", value
-                                )
-                                is not None
-                            },
-                        )
-                        .style("color: #000000; font-size: 80%; font-weight: 300")
-                        .props("rounded outlined dense")
-                    )
-                    flowcell_camera.show_camera()
-                    with ui.stepper_navigation():
-                        ui.button("Back", on_click=stepper.previous).props("flat")
-                        checkerflowcell = ErrorChecker(flowcellid)
-                        ui.button("Next", on_click=stepper.next).bind_enabled_from(
-                            checkerflowcell, "no_errors"
-                        )
-                with ui.step("Device Position").style(
-                    "color: #000000; font-size: 100%; font-weight: 600"
-                ):
-                    ui.label("Place the device in the correct position.").style(
-                        "color: #000000; font-size: 80%; font-weight: 300"
-                    )
-                    run_button = ui.button(
-                        "Start Run",
-                        on_click=lambda: self.start_run(
-                            position=self.position.name,
-                            reference=self.reference,
-                            sample_id=sampleid.value,
-                            flowcell_id=flowcellid.value,
-                            kit=self.kit,
-                            basecall_config=self.basecall_config,
-                            centreID=self.centreID,
-                            experiment_duration=self.experiment_duration,
-                            bed_file=self.bed_file,
-                        ),
-                    )
+            # Monitor Panel - only visible when running
+            with monitor_container:
+                with ui.card().classes('w-full h-full'):
+                    # Device Header
+                    with ui.row().classes('items-center q-pa-md'):
+                        with ui.avatar(size='xl').classes('q-mr-md'):
+                            ui.image(self.deviceicon)
+                        with ui.column():
+                            ui.label(f'{self.name} - {self.position.name}').classes('text-h6')
+                            ui.label('MinKNOW Monitoring').classes(f'text-caption {self.color}')
+                            ui.label(f'Device Type: {self.position.device_type}').classes('text-body2')
 
-                    def dostuff():
-                        run_button.enable()
+                    # Status Indicators
+                    with ui.row().classes('q-pa-md q-gutter-md justify-between'):
+                        self._render_status_chip('Running', self, 'show')
+                        self._render_status_chip('Basecalling', self, 'Basecall_Speed', 
+                                              lambda v: 'positive' if v > 0 else 'negative')
 
-                    ui.radio([self.position.name], value=1).on(
-                        "update:model-value", dostuff
-                    ).style("color: #000000; font-size: 80%; font-weight: 300")
-                    finalstep = ui.stepper_navigation()
-                    with finalstep:
-                        ui.button("Back", on_click=stepper.previous).props("flat")
-                        run_button.move(finalstep)
-                        run_button.disable()
+                    # Monitoring Grid
+                    with ui.grid(columns=3).classes('q-pa-md q-gutter-md').bind_visibility_from(self, 'show'):
+                        # Basic Info
+                        self._render_monitoring_tile('Experiment Group', 'Experiment_Group')
+                        self._render_monitoring_tile('Sample ID', 'Sample_ID')
+                        self._render_monitoring_tile('Flowcell Type', 'Flowcell_Type')
+                        
+                        # Performance Metrics
+                        #self._render_monitoring_tile('Read Count', 'Read_Count', format_func=lambda n: f'{n:,}')
+                        #self._render_monitoring_tile('N50', 'N50', format_func=lambda n: f'{n:,} bp')
+                        #self._render_monitoring_tile('Basecall Speed', 'Mean_Basecall_Speed', 
+                                                    #format_func=lambda n: f'{n:.1f} samples/s')
+                        
+                        # Quality Metrics
+                        #self._render_monitoring_tile('Pass Reads', 'Pass_Read_Count', format_func=lambda n: f'{n:,}')
+                        #self._render_monitoring_tile('Pass Bases', 'Pass_Bases', format_func=lambda n: f'{n:,}')
+                        #self._render_monitoring_tile('Channel Count', 'Channel_Count')
 
-            ui.separator()
-            ui.label("Fixed Settings:").style(
-                "color: #6E93D6; font-size: 100%; font-weight: 400"
-            )
-            ui.label(f"{self.device}")
-            current_date = datetime.now()
+                    # Time Information
+                    with ui.row().classes('q-pa-md q-gutter-md justify-between'):
+                        with ui.card().classes('col'):
+                            ui.label('Start Time').classes(f'text-caption {self.color}')
+                            ui.label().bind_text_from(
+                                self, 'start_time', 
+                                lambda t: t.strftime('%Y-%m-%d %H:%M:%S') if t else 'Not Started'
+                            )
 
-            ui.label(
-                f"experiment_group_id = {self.centreID}_{current_date.strftime('%B')}_{current_date.year}"
-            )
-            ui.label(f"kit = {self.kit}")
-            ui.label(f"reference = {self.reference}")
-            ui.separator()
-            ui.label("User Settings:").style(
-                "color: #6E93D6; font-size: 100%; font-weight: 400"
-            )
-            ui.label().bind_text_from(
-                sampleid,
-                "value",
-                backward=lambda sid: (
-                    f"Sample ID: {sid}"
-                    if sid is not None
-                    else "Sample ID: Not specified"
-                ),
-            )
-            ui.label().bind_text_from(
-                flowcellid,
-                "value",
-                backward=lambda fid: (
-                    f"Flowcell ID: {fid}"
-                    if fid is not None
-                    else "Flowcell ID: Not specified"
-                ),
-            )
-            ui.label().bind_text_from(
-                self.position,
-                "value",
-                backward=lambda pid: (
-                    f"Position: {pid.description.name}"
-                    if pid is not None
-                    else "Position: Not selected"
-                ),
-            )
+    def _render_setting_item(self, label: str, value: str):
+        """Helper method to render consistent setting items"""
+        with ui.row().classes('items-center justify-between w-full q-py-sm'):
+            ui.label(label).classes('text-body2')
+            ui.label(str(value)).classes('text-body2 text-weight-medium')
 
-            ui.button("Close", on_click=startup.close)
-        if self.dev:
-            ui.label(f"{dir(self.position.connect)}")
-            ui.label(f"{self.position.credentials}")
-            ui.label(f"{self.position.description}")
-            ui.label(f"{self.position.device_type}")
-            ui.label(f"{self.position.host}")
-            ui.label(f"{self.position.name}")
-            ui.label(f"{self.position.running}")
-            ui.label(f"{self.position.state}")
-        with ui.card().classes("w-full"):  # .classes("flat border-[2px] no-shadow"):
-            with ui.card().tight().classes("flat border-[2px] no-shadow"):
-                ui.label(f"{self.name} - {self.position}").classes("text-h6")
-                with ui.row().props("align-middle"):
-                    with ui.avatar(square=False, color="white", size="xl"):
-                        ui.image(self.deviceicon).classes("w-full h-full")
-                    ui.label("MinKNOW Monitoring.").classes(
-                        f"text-overline {self.color}"
-                    )
-                    ui.label(f"{self.position.device_type}, {self.position.name}")
-                ui.label("Data from the current experiment.").classes("text-subtitle")
-            with ui.card().tight().classes("flat no-shadow").bind_visibility_from(
-                self, "show"
-            ):
-                with ui.grid(columns=2).classes("gap-0 p-0"):
-                    with ui.column().classes("gap-0 p-0"):
-                        ui.label("Experiment Group:").classes(
-                            f"gap-0 p-0 text-overline {self.color}"
-                        )
-                        ui.label("None").bind_text_from(
-                            self, "Experiment_Group", backward=lambda n: f"{n}"
-                        ).classes("gap-0 p-0")
-                    with ui.column().classes("gap-0 p-0"):
-                        ui.label("Sample Name:").classes(
-                            f"gap-0 p-0 gap-0 text-overline {self.color}"
-                        )
-                        ui.label("None").bind_text_from(
-                            self, "Sample_ID", backward=lambda n: f"{n}"
-                        ).classes("gap-0 p-0")
-                    with ui.column().classes("gap-0 p-0"):
-                        ui.label("Flowcell:").classes(
-                            f"gap-0 p-0 text-overline {self.color}"
-                        )
-                        ui.label("None").bind_text_from(
-                            self, "Flowcell_Type", backward=lambda n: f"{n}"
-                        ).classes("gap-0 p-0")
-                    with ui.column().classes("gap-0 p-0"):
-                        ui.label("Kit ID:").classes(
-                            f"gap-0 p-0 text-overline {self.color}"
-                        )
-                        ui.label("None").bind_text_from(
-                            self, "kit", backward=lambda n: f"{n}"
-                        ).classes("gap-0 p-0")
-                    with ui.column().classes("gap-0 p-0"):
-                        ui.label("Output Directory:").classes(
-                            f"gap-0 p-0 text-overline {self.color}"
-                        )
-                        ui.label("None").bind_text_from(
-                            self, "output_folder", backward=lambda n: f"{n}"
-                        ).classes("gap-0 p-0")
-                    with ui.column().classes("gap-0 p-0"):
-                        ui.label("Basecall Model:").classes(
-                            f"gap-0 p-0 text-overline {self.color}"
-                        )
-                        ui.label("None").bind_text_from(
-                            self,
-                            "basecalling_config_filename",
-                            backward=lambda n: f"{n}",
-                        ).classes("gap-0 p-0")
-            with ui.column().bind_visibility_from(
-                self, "show", backward=lambda v: not v
-            ):
-                ui.label(
-                    "There is no run currently on this device. You can set upt a run using MinKNOW itself or using our big green button."
-                )
-                with ui.button(on_click=startup.open).props("color=green"):
-                    ui.label("Start Run")
-                    ui.image(f"{IMAGEFILE}").classes("rounded-full w-32 h-32 ml-8")
+    def _render_monitoring_tile(self, label: str, bind_property: str, format_func=str):
+        """Helper method to render monitoring information tiles"""
+        with ui.card().classes('q-pa-sm'):
+            ui.label(label).classes(f'text-caption {self.color}')
+            ui.label('--').bind_text_from(
+                self, bind_property,
+                lambda n: format_func(n) if n is not None else '--'
+            ).classes('text-body1 text-weight-medium')
+
+    def _render_status_chip(self, label: str, obj, bind_property: str, 
+                          color_func=lambda v: 'positive' if v else 'negative'):
+        """Helper method to render status indicator chips"""
+        status_button = ui.button(
+            label,
+            icon='circle'
+        ).props('flat dense').classes('q-ma-xs')
+        
+        def update_status():
+            if hasattr(obj, bind_property):
+                value = getattr(obj, bind_property)
+                color = color_func(value)
+                status_button.props(f'color={color}')
+        
+        ui.timer(1, update_status)
+        return status_button
 
     def stream_instance_activity(self) -> None:
         """
@@ -720,16 +644,27 @@ def run_class(port: int, reload: bool):
     :param reload: Should we reload the app on changes.
     :return:
     """
-    # Add some custom CSS because - why not!
-    ui.add_css(
-        """
-        .shadows-into light-regular {
-            font-family: "Shadows Into Light", cursive;
-            font-weight: 800;
-            font-style: normal;
+    ui.add_css("""
+        .monitoring-tile {
+            transition: all 0.3s ease;
         }
-    """
-    )
+        .monitoring-tile:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+        }
+        .status-chip {
+            transition: background-color 0.3s ease;
+        }
+        .device-header {
+            border-bottom: 1px solid #e0e0e0;
+        }
+        @media (max-width: 600px) {
+            .monitoring-grid {
+                grid-template-columns: repeat(2, 1fr) !important;
+            }
+        }
+    """)
+    
     # Register some fonts that we might need later on.
     app.add_static_files("/fonts", str(Path(__file__).parent.parent / "fonts"))
 

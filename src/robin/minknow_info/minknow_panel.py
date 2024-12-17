@@ -1,11 +1,11 @@
-from nicegui import ui, run, app
+from nicegui import binding, ui, run, app
 import time
 import threading
 
 
 # MinKNOW API Imports
 import minknow_api.manager_pb2 as manager_pb2
-from minknow_api.protocol_pb2 import ProtocolPhase
+from minknow_api.protocol_pb2 import ProtocolPhase, ProtocolRunInfo, ProtocolState
 from readfish._utils import get_device
 from robin.minknow_info.minKNOWhistograms import MinknowHistograms
 from robin.minknow_info.minknow_info import Minknow_Info
@@ -367,6 +367,7 @@ class Position(MinKNOWFish):
         experiment_duration,
     ):
         # super().__init__()
+        print("starting position")
         self.ip = ip
         self.position = get_device(position.name, host=self.ip)
         self.connection = self.position.connect()
@@ -401,7 +402,21 @@ class Position(MinKNOWFish):
 
         self.timer = ui.timer(1, self._worker)
 
-        # function using _stop function
+        # Convert yield_data to use bindable properties
+        self.yield_data = {
+            'read_count': binding.BindableProperty(0),
+            'selected_raw_samples': binding.BindableProperty(0),
+            'selected_events': binding.BindableProperty(0),
+            'estimated_selected_bases': binding.BindableProperty(0),
+            'basecalled_pass_read_count': binding.BindableProperty(0),
+            'basecalled_fail_read_count': binding.BindableProperty(0),
+            'basecalled_pass_bases': binding.BindableProperty(0),
+            'basecalled_fail_bases': binding.BindableProperty(0),
+            'fraction_basecalled': binding.BindableProperty(0)
+        }
+        
+        # Store metrics UI elements
+        self.metric_elements = {}
 
     def stop(self):
         self.shutdown_event.set()
@@ -442,34 +457,45 @@ class Position(MinKNOWFish):
                 )
 
                 with ui.column().bind_visibility_from(self.minknow_info_pane, "show"):
-                    self.minknowhistogram = MinknowHistograms(self.position)
-
                     with ui.row():
-                        with ui.card().classes("drop-shadow"):
-                            ui.label().bind_text_from(
-                                self, "Run_ID", backward=lambda n: f"Run ID: {n}"
-                            )
-                            ui.label().bind_text_from(
-                                self.position, "name", backward=lambda n: f"Name: {n}"
-                            )
-                            ui.label().bind_text_from(
-                                self.position,
-                                "device_type",
-                                backward=lambda n: f"Device Type: {n}",
-                            )
-                            ui.label().bind_text_from(
-                                self.position, "host", backward=lambda n: f"Host: {n}"
-                            )
-                            ui.label().bind_text_from(
-                                self.position,
-                                "running",
-                                backward=lambda n: f"Running: {n}",
-                            )
-                            ui.label().bind_text_from(
-                                self.position, "state", backward=lambda n: f"State: {n}"
-                            )
+                        with ui.card().classes("w-full p-4 drop-shadow-lg"):
+                            with ui.column().classes("gap-2"):
+                                ui.label("Device Information") \
+                                    .classes("text-lg font-medium mb-2")
+                                
+                                with ui.grid().classes("grid-cols-2 gap-4"):
+                                    ui.label().bind_text_from(
+                                        self, "Run_ID",
+                                        backward=lambda n: f"Run ID: {n}"
+                                    ).classes("text-sm text-gray-600")
+                                    
+                                    ui.label().bind_text_from(
+                                        self.position, "name",
+                                        backward=lambda n: f"Name: {n}"
+                                    ).classes("text-sm text-gray-600")
+                                    
+                                    ui.label().bind_text_from(
+                                        self.position, "device_type",
+                                        backward=lambda n: f"Device Type: {n}"
+                                    ).classes("text-sm text-gray-600")
+                                    
+                                    ui.label().bind_text_from(
+                                        self.position, "host",
+                                        backward=lambda n: f"Host: {n}" 
+                                    ).classes("text-sm text-gray-600")
+                                    
+                                    ui.label().bind_text_from(
+                                        self.position, "running",
+                                        backward=lambda n: f"Running: {n}"
+                                    ).classes("text-sm font-medium").props('color=green' if self.position.running else 'color=red')
+                                    
+                                    ui.label().bind_text_from(
+                                        self.position, "state",
+                                        backward=lambda n: f"State: {n}"
+                                    ).classes("text-sm font-medium")
+
                         self.protocol_run_info = ui.column().classes(
-                            "p-4 border-dashed border-2"
+                            "p-4 border border-gray-200 rounded-lg bg-gray-50"
                         )
 
                     self.flowcell_info = ui.row()
@@ -479,6 +505,9 @@ class Position(MinKNOWFish):
                     )
 
                     self.acquisition_run_info = ui.column()
+                    
+                    self.minknowhistogram = MinknowHistograms(self.position)
+
 
     def watch_flowcell(self):
         while not self.stopped():
@@ -491,7 +520,7 @@ class Position(MinKNOWFish):
                                 for field in stuff.DESCRIPTOR.fields:
                                     ui.label(
                                         f"{field.name}: {getattr(stuff, field.name)}"
-                                    )
+                                    ).classes("text-sm font-medium")
             else:
                 time.sleep(1)
         print("watch flowcell saw a shutdown")
@@ -534,22 +563,152 @@ class Position(MinKNOWFish):
             for info in self._stream_instance_activity:
                 if self.shutdown_event.is_set():
                     break
-                if info.HasField("device_info"):
-                    self.Channel_Count = info.device_info.device_info.max_channel_count
+
+                # Update yield data when we receive yield summary
+                if info.HasField("yield_summary"):
+                    yield_info = info.yield_summary
+                    print(yield_info)
+                    # Update bindable properties
+                    for field in self.yield_data:
+                        print(field, getattr(yield_info, field))
+                        self.yield_data[field].value = getattr(yield_info, field)
+                    print(self.yield_data)
+
+                    # Update history
+                    if hasattr(self, '_yield_history'):
+                        self._yield_history.append({
+                            'timestamp': datetime.now().strftime('%H:%M:%S'),
+                            'reads': self.yield_data['read_count'].value,
+                            'bases': self.yield_data['estimated_selected_bases'].value
+                        })
+                    else:
+                        self._yield_history = [{
+                            'timestamp': datetime.now().strftime('%H:%M:%S'),
+                            'reads': self.yield_data['read_count'].value,
+                            'bases': self.yield_data['estimated_selected_bases'].value
+                        }]
+
+                # Update acquisition run info display when we receive that update
                 if self.acquisition_run_info:
                     if info.HasField("acquisition_run_info"):
                         self.acquisition_run_info.clear()
                         with self.acquisition_run_info:
-                            for field in info.acquisition_run_info.DESCRIPTOR.fields:
-                                ui.label(
-                                    f"{field.name}: {getattr(info.acquisition_run_info, field.name)}"
-                                )
-                        self.start_time = datetime.fromtimestamp(
-                            info.acquisition_run_info.start_time.seconds
-                            + info.acquisition_run_info.start_time.nanos / 1e9
-                        )
+                            # Main stats card
+                            with ui.card().classes("w-full p-4 drop-shadow-lg"):
+                                with ui.row().classes("justify-between"):
+                                    # Left column - Run Info
+                                    with ui.column().classes("gap-2 flex-1"):
+                                        ui.label("Run Information").classes("text-lg font-medium")
+                                        
+                                        run_info = info.acquisition_run_info
+                                        print(run_info)
+                                        ui.label(f"Run ID: {run_info.run_id}").classes("text-sm")
+                                        ui.label(f"State: {run_info.state}").classes("text-sm font-medium")
+                                        
+                                        start_time = datetime.fromtimestamp(
+                                            run_info.start_time.seconds + run_info.start_time.nanos / 1e9
+                                        )
+                                        ui.label(f"Started: {start_time.strftime('%Y-%m-%d %H:%M:%S')}").classes("text-sm")
+                                        
+                                        if hasattr(run_info, 'data_read_start_time'):
+                                            read_start = datetime.fromtimestamp(
+                                                run_info.data_read_start_time.seconds + 
+                                                run_info.data_read_start_time.nanos / 1e9
+                                            )
+                                            ui.label(f"Reading Since: {read_start.strftime('%Y-%m-%d %H:%M:%S')}").classes("text-sm")
+
+                                    # Right column - Yield Summary
+                                    if hasattr(run_info, 'yield_summary'):
+                                        #print(run_info)
+                                        with ui.column().classes("gap-2 flex-1"):
+                                            ui.label("Yield Summary").classes("text-lg font-medium")
+                                            yield_info = run_info.yield_summary
+                                            print(yield_info)
+                                            
+                                            metrics = [
+                                                ("Reads", 'read_count'),
+                                                ("Raw Samples", 'selected_raw_samples', lambda x: f"{x:,}"),
+                                                ("Events", 'selected_events', lambda x: f"{x:,}"),
+                                                ("Est. Bases", 'estimated_selected_bases', lambda x: f"{x:,}"),
+                                                ("Pass Reads", 'basecalled_pass_read_count', lambda x: f"{x:,}"),
+                                                ("Fail Reads", 'basecalled_fail_read_count', lambda x: f"{x:,}"),
+                                                ("Pass Bases", 'basecalled_pass_bases', lambda x: f"{x:,}"),
+                                                ("Fail Bases", 'basecalled_fail_bases', lambda x: f"{x:,}"),
+                                                ("Percent Basecalled", 'fraction_basecalled', lambda x: f"{x:.1%}")
+                                            ]
+                                            
+                                            for label, bind_key, *formatter in metrics:
+                                                format_func = formatter[0] if formatter else str
+                                                with ui.row().classes("justify-between w-full"):
+                                                    ui.label(f"{label}:").classes("text-sm")
+                                                    ui.label().bind_text_from(
+                                                        self.yield_data[bind_key], 
+                                                        'value',
+                                                        backward=format_func
+                                                    ).classes("text-sm font-medium")
+
+                            # Add charts if we have historical data
+                            if hasattr(self, '_yield_history'):
+                                self._yield_history.append({
+                                    'timestamp': datetime.now().strftime('%H:%M:%S'),
+                                    'reads': yield_info.read_count,
+                                    'bases': yield_info.estimated_selected_bases
+                                })
+                            else:
+                                self._yield_history = [{
+                                    'timestamp': datetime.now().strftime('%H:%M:%S'),
+                                    'reads': yield_info.read_count,
+                                    'bases': yield_info.estimated_selected_bases
+                                }]
+
+                            # Plot yield over time
+                            with ui.card().classes("w-full p-4 mt-4 drop-shadow-lg"):
+                                ui.label("Sequencing Progress").classes("text-lg font-medium mb-4")
+                                
+                                ui.echart({
+                                    'tooltip': {'trigger': 'axis'},
+                                    'legend': {'data': ['Reads', 'Bases (M)']},
+                                    'xAxis': {
+                                        'type': 'category',
+                                        'data': [d['timestamp'] for d in self._yield_history]
+                                    },
+                                    'yAxis': [
+                                        {'type': 'value', 'name': 'Reads'},
+                                        {'type': 'value', 'name': 'Bases (M)', 'alignTicks': True}
+                                    ],
+                                    'series': [
+                                        {
+                                            'name': 'Reads',
+                                            'type': 'line',
+                                            'data': [d['reads'] for d in self._yield_history],
+                                            'smooth': True
+                                        },
+                                        {
+                                            'name': 'Bases (M)',
+                                            'type': 'line',
+                                            'yAxisIndex': 1,
+                                            'data': [d['bases']/1_000_000 for d in self._yield_history],
+                                            'smooth': True
+                                        }
+                                    ]
+                                }).classes('w-full h-64')
+
+                            # Configuration Summary if available
+                            if hasattr(run_info, 'config_summary'):
+                                with ui.card().classes("w-full p-4 mt-4 drop-shadow-lg"):
+                                    ui.label("Configuration").classes("text-lg font-medium")
+                                    config = run_info.config_summary
+                                    ui.label(f"Purpose: {config.purpose}").classes("text-sm")
+                                    ui.label(f"Output Directory: {config.reads_directory}").classes("text-sm")
+                                    ui.label(f"Sample Rate: {config.sample_rate} Hz").classes("text-sm")
+                                    ui.label(f"Channel Count: {config.channel_count}").classes("text-sm")
+
+                        self.start_time = start_time
+                        
                 if info.HasField("basecall_speed"):
                     self.Mean_Basecall_Speed = info.basecall_speed.mean_basecall_speed
+                else:
+                    self.Mean_Basecall_Speed = None
                 if info.HasField("n50"):
                     self.N50 = info.n50.n50
                     self.Estimated_N50 = info.n50.estimated_n50
@@ -557,55 +716,83 @@ class Position(MinKNOWFish):
                     if info.HasField("protocol_run_info"):
                         self.protocol_run_info.clear()
                         with self.protocol_run_info:
-                            self.Experiment_Group = (
-                                info.protocol_run_info.user_info.protocol_group_id.value
-                            )
-                            ui.label(f"Experiment Group: {self.Experiment_Group}")
-                            self.Sample_ID = (
-                                info.protocol_run_info.user_info.sample_id.value
-                            )
-                            ui.label(f"Sample ID: {self.Sample_ID}")
-                            self.Current_Output_Directory = (
-                                info.protocol_run_info.output_path
-                            )
-                            ui.label(
-                                f"Current Output Directory: {self.Current_Output_Directory}"
-                            )
-                            self.Kit = info.protocol_run_info.meta_info.tags[
-                                "kit"
-                            ].string_value
-                            ui.label(f"Kit: {self.Kit}")
-                            self.Phase = ProtocolPhase.Name(
-                                info.protocol_run_info.phase
-                            )
-                            ui.label(f"Phase: {self.Phase}")
-                            self.Start_Time = datetime.fromtimestamp(
-                                info.protocol_run_info.start_time.seconds
-                                + info.protocol_run_info.start_time.nanos / 1e9
-                            )
-                            ui.label(f"Start Time: {self.Start_Time}")
-                if info.HasField("yield_summary"):
-                    if self.yield_summary_info:
-                        self.yield_summary_info.clear()
-                        with self.yield_summary_info:
-                            self.Read_Count = info.yield_summary.read_count
-                            ui.label(f"Read Count: {self.Read_Count}")
-                            self.Percent_Basecalled = (
-                                info.yield_summary.fraction_basecalled
-                            )
-                            ui.label(f"Percent Basecalled: {self.Percent_Basecalled}")
-                            self.Pass_Read_Count = (
-                                info.yield_summary.basecalled_pass_read_count
-                            )
-                            ui.label(f"Pass Read Count: {self.Pass_Read_Count}")
-                            self.Fail_Read_Count = (
-                                info.yield_summary.basecalled_fail_read_count
-                            )
-                            ui.label(f"Fail Read Count: {self.Fail_Read_Count}")
-                            self.Pass_Bases = info.yield_summary.basecalled_pass_bases
-                            ui.label(f"Pass Bases: {self.Pass_Bases}")
-                            self.Fail_Bases = info.yield_summary.basecalled_fail_bases
-                            ui.label(f"Fail Bases: {self.Fail_Bases}")
+                            with ui.card().classes("w-full p-4 drop-shadow-lg"):
+                                with ui.column().classes("gap-2"):
+                                    # Header section
+                                    ui.label("Protocol Information").classes("text-lg font-medium mb-2")
+                                    
+                                    # Main info grid
+                                    with ui.grid().classes("grid-cols-2 gap-4"):
+                                        if info.protocol_run_info.state == ProtocolState.PROTOCOL_COMPLETED:
+                                            ui.label("Status: Protocol Completed").classes("text-sm font-medium text-green-600")
+                                        else:
+                                            # Basic Protocol Info
+                                            ui.label(f"Protocol ID: {info.protocol_run_info.protocol_id}").classes("text-sm text-gray-600")
+                                            ui.label(f"Run ID: {info.protocol_run_info.run_id}").classes("text-sm text-gray-600")
+                                            
+                                            # User Info
+                                            if hasattr(info.protocol_run_info, 'user_info'):
+                                                ui.label(f"Group ID: {info.protocol_run_info.user_info.protocol_group_id.value}").classes("text-sm text-gray-600")
+                                                ui.label(f"Sample ID: {info.protocol_run_info.user_info.sample_id.value}").classes("text-sm text-gray-600")
+                                                ui.label(f"Flow Cell ID: {info.protocol_run_info.user_info.user_specified_flow_cell_id.value}").classes("text-sm text-gray-600")
+                                            
+                                            # Meta Info
+                                            if hasattr(info.protocol_run_info, 'meta_info'):
+                                                meta = info.protocol_run_info.meta_info
+                                                if hasattr(meta, 'tags'):
+                                                    for tag in ['kit', 'flow cell', 'speed']:
+                                                        if tag in meta.tags:
+                                                            value = meta.tags[tag].string_value or meta.tags[tag].int_value
+                                                            ui.label(f"{tag.title()}: {value}").classes("text-sm text-gray-600")
+                                            
+                                            # Phase and Output Info
+                                            ui.label(f"Phase: {info.protocol_run_info.phase}").classes("text-sm font-medium")
+                                            ui.label(f"Output Path: {info.protocol_run_info.output_path}").classes("text-sm text-gray-600")
+                                            
+                                            # Software Versions (detailed collapsible section)
+                                            if hasattr(info.protocol_run_info, 'software_versions'):
+                                                with ui.expansion("Software Versions", icon="developer_board").classes("w-full mt-4"):
+                                                    with ui.grid().classes("grid-cols-2 gap-2 mt-2"):
+                                                        sw = info.protocol_run_info.software_versions
+                                                        
+                                                        # MinKNOW version
+                                                        with ui.card().classes("p-2"):
+                                                            ui.label("MinKNOW").classes("text-sm font-medium")
+                                                            ui.label(f"Version: {sw.minknow.full}").classes("text-xs text-gray-600")
+                                                            ui.label(f"Major: {sw.minknow.major}").classes("text-xs text-gray-600")
+                                                            ui.label(f"Minor: {sw.minknow.minor}").classes("text-xs text-gray-600")
+                                                            ui.label(f"Patch: {sw.minknow.patch}").classes("text-xs text-gray-600")
+                                                        
+                                                        # Bream version
+                                                        with ui.card().classes("p-2"):
+                                                            ui.label("Bream").classes("text-sm font-medium")
+                                                            ui.label(f"Version: {sw.bream}").classes("text-xs text-gray-600")
+                                                        
+                                                        # Distribution info
+                                                        with ui.card().classes("p-2"):
+                                                            ui.label("Distribution").classes("text-sm font-medium")
+                                                            ui.label(f"Version: {sw.distribution_version}").classes("text-xs text-gray-600")
+                                                            ui.label(f"Status: {sw.distribution_status}").classes("text-xs text-gray-600")
+                                                            ui.label(f"Type: {sw.installation_type}").classes("text-xs text-gray-600")
+                                                        
+                                                        # Basecaller info
+                                                        with ui.card().classes("p-2"):
+                                                            ui.label("Basecaller").classes("text-sm font-medium")
+                                                            ui.label(f"Connected: {sw.basecaller_connected_version}").classes("text-xs text-gray-600")
+                                                            ui.label(f"Build: {sw.basecaller_build_version}").classes("text-xs text-gray-600")
+                                                        
+                                                        # Protocol config
+                                                        with ui.card().classes("p-2"):
+                                                            ui.label("Protocol").classes("text-sm font-medium")
+                                                            ui.label(f"Configuration: {sw.protocol_configuration}").classes("text-xs text-gray-600")
+                                        
+                                        # Arguments section (collapsible)
+                                        if hasattr(info.protocol_run_info, 'args') and info.protocol_run_info.args:
+                                            with ui.expansion("Protocol Arguments", icon="settings").classes("w-full mt-4"):
+                                                with ui.column().classes("gap-1"):
+                                                    for arg in info.protocol_run_info.args:
+                                                        ui.label(arg).classes("text-xs text-gray-500")
+                
 
     # def shutdown(self):
     #    self.shutdown_event.set()

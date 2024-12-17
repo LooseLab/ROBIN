@@ -24,6 +24,15 @@ import math
 logger = logging.getLogger(__name__)
 
 
+class StatusChip(ui.chip):
+    def _handle_text_change(self, text: str) -> None:
+        super()._handle_text_change(text)
+        if "Enabled" in text:
+            self.props('color=green-500')
+        else:
+            self.props('color=red-500')
+
+
 class MinknowHistograms:
     """Class that displays a histogram from MinKNOW."""
 
@@ -63,56 +72,88 @@ class MinknowHistograms:
         self.renderme()
 
     def renderme(self):
-        with ui.card().classes("w-full flat border-[2px] no-shadow"):
-            with ui.card().tight().classes("flat border-[2px] no-shadow"):
-                ui.label("Histograms").classes("text-h6")
-                with ui.row().props("align-middle"):
+        # Main container with subtle border
+        with ui.card().classes("w-full flat border-[1px] no-shadow rounded-lg"):
+            # Header section
+            with ui.card().tight().classes("flat border-b-[1px] no-shadow p-4"):
+                with ui.row().classes("items-center gap-2"):
                     ui.avatar("bar_chart", color="grey", square=False)
-                    ui.label(
-                        "Information on read length distributions taken from MinNKOW."
-                    ).classes(f"text-h6 text-overline {self.color}")
-            with ui.column().classes("w-full").bind_visibility_from(self, "Live_Run"):
+                    ui.label("Histograms").classes("text-h6 font-semibold")
+                ui.label(
+                    "Information on read length distributions taken from MinKNOW."
+                ).classes(f"text-caption text-secondary {self.color} mt-1")
+
+            # Main content area
+            with ui.column().classes("w-full p-4").bind_visibility_from(self, "Live_Run"):
+                # Plot takes primary focus
                 self.myplot = StackedBarPlot()
-                with ui.row():
-                    ui.label().bind_text_from(
-                        self,
-                        "padding",
-                        backward=lambda n: f"Suggested padding: {n} bases",
-                    )
-                    self.checkbox = ui.checkbox("Basecalling Enabled").bind_value_from(
-                        self, "basecalling_enabled"
-                    )
-                    ui.label().bind_text_from(
-                        self,
-                        "events_to_base_ratio",
-                        backward=lambda n: f"Events to Base Ratio: {n}",
-                    )
-                    ui.label().bind_text_from(
-                        self, "sample_rate", backward=lambda n: f"Sample Rate: {n}"
-                    )
-                    ui.label().bind_text_from(
-                        self, "purpose", backward=lambda n: f"Purpose: {n}"
-                    )
-                    ui.label().bind_text_from(
-                        self, "Run_ID", backward=lambda n: f"Run ID: {n}"
-                    )
-                    ui.label().bind_text_from(
-                        self, "Live_Run", backward=lambda n: f"Live Run: {n}"
-                    )
-                    ui.label().bind_text_from(
-                        self,
-                        "adaptive_sampling",
-                        backward=lambda n: f"Adaptive Sampling: {n}",
-                    )
-                    ui.label().bind_text_from(
-                        self,
-                        "adaptive_sampling_ignore_chunk",
-                        backward=lambda n: f"Adaptive Sampling Ignore Chunk: {n}",
-                    )
-            with ui.column().bind_visibility_from(
+                
+                # Information grid - organized in 2 rows for better scanning
+                with ui.grid().classes("gap-4 mt-4 grid-cols-2 md:grid-cols-4"):
+                    # Primary metrics
+                    with ui.column().classes("space-y-2"):
+                        ui.label("Run Status").classes("text-secondary text-sm")
+                        ui.label().bind_text_from(
+                            self, "Run_ID", backward=lambda n: f"Run ID: {n}"
+                        ).classes("font-medium")
+                        ui.label().bind_text_from(
+                            self, "Live_Run", backward=lambda n: f"Live Run: {n}"
+                        ).classes("font-medium")
+                    
+                    # Technical metrics
+                    with ui.column().classes("space-y-2"):
+                        ui.label("Technical Details").classes("text-secondary text-sm")
+                        ui.label().bind_text_from(
+                            self, "sample_rate", 
+                            backward=lambda n: f"Sample Rate: {n}"
+                        ).classes("font-medium")
+                        ui.label().bind_text_from(
+                            self, "events_to_base_ratio",
+                            backward=lambda n: f"Events to Base Ratio: {n}",
+                        ).classes("font-medium")
+                    
+                    # Configuration
+                    with ui.column().classes("space-y-2"):
+                        ui.label("Configuration").classes("text-secondary text-sm")
+                        chip = StatusChip(
+                            text=''  # Text will be set by bind_text_from
+                        ).bind_text_from(
+                            self,
+                            "basecalling_enabled",
+                            backward=lambda v: "Basecalling Enabled" if v else "Basecalling Disabled"
+                        )
+                        ui.label().bind_text_from(
+                            self, "purpose", backward=lambda n: f"Purpose: {n}"
+                        ).classes("font-medium")
+                    
+                    # Adaptive sampling info
+                    with ui.column().classes("space-y-2"):
+                        ui.label("Adaptive Sampling").classes("text-secondary text-sm")
+                        chip = StatusChip(
+                            text=''  # Text will be set by bind_text_from
+                        ).bind_text_from(
+                            self,
+                            "adaptive_sampling",
+                            backward=lambda v: "Adaptive Sampling Enabled" if v else "Adaptive Sampling Disabled"
+                        )
+                        ui.label().bind_text_from(
+                            self, "adaptive_sampling_ignore_chunk",
+                            backward=lambda n: f"Chunk: {n}",
+                        ).classes("font-medium")
+                    
+                # Padding info - important enough to be separate
+                ui.label().bind_text_from(
+                    self, "padding",
+                    backward=lambda n: f"Suggested padding: {n} bases",
+                ).classes("mt-4 text-emphasis font-medium")
+
+            # Empty state message
+            with ui.column().classes("p-8 text-center").bind_visibility_from(
                 self, "Live_Run", backward=lambda v: not v
             ):
-                ui.label("Set up a run using MinKNOW to see histogram information.")
+                ui.label("Set up a run using MinKNOW to see histogram information.").classes(
+                    "text-secondary"
+                )
 
     def connect_me(self) -> None:
         self.connection = self.Position.connect()
@@ -176,7 +217,7 @@ class MinknowHistograms:
                         # )
 
                         for info in self._stream_histogram_info:
-                            # print(str(info))
+                            #print(str(info))
                             _rundata = dict()
                             _rundata["read_end_reason"] = list()
                             _rundata["bucket_values"] = list()
