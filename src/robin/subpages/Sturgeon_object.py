@@ -40,16 +40,27 @@ def pysam_cat(tempbam, tomerge):
 def run_modkit(file, temp, threads):
     """
     This function runs modkit on a bam file and extracts the methylation data.
+    Adjusts command based on modkit version.
     """
     try:
+        # Get modkit version
+        import subprocess
+        version_output = subprocess.check_output(['modkit', '--version'], text=True).strip()
+        version = version_output.split()[-1]  # Gets '0.4.1' from 'mod_kit 0.4.1'
+        
+        # Parse version number
+        major, minor, *_ = version.split('.')
+        version_num = float(f"{major}.{minor}")
+        
+        # Choose appropriate command based on version
+        extract_cmd = "extract full" if version_num >= 0.4 else "extract"
+        
         os.system(
-            f"modkit extract --ignore h -t {threads} {file} {temp} "
+            f"modkit {extract_cmd} --ignore h -t {threads} {file} {temp} "
             f"--force --suppress-progress >/dev/null 2>&1"
         )
-        # self.log("Done processing bam file")
     except Exception as e:
         print(e)
-        # self.log(e)
         pass
 
 
