@@ -26,8 +26,6 @@ What did you expect ROBIN to do?
 ## 🖥️ Environment
 Please provide the following details about your environment:
 - ROBIN Version: [e.g., v1.2.0]
-- Operating System: [e.g., Ubuntu 20.04, macOS Monterey]
-- Python Version (if applicable): [e.g., 3.9]
 - Other relevant details:
 
 ## 📸 Screenshots
