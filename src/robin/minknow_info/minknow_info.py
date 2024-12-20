@@ -320,7 +320,7 @@ class Minknow_Info:
 
                                 ui.radio(
                                     [self.position.name], 
-                                    value=1
+                                    value=self.position.name
                                 ).on('update:model-value', lambda: run_button.enable()
                                 ).classes('q-mt-md')
 
