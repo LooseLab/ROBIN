@@ -220,6 +220,8 @@ class Minknow_Info:
         self.check_instance.daemon = True
         self.check_instance.start()
         self.render_me()
+        self._status_updates = []
+        ui.timer(1.0, self._update_all_status)
 
     def render_me(self):
         # Initialize camera handlers
@@ -401,12 +403,16 @@ class Minknow_Info:
             ).classes('text-body1 text-weight-medium')
 
     def _render_status_chip(self, label: str, obj, bind_property: str, 
-                          color_func=lambda v: 'positive' if v else 'negative'):
+                           color_func=lambda v: 'positive' if v else 'negative'):
         """Helper method to render status indicator chips"""
         status_button = ui.button(
             label,
             icon='circle'
         ).props('flat dense').classes('q-ma-xs')
+        
+        # Store the update function and button in a list for batch updates
+        if not hasattr(self, '_status_updates'):
+            self._status_updates = []
         
         def update_status():
             if hasattr(obj, bind_property):
@@ -414,8 +420,16 @@ class Minknow_Info:
                 color = color_func(value)
                 status_button.props(f'color={color}')
         
-        ui.timer(1, update_status)
+        self._status_updates.append(update_status)
         return status_button
+
+    def _update_all_status(self):
+        """Update all status indicators in a single timer tick"""
+        for update_func in self._status_updates:
+            try:
+                update_func()
+            except Exception as e:
+                logger.error(f"Error updating status: {e}", exc_info=True)
 
     def stream_instance_activity(self) -> None:
         """
