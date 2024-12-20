@@ -33,7 +33,7 @@ from typing import Sequence
 from pathlib import Path
 import uuid
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 # We need `find_protocol` to search for the required protocol given a kit + product code.
@@ -486,6 +486,11 @@ class Position(MinKNOWFish):
         self.threads = []  # Keep track of background threads
         self._initialized = False  # Track initialization state
         
+        # Add state variables for UI updates
+        self._current_state = None
+        self._current_run_info = None
+        self._needs_ui_update = False
+        
         try:
             logger.debug(f"Using position object: {position}")
             logger.debug(f"Position type: {type(position)}")
@@ -567,6 +572,12 @@ class Position(MinKNOWFish):
                                 backward=lambda n: f"Host: {n}"
                             ).classes("text-sm text-gray-700")
                             self.run_id_label = ui.label("Run ID: -").classes("text-sm text-gray-700")
+                            self.run_state_label = ui.label("Run State: -").classes("text-sm text-gray-700")
+                            self.run_start_time_label = ui.label("Start Time: -").classes("text-sm text-gray-700")
+                            self.acquisition_duration_label = ui.label("Run Duration: -").classes("text-sm text-gray-700")
+                            self.expected_duration_label = ui.label("Expected Duration: -").classes("text-sm text-gray-700")
+                            self.expected_finish_label = ui.label("Expected Finish: -").classes("text-sm text-gray-700")
+                            self.run_purpose_label = ui.label("Purpose: -").classes("text-sm text-gray-700")
                             
                         # Flowcell Hardware
                         with ui.column().classes("space-y-2"):
@@ -719,6 +730,100 @@ class Position(MinKNOWFish):
             if not hasattr(self, 'status_label'):
                 logger.warning("Warning: UI elements not initialized")
                 return
+            
+            # Update run information if needed
+            if self._needs_ui_update and self._current_run_info:
+                info = self._current_run_info
+                state_name = manager_pb2.FlowCellPosition.State.Name(info.state)
+                self.run_state_label.text = f"Run State: {state_name}"
+                
+                if info.state == manager_pb2.FlowCellPosition.State.STATE_RUNNING:
+                    # Calculate run duration and update start time if start time is available
+                    if hasattr(info, 'start_time'):
+                        start_time = datetime.fromtimestamp(
+                            info.start_time.seconds +
+                            info.start_time.nanos / 1e9
+                        )
+                        # Update start time label with formatted datetime
+                        self.run_start_time_label.text = f"Start Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                        
+                        # Calculate and update duration
+                        duration = datetime.now() - start_time
+                        hours = duration.total_seconds() / 3600
+                        self.acquisition_duration_label.text = f"Run Duration: {hours:.1f} hours"
+                        
+                        # Get protocol run info for expected duration
+                        try:
+                            protocol_info = self.connection.protocol.get_current_protocol_run()
+                            if hasattr(protocol_info, 'meta_info') and hasattr(protocol_info.meta_info, 'tags'):
+                                meta_info = protocol_info.meta_info
+                                print(meta_info)
+                                # Try to get experiment duration from meta info
+                                if 'experiment_duration_set' in meta_info.tags:
+                                    duration_tag = meta_info.tags['experiment_duration_set']
+                                    if hasattr(duration_tag, 'string_value'):
+                                        try:
+                                            expected_hours = float(duration_tag.string_value)
+                                            self.expected_duration_label.text = f"Expected Duration: {expected_hours:.1f} hours"
+                                            
+                                            # Calculate and display expected finish time
+                                            expected_duration = duration.total_seconds() + (expected_hours * 3600)
+                                            finish_time = start_time + timedelta(seconds=expected_duration)
+                                            self.expected_finish_label.text = f"Expected Finish: {finish_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                        except (ValueError, TypeError):
+                                            self.expected_duration_label.text = "Expected Duration: Invalid Format"
+                                            self.expected_finish_label.text = "Expected Finish: Not Available"
+                                elif 'experiment-duration' in meta_info.tags:  # Try alternate tag name
+                                    duration_tag = meta_info.tags['experiment-duration']
+                                    if hasattr(duration_tag, 'string_value'):
+                                        try:
+                                            expected_hours = float(duration_tag.string_value)
+                                            self.expected_duration_label.text = f"Expected Duration: {expected_hours:.1f} hours"
+                                            
+                                            # Calculate and display expected finish time
+                                            expected_duration = duration.total_seconds() + (expected_hours * 3600)
+                                            finish_time = start_time + timedelta(seconds=expected_duration)
+                                            self.expected_finish_label.text = f"Expected Finish: {finish_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                        except (ValueError, TypeError):
+                                            self.expected_duration_label.text = "Expected Duration: Invalid Format"
+                                            self.expected_finish_label.text = "Expected Finish: Not Available"
+                                else:
+                                    self.expected_duration_label.text = "Expected Duration: Not Set"
+                                    self.expected_finish_label.text = "Expected Finish: Not Available"
+                            else:
+                                self.expected_duration_label.text = "Expected Duration: Not Available"
+                                self.expected_finish_label.text = "Expected Finish: Not Available"
+                        except Exception as e:
+                            logger.error(f"Error getting protocol run info: {str(e)}")
+                            self.expected_duration_label.text = "Expected Duration: Error"
+                            self.expected_finish_label.text = "Expected Finish: Error"
+                    
+                    # Update acquisition info
+                    if hasattr(info, 'config_summary'):
+                        config = info.config_summary
+                        config_info = []
+                        
+                        if hasattr(config, 'basecalling_enabled'):
+                            config_info.append(f"Basecalling: {'Enabled' if config.basecalling_enabled else 'Disabled'}")
+                        
+                        if hasattr(config, 'reads_directory'):
+                            config_info.append(f"Output: {config.reads_directory}")
+                            
+                        if hasattr(config, 'basecalling_config_filename'):
+                            config_info.append(f"Config: {config.basecalling_config_filename}")
+                            
+                        if config_info:
+                            self.run_purpose_label.text = " | ".join(config_info)
+                        else:
+                            self.run_purpose_label.text = "No config information available"
+                else:
+                    self.acquisition_duration_label.text = "Run Duration: -"
+                    self.run_start_time_label.text = "Start Time: -"
+                    self.expected_duration_label.text = "Expected Duration: -"
+                    self.expected_finish_label.text = "Expected Finish: -"
+                    self.run_purpose_label.text = "No active run"
+                
+                self._needs_ui_update = False
                 
             # Update status
             try:
@@ -881,35 +986,35 @@ class Position(MinKNOWFish):
                     for info in self._stream_current_run:
                         if self.stopped():
                             break
+
+                        # Update run state and ID
+                        self.Run_ID = info.run_id
+                        
+                        # Store current run info and flag for UI update
+                        self._current_run_info = info
+                        self._needs_ui_update = True
+                        
+                        # Update run status
                         if info.state == manager_pb2.FlowCellPosition.State.STATE_RUNNING:
-                            self.Run_ID = info.run_id
                             self.Live_Run = True
-                            msg = f"Run {self.Run_ID} seen on {self.position}"
-                            title = "MinKNOW Info"
-                            severity = "information"
-                            timeout = 5
-                        else:
-                            self.Run_ID = None
-                            self.Live_Run = False
                             if first_run:
-                                msg = f"Connected to {self.position}."
-                                title = "MinKNOW Info"
-                                severity = "information"
-                                timeout = 5
+                                logger.info(f"Run {self.Run_ID} seen on {self.position}")
+                        else:
+                            self.Live_Run = False
+                            self.Run_ID = None
+                            if first_run:
+                                logger.info(f"Connected to {self.position}.")
                             else:
-                                msg = f"Run {self.Run_ID} finished on {self.position}."
-                                title = "MinKNOW Info"
-                                severity = "warning"
-                                timeout = 10
-                        if first_run:
-                            first_run = False
+                                logger.warning(f"Run {self.Run_ID} finished on {self.position}.")
+                        
+                        first_run = False
                 except Exception as e:
-                    logger.error(f"[Position.stream_current_run] Inner loop error: {str(e)}")
+                    logger.error(f"Inner loop error: {str(e)}")
                     time.sleep(1)
             logger.debug("Run monitoring stopped")
         except Exception as e:
-            logger.error(f"[Position.stream_current_run] Error: {str(e)}")
-            logger.error(f"[Position.stream_current_run] Error type: {type(e)}")
+            logger.error(f"Error: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
             import traceback
             logger.error(traceback.format_exc())
 
