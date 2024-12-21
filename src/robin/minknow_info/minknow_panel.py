@@ -607,19 +607,30 @@ class Position(MinKNOWFish):
                 # Yield Statistics
                 with ui.card().classes("w-full p-4 mb-4 bg-white"):
                     ui.label("Yield Statistics").classes("text-lg font-bold mb-3 text-gray-900")
-                    with ui.grid().classes("grid-cols-2 gap-6"):
+                    with ui.grid().classes("grid-cols-3 gap-6"):
                         # Read Statistics
                         with ui.card().classes("p-4 bg-gray-50 rounded-lg"):
                             ui.label("Read Statistics").classes("text-md font-semibold mb-2 text-gray-800")
                             with ui.column().classes("space-y-2"):
                                 self.read_count_label = ui.label("Reads: 0").classes("text-sm text-gray-700")
                                 self.bases_label = ui.label("Bases: 0").classes("text-sm text-gray-700")
+                                self.n50_label = ui.label("N50: -").classes("text-sm text-gray-700")
+                                self.estimated_n50_label = ui.label("Estimated N50: -").classes("text-sm text-gray-700")
+                        
                         # Quality Metrics
                         with ui.card().classes("p-4 bg-gray-50 rounded-lg"):
                             ui.label("Quality Metrics").classes("text-md font-semibold mb-2 text-gray-800")
                             with ui.column().classes("space-y-2"):
                                 self.pass_reads_label = ui.label("Pass Reads: 0").classes("text-sm text-gray-700")
                                 self.fail_reads_label = ui.label("Fail Reads: 0").classes("text-sm text-gray-700")
+                                self.mean_basecall_speed_label = ui.label("Basecall Speed: -").classes("text-sm text-gray-700")
+                        
+                        # Output Information
+                        with ui.card().classes("p-4 bg-gray-50 rounded-lg"):
+                            ui.label("Output Settings").classes("text-md font-semibold mb-2 text-gray-800")
+                            with ui.column().classes("space-y-2"):
+                                self.output_folder_label = ui.label("Output: -").classes("text-sm text-gray-700 break-all")
+                                self.basecall_config_label = ui.label("Basecall Config: -").classes("text-sm text-gray-700 break-all")
 
                 # MinKNOW Details
                 with ui.card().classes("w-full p-4 bg-white"):
@@ -750,6 +761,24 @@ class Position(MinKNOWFish):
                         progress = self.connection.acquisition.get_progress()
                         if progress:
                             logger.debug(f"Progress info: {progress}")
+                            
+                            # Update read statistics from progress info
+                            if hasattr(progress, 'raw_per_channel'):
+                                self.read_count_label.text = f"Reads: {progress.raw_per_channel.acquired:,}"
+                            
+                            if hasattr(progress, 'basecalled_per_channel'):
+                                basecalled = progress.basecalled_per_channel
+                                if hasattr(basecalled, 'pass_'):
+                                    self.pass_reads_label.text = f"Pass Reads: {basecalled.pass_:,}"
+                                if hasattr(basecalled, 'fail'):
+                                    self.fail_reads_label.text = f"Fail Reads: {basecalled.fail:,}"
+                            
+                            # Update bases count and rate
+                            if hasattr(progress, 'basecalled_bases'):
+                                base_text = f"Bases: {progress.basecalled_bases:,}"
+                                if hasattr(progress, 'estimated_bases_per_second'):
+                                    base_text += f" ({progress.estimated_bases_per_second:.1f} bases/s)"
+                                self.bases_label.text = base_text
                 # Don't update sample ID and experiment ID here - let stream_instance_activity handle it
             except Exception as e:
                 if "No acquisition running" not in str(e):
@@ -778,48 +807,42 @@ class Position(MinKNOWFish):
                         
                         # Get protocol run info for expected duration
                         try:
-                            protocol_info = self.connection.protocol.get_current_protocol_run()
-                            if hasattr(protocol_info, 'meta_info') and hasattr(protocol_info.meta_info, 'tags'):
-                                meta_info = protocol_info.meta_info
-                                print(meta_info)
+                            # Get current acquisition info
+                            current_acquisition = self.connection.acquisition.get_current_acquisition_run()
+                            if current_acquisition:
+                                logger.debug(f"Current acquisition: {current_acquisition}")
                                 
-                                # Try to get experiment duration from meta info
-                                if 'experiment_duration_set' in meta_info.tags:
-                                    duration_tag = meta_info.tags['experiment_duration_set']
-                                    if hasattr(duration_tag, 'string_value'):
-                                        try:
-                                            expected_hours = float(duration_tag.string_value)
+                                # Access config_summary directly from AcquisitionRunInfo
+                                if hasattr(current_acquisition, 'config_summary'):
+                                    config = current_acquisition.config_summary
+                                    logger.debug(f"Acquisition config summary: {config}")
+                                    
+                                    if hasattr(config, 'target_run_until'):
+                                        target = config.target_run_until
+                                        logger.debug(f"Target run until criteria: {target}")
+                                        
+                                        if hasattr(target, 'run_time'):
+                                            # run_time is in seconds
+                                            expected_hours = target.run_time / 3600
                                             self.expected_duration_label.text = f"Expected Duration: {expected_hours:.1f} hours"
                                             
                                             # Calculate and display expected finish time
-                                            expected_duration = duration.total_seconds() + (expected_hours * 3600)
-                                            finish_time = start_time + timedelta(seconds=expected_duration)
+                                            finish_time = start_time + timedelta(hours=expected_hours)
                                             self.expected_finish_label.text = f"Expected Finish: {finish_time.strftime('%Y-%m-%d %H:%M:%S')}"
-                                        except (ValueError, TypeError):
-                                            self.expected_duration_label.text = "Expected Duration: Invalid Format"
+                                        else:
+                                            self.expected_duration_label.text = "Expected Duration: Not Set (No run_time)"
                                             self.expected_finish_label.text = "Expected Finish: Not Available"
-                                elif 'experiment-duration' in meta_info.tags:  # Try alternate tag name
-                                    duration_tag = meta_info.tags['experiment-duration']
-                                    if hasattr(duration_tag, 'string_value'):
-                                        try:
-                                            expected_hours = float(duration_tag.string_value)
-                                            self.expected_duration_label.text = f"Expected Duration: {expected_hours:.1f} hours"
-                                            
-                                            # Calculate and display expected finish time
-                                            expected_duration = duration.total_seconds() + (expected_hours * 3600)
-                                            finish_time = start_time + timedelta(seconds=expected_duration)
-                                            self.expected_finish_label.text = f"Expected Finish: {finish_time.strftime('%Y-%m-%d %H:%M:%S')}"
-                                        except (ValueError, TypeError):
-                                            self.expected_duration_label.text = "Expected Duration: Invalid Format"
-                                            self.expected_finish_label.text = "Expected Finish: Not Available"
+                                    else:
+                                        self.expected_duration_label.text = "Expected Duration: Not Set (No target)"
+                                        self.expected_finish_label.text = "Expected Finish: Not Available"
                                 else:
-                                    self.expected_duration_label.text = "Expected Duration: Not Set"
+                                    self.expected_duration_label.text = "Expected Duration: Not Available (No config)"
                                     self.expected_finish_label.text = "Expected Finish: Not Available"
-                            else:
-                                self.expected_duration_label.text = "Expected Duration: Not Available"
-                                self.expected_finish_label.text = "Expected Finish: Not Available"
                         except Exception as e:
-                            logger.error(f"Error getting protocol run info: {str(e)}")
+                            logger.error(f"Error getting acquisition run info: {str(e)}")
+                            logger.error(f"Error type: {type(e)}")
+                            import traceback
+                            logger.error(traceback.format_exc())
                             self.expected_duration_label.text = "Expected Duration: Error"
                             self.expected_finish_label.text = "Expected Finish: Error"
                     
