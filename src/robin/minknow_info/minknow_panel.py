@@ -551,6 +551,9 @@ class Position(MinKNOWFish):
                                 ui.label(f"MinION - {self.position.name}").classes("text-xl font-bold text-gray-900")
                                 ui.label("MinKNOW Monitoring").classes("ml-2 text-sm text-gray-600")
                             ui.label(f"Device Type: {self.position.device_type}").classes("text-sm text-gray-700")
+                            # Add Sample ID and Experiment ID
+                            self.sample_id_label = ui.label("Sample ID: -").classes("text-lg font-semibold text-blue-700 mt-2")
+                            self.experiment_id_label = ui.label("Experiment ID: -").classes("text-lg font-semibold text-blue-700")
                             with ui.row().classes("mt-1"):
                                 ui.badge("RUNNING", color="positive" if self.position.running else "negative")
                                 ui.badge(str(self.position.state), color="gray")
@@ -731,6 +734,27 @@ class Position(MinKNOWFish):
                 logger.warning("Warning: UI elements not initialized")
                 return
             
+            # Get current acquisition info
+            try:
+                # Check if acquisition is running first
+                current_status = self.connection.acquisition.current_status()
+                logger.debug(f"Current status: {current_status}")
+                # MinKNOW status constants from acquisition_pb2
+                if current_status.status == 2:  # PROCESSING is 2 in MinKNOW API
+                    # Only try to get acquisition info if we're actually processing
+                    current_acquisition = self.connection.acquisition.get_current_acquisition_run()
+                    if current_acquisition and hasattr(current_acquisition, 'run_info'):
+                        run_info = current_acquisition.run_info
+                        
+                        # Get progress information
+                        progress = self.connection.acquisition.get_progress()
+                        if progress:
+                            logger.debug(f"Progress info: {progress}")
+                # Don't update sample ID and experiment ID here - let stream_instance_activity handle it
+            except Exception as e:
+                if "No acquisition running" not in str(e):
+                    logger.error(f"Error getting acquisition info: {str(e)}")
+            
             # Update run information if needed
             if self._needs_ui_update and self._current_run_info:
                 info = self._current_run_info
@@ -758,6 +782,7 @@ class Position(MinKNOWFish):
                             if hasattr(protocol_info, 'meta_info') and hasattr(protocol_info.meta_info, 'tags'):
                                 meta_info = protocol_info.meta_info
                                 print(meta_info)
+                                
                                 # Try to get experiment duration from meta info
                                 if 'experiment_duration_set' in meta_info.tags:
                                     duration_tag = meta_info.tags['experiment_duration_set']
@@ -1043,18 +1068,42 @@ class Position(MinKNOWFish):
                             self.output_folder = (
                                 info.acquisition_run_info.config_summary.reads_directory
                             )
-                    if info.HasField("basecall_speed"):
-                        self.Mean_Basecall_Speed = info.basecall_speed.mean_basecall_speed
-                    if info.HasField("n50"):
-                        self.N50 = info.n50.n50
-                        self.Estimated_N50 = info.n50.estimated_n50
+                        if info.HasField("basecall_speed"):
+                            self.Mean_Basecall_Speed = info.basecall_speed.mean_basecall_speed
+                        if info.HasField("n50"):
+                            self.N50 = info.n50.n50
+                            self.Estimated_N50 = info.n50.estimated_n50
                         if info.HasField("protocol_run_info"):
-                            self.running_kit = info.protocol_run_info.meta_info.tags[
-                                "kit"
-                            ].string_value
-                            self.Flowcell_Type = info.protocol_run_info.meta_info.tags[
-                                "flow cell"
-                            ].string_value
+                            # Log the entire protocol run info for debugging
+                            logger.debug(f"Protocol run info: {info.protocol_run_info}")
+                            
+                            # Get sample ID and experiment ID from user_info
+                            if hasattr(info.protocol_run_info, 'user_info'):
+                                user_info = info.protocol_run_info.user_info
+                                logger.debug(f"User info: {user_info}")
+                                
+                                # Update sample ID
+                                if hasattr(user_info, 'sample_id'):
+                                    sample_id = user_info.sample_id.value if hasattr(user_info.sample_id, 'value') else 'Not Set'
+                                    self.sample_id_label.text = f"Sample ID: {sample_id}"
+                                else:
+                                    self.sample_id_label.text = "Sample ID: Not Set"
+                                
+                                # Update protocol group ID (experiment ID)
+                                if hasattr(user_info, 'protocol_group_id'):
+                                    protocol_group_id = user_info.protocol_group_id.value if hasattr(user_info.protocol_group_id, 'value') else 'Not Set'
+                                    self.experiment_id_label.text = f"Experiment ID: {protocol_group_id}"
+                                else:
+                                    self.experiment_id_label.text = "Experiment ID: Not Set"
+                            
+                            # Update other existing fields from meta_info
+                            meta_info = info.protocol_run_info.meta_info
+                            if hasattr(meta_info, 'tags'):
+                                if 'kit' in meta_info.tags:
+                                    self.running_kit = meta_info.tags['kit'].string_value
+                                if 'flow cell' in meta_info.tags:
+                                    self.Flowcell_Type = meta_info.tags['flow cell'].string_value
+                            
                             if info.protocol_run_info.phase != 0:
                                 self.show = True
                             else:
