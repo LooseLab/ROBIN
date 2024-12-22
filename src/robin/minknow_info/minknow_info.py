@@ -10,7 +10,10 @@ from minknow_api.manager import Manager
 import os
 import asyncio
 import re
+import logging
 from contextlib import contextmanager
+from collections import deque
+import time
 
 # MinKNOW API Imports
 from robin.utilities.camera import Camera
@@ -62,18 +65,7 @@ def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_i
         product_code = flow_cell_info.user_specified_product_code
         if not product_code:
             product_code = flow_cell_info.product_code
-        """
-        device_connection: Connection,
-        product_code: str,
-        kit: str,
-        basecalling: bool = False,
-        basecall_config: Optional[str] = None,
-        barcoding: bool = False,
-        barcoding_kits: Optional[List[str]] = None,
-        force_reload: bool = False,
-        experiment_type: str = "sequencing",
-        ) -> Optional[str]:
-        """
+
         # Find the protocol identifier for the required protocol:
         protocol_info = protocols.find_protocol(
             position_connection,
@@ -92,14 +84,6 @@ def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_i
                 "Failed to find protocol for position %s" % (spec.position),
                 type="negative",
             )
-
-            # print("Requested protocol:")
-            # print("  product-code: %s" % product_code)
-            # print("  kit: %s" % kit)
-            # ui.notify("Failed to find protocol for position %s" % (spec.position))
-            # ui.notify("Requested protocol:")
-            # ui.notify("  product-code: %s" % product_code)
-            # ui.notify("  kit: %s" % kit)
             return
 
         # Store the identifier for later:
@@ -192,6 +176,32 @@ class Minknow_Info:
         self.device = self.position.device_type
         self.show = False
 
+        # Initialize yield tracking with lists instead of deques to maintain all history
+        self.timestamps = []
+        self.read_counts = []
+        self.pass_reads = []
+        self.pass_bases = []
+        self.last_update = time.time()
+        self.update_interval = 10  # Update plot every 10 seconds
+        self.acquisition_run_id = None
+
+        # Initialize current values
+        self.Read_Count = 0
+        self.Pass_Read_Count = 0
+        self.Pass_Bases = 0
+        self.Mean_Basecall_Speed = 0
+        self.N50 = 0
+        self.Estimated_N50 = 0
+        self.Basecall_Speed = 0
+        self.Channel_Count = 0
+        self.Experiment_Group = ""
+        self.Sample_ID = ""
+        self.Flowcell_Type = ""
+        self.running_kit = ""
+        self.output_folder = ""
+        self.basecalling_config_filename = ""
+        self.start_time = None
+
         self.basecall_config = basecall_config
         self.centreID = centreID
         self.kit = kit
@@ -248,6 +258,46 @@ class Minknow_Info:
             # Setup Panel - only visible when not running
             setup_container = ui.element('div').classes('w-full h-full').bind_visibility_from(self, 'show', value=False)
             monitor_container = ui.element('div').classes('w-full h-full').bind_visibility_from(self, 'show')
+
+            with monitor_container:
+                with ui.card().classes('w-full h-full'):
+                    # Device Header
+                    with ui.row().classes('items-center q-pa-md'):
+                        with ui.avatar(size='xl').classes('q-mr-md'):
+                            ui.image(self.deviceicon)
+                        with ui.column():
+                            ui.label(f'{self.name} - {self.position.name}').classes('text-h6')
+                            ui.label('MinKNOW Monitoring').classes(f'text-caption {self.color}')
+                            ui.label(f'Device Type: {self.position.device_type}').classes('text-body2')
+
+                    # Status Indicators
+                    with ui.row().classes('q-pa-md q-gutter-md justify-between'):
+                        self._render_status_chip('Running', self, 'show')
+                        self._render_status_chip('Basecalling', self, 'Basecall_Speed', 
+                                              lambda v: 'positive' if v > 0 else 'negative')
+
+                    # Monitoring Grid
+                    with ui.grid(columns=3).classes('q-pa-md q-gutter-md').bind_visibility_from(self, 'show'):
+                        # Basic Info
+                        self._render_monitoring_tile('Experiment Group', 'Experiment_Group')
+                        self._render_monitoring_tile('Sample ID', 'Sample_ID')
+                        self._render_monitoring_tile('Flowcell Type', 'Flowcell_Type')
+                    
+                    # Yield Plot Container
+                    with ui.card().classes('w-full q-ma-md').style('min-height: 500px'):
+                        with ui.card_section():
+                            ui.label('Sequencing Yield').classes('text-h6')
+                        
+                        # Initialize the yield plot
+                        logging.debug("=== Initializing Yield Plot ===")
+                        logging.debug("Initial timestamps: %d", len(self.timestamps))
+                        logging.debug("Initial read counts: %d", len(self.read_counts))
+                        logging.debug("Initial pass reads: %d", len(self.pass_reads))
+                        logging.debug("Initial pass bases: %d", len(self.pass_bases))
+                        initial_options = self.create_yield_plot()
+                        self.yield_plot = ui.echart(options=initial_options).classes('w-full').style('height: 400px')
+                        logging.debug("Plot initialized with ID: %s", self.yield_plot.id)
+                        logging.debug("=== Plot Initialization Complete ===")
 
             with setup_container:
                 with ui.card().classes('w-full h-full'):
@@ -342,51 +392,6 @@ class Minknow_Info:
                                 self._render_setting_item('Kit', self.kit)
                                 self._render_setting_item('Reference', self.reference)
 
-            # Monitor Panel - only visible when running
-            with monitor_container:
-                with ui.card().classes('w-full h-full'):
-                    # Device Header
-                    with ui.row().classes('items-center q-pa-md'):
-                        with ui.avatar(size='xl').classes('q-mr-md'):
-                            ui.image(self.deviceicon)
-                        with ui.column():
-                            ui.label(f'{self.name} - {self.position.name}').classes('text-h6')
-                            ui.label('MinKNOW Monitoring').classes(f'text-caption {self.color}')
-                            ui.label(f'Device Type: {self.position.device_type}').classes('text-body2')
-
-                    # Status Indicators
-                    with ui.row().classes('q-pa-md q-gutter-md justify-between'):
-                        self._render_status_chip('Running', self, 'show')
-                        self._render_status_chip('Basecalling', self, 'Basecall_Speed', 
-                                              lambda v: 'positive' if v > 0 else 'negative')
-
-                    # Monitoring Grid
-                    with ui.grid(columns=3).classes('q-pa-md q-gutter-md').bind_visibility_from(self, 'show'):
-                        # Basic Info
-                        self._render_monitoring_tile('Experiment Group', 'Experiment_Group')
-                        self._render_monitoring_tile('Sample ID', 'Sample_ID')
-                        self._render_monitoring_tile('Flowcell Type', 'Flowcell_Type')
-                        
-                        # Performance Metrics
-                        #self._render_monitoring_tile('Read Count', 'Read_Count', format_func=lambda n: f'{n:,}')
-                        #self._render_monitoring_tile('N50', 'N50', format_func=lambda n: f'{n:,} bp')
-                        #self._render_monitoring_tile('Basecall Speed', 'Mean_Basecall_Speed', 
-                                                    #format_func=lambda n: f'{n:.1f} samples/s')
-                        
-                        # Quality Metrics
-                        #self._render_monitoring_tile('Pass Reads', 'Pass_Read_Count', format_func=lambda n: f'{n:,}')
-                        #self._render_monitoring_tile('Pass Bases', 'Pass_Bases', format_func=lambda n: f'{n:,}')
-                        #self._render_monitoring_tile('Channel Count', 'Channel_Count')
-
-                    # Time Information
-                    with ui.row().classes('q-pa-md q-gutter-md justify-between'):
-                        with ui.card().classes('col'):
-                            ui.label('Start Time').classes(f'text-caption {self.color}')
-                            ui.label().bind_text_from(
-                                self, 'start_time', 
-                                lambda t: t.strftime('%Y-%m-%d %H:%M:%S') if t else 'Not Started'
-                            )
-
     def _render_setting_item(self, label: str, value: str):
         """Helper method to render consistent setting items"""
         with ui.row().classes('items-center justify-between w-full q-py-sm'):
@@ -431,106 +436,348 @@ class Minknow_Info:
             except Exception as e:
                 logger.error(f"Error updating status: {e}", exc_info=True)
 
+    def create_yield_plot(self):
+        """Create an interactive yield plot using echarts"""
+        # Format timestamps for x-axis
+        timestamps = [t.strftime('%H:%M:%S') for t in self.timestamps]
+        
+        options = {
+            'animation': False,  # Disable animations for smoother updates
+            'title': {
+                'text': 'Sequencing Yield Over Time',
+                'left': 'center'
+            },
+            'tooltip': {
+                'trigger': 'axis',
+                'axisPointer': {
+                    'type': 'cross'
+                },
+                ':formatter': '''
+                    function(params) {
+                        let result = params[0].axisValueLabel + '<br/>';
+                        for (let i = 0; i < params.length; i++) {
+                            let value = params[i].value;
+                            let marker = params[i].marker;
+                            let name = params[i].seriesName;
+                            if (name.includes('Bases')) {
+                                value = value.toFixed(1) + ' Gb';
+                            } else {
+                                value = value.toLocaleString();
+                            }
+                            result += marker + ' ' + name + ': ' + value + '<br/>';
+                        }
+                        return result;
+                    }
+                '''
+            },
+            'legend': {
+                'data': ['Total Reads', 'Pass Reads', 'Pass Bases (Gb)'],
+                'top': '25px'
+            },
+            'grid': {
+                'left': '3%',
+                'right': '4%',
+                'bottom': '3%',
+                'top': '15%',
+                'containLabel': True
+            },
+            'xAxis': {
+                'type': 'category',
+                'boundaryGap': False,
+                'data': timestamps,
+                'axisLabel': {
+                    'rotate': 45
+                }
+            },
+            'yAxis': [
+                {
+                    'type': 'value',
+                    'name': 'Read Count',
+                    'position': 'left',
+                    'axisLine': {
+                        'show': True,
+                        'lineStyle': {
+                            'color': '#5470C6'
+                        }
+                    },
+                    'axisLabel': {
+                        ':formatter': 'value => value.toLocaleString()'
+                    }
+                },
+                {
+                    'type': 'value',
+                    'name': 'Bases (Gb)',
+                    'position': 'right',
+                    'axisLine': {
+                        'show': True,
+                        'lineStyle': {
+                            'color': '#91CC75'
+                        }
+                    },
+                    'axisLabel': {
+                        ':formatter': 'value => value.toFixed(1)'
+                    }
+                }
+            ],
+            'series': [
+                {
+                    'name': 'Total Reads',
+                    'type': 'line',
+                    'smooth': True,
+                    'data': list(self.read_counts),
+                    'itemStyle': {'color': '#5470C6'},
+                    'showSymbol': False  # Hide symbols for smoother line
+                },
+                {
+                    'name': 'Pass Reads',
+                    'type': 'line',
+                    'smooth': True,
+                    'data': list(self.pass_reads),
+                    'itemStyle': {'color': '#91CC75'},
+                    'showSymbol': False  # Hide symbols for smoother line
+                },
+                {
+                    'name': 'Pass Bases (Gb)',
+                    'type': 'line',
+                    'smooth': True,
+                    'yAxisIndex': 1,
+                    'data': list(self.pass_bases),
+                    'itemStyle': {'color': '#FAC858'},
+                    'showSymbol': False  # Hide symbols for smoother line
+                }
+            ]
+        }
+        
+        return options
+
+    def update_yield_data(self, read_count, pass_read_count, pass_bases):
+        """Update the yield data with new values - only used for live updates"""
+        current_time = datetime.now()
+        
+        # Only update if enough time has passed and we're not getting historical data
+        if time.time() - self.last_update >= self.update_interval:
+            # Check if this timestamp would be newer than our last one
+            if not self.timestamps or current_time > self.timestamps[-1]:
+                # Update data arrays
+                self.timestamps.append(current_time)
+                self.read_counts.append(read_count)
+                self.pass_reads.append(pass_read_count)
+                self.pass_bases.append(pass_bases / 1e9)  # Convert to Gb
+                self.last_update = time.time()
+                
+                # Update current values
+                self.Read_Count = read_count
+                self.Pass_Read_Count = pass_read_count
+                self.Pass_Bases = pass_bases
+                
+                # Update the plot data
+                if hasattr(self, 'yield_plot'):
+                    # Update x-axis data
+                    new_timestamps = [t.strftime('%H:%M:%S') for t in self.timestamps]
+                    self.yield_plot.options['xAxis']['data'] = new_timestamps
+                    
+                    # Update series data
+                    self.yield_plot.options['series'][0]['data'] = list(self.read_counts)
+                    self.yield_plot.options['series'][1]['data'] = list(self.pass_reads)
+                    self.yield_plot.options['series'][2]['data'] = list(self.pass_bases)
+                    
+                    # Trigger the update
+                    self.yield_plot.update()
+
+    def start_acquisition_stream(self):
+        """Start streaming acquisition output data"""
+        logging.info("=== Starting Acquisition Stream ===")
+        logging.debug(f"Acquisition Run ID: {self.acquisition_run_id}")
+        
+        if not self.acquisition_run_id:
+            logging.warning("No acquisition run ID available, cannot start stream")
+            return
+
+        try:
+            # Create a proper DataSelection object for historical data
+            from minknow_api.statistics_pb2 import DataSelection
+            data_selection = DataSelection()
+            data_selection.start = 0  # From the beginning
+            data_selection.step = 60  # Get data every minute
+            logging.debug(f"Created DataSelection: start={data_selection.start}, step={data_selection.step}")
+
+            logging.debug("Setting up acquisition stream...")
+            # Set up the acquisition output stream
+            self._acquisition_stream = self.connection.statistics.stream_acquisition_output(
+                acquisition_run_id=self.acquisition_run_id,
+                data_selection=data_selection
+            )
+            logging.debug("Acquisition stream created successfully")
+
+            # Start a thread to process the stream
+            logging.debug("Starting acquisition processing thread...")
+            self._acquisition_thread = threading.Thread(
+                target=self._process_acquisition_stream,
+                daemon=True
+            )
+            self._acquisition_thread.start()
+            logging.debug("Acquisition processing thread started")
+            logging.info("=== Acquisition Stream Setup Complete ===")
+        except Exception as e:
+            logging.error(f"Error starting acquisition stream: {str(e)}")
+
+    def _process_acquisition_stream(self):
+        """Process the acquisition output stream data"""
+        try:
+            for data in self._acquisition_stream:
+                try:
+                    if hasattr(data, 'snapshots') and data.snapshots:
+                        # The data structure has snapshots nested inside snapshots
+                        for outer_snapshot in data.snapshots:
+                            if hasattr(outer_snapshot, 'snapshots'):
+                                for snapshot in outer_snapshot.snapshots:
+                                    try:
+                                        # Get the time in seconds from the acquisition start
+                                        acquisition_time = getattr(snapshot, 'seconds', None)
+                                        if acquisition_time is None:
+                                            logging.debug("No valid timestamp found in snapshot, using current time")
+                                            current_time = datetime.now()
+                                        else:
+                                            # Calculate the actual timestamp
+                                            current_time = datetime.fromtimestamp(self.start_time.timestamp() + float(acquisition_time))
+                                        
+                                        # Check if yield_summary exists
+                                        if not hasattr(snapshot, 'yield_summary'):
+                                            logging.debug("No yield_summary in snapshot, available fields: %s", 
+                                                      [field.name for field in snapshot.DESCRIPTOR.fields])
+                                            continue
+                                        
+                                        yield_summary = snapshot.yield_summary
+                                        
+                                        # Check if yield_summary has the required fields
+                                        if not all(hasattr(yield_summary, attr) for attr in ['read_count', 'basecalled_pass_read_count', 'basecalled_pass_bases']):
+                                            logging.debug("Missing required fields in yield_summary, available fields: %s",
+                                                      [field.name for field in yield_summary.DESCRIPTOR.fields])
+                                            continue
+                                        
+                                        # Update current values
+                                        self.Read_Count = yield_summary.read_count
+                                        self.Pass_Read_Count = yield_summary.basecalled_pass_read_count
+                                        self.Pass_Bases = yield_summary.basecalled_pass_bases
+                                        
+                                        # Only append if it's a new timestamp
+                                        if not self.timestamps or current_time > self.timestamps[-1]:
+                                            self.timestamps.append(current_time)
+                                            self.read_counts.append(yield_summary.read_count)
+                                            self.pass_reads.append(yield_summary.basecalled_pass_read_count)
+                                            self.pass_bases.append(yield_summary.basecalled_pass_bases / 1e9)  # Convert to Gb
+                                            
+                                            logging.debug("Added data point - Time: %s, Reads: %s, Pass: %s, Bases: %.1fGb",
+                                                      current_time.strftime('%H:%M:%S'),
+                                                      f"{yield_summary.read_count:,}",
+                                                      f"{yield_summary.basecalled_pass_read_count:,}",
+                                                      yield_summary.basecalled_pass_bases/1e9)
+                                            
+                                            # Update the plot data
+                                            if hasattr(self, 'yield_plot'):
+                                                # Update x-axis data
+                                                new_timestamps = [t.strftime('%H:%M:%S') for t in self.timestamps]
+                                                self.yield_plot.options['xAxis']['data'] = new_timestamps
+                                                
+                                                # Update series data
+                                                self.yield_plot.options['series'][0]['data'] = list(self.read_counts)
+                                                self.yield_plot.options['series'][1]['data'] = list(self.pass_reads)
+                                                self.yield_plot.options['series'][2]['data'] = list(self.pass_bases)
+                                                
+                                                # Trigger the update
+                                                self.yield_plot.update()
+                                    
+                                    except Exception as e:
+                                        logging.error("Error processing individual snapshot: %s", str(e))
+                                        if hasattr(snapshot, 'DESCRIPTOR'):
+                                            logging.debug("Available snapshot fields: %s", 
+                                                      [field.name for field in snapshot.DESCRIPTOR.fields])
+                            else:
+                                logging.debug("No nested snapshots found in outer snapshot")
+                            
+                except Exception as e:
+                    logging.error("Error processing acquisition data: %s", str(e))
+        except Exception as e:
+            logging.error("Error in acquisition stream: %s", str(e))
+
     def stream_instance_activity(self) -> None:
         """
         This function will stream instance activity from the minknow api.
         We configure a connection and give it a handler.
         This allows us to call cancel on the handler on exit to escape the loop.
         """
+        try:
+            logging.info("=== Starting Instance Activity Stream ===")
+            self._stream_instance_activity = (
+                self.connection.instance.stream_instance_activity()
+            )
+            for info in self._stream_instance_activity:
+                try:
+                    if info.HasField("device_info"):
+                        self.Channel_Count = info.device_info.device_info.max_channel_count
+                    if info.HasField("acquisition_run_info"):
+                        logging.info("Received acquisition_run_info:")
+                        self.basecalling_config_filename = (
+                            info.acquisition_run_info.config_summary.basecalling_config_filename
+                        )
+                        self.start_time = datetime.fromtimestamp(
+                            info.acquisition_run_info.start_time.seconds
+                            + info.acquisition_run_info.start_time.nanos / 1e9
+                        )
+                        self.output_folder = (
+                            info.acquisition_run_info.config_summary.reads_directory
+                        )
+                        logging.debug("  Config: %s", self.basecalling_config_filename)
+                        logging.debug("  Start Time: %s", self.start_time)
+                        logging.debug("  Output Folder: %s", self.output_folder)
+                        
+                        # Start acquisition stream when we get run info
+                        if hasattr(info.acquisition_run_info, 'run_id'):
+                            logging.debug("  Found Run ID: %s", info.acquisition_run_info.run_id)
+                            self.acquisition_run_id = info.acquisition_run_info.run_id
+                            self.start_acquisition_stream()
+                        else:
+                            logging.warning("  No Run ID found in acquisition_run_info")
+                    if info.HasField("basecall_speed"):
+                        self.Mean_Basecall_Speed = info.basecall_speed.mean_basecall_speed
+                    if info.HasField("n50"):
+                        self.N50 = info.n50.n50
+                        self.Estimated_N50 = info.n50.estimated_n50
+                    if info.HasField("protocol_run_info"):
+                        self.running_kit = info.protocol_run_info.meta_info.tags[
+                            "kit"
+                        ].string_value
+                        self.Flowcell_Type = info.protocol_run_info.meta_info.tags[
+                            "flow cell"
+                        ].string_value
+                        if info.protocol_run_info.phase != 0:
+                            self.show = True
+                        else:
+                            self.show = False
 
-        self._stream_instance_activity = (
-            self.connection.instance.stream_instance_activity()
-        )
-        for info in self._stream_instance_activity:
-            # print(info)
-            if info.HasField("device_info"):
-                self.Channel_Count = info.device_info.device_info.max_channel_count
-                # print (info.device_info.device_info)
-            if info.HasField("acquisition_run_info"):
-                # print(info.acquisition_run_info)
-                # self.acquisition_run_info.clear()
-                # with self.acquisition_run_info:
-                # for field in info.acquisition_run_info.DESCRIPTOR.fields:
-                # print (f"{field.name}: {getattr(info.acquisition_run_info, field.name)}")
-                # ui.label(f"{field.name}: {getattr(info.acquisition_run_info, field.name)}")
-                ### This isn't giving us the start time for some reason?!
-                # print (info.acquisition_run_info.config_summary)
-                self.basecalling_config_filename = (
-                    info.acquisition_run_info.config_summary.basecalling_config_filename
-                )
-                self.start_time = datetime.fromtimestamp(
-                    info.acquisition_run_info.start_time.seconds
-                    + info.acquisition_run_info.start_time.nanos / 1e9
-                )
-                self.output_folder = (
-                    info.acquisition_run_info.config_summary.reads_directory
-                )
-            if info.HasField("basecall_speed"):
-                # self.log(f"{info.basecall_speed.mean_basecall_speed}")
-                # self.log(type(info.basecall_speed.mean_basecall_speed))
-                self.Mean_Basecall_Speed = info.basecall_speed.mean_basecall_speed
-            # if info.HasField("flow_cell_health"):
-            # if info.HasField("flow_cell_info"):
-            if info.HasField("n50"):
-                self.N50 = info.n50.n50
-                self.Estimated_N50 = info.n50.estimated_n50
-            if info.HasField("protocol_run_info"):
-                # print(info.protocol_run_info.meta_info.tags)
-                self.running_kit = info.protocol_run_info.meta_info.tags[
-                    "kit"
-                ].string_value
-                self.Flowcell_Type = info.protocol_run_info.meta_info.tags[
-                    "flow cell"
-                ].string_value
-                # print(info.protocol_run_info.phase)
-                if info.protocol_run_info.phase != 0:
-                    self.show = True
-                else:
-                    self.show = False
-
-                # self.protocol_run_info.clear()
-                # with self.protocol_run_info:
-                #    for field in info.protocol_run_info.DESCRIPTOR.fields:
-                #        ui.label(f"{field.name}: {getattr(info.protocol_run_info, field.name)}")
-                self.Experiment_Group = (
-                    info.protocol_run_info.user_info.protocol_group_id.value
-                )
-                self.Sample_ID = info.protocol_run_info.user_info.sample_id.value
-                # print(f"Experiment Group: {self.Experiment_Group}")
-                """
-                    #ui.label(f"Experiment Group: {self.Experiment_Group}")
-                    s
-                    ui.label(f"Sample ID: {self.Sample_ID}")
-                    self.Current_Output_Directory = info.protocol_run_info.output_path
-                    ui.label(f"Current Output Directory: {self.Current_Output_Directory}")
-                    self.Kit = info.protocol_run_info.meta_info.tags["kit"].string_value
-                    ui.label(f"Kit: {self.Kit}")
-                    self.Phase = ProtocolPhase.Name(info.protocol_run_info.phase)
-                    ui.label(f"Phase: {self.Phase}")
-                    self.Start_Time = datetime.fromtimestamp(
-                        info.protocol_run_info.start_time.seconds
-                        + info.protocol_run_info.start_time.nanos / 1e9
-                    )
-                    ui.label(f"Start Time: {self.Start_Time}")
-            if info.HasField("yield_summary"):
-                self.yield_summary_info.clear()
-                with self.yield_summary_info:
-                    #    for field in info.yield_summary.DESCRIPTOR.fields:
-                    #        ui.label(f"{field.name}: {getattr(info.yield_summary, field.name)}")
-                    # self.log("yield_summary")
-                    self.Read_Count = info.yield_summary.read_count
-                    ui.label(f"Read Count: {self.Read_Count}")
-                    self.Percent_Basecalled = info.yield_summary.fraction_basecalled
-                    ui.label(f"Percent Basecalled: {self.Percent_Basecalled}")
-                    self.Pass_Read_Count = info.yield_summary.basecalled_pass_read_count
-                    ui.label(f"Pass Read Count: {self.Pass_Read_Count}")
-                    self.Fail_Read_Count = info.yield_summary.basecalled_fail_read_count
-                    ui.label(f"Fail Read Count: {self.Fail_Read_Count}")
-                    self.Pass_Bases = info.yield_summary.basecalled_pass_bases
-                    ui.label(f"Pass Bases: {self.Pass_Bases}")
-                    self.Fail_Bases = info.yield_summary.basecalled_fail_bases
-                    ui.label(f"Fail Bases: {self.Fail_Bases}")
-            """
+                        self.Experiment_Group = (
+                            info.protocol_run_info.user_info.protocol_group_id.value
+                        )
+                        self.Sample_ID = info.protocol_run_info.user_info.sample_id.value
+                    if info.HasField("yield_summary"):
+                        try:
+                            # Update yield data for plotting
+                            self.Read_Count = info.yield_summary.read_count
+                            self.Pass_Read_Count = info.yield_summary.basecalled_pass_read_count
+                            self.Pass_Bases = info.yield_summary.basecalled_pass_bases
+                            
+                            # Update the plot data
+                            self.update_yield_data(
+                                self.Read_Count,
+                                self.Pass_Read_Count,
+                                self.Pass_Bases
+                            )
+                        except Exception as e:
+                            logging.error("Error processing yield summary: %s", str(e))
+                except Exception as e:
+                    logging.error("Error processing stream info: %s", str(e))
+        except Exception as e:
+            logging.error("Error in stream activity: %s", str(e))
 
     async def start_run(
         self,
@@ -706,6 +953,6 @@ if __name__ in {"__main__", "__mp_main__"}:
     :return: None
     """
     if __name__ == "__mp_main__":
-        print("GUI launched by auto-reload")
+        logging.info("GUI launched by auto-reload")
 
     run_class(port=12398, reload=True)

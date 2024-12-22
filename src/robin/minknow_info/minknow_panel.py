@@ -293,11 +293,11 @@ class MinKNOWFish:
         pass
 
     def choose_device(self):
-        print(f"[choose_device] Setting up device for position: {self.selected_position}")
+        logger.debug(f"Setting up device for position: {self.selected_position}")
         self.position_choose.close()
         
         try:
-            print("[choose_device] Creating Position instance")
+            logger.debug("Creating Position instance")
             with self.holder:
                 self.minKNOW_display = Position(
                     self.selected_position,
@@ -309,14 +309,13 @@ class MinKNOWFish:
                     self.bed_file,
                     self.experiment_duration,
                 )
-                print("[choose_device] Position instance created, calling setup")
+                logger.debug("Position instance created, calling setup")
                 self.minKNOW_display.setup(self.holder)
-                print("[choose_device] Setup completed")
+                logger.debug("Setup completed")
         except Exception as e:
-            print(f"[choose_device] Error: {str(e)}")
-            print(f"[choose_device] Error type: {type(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error setting up device: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
             ui.notify(f"Error setting up device: {str(e)}", type="negative")
 
     def enable_access(self, e):
@@ -324,97 +323,94 @@ class MinKNOWFish:
         # self.position_choose.open()
 
     async def connect_to_localhost(self):
-        print("[connect_to_localhost] Attempting to connect to localhost...")
+        logger.debug("Attempting to connect to localhost...")
         try:
             self.connection_ip = "127.0.0.1"
-            print("[connect_to_localhost] Set connection_ip to 127.0.0.1")
+            logger.debug("Set connection_ip to 127.0.0.1")
             await self.add_positions()
-            print("[connect_to_localhost] Successfully connected to localhost")
+            logger.debug("Successfully connected to localhost")
             return True
         except Exception as e:
-            print(f"[connect_to_localhost] Error: {str(e)}")
-            print(f"[connect_to_localhost] Error type: {type(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error connecting to localhost: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
             return False
 
     async def add_positions(self) -> None:
-        print("[add_positions] Starting...")
+        logger.debug("Starting add_positions...")
         with disable(self.connect_now):
             ui.notify("Trying to connect to MinKNOW")
             try:
-                print("[add_positions] Calling _connect_positions...")
+                logger.debug("Calling _connect_positions...")
                 await run.io_bound(self._connect_positions)
-                print("[add_positions] _connect_positions completed")
+                logger.debug("_connect_positions completed")
                 
                 if self.connected:
-                    print("[add_positions] Connection successful")
+                    logger.info("Connection successful")
                     ui.notify("Connection Successful.", type="positive")
                     self.connectiondialog.close()
                     
-                    print("[add_positions] Creating radio buttons for positions")
+                    logger.debug("Creating radio buttons for positions")
                     with self.choices:
                         ui.radio(
                             {item: str(item) for item in self.positions},
                             on_change=self.enable_access,
                         ).bind_value(self, "selected_position").props("inline")
-                    print("[add_positions] Opening position chooser")
+                    logger.debug("Opening position chooser")
                     self.position_choose.open()
                 else:
-                    print("[add_positions] Connection failed")
+                    logger.warning("Connection failed")
                     self.connection_ip = None
                     ui.notify(
                         "Unable to connect.\nPlease check MinKNOW is running on this IP.",
                         type="warning",
                     )
             except Exception as e:
-                print(f"[add_positions] Error: {str(e)}")
-                print(f"[add_positions] Error type: {type(e)}")
-                import traceback
-                traceback.print_exc()
+                logger.error(f"Error in add_positions: {str(e)}")
+                logger.error(f"Error type: {type(e)}")
+                logger.error(traceback.format_exc())
                 ui.notify(f"Connection error: {str(e)}", type="negative")
             finally:
-                print("[add_positions] Finished")
+                logger.debug("add_positions finished")
             ui.notify("Finished trying to connect to MinKNOW")
 
     def _connect_positions(self):
-        print("Starting MinKNOWFish connection...")
+        logger.debug("Starting MinKNOWFish connection...")
         try:
-            print(f"Attempting to connect to MinKNOW at {self.connection_ip}")
+            logger.debug(f"Attempting to connect to MinKNOW at {self.connection_ip}")
             self.manager = Manager(host=self.connection_ip)
-            print("Manager connection established")
+            logger.debug("Manager connection established")
             
             try:
-                print("Getting version info...")
+                logger.debug("Getting version info...")
                 version_info = self.manager.version
-                print(f"MinKNOW version info: {version_info}")
+                logger.debug(f"MinKNOW version info: {version_info}")
             except Exception as ve:
-                print(f"Warning: Could not get version info: {str(ve)}")
-                print("Continuing anyway...")
+                logger.warning(f"Could not get version info: {str(ve)}")
+                logger.debug("Continuing anyway...")
             
-            print("Getting flow cell positions...")
+            logger.debug("Getting flow cell positions...")
             self.positions = list(self.manager.flow_cell_positions())
-            print(f"Found positions: {self.positions}")
+            logger.debug(f"Found positions: {self.positions}")
             self.connected = True
             
         except Exception as e:
-            print(f"MinKNOWFish connection error: {str(e)}")
-            print(f"Error type: {type(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"MinKNOWFish connection error: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
             self.connected = False
             raise
 
     def watch_positions(self):
         """Watch for new flow cell positions and update UI accordingly"""
-        print("[watch_positions] Starting position watcher...")
+        logger.debug("Starting position watcher...")
         try:
             while True:
                 if self.manager:
-                    print("[watch_positions] Watching for position changes...")
+                    logger.debug("Watching for position changes...")
                     for item in self.manager.rpc.watch_flow_cell_positions():
                         if self.tabs:
-                            print(f"[watch_positions] Processing position changes: {item}")
+                            logger.debug(f"Processing position changes: {item}")
                             with self.tabs:
                                 for position in item.additions:
                                     ui.notify(f"{position.name} connected.", type="positive")
@@ -431,25 +427,23 @@ class MinKNOWFish:
                                         )
                             self.tabs.set_value(f"{position.name}")
                 else:
-                    print("[watch_positions] No manager available, waiting...")
+                    logger.debug("No manager available, waiting...")
                     time.sleep(1)
         except Exception as e:
-            print(f"[watch_positions] Error: {str(e)}")
-            print(f"[watch_positions] Error type: {type(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error in watch_positions: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
 
     def connect_to_position(self, position):
         """Connect to a specific position when requested"""
-        print(f"[connect_to_position] Connecting to position: {position.name}")
+        logger.debug(f"Connecting to position: {position.name}")
         try:
             self.selected_position = position
             self.choose_device()
         except Exception as e:
-            print(f"[connect_to_position] Error: {str(e)}")
-            print(f"[connect_to_position] Error type: {type(e)}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"Error connecting to position: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
             ui.notify(f"Error connecting to position: {str(e)}", type="negative")
 
     def setup_ui(self):
@@ -1207,6 +1201,6 @@ if __name__ in {"__main__", "__mp_main__"}:
     :return: None
     """
     if __name__ == "__mp_main__":
-        print("GUI launched by auto-reload")
+        logging.info("GUI launched by auto-reload")
 
     run_class(port=12398, reload=True)
