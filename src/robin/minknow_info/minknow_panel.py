@@ -1,3 +1,30 @@
+"""
+MinKNOW Panel Module
+
+This module implements the panel interface for MinKNOW device monitoring and control.
+It provides a comprehensive UI for managing Oxford Nanopore sequencing devices,
+monitoring run status, and visualizing sequencing data in real-time.
+
+The module creates an interactive dashboard that displays:
+- Device status and information
+- Flowcell details
+- Run statistics
+- Real-time data visualization
+- Configuration options
+
+Key Components:
+- MinKNOWFish: Main class for MinKNOW connection management
+- Position: Class for handling individual sequencing positions
+- StatusChip: UI component for status display
+- ErrorChecker: Validation utility for UI inputs
+
+Dependencies:
+- nicegui: Web interface framework
+- minknow_api: MinKNOW communication interface
+- logging: Application logging
+- threading: Concurrent operations handling
+"""
+
 from nicegui import binding, ui, run, app
 import time
 import threading
@@ -53,11 +80,33 @@ ExperimentSpecs = Sequence[ExperimentSpec]
 
 
 class ErrorChecker:
+    """
+    Utility class for validating UI input elements.
+    
+    This class aggregates multiple UI elements and their validation rules,
+    providing a single point to check if all validations pass.
+    
+    Attributes:
+        elements: Collection of UI elements to validate
+    """
+    
     def __init__(self, *elements) -> None:
+        """
+        Initialize an ErrorChecker instance.
+        
+        Args:
+            *elements: Variable number of UI elements to validate
+        """
         self.elements = elements
 
     @property
     def no_errors(self) -> bool:
+        """
+        Check if all elements pass their validation rules.
+        
+        Returns:
+            bool: True if all validations pass, False otherwise
+        """
         return all(
             validation(element.value)
             for element in self.elements
@@ -144,9 +193,25 @@ def disable(button: ui.button):
 
 class MinKNOWFish:
     """
-    A way of handling a minknow connection.
+    Main class for managing MinKNOW connections and device monitoring.
+    
+    This class handles the connection to MinKNOW instances, manages device
+    positions, and coordinates the UI updates for device monitoring.
+    
+    Attributes:
+        dev (bool): Development mode flag
+        color (str): UI color theme
+        position: Current sequencing position
+        connection: MinKNOW connection object
+        device: Device type
+        show (bool): Display visibility flag
+        manager: MinKNOW manager connection
+        connected (bool): Connection status
+        positions (list): Available sequencing positions
+        position_list (list): List of position objects
+        selected_position: Currently selected position
     """
-
+    
     def __init__(
         self,
         kit=None,
@@ -156,6 +221,17 @@ class MinKNOWFish:
         basecall_config=None,
         reference=None,
     ):
+        """
+        Initialize MinKNOWFish instance.
+        
+        Args:
+            kit (str, optional): Sequencing kit identifier
+            centreID (str, optional): Centre identifier
+            experiment_duration (int): Run duration in hours
+            bed_file (str, optional): Path to BED file
+            basecall_config (str, optional): Basecalling configuration
+            reference (str, optional): Reference genome path
+        """
         self.connection_ip = None
         self.manager = None
         self.connected = False
@@ -451,6 +527,23 @@ class MinKNOWFish:
 
 
 class Position(MinKNOWFish):
+    """
+    Class for managing individual sequencing positions.
+    
+    Handles the monitoring and control of a specific sequencing position,
+    including data collection, status updates, and UI rendering.
+    
+    Attributes:
+        ip (str): IP address of the MinKNOW instance
+        yield_data (list): Collected yield data
+        threads (list): Background monitoring threads
+        _initialized (bool): Initialization status
+        position: Position object from MinKNOW
+        connection: Connection to the position
+        Run_ID: Current run identifier
+        shutdown_event: Thread shutdown signal
+    """
+    
     def __init__(
         self,
         position,
@@ -462,6 +555,19 @@ class Position(MinKNOWFish):
         bed_file=None,
         experiment_duration=24,
     ):
+        """
+        Initialize a Position instance.
+        
+        Args:
+            position: MinKNOW position object
+            ip (str): IP address of MinKNOW instance
+            centreID (str, optional): Centre identifier
+            kit (str, optional): Sequencing kit identifier
+            reference (str, optional): Reference genome path
+            basecall_config (str, optional): Basecalling configuration
+            bed_file (str, optional): Path to BED file
+            experiment_duration (int): Run duration in hours
+        """
         logger.debug("Starting position initialization...")
         # Call parent class init with configuration parameters
         logger.debug("Calling parent class init")
@@ -475,6 +581,7 @@ class Position(MinKNOWFish):
         )
         logger.debug("Parent class init completed")
         
+        # Initialize instance variables
         self.ip = ip
         self.yield_data = []  # Initialize yield_data
         self.threads = []  # Keep track of background threads
@@ -506,10 +613,38 @@ class Position(MinKNOWFish):
             self.minknow_info_pane = None
             self.watchfolder = None
             self.shutdown_event = threading.Event()
+            
+            # Initialize data collection attributes
+            self.timestamps = []
+            self.read_counts = []
+            self.pass_reads = []
+            self.pass_bases = []
+            self.last_update = time.time()
+            self.update_interval = 10  # Update plot every 10 seconds
+            self.acquisition_run_id = None
+            
+            # Initialize current values
+            self.Read_Count = 0
+            self.Pass_Read_Count = 0
+            self.Pass_Bases = 0
+            self.Mean_Basecall_Speed = 0
+            self.N50 = 0
+            self.Estimated_N50 = 0
+            self.Basecall_Speed = 0
+            self.Channel_Count = 0
+            self.Experiment_Group = ""
+            self.Sample_ID = ""
+            self.Flowcell_Type = ""
+            self.running_kit = ""
+            self.output_folder = ""
+            self.basecalling_config_filename = ""
+            self.start_time = None
+            
+            # Mark initialization as complete
             self._initialized = True
             logger.debug("Position initialization completed successfully")
         except Exception as e:
-            logger.error(f"Error: {str(e)}")
+            logger.error(f"Error in position initialization: {str(e)}")
             logger.error(f"Error type: {type(e)}")
             import traceback
             logger.error(traceback.format_exc())
@@ -1159,10 +1294,17 @@ async def index_page() -> None:
 
 def run_class(port: int, reload: bool):
     """
-    Helper function to run the app.
-    :param port: The port to serve the app on.
-    :param reload: Should we reload the app on changes.
-    :return:
+    Helper function to run the MinKNOW panel application.
+    
+    Sets up the web application with custom styling and configuration,
+    then starts the server.
+    
+    Args:
+        port (int): Port number to serve the application
+        reload (bool): Whether to enable auto-reload for development
+        
+    Returns:
+        None
     """
     # Add some custom CSS because - why not!
     ui.add_css(
@@ -1182,7 +1324,7 @@ def run_class(port: int, reload: bool):
         reload=reload,
         title="Readfish NiceGUI",
         storage_secret="waynesworld",
-    )  # , native=True, fullscreen=False, window_size=(1200, 1000))
+    )
 
 
 def main():  # , threads, simtime, watchfolder, output, sequencing_summary):

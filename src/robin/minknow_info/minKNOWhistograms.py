@@ -1,3 +1,29 @@
+"""
+MinKNOW Histograms Module
+
+This module provides real-time visualization of MinKNOW sequencing data through
+interactive histograms. It handles the collection, processing, and display of
+read length distributions and other sequencing metrics.
+
+Key Features:
+- Real-time histogram updates
+- Read length distribution visualization
+- Adaptive sampling monitoring
+- Interactive data exploration
+- Multiple data series display
+
+The module includes classes for:
+- StatusChip: Visual status indicator
+- MinknowHistograms: Main histogram management
+- StackedBarPlot: Interactive plot generation
+
+Dependencies:
+- nicegui: Web interface components
+- minknow_api: MinKNOW data access
+- numpy: Numerical computations
+- logging: Application logging
+"""
+
 # Python imports.
 from __future__ import annotations
 from nicegui import ui
@@ -25,7 +51,26 @@ logger = logging.getLogger(__name__)
 
 
 class StatusChip(ui.chip):
+    """
+    A custom UI chip component for displaying status information.
+    
+    This component extends the basic UI chip with color-coding based on
+    the status text (Enabled/Disabled).
+    
+    Attributes:
+        Inherits all attributes from ui.chip
+    """
+    
     def _handle_text_change(self, text: str) -> None:
+        """
+        Handle changes to the chip's text and update its appearance.
+        
+        Args:
+            text (str): The new text to display
+            
+        Note:
+            Colors the chip green for "Enabled" and red for other states
+        """
         super()._handle_text_change(text)
         if "Enabled" in text:
             self.props('color=green-500')
@@ -34,7 +79,23 @@ class StatusChip(ui.chip):
 
 
 class MinknowHistograms:
-    """Class that displays a histogram from MinKNOW."""
+    """
+    Class for managing and displaying MinKNOW sequencing histograms.
+    
+    This class handles the collection and visualization of read length
+    distributions and other sequencing metrics in real-time.
+    
+    Attributes:
+        Position: MinKNOW position object
+        Live_Run (bool): Whether a run is currently active
+        Run_ID: Current run identifier
+        color (str): UI color theme
+        _live_data (list): Collected data points
+        padding (int): Data padding value
+        basecalling_enabled (bool): Basecalling status
+        adaptive_sampling (bool): Adaptive sampling status
+        adaptive_sampling_ignore_chunk (int): Chunk size to ignore
+    """
 
     # basecalling_enabled: reactive[bool] = reactive(False)
     # purpose: reactive[str] = reactive("")
@@ -47,6 +108,12 @@ class MinknowHistograms:
     # padding: reactive[int] = reactive(0)
 
     def __init__(self, position):
+        """
+        Initialize a MinknowHistograms instance.
+        
+        Args:
+            position: MinKNOW position object to monitor
+        """
         super().__init__()
         self.Position = position
         self.Live_Run = True
@@ -156,17 +223,24 @@ class MinknowHistograms:
                 )
 
     def connect_me(self) -> None:
+        """
+        Establish connection to the MinKNOW position.
+        """
         self.connection = self.Position.connect()
 
     def stream_current_run(self) -> None:
-        # worker = get_current_worker()
+        """
+        Monitor the current sequencing run.
+        
+        This method continuously monitors the run status and updates
+        the Run_ID and Live_Run status accordingly.
+        """
         while True:
             self.stream = self.connection.acquisition.watch_current_acquisition_run()
             for info in self.stream:
                 try:
                     if info.state == manager_pb2.FlowCellPosition.State.STATE_RUNNING:
                         self.Run_ID = info.run_id
-                        # print("Run ID: " + str(self.Run_ID))
                         if not self.Live_Run:
                             self.Live_Run = True
                     else:
@@ -178,16 +252,22 @@ class MinknowHistograms:
                     break
 
     def stream_histogram_info(self, step_size=None, end=None) -> None:
-        """Stream histogram info."""
-        # worker = get_current_worker()
+        """
+        Stream and process histogram information from MinKNOW.
+        
+        This method collects read length distribution data and updates
+        the visualization in real-time.
+        
+        Args:
+            step_size: Time step between data points
+            end: End time for data collection
+        """
         while True:
             while self.Live_Run:
-                # print("Trying to Streaming Histogram Info")
                 if self.Run_ID:
                     self.purpose = (
                         self.connection.protocol.get_protocol_purpose().purpose
                     )
-                    # print(f"Purpose: {self.purpose}")
                     if self.purpose == "sequencing_run":
                         self.basecalling_enabled = (
                             self.connection.acquisition.get_current_acquisition_run().config_summary.basecalling_enabled
@@ -212,17 +292,13 @@ class MinknowHistograms:
                             )
                         )
 
-                        # print(
-                        #    f"Streaming info with step_size={step_size}, end={end}"
-                        # )
-
                         for info in self._stream_histogram_info:
-                            #print(str(info))
                             _rundata = dict()
                             _rundata["read_end_reason"] = list()
                             _rundata["bucket_values"] = list()
                             _rundata["n50"] = list()
                             _rundata["histdata"] = list()
+                            
                             for hist in info.histogram_data:
                                 if sum(hist.bucket_values) > 0:
                                     _rundata["read_end_reason"].append(
@@ -233,7 +309,7 @@ class MinknowHistograms:
 
                             for bucket in info.bucket_ranges:
                                 _rundata["bucket_values"].append(bucket.end)
-                            # print("Sending Histogram Info")
+                                
                             self.run_data = _rundata
                             self.myplot.add_series(self.run_data)
                             self.calculate_sequenced_read_lengths()
@@ -317,37 +393,48 @@ class MinknowHistograms:
 
 
 class StackedBarPlot:
+    """
+    Class for creating and managing stacked bar plots.
+    
+    This class handles the creation and updating of interactive
+    stacked bar plots using the echarts library.
+    
+    Attributes:
+        echart: The echarts plot object
+    """
+    
     def __init__(self):
-
+        """
+        Initialize a StackedBarPlot instance.
+        
+        Creates an interactive plot with toolbox, axes, and legend.
+        """
         self.echart = ui.echart(
             {
                 "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                #'title': {'text': 'Read Length Histogram'},
                 "yAxis": {"type": "value", "name": "Yield"},
                 "xAxis": {"type": "category", "name": "Bin Size", "data": []},
                 "legend": {"textStyle": {"color": "gray"}},
-                "series": [
-                    # {'type': 'bar', 'name': 'Alpha', 'stack': 'x', 'data': [0.1, 0.2]},
-                    # {'type': 'bar', 'name': 'Beta', 'stack': 'x',  'data': [0.3, 0.4]},
-                ],
+                "series": [],
             }
         ).classes("w-full")
 
     def add_series(self, rundata: dict) -> None:
-        # TODO: Maintain data visibility state between updates.
-        # print(dir(self.echart.props))
+        """
+        Add or update data series in the plot.
+        
+        Args:
+            rundata (dict): Dictionary containing the data series to plot
+                Must include 'bucket_values', 'read_end_reason', and 'histdata'
+        """
         self.echart.options["xAxis"]["data"] = rundata["bucket_values"]
-        # print(self.echart.options['series'])
         for i, value in enumerate(rundata["read_end_reason"]):
             dataexists = False
             for seri in self.echart.options["series"]:
                 if seri["name"] == value:
                     dataexists = True
-                    # print (f"Found {value}")
-                    # print (seri)
                     seri["data"] = list(rundata["histdata"][i])
             if not dataexists:
-                # print(f"Not Found {value} in {[x['name'] for x in self.echart.options['series']]}")
                 self.echart.options["series"].append(
                     {
                         "type": "bar",
@@ -356,7 +443,6 @@ class StackedBarPlot:
                         "data": list(rundata["histdata"][i]),
                     }
                 )
-        # print(self.echart.options['legend'])
         self.echart.update()
 
 
@@ -372,15 +458,19 @@ def index_page() -> None:
 
 def run_class(port: int, reload: bool):
     """
-    Helper function to run the app.
-    :param port: The port to serve the app on.
-    :param reload: Should we reload the app on changes.
-    :return:
+    Helper function to run the histogram visualization application.
+    
+    Args:
+        port (int): Port number to serve the application
+        reload (bool): Whether to enable auto-reload for development
+        
+    Returns:
+        None
     """
     index_page()
     ui.run(
         port=port, reload=reload, title="Readfish NiceGUI"
-    )  # , native=True, fullscreen=False, window_size=(1200, 1000))
+    )
 
 
 def main():  # , threads, simtime, watchfolder, output, sequencing_summary):

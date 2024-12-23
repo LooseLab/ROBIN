@@ -1,3 +1,27 @@
+"""
+MinKNOW Information Module
+
+This module provides a comprehensive interface for interacting with Oxford Nanopore's MinKNOW software.
+It handles real-time monitoring of sequencing runs, data visualization, and device management through
+a modern web interface built with NiceGUI.
+
+The module includes classes for managing MinKNOW connections, monitoring device status,
+tracking sequencing progress, and displaying real-time statistics and plots.
+
+Key Features:
+- Real-time monitoring of MinKNOW sequencing runs
+- Interactive data visualization with plots and statistics
+- Device and flowcell status tracking
+- Run configuration and management
+- Automated data collection and analysis
+
+Dependencies:
+- nicegui: For building the web interface
+- minknow_api: For communicating with MinKNOW
+- numpy: For numerical computations
+- logging: For application logging
+"""
+
 # Python imports.
 from __future__ import annotations
 from nicegui import ui, app
@@ -35,7 +59,24 @@ UNIQUE_ID: str = str(uuid.uuid4())
 
 
 class ExperimentSpec(object):
+    """
+    A class to hold experiment specifications for a MinKNOW sequencing position.
+    
+    This class maintains information about a sequencing position and its associated
+    protocol ID for experiment execution.
+    
+    Attributes:
+        position: The sequencing position object from MinKNOW
+        protocol_id (str): The identifier for the protocol to be run
+    """
+    
     def __init__(self, position):
+        """
+        Initialize an ExperimentSpec instance.
+        
+        Args:
+            position: A MinKNOW position object representing a sequencing position
+        """
         self.position = position
         self.protocol_id = ""
 
@@ -45,6 +86,25 @@ ExperimentSpecs = Sequence[ExperimentSpec]
 
 # Determine which protocol to run for each experiment, and add its ID to experiment_specs
 def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_id):
+    """
+    Add protocol IDs to experiment specifications based on flowcell and kit information.
+    
+    This function validates flowcell presence and compatibility, then finds and assigns
+    the appropriate protocol ID for each experiment specification.
+    
+    Args:
+        experiment_specs (list): List of ExperimentSpec objects
+        kit (str): The sequencing kit identifier
+        basecall_config (str): Basecalling configuration name
+        expected_flowcell_id (str): The expected flowcell ID to validate against
+        
+    Returns:
+        bool: True if protocol IDs were successfully added, False otherwise
+        
+    Raises:
+        None: Errors are handled internally and reported via UI notifications
+    """
+    
     for spec in experiment_specs:
         # Connect to the sequencing position:
         position_connection = spec.position.connect()
@@ -94,6 +154,22 @@ def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_i
 
 @contextmanager
 def disable(button: ui.button):
+    """
+    Context manager to temporarily disable a UI button.
+    
+    This ensures the button is re-enabled even if an exception occurs.
+    
+    Args:
+        button (ui.button): The button to disable
+        
+    Yields:
+        None
+        
+    Example:
+        with disable(my_button):
+            # Perform some operation
+            # Button will be re-enabled after the block
+    """
     button.disable()
     try:
         yield
@@ -441,6 +517,17 @@ class Minknow_Info:
         # Format timestamps for x-axis
         timestamps = [t.strftime('%H:%M:%S') for t in self.timestamps]
         
+        # Determine appropriate scale for bases
+        max_bases = max(self.pass_bases) if self.pass_bases else 0
+        if max_bases >= 1:  # Greater than 1 Gb
+            base_scale = 1
+            base_unit = 'Gb'
+            formatted_bases = self.pass_bases
+        else:
+            base_scale = 1000  # Convert to Mb
+            base_unit = 'Mb'
+            formatted_bases = [b * 1000 for b in self.pass_bases]  # Convert Gb to Mb
+        
         options = {
             'animation': False,  # Disable animations for smoother updates
             'title': {
@@ -452,26 +539,26 @@ class Minknow_Info:
                 'axisPointer': {
                     'type': 'cross'
                 },
-                ':formatter': '''
-                    function(params) {
+                ':formatter': f'''
+                    function(params) {{
                         let result = params[0].axisValueLabel + '<br/>';
-                        for (let i = 0; i < params.length; i++) {
+                        for (let i = 0; i < params.length; i++) {{
                             let value = params[i].value;
                             let marker = params[i].marker;
                             let name = params[i].seriesName;
-                            if (name.includes('Bases')) {
-                                value = value.toFixed(1) + ' Gb';
-                            } else {
+                            if (name.includes('Bases')) {{
+                                value = value.toFixed(1) + ' {base_unit}';
+                            }} else {{
                                 value = value.toLocaleString();
-                            }
+                            }}
                             result += marker + ' ' + name + ': ' + value + '<br/>';
-                        }
+                        }}
                         return result;
-                    }
+                    }}
                 '''
             },
             'legend': {
-                'data': ['Total Reads', 'Pass Reads', 'Pass Bases (Gb)'],
+                'data': ['Total Reads', 'Pass Reads', f'Pass Bases ({base_unit})'],
                 'top': '25px'
             },
             'grid': {
@@ -506,7 +593,7 @@ class Minknow_Info:
                 },
                 {
                     'type': 'value',
-                    'name': 'Bases (Gb)',
+                    'name': f'Bases ({base_unit})',
                     'position': 'right',
                     'axisLine': {
                         'show': True,
@@ -537,11 +624,11 @@ class Minknow_Info:
                     'showSymbol': False  # Hide symbols for smoother line
                 },
                 {
-                    'name': 'Pass Bases (Gb)',
+                    'name': f'Pass Bases ({base_unit})',
                     'type': 'line',
                     'smooth': True,
                     'yAxisIndex': 1,
-                    'data': list(self.pass_bases),
+                    'data': list(formatted_bases),
                     'itemStyle': {'color': '#FAC858'},
                     'showSymbol': False  # Hide symbols for smoother line
                 }
@@ -551,7 +638,22 @@ class Minknow_Info:
         return options
 
     def update_yield_data(self, read_count, pass_read_count, pass_bases):
-        """Update the yield data with new values - only used for live updates"""
+        """
+        Update the yield data with new values from the sequencing run.
+        
+        This method updates the internal data structures with new sequencing
+        statistics and triggers UI updates if sufficient time has passed since
+        the last update.
+        
+        Args:
+            read_count (int): Total number of reads
+            pass_read_count (int): Number of reads passing quality filters
+            pass_bases (int): Total number of bases in passing reads
+            
+        Note:
+            Updates are rate-limited by self.update_interval to prevent
+            overwhelming the UI.
+        """
         current_time = datetime.now()
         
         # Only update if enough time has passed and we're not getting historical data
@@ -572,14 +674,32 @@ class Minknow_Info:
                 
                 # Update the plot data
                 if hasattr(self, 'yield_plot'):
+                    # Determine appropriate scale
+                    max_bases = max(self.pass_bases)
+                    if max_bases >= 1:  # Greater than 1 Gb
+                        base_scale = 1
+                        base_unit = 'Gb'
+                        formatted_bases = self.pass_bases
+                    else:
+                        base_scale = 1000  # Convert to Mb
+                        base_unit = 'Mb'
+                        formatted_bases = [b * 1000 for b in self.pass_bases]  # Convert Gb to Mb
+                    
                     # Update x-axis data
                     new_timestamps = [t.strftime('%H:%M:%S') for t in self.timestamps]
                     self.yield_plot.options['xAxis']['data'] = new_timestamps
                     
+                    # Update y-axis label
+                    self.yield_plot.options['yAxis'][1]['name'] = f'Bases ({base_unit})'
+                    
+                    # Update legend
+                    self.yield_plot.options['legend']['data'] = ['Total Reads', 'Pass Reads', f'Pass Bases ({base_unit})']
+                    
                     # Update series data
                     self.yield_plot.options['series'][0]['data'] = list(self.read_counts)
                     self.yield_plot.options['series'][1]['data'] = list(self.pass_reads)
-                    self.yield_plot.options['series'][2]['data'] = list(self.pass_bases)
+                    self.yield_plot.options['series'][2]['data'] = list(formatted_bases)
+                    self.yield_plot.options['series'][2]['name'] = f'Pass Bases ({base_unit})'
                     
                     # Trigger the update
                     self.yield_plot.update()
@@ -937,10 +1057,16 @@ def run_class(port: int, reload: bool):
     )  # , native=True, fullscreen=False, window_size=(1200, 1000))
 
 
-def main():  # , threads, simtime, watchfolder, output, sequencing_summary):
+def main():
     """
-    Entrypoint for when GUI is launched directly.
-    :return: None
+    Main entry point for the MinKNOW monitoring application.
+    
+    This function initializes and runs the web interface for monitoring
+    MinKNOW sequencing runs. It sets up the necessary routes and starts
+    the web server.
+    
+    Returns:
+        None
     """
     run_class(port=12398, reload=False)
 
