@@ -773,27 +773,9 @@ class Position(MinKNOWFish):
                         self.bed_file,
                         self.experiment_duration,
                     )
-
-                    with ui.column().bind_visibility_from(self.minknow_info_pane, "show"):
-                        # Protocol Information
-                        self.protocol_run_info = ui.column().classes(
-                            "w-full p-4 bg-gray-50 rounded-lg mt-4"
-                        )
-                        # Flowcell Information
-                        self.flowcell_info = ui.column().classes(
-                            "w-full p-4 bg-gray-50 rounded-lg mt-4"
-                        )
-                        # Yield Summary
-                        self.yield_summary_info = ui.column().classes(
-                            "w-full p-4 bg-gray-50 rounded-lg mt-4"
-                        )
-                        # Acquisition Information
-                        self.acquisition_run_info = ui.column().classes(
-                            "w-full p-4 bg-gray-50 rounded-lg mt-4"
-                        )
-                        
-                        logger.debug("Creating MinknowHistograms instance")
-                        self.minknowhistogram = MinknowHistograms(self.position)
+                    
+                    logger.debug("Creating MinknowHistograms instance")
+                    self.minknowhistogram = MinknowHistograms(self.position)
 
             # Start background tasks
             logger.debug("Starting background tasks")

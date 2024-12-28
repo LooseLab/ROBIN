@@ -360,7 +360,7 @@ class Minknow_Info:
                         self._render_monitoring_tile('Flowcell Type', 'Flowcell_Type')
                     
                     # Yield Plot Container
-                    with ui.card().classes('w-full q-ma-md').style('min-height: 500px'):
+                    with ui.card().classes('w-full').style('min-height: 500px'):
                         with ui.card_section():
                             ui.label('Sequencing Yield').classes('text-h6')
                         
@@ -532,7 +532,14 @@ class Minknow_Info:
             'animation': False,  # Disable animations for smoother updates
             'title': {
                 'text': 'Sequencing Yield Over Time',
-                'left': 'center'
+                'left': 'center',
+                'top': '20px'  # Add space above title
+            },
+            'toolbox': {
+                'show': True,
+                'feature': {
+                    'saveAsImage': {'title': 'Save Image'}
+                }
             },
             'tooltip': {
                 'trigger': 'axis',
@@ -559,13 +566,14 @@ class Minknow_Info:
             },
             'legend': {
                 'data': ['Total Reads', 'Pass Reads', f'Pass Bases ({base_unit})'],
-                'top': '25px'
+                'top': '50px',  # Move legend below title
+                'padding': [10, 10]  # Add padding around legend
             },
             'grid': {
-                'left': '3%',
-                'right': '4%',
-                'bottom': '3%',
-                'top': '15%',
+                'left': '10%',      # Increased left padding for y-axis labels
+                'right': '10%',     # Increased right padding for second y-axis
+                'bottom': '15%',    # Increased bottom padding for x-axis labels
+                'top': '25%',       # Increased top padding for title and legend
                 'containLabel': True
             },
             'xAxis': {
@@ -573,14 +581,19 @@ class Minknow_Info:
                 'boundaryGap': False,
                 'data': timestamps,
                 'axisLabel': {
-                    'rotate': 45
-                }
+                    'rotate': 45,
+                    'margin': 15    # Add margin for rotated labels
+                },
+                'nameLocation': 'middle',
+                'nameGap': 35      # Add gap for axis name
             },
             'yAxis': [
                 {
                     'type': 'value',
                     'name': 'Read Count',
                     'position': 'left',
+                    'nameLocation': 'middle',
+                    'nameGap': 50,  # Add gap for axis name
                     'axisLine': {
                         'show': True,
                         'lineStyle': {
@@ -588,13 +601,16 @@ class Minknow_Info:
                         }
                     },
                     'axisLabel': {
-                        ':formatter': 'value => value.toLocaleString()'
+                        ':formatter': 'value => value.toLocaleString()',
+                        'margin': 10  # Add margin for labels
                     }
                 },
                 {
                     'type': 'value',
                     'name': f'Bases ({base_unit})',
                     'position': 'right',
+                    'nameLocation': 'middle',
+                    'nameGap': 50,  # Add gap for axis name
                     'axisLine': {
                         'show': True,
                         'lineStyle': {
@@ -602,7 +618,8 @@ class Minknow_Info:
                         }
                     },
                     'axisLabel': {
-                        ':formatter': 'value => value.toFixed(1)'
+                        ':formatter': 'value => value.toFixed(1)',
+                        'margin': 10  # Add margin for labels
                     }
                 }
             ],

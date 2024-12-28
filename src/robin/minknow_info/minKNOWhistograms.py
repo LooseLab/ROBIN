@@ -139,87 +139,83 @@ class MinknowHistograms:
         self.renderme()
 
     def renderme(self):
-        # Main container with subtle border
-        with ui.card().classes("w-full flat border-[1px] no-shadow rounded-lg"):
-            # Header section
-            with ui.card().tight().classes("flat border-b-[1px] no-shadow p-4"):
-                with ui.row().classes("items-center gap-2"):
-                    ui.avatar("bar_chart", color="grey", square=False)
-                    ui.label("Histograms").classes("text-h6 font-semibold")
-                ui.label(
-                    "Information on read length distributions taken from MinKNOW."
-                ).classes(f"text-caption text-secondary {self.color} mt-1")
+        # Main container with full width
+        with ui.card().classes('w-full'):
+            with ui.card_section():
+                with ui.row().classes('items-center'):
+                    ui.icon('bar_chart', size='lg').classes('text-primary q-mr-md')
+                    with ui.column():
+                        ui.label('Read Length Distribution').classes('text-h6')
+                        ui.label('Information on read length distributions taken from MinKNOW').classes(f'text-caption {self.color}')
 
-            # Main content area
-            with ui.column().classes("w-full p-4").bind_visibility_from(self, "Live_Run"):
-                # Plot takes primary focus
-                self.myplot = StackedBarPlot()
-                
-                # Information grid - organized in 2 rows for better scanning
-                with ui.grid().classes("gap-4 mt-4 grid-cols-2 md:grid-cols-4"):
-                    # Primary metrics
-                    with ui.column().classes("space-y-2"):
-                        ui.label("Run Status").classes("text-secondary text-sm")
-                        ui.label().bind_text_from(
-                            self, "Run_ID", backward=lambda n: f"Run ID: {n}"
-                        ).classes("font-medium")
-                        ui.label().bind_text_from(
-                            self, "Live_Run", backward=lambda n: f"Live Run: {n}"
-                        ).classes("font-medium")
-                    
-                    # Technical metrics
-                    with ui.column().classes("space-y-2"):
-                        ui.label("Technical Details").classes("text-secondary text-sm")
-                        ui.label().bind_text_from(
-                            self, "sample_rate", 
-                            backward=lambda n: f"Sample Rate: {n}"
-                        ).classes("font-medium")
-                        ui.label().bind_text_from(
-                            self, "events_to_base_ratio",
-                            backward=lambda n: f"Events to Base Ratio: {n}",
-                        ).classes("font-medium")
-                    
-                    # Configuration
-                    with ui.column().classes("space-y-2"):
-                        ui.label("Configuration").classes("text-secondary text-sm")
-                        chip = StatusChip(
-                            text=''  # Text will be set by bind_text_from
-                        ).bind_text_from(
-                            self,
-                            "basecalling_enabled",
-                            backward=lambda v: "Basecalling Enabled" if v else "Basecalling Disabled"
-                        )
-                        ui.label().bind_text_from(
-                            self, "purpose", backward=lambda n: f"Purpose: {n}"
-                        ).classes("font-medium")
-                    
-                    # Adaptive sampling info
-                    with ui.column().classes("space-y-2"):
-                        ui.label("Adaptive Sampling").classes("text-secondary text-sm")
-                        chip = StatusChip(
-                            text=''  # Text will be set by bind_text_from
-                        ).bind_text_from(
-                            self,
-                            "adaptive_sampling",
-                            backward=lambda v: "Adaptive Sampling Enabled" if v else "Adaptive Sampling Disabled"
-                        )
-                        ui.label().bind_text_from(
-                            self, "adaptive_sampling_ignore_chunk",
-                            backward=lambda n: f"Chunk: {n}",
-                        ).classes("font-medium")
-                    
-                # Padding info - important enough to be separate
+            # Main content area with full width
+            with ui.card_section().classes('w-full').bind_visibility_from(self, 'Live_Run'):
+                # Plot container with full width and fixed height
+                with ui.card().classes('w-full').style('min-height: 500px'):
+                    self.myplot = StackedBarPlot()
+
+            # Information grid
+            with ui.grid(columns=4):
+                # Run Status
+                with ui.card().classes('q-pa-sm'):
+                    ui.label('Run Status').classes('text-caption text-secondary')
+                    ui.label().bind_text_from(
+                        self, 'Run_ID',
+                        backward=lambda n: f'Run ID: {n}'
+                    ).classes('text-body2')
+                    ui.label().bind_text_from(
+                        self, 'Live_Run',
+                        backward=lambda n: f'Live Run: {n}'
+                    ).classes('text-body2')
+
+                # Technical Details
+                with ui.card():#.classes('q-pa-sm'):
+                    ui.label('Technical Details').classes('text-caption text-secondary')
+                    ui.label().bind_text_from(
+                        self, 'sample_rate',
+                        backward=lambda n: f'Sample Rate: {n}'
+                    ).classes('text-body2')
+                    ui.label().bind_text_from(
+                        self, 'events_to_base_ratio',
+                        backward=lambda n: f'Events to Base Ratio: {n}'
+                    ).classes('text-body2')
+
+                # Configuration
+                with ui.card():#.classes('q-pa-sm'):
+                    ui.label('Configuration').classes('text-caption text-secondary')
+                    StatusChip(text='').bind_text_from(
+                        self, 'basecalling_enabled',
+                        backward=lambda v: 'Basecalling Enabled' if v else 'Basecalling Disabled'
+                    )
+                    ui.label().bind_text_from(
+                        self, 'purpose',
+                        backward=lambda n: f'Purpose: {n}'
+                    ).classes('text-body2')
+
+                # Adaptive Sampling
+                with ui.card():#.classes('q-pa-sm'):
+                    ui.label('Adaptive Sampling').classes('text-caption text-secondary')
+                    StatusChip(text='').bind_text_from(
+                        self, 'adaptive_sampling',
+                        backward=lambda v: 'Adaptive Sampling Enabled' if v else 'Adaptive Sampling Disabled'
+                    )
+                    ui.label().bind_text_from(
+                        self, 'adaptive_sampling_ignore_chunk',
+                        backward=lambda n: f'Chunk: {n}'
+                    ).classes('text-body2')
+
+                # Padding info at the bottom
                 ui.label().bind_text_from(
-                    self, "padding",
-                    backward=lambda n: f"Suggested padding: {n} bases",
-                ).classes("mt-4 text-emphasis font-medium")
+                    self, 'padding',
+                    backward=lambda n: f'Suggested padding: {n} bases'
+                ).classes('text-body1 q-mt-md')
 
             # Empty state message
-            with ui.column().classes("p-8 text-center").bind_visibility_from(
-                self, "Live_Run", backward=lambda v: not v
+            with ui.column().classes('q-pa-lg text-center').bind_visibility_from(
+                self, 'Live_Run', backward=lambda v: not v
             ):
-                ui.label("Set up a run using MinKNOW to see histogram information.").classes(
-                    "text-secondary"
+                ui.label('Set up a run using MinKNOW to see histogram information.').classes(
+                    'text-secondary'
                 )
 
     def connect_me(self) -> None:
@@ -404,45 +400,107 @@ class StackedBarPlot:
     """
     
     def __init__(self):
-        """
-        Initialize a StackedBarPlot instance.
+        """Initialize a stacked bar plot with proper sizing and layout"""
+        # Keep track of selected state
+        self.selected_state = {}
+        self.series_names = set()
         
-        Creates an interactive plot with toolbox, axes, and legend.
-        """
-        self.echart = ui.echart(
-            {
-                "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                "yAxis": {"type": "value", "name": "Yield"},
-                "xAxis": {"type": "category", "name": "Bin Size", "data": []},
-                "legend": {"textStyle": {"color": "gray"}},
-                "series": [],
-            }
-        ).classes("w-full")
+        self.echart = ui.echart({
+            'grid': {
+                'left': '10%',      # Increased left padding for y-axis labels
+                'right': '10%',     # Increased right padding for second y-axis
+                'bottom': '15%',    # Increased bottom padding for x-axis labels
+                'top': '25%',       # Increased top padding for title and legend
+                'containLabel': True
+            },
+            'toolbox': {
+                'show': True,
+                'feature': {
+                    'saveAsImage': {'title': 'Save Image'}
+                }
+            },
+            'tooltip': {
+                'trigger': 'axis',
+                'axisPointer': {'type': 'cross'}
+            },
+            'yAxis': {
+                'type': 'value',
+                'name': 'Read Count',
+                'nameLocation': 'middle',
+                'nameGap': 50,
+                'axisLabel': {
+                    'formatter': '{value}',
+                    'margin': 10
+                }
+            },
+            'xAxis': {
+                'type': 'category',
+                'name': 'Read Length',
+                'nameLocation': 'middle',
+                'nameGap': 40,
+                'data': [],
+                'axisLabel': {
+                    'rotate': 45,
+                    'margin': 15
+                }
+            },
+            'legend': {
+                'type': 'scroll',
+                'top': '50px',  # Move legend below title
+                'padding': [10, 10],  # Add padding around legend
+                'selected': self.selected_state,  # Link to our state tracker
+                'selectedMode': 'multiple'  # Allow multiple selection
+            },
+            'series': [],
+            'animation': False
+        }).classes('w-full').style('min-height: 500px')
 
     def add_series(self, rundata: dict) -> None:
-        """
-        Add or update data series in the plot.
+        """Add or update data series in the plot with proper filtering"""
+        if not rundata or 'bucket_values' not in rundata:
+            return
+
+        # Update x-axis data
+        self.echart.options['xAxis']['data'] = rundata['bucket_values']
         
-        Args:
-            rundata (dict): Dictionary containing the data series to plot
-                Must include 'bucket_values', 'read_end_reason', and 'histdata'
-        """
-        self.echart.options["xAxis"]["data"] = rundata["bucket_values"]
-        for i, value in enumerate(rundata["read_end_reason"]):
-            dataexists = False
-            for seri in self.echart.options["series"]:
-                if seri["name"] == value:
-                    dataexists = True
-                    seri["data"] = list(rundata["histdata"][i])
-            if not dataexists:
-                self.echart.options["series"].append(
-                    {
-                        "type": "bar",
-                        "name": f"{value}",
-                        "stack": "x",
-                        "data": list(rundata["histdata"][i]),
-                    }
-                )
+        # Get current series by name for quick lookup
+        current_series = {series['name']: i for i, series in enumerate(self.echart.options['series'])}
+        
+        # Color mapping for consistency
+        color_map = {
+            'SignalPositive': '#91CC75',  # Green
+            'SignalNegative': '#EE6666',  # Red
+            'DataServiceUnblockMuxChange': '#5470C6',  # Blue
+            'UnblockMuxChange': '#FAC858',  # Yellow
+            'Other': '#73C0DE'  # Light blue
+        }
+        
+        # Update or add series
+        for i, value in enumerate(rundata['read_end_reason']):
+            # Skip series with all zero values
+            if all(v == 0 for v in rundata['histdata'][i]):
+                continue
+            
+            if value in current_series:
+                # Just update the data of the existing series
+                series_index = current_series[value]
+                self.echart.options['series'][series_index]['data'] = list(rundata['histdata'][i])
+            else:
+                # Only add new series if it doesn't exist
+                color = next((v for k, v in color_map.items() if k in value), '#73C0DE')
+                self.echart.options['series'].append({
+                    'type': 'bar',
+                    'name': value,
+                    'stack': 'total',
+                    'data': list(rundata['histdata'][i]),
+                    'itemStyle': {'color': color},
+                    'emphasis': {
+                        'focus': 'series'
+                    },
+                    'animation': False
+                })
+        
+        # Update the chart
         self.echart.update()
 
 
