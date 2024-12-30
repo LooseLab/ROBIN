@@ -261,14 +261,14 @@ class Sturgeon_object(BaseAnalysis):
         """
         self.card = ui.card().classes('dark:bg-black').style("width: 100%")
         with self.card:
-            with ui.grid(columns=8).classes("w-full h-auto"):
+            with ui.grid(columns=8).classes("w-full h-auto gap-4"):
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black"
-                ):
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg"
+                ).style('background-color: #FFFFFF; padding: 16px;'):
                     self.create_sturgeon_chart("Sturgeon")
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black"
-                ):
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg"
+                ).style('background-color: #FFFFFF; padding: 16px;'):
                     self.create_sturgeon_time_chart("Sturgeon Time Series")
         if self.summary:
             with self.summary:
@@ -482,43 +482,31 @@ class Sturgeon_object(BaseAnalysis):
     def create_sturgeon_chart(self, title):
         """
         Create a bar chart for displaying Sturgeon classification results.
-
-        Creates an accessible, easy-to-read bar chart that shows classification 
-        confidence scores. The chart includes:
-        - Clear title with processing status
-        - Descriptive labels
-        - Consistent color scheme
-        - Accessible text sizes
-        - Interactive tooltips
-
-        Parameters
-        ----------
-        title : str
-            Title for the chart
         """
         self.echart2 = self.create_chart(title)
-        # Set up base chart options following Apple HIG
         self.echart2.options.update({
             "backgroundColor": "transparent",
             "title": {
                 "text": title,
                 "left": "center",
-                "top": 10,
+                "top": 20,
                 "textStyle": {
                     "fontSize": 16,
-                    "fontWeight": "normal"
+                    "fontWeight": "normal",
+                    "color": "#000000"
                 }
             },
             "tooltip": {
                 "trigger": "axis",
                 "axisPointer": {"type": "shadow"},
-                "formatter": "{b}: {c}%"
+                "formatter": "{b}: {c}%",
+                "textStyle": {"fontSize": 14}
             },
             "grid": {
-                "left": "10%",  # Increased to accommodate longer labels
+                "left": "15%",
                 "right": "10%",
                 "bottom": "10%",
-                "top": "15%",
+                "top": "25%",
                 "containLabel": True
             },
             "xAxis": {
@@ -528,7 +516,15 @@ class Sturgeon_object(BaseAnalysis):
                 "interval": 20,
                 "axisLabel": {
                     "fontSize": 12,
-                    "formatter": "{value}%"
+                    "formatter": "{value}%",
+                    "color": "#666666"
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "color": "#E0E0E0",
+                        "type": "dashed"
+                    }
                 }
             },
             "yAxis": {
@@ -537,25 +533,27 @@ class Sturgeon_object(BaseAnalysis):
                 "data": [],
                 "axisLabel": {
                     "fontSize": 12,
-                    "width": 250,  # Increased width for labels
-                    "overflow": "break",  # Changed to break instead of truncate
-                    "interval": 0,  # Show all labels
-                    "align": "right"
+                    "width": 250,
+                    "overflow": "break",
+                    "interval": 0,
+                    "align": "right",
+                    "color": "#666666"
                 }
             },
             "series": [{
                 "type": "bar",
                 "name": "Confidence",
-                "barMaxWidth": "50%",
+                "barMaxWidth": "60%",
                 "itemStyle": {
-                    "color": "#007AFF",  # iOS blue
+                    "color": "#007AFF",
                     "borderRadius": [0, 4, 4, 0]
                 },
                 "label": {
                     "show": True,
                     "position": "right",
                     "formatter": "{c}%",
-                    "fontSize": 12
+                    "fontSize": 12,
+                    "color": "#666666"
                 },
                 "data": []
             }],
@@ -570,58 +568,54 @@ class Sturgeon_object(BaseAnalysis):
     def create_sturgeon_time_chart(self, title):
         """
         Create a time series chart for Sturgeon results.
-
-        Creates an accessible line chart showing classification confidence 
-        trends over time. The chart includes:
-        - Clear title
-        - Time-based x-axis
-        - Interactive legend
-        - Smooth transitions
-        - Accessible color scheme
-        - Tooltips for data points
-
-        Parameters
-        ----------
-        title : str
-            Title for the time series chart
         """
         self.sturgeon_time_chart = self.create_time_chart(title)
-        # Set up base chart options following Apple HIG
         self.sturgeon_time_chart.options.update({
             "backgroundColor": "transparent",
             "title": {
                 "text": title,
                 "left": "center",
-                "top": 10,
+                "top": 20,
                 "textStyle": {
                     "fontSize": 16,
-                    "fontWeight": "normal"
+                    "fontWeight": "normal",
+                    "color": "#000000"
                 }
             },
             "tooltip": {
                 "trigger": "axis",
-                "axisPointer": {"type": "line"}
+                "axisPointer": {"type": "line"},
+                "textStyle": {"fontSize": 14}
             },
             "grid": {
-                "left": "10%",
+                "left": "15%",
                 "right": "15%",
                 "bottom": "10%",
-                "top": "20%",
+                "top": "25%",
                 "containLabel": True
             },
             "legend": {
                 "type": "scroll",
                 "orient": "horizontal",
-                "top": 40,
+                "top": 50,
                 "textStyle": {
-                    "fontSize": 12
+                    "fontSize": 12,
+                    "color": "#666666"
                 }
             },
             "xAxis": {
                 "type": "time",
                 "axisLabel": {
                     "fontSize": 12,
-                    "formatter": "{HH}:{mm}"
+                    "formatter": "{HH}:{mm}",
+                    "color": "#666666"
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "color": "#E0E0E0",
+                        "type": "dashed"
+                    }
                 }
             },
             "yAxis": {
@@ -631,7 +625,15 @@ class Sturgeon_object(BaseAnalysis):
                 "interval": 20,
                 "axisLabel": {
                     "fontSize": 12,
-                    "formatter": "{value}%"
+                    "formatter": "{value}%",
+                    "color": "#666666"
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "color": "#E0E0E0",
+                        "type": "dashed"
+                    }
                 }
             },
             "aria": {
@@ -648,9 +650,9 @@ class Sturgeon_object(BaseAnalysis):
 
         Parameters
         ----------
-        x : list
+        x : List[str]
             List of tumor types
-        y : list
+        y : List[float]
             Confidence scores for each tumor type
         count : str
             Number of BAM files processed
@@ -660,6 +662,11 @@ class Sturgeon_object(BaseAnalysis):
         # Convert values to percentages and format
         formatted_values = [float(f"{val * 100:.1f}") for val in y]
         
+        # Sort the data in descending order
+        sorted_indices = sorted(range(len(formatted_values)), key=lambda k: formatted_values[k], reverse=True)
+        sorted_values = [formatted_values[i] for i in sorted_indices]
+        sorted_labels = [x[i] for i in sorted_indices]
+        
         # Create descriptive title with key information
         title_text = (
             f"Sturgeon Analysis Results\n"
@@ -667,11 +674,11 @@ class Sturgeon_object(BaseAnalysis):
         )
         
         self.echart2.options["title"]["text"] = title_text
-        self.echart2.options["yAxis"]["data"] = x
+        self.echart2.options["yAxis"]["data"] = sorted_labels
         self.echart2.options["series"][0].update({
-            "data": formatted_values,
+            "data": sorted_values,
             "itemStyle": {
-                "color": "#007AFF",  # iOS blue
+                "color": "#007AFF",
                 "borderRadius": [0, 4, 4, 0]
             }
         })
@@ -683,7 +690,7 @@ class Sturgeon_object(BaseAnalysis):
 
         Parameters
         ----------
-        datadf : pandas.DataFrame
+        datadf : pd.DataFrame
             DataFrame containing time series data for visualization
         """
         self.sturgeon_time_chart.options["series"] = []

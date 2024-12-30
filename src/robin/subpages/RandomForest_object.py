@@ -464,43 +464,31 @@ class RandomForest_object(BaseAnalysis):
     def create_rcns2_chart(self, title):
         """
         Create a bar chart for displaying Random Forest classification results.
-
-        Creates an accessible, easy-to-read bar chart that shows classification 
-        confidence scores. The chart includes:
-        - Clear title with processing status
-        - Descriptive labels
-        - Consistent color scheme
-        - Accessible text sizes
-        - Interactive tooltips
-
-        Parameters
-        ----------
-        title : str
-            Title for the chart
         """
         self.echart = self.create_chart(title)
-        # Set up base chart options following Apple HIG
         self.echart.options.update({
             "backgroundColor": "transparent",
             "title": {
                 "text": title,
                 "left": "center",
-                "top": 10,
+                "top": 20,  # Increased for consistency
                 "textStyle": {
                     "fontSize": 16,
-                    "fontWeight": "normal"
+                    "fontWeight": "normal",
+                    "color": "#000000"  # Explicit color for better contrast
                 }
             },
             "tooltip": {
                 "trigger": "axis",
                 "axisPointer": {"type": "shadow"},
-                "formatter": "{b}: {c}%"
+                "formatter": "{b}: {c}%",
+                "textStyle": {"fontSize": 14}
             },
             "grid": {
-                "left": "10%",
+                "left": "15%",  # Standardized margin
                 "right": "10%",
                 "bottom": "10%",
-                "top": "15%",
+                "top": "25%",  # Increased for title and legend
                 "containLabel": True
             },
             "xAxis": {
@@ -510,7 +498,15 @@ class RandomForest_object(BaseAnalysis):
                 "interval": 20,
                 "axisLabel": {
                     "fontSize": 12,
-                    "formatter": "{value}%"
+                    "formatter": "{value}%",
+                    "color": "#666666"  # Subtle color for axis labels
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "color": "#E0E0E0",
+                        "type": "dashed"
+                    }
                 }
             },
             "yAxis": {
@@ -522,22 +518,24 @@ class RandomForest_object(BaseAnalysis):
                     "width": 250,
                     "overflow": "break",
                     "interval": 0,
-                    "align": "right"
+                    "align": "right",
+                    "color": "#666666"
                 }
             },
             "series": [{
                 "type": "bar",
                 "name": "Confidence",
-                "barMaxWidth": "50%",
+                "barMaxWidth": "60%",  # Standardized bar width
                 "itemStyle": {
-                    "color": "#007AFF",  # iOS blue
+                    "color": "#007AFF",
                     "borderRadius": [0, 4, 4, 0]
                 },
                 "label": {
                     "show": True,
                     "position": "right",
                     "formatter": "{c}%",
-                    "fontSize": 12
+                    "fontSize": 12,
+                    "color": "#666666"
                 },
                 "data": []
             }],
@@ -552,58 +550,54 @@ class RandomForest_object(BaseAnalysis):
     def create_rcns2_time_chart(self, title):
         """
         Create a time series chart for Random Forest results.
-
-        Creates an accessible line chart showing classification confidence 
-        trends over time. The chart includes:
-        - Clear title
-        - Time-based x-axis
-        - Interactive legend
-        - Smooth transitions
-        - Accessible color scheme
-        - Tooltips for data points
-
-        Parameters
-        ----------
-        title : str
-            Title for the time series chart
         """
         self.rcns2_time_chart = self.create_time_chart(title)
-        # Set up base chart options following Apple HIG
         self.rcns2_time_chart.options.update({
             "backgroundColor": "transparent",
             "title": {
                 "text": title,
                 "left": "center",
-                "top": 10,
+                "top": 20,
                 "textStyle": {
                     "fontSize": 16,
-                    "fontWeight": "normal"
+                    "fontWeight": "normal",
+                    "color": "#000000"
                 }
             },
             "tooltip": {
                 "trigger": "axis",
-                "axisPointer": {"type": "line"}
+                "axisPointer": {"type": "line"},
+                "textStyle": {"fontSize": 14}
             },
             "grid": {
-                "left": "10%",
+                "left": "15%",
                 "right": "15%",
                 "bottom": "10%",
-                "top": "20%",
+                "top": "25%",
                 "containLabel": True
             },
             "legend": {
                 "type": "scroll",
                 "orient": "horizontal",
-                "top": 40,
+                "top": 50,
                 "textStyle": {
-                    "fontSize": 12
+                    "fontSize": 12,
+                    "color": "#666666"
                 }
             },
             "xAxis": {
                 "type": "time",
                 "axisLabel": {
                     "fontSize": 12,
-                    "formatter": "{HH}:{mm}"
+                    "formatter": "{HH}:{mm}",
+                    "color": "#666666"
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "color": "#E0E0E0",
+                        "type": "dashed"
+                    }
                 }
             },
             "yAxis": {
@@ -613,7 +607,15 @@ class RandomForest_object(BaseAnalysis):
                 "interval": 20,
                 "axisLabel": {
                     "fontSize": 12,
-                    "formatter": "{value}%"
+                    "formatter": "{value}%",
+                    "color": "#666666"
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "color": "#E0E0E0",
+                        "type": "dashed"
+                    }
                 }
             },
             "aria": {
