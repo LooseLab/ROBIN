@@ -1,0 +1,39 @@
+name: Enforce Branch Creation Rules
+
+on:
+  create:
+    branches:
+      - "**"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check branch creation rules
+        run: |
+          branch_name="${{ github.ref_name }}"
+
+          if [[ "$branch_name" =~ ^hotfix/ ]]; then
+              base_branch=$(git merge-base HEAD origin/main)
+              main_commit=$(git rev-parse origin/main)
+              if [[ "$base_branch" != "$main_commit" ]]; then
+                  echo "Error: Hotfix branches must be created from 'main'."
+                  exit 1
+              fi
+          elif [[ "$branch_name" =~ ^issue/ ]]; then
+              base_branch=$(git merge-base HEAD origin/main origin/dev)
+              main_commit=$(git rev-parse origin/main)
+              dev_commit=$(git rev-parse origin/dev)
+              if [[ "$base_branch" != "$main_commit" && "$base_branch" != "$dev_commit" ]]; then
+                  echo "Error: Issue branches must be created from 'main' or 'dev'."
+                  exit 1
+              fi
+          elif [[ "$branch_name" =~ ^feature/ ]]; then
+              base_branch=$(git merge-base HEAD origin/dev)
+              dev_commit=$(git rev-parse origin/dev)
+              if [[ "$base_branch" != "$dev_commit" ]]; then
+                  echo "Error: Feature branches must be created from 'dev'."
+                  exit 1
+              fi
+          fi
