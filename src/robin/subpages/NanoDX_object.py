@@ -729,62 +729,89 @@ class NanoDX_object(BaseAnalysis):
         datadf : pd.DataFrame
             DataFrame containing time series data for visualization
         """
-        self.nanodx_time_chart.options["series"] = []
-        
-        # iOS color palette for multiple series
-        colors = [
-            "#007AFF",  # Blue
-            "#34C759",  # Green
-            "#FF9500",  # Orange
-            "#FF2D55",  # Red
-            "#5856D6",  # Purple
-            "#FF3B30",  # Red-Orange
-            "#5AC8FA",  # Light Blue
-            "#4CD964",  # Light Green
-        ]
-        
-        for idx, (series, data) in enumerate(datadf.to_dict().items()):
-            if series != "number_probes":
-                # Convert values to percentages
-                data_list = [[key, float(f"{value * 100:.1f}")] for key, value in data.items()]
-                self.nanodx_time_chart.options["series"].append({
-                    "name": series,
-                    "type": "line",
-                    "smooth": True,
-                    "animation": False,
-                    "symbolSize": 6,
-                    "emphasis": {
-                        "focus": "series",
+        try:
+            logger.debug(f"Updating NanoDX time chart with DataFrame shape: {datadf.shape}")
+            logger.debug(f"DataFrame columns: {datadf.columns.tolist()}")
+
+            if datadf.empty:
+                logger.warning("No data available for NanoDX time series chart")
+                self.nanodx_time_chart.options["title"]["text"] = "No Data Available"
+                self.nanodx_time_chart.options["series"] = []
+                self.nanodx_time_chart.update()
+                return
+
+            self.nanodx_time_chart.options["series"] = []
+            
+            # iOS color palette for multiple series
+            colors = [
+                "#007AFF",  # Blue
+                "#34C759",  # Green
+                "#FF9500",  # Orange
+                "#FF2D55",  # Red
+                "#5856D6",  # Purple
+                "#FF3B30",  # Red-Orange
+                "#5AC8FA",  # Light Blue
+                "#4CD964",  # Light Green
+            ]
+            
+            for idx, (series, data) in enumerate(datadf.to_dict().items()):
+                if series != "number_probes":
+                    logger.debug(f"Processing series: {series}")
+                    # Convert values to percentages
+                    data_list = [[key, float(f"{value * 100:.1f}")] for key, value in data.items()]
+                    logger.debug(f"First few data points for {series}: {data_list[:3]}")
+                    
+                    self.nanodx_time_chart.options["series"].append({
+                        "name": series,
+                        "type": "line",
+                        "smooth": True,
+                        "animation": False,
+                        "symbolSize": 6,
+                        "emphasis": {
+                            "focus": "series",
+                            "itemStyle": {
+                                "borderWidth": 2
+                            }
+                        },
+                        "endLabel": {
+                            "show": True,
+                            "formatter": "{a}: {c}%",
+                            "distance": 10,
+                            "fontSize": 12
+                        },
+                        "lineStyle": {
+                            "width": 2,
+                            "color": colors[idx % len(colors)]
+                        },
                         "itemStyle": {
-                            "borderWidth": 2
-                        }
-                    },
-                    "endLabel": {
-                        "show": True,
-                        "formatter": "{a}: {c}%",
-                        "distance": 10,
-                        "fontSize": 12
-                    },
-                    "lineStyle": {
-                        "width": 2,
-                        "color": colors[idx % len(colors)]
-                    },
-                    "itemStyle": {
-                        "color": colors[idx % len(colors)]
-                    },
-                    "data": data_list
-                })
-        
-        # Update chart title with summary
-        latest_data = datadf.iloc[-1].drop("number_probes")  # Remove number_probes from latest data
-        max_confidence = latest_data.max() * 100  # Convert to percentage
-        max_type = latest_data.idxmax()
-        self.nanodx_time_chart.options["title"]["text"] = (
-            f"Classification Confidence Over Time\n"
-            f"Current highest confidence: {max_type} ({max_confidence:.1f}%)"
-        )
-        
-        self.nanodx_time_chart.update()
+                            "color": colors[idx % len(colors)]
+                        },
+                        "data": data_list
+                    })
+
+            # Update chart title with summary
+            if not datadf.empty:
+                latest_data = datadf.iloc[-1]
+                if "number_probes" in latest_data:
+                    latest_data = latest_data.drop("number_probes")  # Remove number_probes from latest data
+                
+                if not latest_data.empty and not latest_data.isna().all():
+                    max_confidence = latest_data.max() * 100  # Convert to percentage
+                    max_type = latest_data.idxmax()
+                    self.nanodx_time_chart.options["title"]["text"] = (
+                        f"Classification Confidence Over Time\n"
+                        f"Current highest confidence: {max_type} ({max_confidence:.1f}%)"
+                    )
+                else:
+                    self.nanodx_time_chart.options["title"]["text"] = "Classification Confidence Over Time"
+            
+            self.nanodx_time_chart.update()
+            
+        except Exception as e:
+            logger.error(f"Error updating NanoDX time chart: {str(e)}", exc_info=True)
+            self.nanodx_time_chart.options["title"]["text"] = "Error Updating Chart"
+            self.nanodx_time_chart.options["series"] = []
+            self.nanodx_time_chart.update()
 
 
 def test_me(
