@@ -482,26 +482,98 @@ class TargetCoverage(BaseAnalysis):
             self.page_timer = ui.timer(30, lambda: self.show_previous_data())
 
     def create_coverage_plot(self, title):
+        """
+        Create a bar chart for displaying chromosome coverage data.
+        """
         self.echart3 = (
             ui.echart(
                 {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "yAxis": {"type": "value"},
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12
+                    },
+                    "grid": {
+                        "top": 80,
+                        "bottom": 90,
+                        "left": 80,
+                        "right": 80,
+                        "containLabel": True
+                    },
+                    "title": {
+                        "text": title,
+                        "left": "center",
+                        "top": 20,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {
+                            "dataZoom": {
+                                "show": True,
+                                "title": {
+                                    "zoom": "Zoom",
+                                    "back": "Reset Zoom"
+                                }
+                            },
+                            "restore": {
+                                "show": True,
+                                "title": "Reset"
+                            },
+                            "saveAsImage": {
+                                "show": True,
+                                "title": "Save Image",
+                                "pixelRatio": 2
+                            }
+                        }
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {
+                            "color": "#1D1D1F"
+                        }
+                    },
                     "xAxis": {
                         "type": "category",
                         "data": [],
-                        "axisTick": {"alignWithLabel": True},
                         "axisLabel": {
                             "interval": 0,
-                            "rotate": 30,
+                            "rotate": 45,
+                            "color": "#86868B",
+                            "fontSize": 12
                         },
-                        "inverse": False,
+                        "axisTick": {
+                            "alignWithLabel": True
+                        }
                     },
-                    #'legend': {},
-                    "series": [],
+                    "yAxis": {
+                        "type": "value",
+                        "name": "Coverage Depth",
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "padding": [0, 30, 0, 0]
+                        },
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "formatter": "{value}x"
+                        },
+                        "splitLine": {
+                            "show": True,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#E5E5EA"
+                            }
+                        }
+                    },
+                    "series": []
                 }
             )
             .style("height: 350px")
@@ -509,26 +581,105 @@ class TargetCoverage(BaseAnalysis):
         )
 
     def create_coverage_plot_targets(self, title):
+        """
+        Create a scatter plot for comparing on-target vs off-target coverage.
+        """
         self.echart4 = (
             ui.echart(
                 {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "yAxis": {"type": "value"},
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12
+                    },
+                    "grid": {
+                        "top": 80,
+                        "bottom": 90,
+                        "left": 80,
+                        "right": 80,
+                        "containLabel": True
+                    },
+                    "title": {
+                        "text": title,
+                        "left": "center",
+                        "top": 20,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {
+                            "dataZoom": {
+                                "show": True,
+                                "title": {
+                                    "zoom": "Zoom",
+                                    "back": "Reset Zoom"
+                                }
+                            },
+                            "restore": {
+                                "show": True,
+                                "title": "Reset"
+                            },
+                            "saveAsImage": {
+                                "show": True,
+                                "title": "Save Image",
+                                "pixelRatio": 2
+                            }
+                        }
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "legend": {
+                        "data": ["Off Target", "On Target"],
+                        "top": 50,
+                        "textStyle": {
+                            "color": "#86868B"
+                        }
+                    },
                     "xAxis": {
                         "type": "category",
                         "data": [],
-                        "axisTick": {"alignWithLabel": True},
                         "axisLabel": {
                             "interval": 0,
-                            "rotate": 30,
+                            "rotate": 45,
+                            "color": "#86868B",
+                            "fontSize": 12
                         },
-                        "inverse": False,
+                        "axisTick": {
+                            "alignWithLabel": True
+                        }
                     },
-                    "legend": {"data": ["Off Target", "On Target"]},
-                    "series": [],
+                    "yAxis": {
+                        "type": "value",
+                        "name": "Coverage Depth",
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "padding": [0, 30, 0, 0]
+                        },
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "formatter": "{value}x"
+                        },
+                        "splitLine": {
+                            "show": True,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#E5E5EA"
+                            }
+                        }
+                    },
+                    "series": []
                 }
             )
             .style("height: 350px")
@@ -539,30 +690,109 @@ class TargetCoverage(BaseAnalysis):
         self.coverage_time_chart = (
             ui.echart(
                 {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "grid": {"containLabel": True},
-                    "title": {"text": "Coverage Over Time"},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "time"},
-                    "yAxis": {"type": "value", "data": [], "inverse": False},
-                    "tooltip": {"order": "valueDesc", "trigger": "axis"},
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12
+                    },
+                    "grid": {
+                        "top": 80,
+                        "bottom": 90,
+                        "left": 80,
+                        "right": 80,
+                        "containLabel": True
+                    },
+                    "title": {
+                        "text": "Coverage Over Time",
+                        "left": "center",
+                        "top": 20,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {
+                            "dataZoom": {
+                                "show": True,
+                                "title": {
+                                    "zoom": "Zoom",
+                                    "back": "Reset Zoom"
+                                }
+                            },
+                            "restore": {
+                                "show": True,
+                                "title": "Reset"
+                            },
+                            "saveAsImage": {
+                                "show": True,
+                                "title": "Save Image",
+                                "pixelRatio": 2
+                            }
+                        }
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "xAxis": {
+                        "type": "time",
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "formatter": "{HH}:{mm}:{ss}"
+                        }
+                    },
+                    "yAxis": {
+                        "type": "value",
+                        "name": "Coverage Depth",
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "padding": [0, 30, 0, 0]
+                        },
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "formatter": "{value}x"
+                        },
+                        "splitLine": {
+                            "show": True,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#E5E5EA"
+                            }
+                        }
+                    },
                     "series": [
                         {
                             "type": "line",
                             "smooth": True,
                             "name": "Coverage",
-                            "emphasis": {"focus": "series"},
-                            "endLabel": {
-                                "show": True,
-                                "formatter": "{a}",
-                                "distance": 20,
+                            "emphasis": {
+                                "focus": "series",
+                                "itemStyle": {
+                                    "color": "#0A84FF"  # iOS blue (highlighted)
+                                }
                             },
                             "lineStyle": {
                                 "width": 2,
+                                "color": "#007AFF"  # iOS blue
                             },
-                            "data": [],
+                            "itemStyle": {
+                                "color": "#007AFF"  # iOS blue
+                            },
+                            "symbol": "circle",
+                            "symbolSize": 6,
+                            "data": []
                         }
-                    ],
+                    ]
                 }
             )
             .style("height: 350px")
@@ -573,12 +803,50 @@ class TargetCoverage(BaseAnalysis):
         self.target_boxplot = (
             ui.echart(
                 {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "title": [
-                        {
-                            "text": "Target Coverage",
-                        },
-                    ],
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12
+                    },
+                    "grid": {
+                        "top": 80,
+                        "bottom": 90,
+                        "left": 80,
+                        "right": 80,
+                        "containLabel": True
+                    },
+                    "title": {
+                        "text": "Target Coverage",
+                        "left": "center",
+                        "top": 20,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {
+                            "dataZoom": {
+                                "show": True,
+                                "title": {
+                                    "zoom": "Zoom",
+                                    "back": "Reset Zoom"
+                                }
+                            },
+                            "restore": {
+                                "show": True,
+                                "title": "Reset"
+                            },
+                            "saveAsImage": {
+                                "show": True,
+                                "title": "Save Image",
+                                "pixelRatio": 2
+                            }
+                        }
+                    },
                     "dataset": [
                         {
                             "id": "raw",
@@ -609,108 +877,134 @@ class TargetCoverage(BaseAnalysis):
                             "source": [],
                         },
                     ],
-                    "tooltip": {"trigger": "item", "axisPointer": {"type": "shadow"}},
+                    "tooltip": {
+                        "trigger": "item",
+                        "axisPointer": {"type": "shadow"},
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {
+                            "color": "#1D1D1F"
+                        }
+                    },
                     "dataZoom": [
                         {
                             "type": "slider",
-                            "yAxisIndex": 0,
+                            "show": True,
+                            "xAxisIndex": [0],
+                            "start": 0,
+                            "end": 100,
+                            "borderColor": "#E5E5EA",
+                            "textStyle": {
+                                "color": "#86868B"
+                            }
                         }
                     ],
-                    "grid": {"left": "10%", "right": "10%", "bottom": "15%"},
                     "xAxis": {
                         "type": "category",
                         "name": "Chromosome",
-                        "boundaryGap": True,
                         "nameGap": 30,
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12
+                        },
+                        "axisLabel": {
+                            "interval": 0,
+                            "rotate": 45,
+                            "color": "#86868B",
+                            "fontSize": 12
+                        },
                         "splitArea": {"show": False},
-                        "splitLine": {"show": False},
+                        "splitLine": {"show": False}
                     },
                     "yAxis": {
-                        # "type": 'value',
+                        "type": "value",
                         "name": "Coverage",
-                        # "splitArea": {
-                        #    "show": True
-                        # }
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "padding": [0, 30, 0, 0]
+                        },
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "formatter": "{value}x"
+                        },
+                        "splitArea": {
+                            "show": True
+                        }
                     },
                     "legend": {
-                        "data": ["boxplot", "raw data", "outliers", "global outliers"],
+                        "top": 50,
+                        "textStyle": {
+                            "color": "#86868B"
+                        },
                         "selected": {
-                            "boxplot": True,
+                            "box plot": True,
+                            "outliers": True,
                             "global outliers": True,
-                            "raw data": False,
-                            "outliers": False,
+                            "raw data": False
                         },
                     },
                     "series": [
                         {
-                            "name": "boxplot",
+                            "name": "box plot",
                             "type": "boxplot",
                             "datasetId": "raw",
+                            "itemStyle": {
+                                "color": "#007AFF",  # iOS blue
+                                "borderColor": "#0A84FF"  # iOS blue (highlighted)
+                            },
                             "encode": {
-                                "y": ["min", "Q1", "median", "Q3", "max"],
                                 "x": "chrom",
+                                "y": ["min", "Q1", "median", "Q3", "max"],
                                 "itemName": ["chrom"],
                                 "tooltip": ["min", "Q1", "median", "Q3", "max"],
-                            },
-                        },
-                        {
-                            "name": "raw data",
-                            "type": "scatter",
-                            "datasetId": "rawdata",
-                            "encode": {
-                                "y": "coverage",
-                                "x": "chrom",
-                                "label": "name",
-                                "itemName": "name",
-                                "tooltip": ["chrom", "name", "coverage"],
-                            },
-                            "label": {
-                                "show": True,
-                                "position": "right",
-                                "itemName": "name",
-                                "color": "black",
-                                "fontSize": 16,
                             },
                         },
                         {
                             "name": "outliers",
                             "type": "scatter",
                             "datasetId": "outliers",
-                            "encode": {
-                                "y": "coverage",
-                                "x": "chrom",
-                                "label": "name",
-                                "itemName": "name",
-                                "tooltip": ["chrom", "name", "coverage"],
+                            "symbolSize": 6,
+                            "itemStyle": {
+                                "color": "#FF9F0A"  # iOS orange
                             },
                             "label": {
                                 "show": True,
                                 "position": "right",
-                                "itemName": "name",
-                                "color": "black",
-                                "fontSize": 16,
+                                "formatter": "{@name}",
+                                "color": "#1D1D1F",
+                                "fontSize": 12
                             },
+                            "encode": {
+                                "x": "chrom",
+                                "y": "coverage",
+                                "label": ["name"],
+                                "tooltip": ["name", "coverage"]
+                            }
                         },
                         {
                             "name": "global outliers",
                             "type": "scatter",
                             "datasetId": "globaloutliers",
-                            "encode": {
-                                "y": "coverage",
-                                "x": "chrom",
-                                "label": "name",
-                                "itemName": "name",
-                                "tooltip": ["chrom", "name", "coverage"],
+                            "symbolSize": 6,
+                            "itemStyle": {
+                                "color": "#FF453A"  # iOS red
                             },
                             "label": {
                                 "show": True,
                                 "position": "right",
-                                "itemName": "name",
-                                "color": "black",
-                                "fontSize": 16,
+                                "formatter": "{@name}",
+                                "color": "#1D1D1F",
+                                "fontSize": 12
                             },
-                        },
-                    ],
+                            "encode": {
+                                "x": "chrom",
+                                "y": "coverage",
+                                "label": ["name"],
+                                "tooltip": ["name", "coverage"]
+                            }
+                        }
+                    ]
                 }
             )
             .style("height: 500px")
