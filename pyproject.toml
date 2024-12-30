@@ -24,7 +24,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "niceGUI<=2.0.0",
+  "niceGUI==1.4.37",
   "click",
   "flet",
   "cnv_from_bam",
@@ -50,7 +50,8 @@ dependencies = [
   "networkx",
   "docker",
   "opencv-python",
-  "zxing-cpp"
+  "zxing-cpp",
+  "tomli-w",
 ]
 
 [project.scripts]

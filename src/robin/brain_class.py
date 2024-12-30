@@ -170,7 +170,9 @@ class BrainMeth:
         exclude=[],
         minknow_connection=None,
         reference=None,
+        bed_file=None,
         mainuuid=None,
+        readfish_toml=None,
     ):
         """
         Initialize the BrainMeth class.
@@ -204,10 +206,12 @@ class BrainMeth:
         self.exclude = exclude
         self.minknow_connection = minknow_connection
         self.reference = reference
+        self.bed_file = bed_file
         self.observer = None
         if self.browse:
             self.runsfolder = self.output
         self.sampleID = None
+        self.readfish_toml = readfish_toml
         self.watchdogbamqueue = Queue()
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
@@ -312,6 +316,9 @@ class BrainMeth:
                 analysis_name="CNV",
                 bamqueue=self.bamforcnv,
                 target_panel=self.target_panel,
+                reference_file=self.reference,
+                bed_file=self.bed_file,
+                readfish_toml=self.readfish_toml,
                 **common_args,
             )
             self.CNV.process_data()
@@ -847,6 +854,8 @@ class BrainMeth:
                                 analysis_name="CNV",
                                 summary=cnvsummary,
                                 target_panel=self.target_panel,
+                                reference_file=self.reference,
+                                bed_file = self.bed_file,
                                 **display_args,
                             )
                             await self.CNV.render_ui(sample_id=self.sampleID)
