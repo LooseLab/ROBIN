@@ -1,11 +1,47 @@
-from nicegui import ui, run, app
+"""
+MinKNOW Panel Module
+
+This module implements the panel interface for MinKNOW device monitoring and control.
+It provides a comprehensive UI for managing Oxford Nanopore sequencing devices,
+monitoring run status, and visualizing sequencing data in real-time.
+
+The module creates an interactive dashboard that displays:
+- Device status and information
+- Flowcell details
+- Run statistics
+- Real-time data visualization
+- Configuration options
+
+Key Components:
+- MinKNOWFish: Main class for MinKNOW connection management
+- Position: Class for handling individual sequencing positions
+- StatusChip: UI component for status display
+- ErrorChecker: Validation utility for UI inputs
+
+Dependencies:
+- nicegui: Web interface framework
+- minknow_api: MinKNOW communication interface
+- logging: Application logging
+- threading: Concurrent operations handling
+"""
+
+from nicegui import binding, ui, run, app
 import time
 import threading
+import logging
 
+# Configure logger
+logger = logging.getLogger(__name__)
+
+# Create console handler with formatting
+console_handler = logging.StreamHandler()
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 # MinKNOW API Imports
 import minknow_api.manager_pb2 as manager_pb2
-from minknow_api.protocol_pb2 import ProtocolPhase
+from minknow_api.protocol_pb2 import ProtocolPhase, ProtocolRunInfo, ProtocolState
 from readfish._utils import get_device
 from robin.minknow_info.minKNOWhistograms import MinknowHistograms
 from robin.minknow_info.minknow_info import Minknow_Info
@@ -17,12 +53,14 @@ import ipaddress
 
 # MinKNOW API Imports
 from minknow_api.manager import Manager
+from minknow_api.tools import protocols
+import grpc
 
 from typing import Sequence
 from pathlib import Path
 import uuid
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 # We need `find_protocol` to search for the required protocol given a kit + product code.
@@ -42,11 +80,33 @@ ExperimentSpecs = Sequence[ExperimentSpec]
 
 
 class ErrorChecker:
+    """
+    Utility class for validating UI input elements.
+    
+    This class aggregates multiple UI elements and their validation rules,
+    providing a single point to check if all validations pass.
+    
+    Attributes:
+        elements: Collection of UI elements to validate
+    """
+    
     def __init__(self, *elements) -> None:
+        """
+        Initialize an ErrorChecker instance.
+        
+        Args:
+            *elements: Variable number of UI elements to validate
+        """
         self.elements = elements
 
     @property
     def no_errors(self) -> bool:
+        """
+        Check if all elements pass their validation rules.
+        
+        Returns:
+            bool: True if all validations pass, False otherwise
+        """
         return all(
             validation(element.value)
             for element in self.elements
@@ -133,9 +193,25 @@ def disable(button: ui.button):
 
 class MinKNOWFish:
     """
-    A way of handling a minknow connection.
+    Main class for managing MinKNOW connections and device monitoring.
+    
+    This class handles the connection to MinKNOW instances, manages device
+    positions, and coordinates the UI updates for device monitoring.
+    
+    Attributes:
+        dev (bool): Development mode flag
+        color (str): UI color theme
+        position: Current sequencing position
+        connection: MinKNOW connection object
+        device: Device type
+        show (bool): Display visibility flag
+        manager: MinKNOW manager connection
+        connected (bool): Connection status
+        positions (list): Available sequencing positions
+        position_list (list): List of position objects
+        selected_position: Currently selected position
     """
-
+    
     def __init__(
         self,
         kit=None,
@@ -144,26 +220,42 @@ class MinKNOWFish:
         bed_file=None,
         basecall_config=None,
         reference=None,
-        **kwargs,
     ):
         """
-        This is called when the app is initialized.
+        Initialize MinKNOWFish instance.
+        
+        Args:
+            kit (str, optional): Sequencing kit identifier
+            centreID (str, optional): Centre identifier
+            experiment_duration (int): Run duration in hours
+            bed_file (str, optional): Path to BED file
+            basecall_config (str, optional): Basecalling configuration
+            reference (str, optional): Reference genome path
         """
-        # super().__init__(**kwargs)
-        self.tabs = None
+        self.connection_ip = None
         self.manager = None
-        self.positions = None
-        self.selected_position = None
-        self.connection_ip: str | None = None
         self.connected = False
-        self.watchfolder = None
-        self.devices = set()
+        self.positions = []
+        self.position_list = []
+        self.selected_position = None
+        
+        # Configuration parameters
+        self.centreID = centreID
         self.kit = kit
-        self.basecall_config = basecall_config
         self.reference = reference
+        self.basecall_config = basecall_config
         self.bed_file = bed_file
         self.experiment_duration = experiment_duration
-        self.centreID = centreID
+        
+        # UI elements that will be initialized later
+        self.position_choose = None
+        self.holder = None
+        self.connect_now = None
+        self.choices = None
+        self.connectiondialog = None
+        self.access_device = None
+        self.tabs = None
+        self.all_tab_panels = None
 
     def _check_ip(self, ip: str) -> None:
         """
@@ -277,162 +369,15 @@ class MinKNOWFish:
         pass
 
     def choose_device(self):
+        logger.debug(f"Setting up device for position: {self.selected_position}")
         self.position_choose.close()
-        with self.holder:
-            self.minKNOW_display = Position(self.selected_position, self.connection_ip)
-            self.minKNOW_display.setup()
-
-    def enable_access(self, e):
-        self.access_device.visible = True
-        # self.position_choose.open()
-
-    async def connect_to_localhost(self):
-        self.connection_ip = "127.0.0.1"
-        await self.add_positions()
-
-    async def add_positions(self) -> None:
-        """
-        This is called when the connectionip variable is changed.
-        It adds a tab for each position on the flowcell.
-        It does this using a thread so that the app doesn't freeze
-        while it waits for minKNOW to respond.
-        """
-        with disable(self.connect_now):
-            ui.notify("Trying to connect to MinKNOW")
-            await run.io_bound(self._connect_positions)
-            if self.connected:
-                ui.notify("Connection Successful.", type="positive")
-                with self.connect_now:
-                    ui.notify("Connected to MinKNOW - getting positions.")
-                self.positions = list(self.manager.flow_cell_positions())
-                self.connectiondialog.close()
-                with self.choices:
-                    ui.radio(
-                        {item: str(item) for index, item in enumerate(self.positions)},
-                        on_change=self.enable_access,
-                    ).bind_value(self, "selected_position").props("inline")
-                self.position_choose.open()
-            else:
-                self.connection_ip = None
-                with self.connect_now:
-                    ui.notify(
-                        "Unable to connect.\nPlease check MinKNOW is running on this IP. ",
-                        # title="Uh Oh!",
-                        type="warning",
-                        # timeout=10,
-                    )
-            ui.notify("Finished trying to connect to MinKNOW")
-
-    def _connect_positions(self) -> None:
-        if not self.manager and self.connection_ip:
-            try:
-                self.manager = Manager(host=self.connection_ip)
-                self.connected = True
-            except Exception:
-                self.connected = False
-
-    def watch_positions(self):
-        while True:
-            if self.manager:
-                for item in self.manager.rpc.watch_flow_cell_positions():
-                    if self.tabs:
-                        with self.tabs:
-                            for position in item.additions:
-                                ui.notify(
-                                    f"{position.name} connected.", type="positive"
-                                )
-                                ui.tab(f"{position.name}")
-                        with self.all_tab_panels:
-                            for position in item.additions:
-                                with ui.tab_panel(position.name):
-                                    Position(position, self.connection_ip)
-                        self.tabs.set_value(f"{position.name}")
-            else:
-                time.sleep(1)
-
-    def setup_ui(self):
-        self.holder = ui.row().classes("w-full")
-
-
-class Position(MinKNOWFish):
-    def __init__(
-        self,
-        position,
-        ip,
-        centreID,
-        kit,
-        reference,
-        basecall_config,
-        bed_file,
-        experiment_duration,
-    ):
-        # super().__init__()
-        self.ip = ip
-        self.position = get_device(position.name, host=self.ip)
-        self.connection = self.position.connect()
-        self.Run_ID = None
-        self.yield_summary_info = None
-        self.acquisition_run_info = None
-        self.protocol_run_info = None
-        self.flowcell_info = None
-        self.minknow_info_pane = None
-        self.watchfolder = None
-        self.centreID = centreID
-        self.kit = kit
-        self.reference = reference
-        self.basecall_config = basecall_config
-        self.bed_file = bed_file
-        self.experiment_duration = experiment_duration
-        self.shutdown_event = threading.Event()
-
-        self.check_flowcell = threading.Thread(target=self.watch_flowcell, args=())
-        self.check_flowcell.daemon = True
-        self.check_flowcell.start()
-
-        self.check_run = threading.Thread(target=self.stream_current_run, args=())
-        self.check_run.daemon = True
-        self.check_run.start()
-
-        self.check_instance = threading.Thread(
-            target=self.stream_instance_activity, args=()
-        )
-        self.check_instance.daemon = True
-        self.check_instance.start()
-
-        self.timer = ui.timer(1, self._worker)
-
-        # function using _stop function
-
-    def stop(self):
-        self.shutdown_event.set()
-        # print(self.shutdown_event)
-
-    def stopped(self):
-        return self.shutdown_event.isSet()
-
-    def _worker(self):
-        if self.minknow_info_pane:
-            if hasattr(self.minknow_info_pane, "output_folder"):
-                if self.minknow_info_pane.show:
-                    if self.minknow_info_pane.output_folder != self.watchfolder:
-                        self.watchfolder = self.minknow_info_pane.output_folder
-
-    def setup(self):
-        with ui.card().classes("w-full"):
-            with ui.card().classes("w-full drop-shadow"):
-                """
-                self,
-                position,
-                centreID,
-                kit,
-                reference,
-                basecall_config,
-                bed_file,
-                experiment_duration,
-                dev=False,
-                """
-                self.minknow_info_pane = Minknow_Info(
-                    self.position,
+        
+        try:
+            logger.debug("Creating Position instance")
+            with self.holder:
+                self.minKNOW_display = Position(
+                    self.selected_position,
+                    self.connection_ip,
                     self.centreID,
                     self.kit,
                     self.reference,
@@ -440,179 +385,872 @@ class Position(MinKNOWFish):
                     self.bed_file,
                     self.experiment_duration,
                 )
+                logger.debug("Position instance created, calling setup")
+                self.minKNOW_display.setup(self.holder)
+                logger.debug("Setup completed")
+        except Exception as e:
+            logger.error(f"Error setting up device: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
+            ui.notify(f"Error setting up device: {str(e)}", type="negative")
 
-                with ui.column().bind_visibility_from(self.minknow_info_pane, "show"):
+    def enable_access(self, e):
+        self.access_device.visible = True
+        # self.position_choose.open()
+
+    async def connect_to_localhost(self):
+        logger.debug("Attempting to connect to localhost...")
+        try:
+            self.connection_ip = "127.0.0.1"
+            logger.debug("Set connection_ip to 127.0.0.1")
+            await self.add_positions()
+            logger.debug("Successfully connected to localhost")
+            return True
+        except Exception as e:
+            logger.error(f"Error connecting to localhost: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
+            return False
+
+    async def add_positions(self) -> None:
+        logger.debug("Starting add_positions...")
+        with disable(self.connect_now):
+            ui.notify("Trying to connect to MinKNOW")
+            try:
+                logger.debug("Calling _connect_positions...")
+                await run.io_bound(self._connect_positions)
+                logger.debug("_connect_positions completed")
+                
+                if self.connected:
+                    logger.info("Connection successful")
+                    ui.notify("Connection Successful.", type="positive")
+                    self.connectiondialog.close()
+                    
+                    logger.debug("Creating radio buttons for positions")
+                    with self.choices:
+                        ui.radio(
+                            {item: str(item) for item in self.positions},
+                            on_change=self.enable_access,
+                        ).bind_value(self, "selected_position").props("inline")
+                    logger.debug("Opening position chooser")
+                    self.position_choose.open()
+                else:
+                    logger.warning("Connection failed")
+                    self.connection_ip = None
+                    ui.notify(
+                        "Unable to connect.\nPlease check MinKNOW is running on this IP.",
+                        type="warning",
+                    )
+            except Exception as e:
+                logger.error(f"Error in add_positions: {str(e)}")
+                logger.error(f"Error type: {type(e)}")
+                logger.error(traceback.format_exc())
+                ui.notify(f"Connection error: {str(e)}", type="negative")
+            finally:
+                logger.debug("add_positions finished")
+            ui.notify("Finished trying to connect to MinKNOW")
+
+    def _connect_positions(self):
+        logger.debug("Starting MinKNOWFish connection...")
+        try:
+            logger.debug(f"Attempting to connect to MinKNOW at {self.connection_ip}")
+            self.manager = Manager(host=self.connection_ip)
+            logger.debug("Manager connection established")
+            
+            try:
+                logger.debug("Getting version info...")
+                version_info = self.manager.version
+                logger.debug(f"MinKNOW version info: {version_info}")
+            except Exception as ve:
+                logger.warning(f"Could not get version info: {str(ve)}")
+                logger.debug("Continuing anyway...")
+            
+            logger.debug("Getting flow cell positions...")
+            self.positions = list(self.manager.flow_cell_positions())
+            logger.debug(f"Found positions: {self.positions}")
+            self.connected = True
+            
+        except Exception as e:
+            logger.error(f"MinKNOWFish connection error: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
+            self.connected = False
+            raise
+
+    def watch_positions(self):
+        """Watch for new flow cell positions and update UI accordingly"""
+        logger.debug("Starting position watcher...")
+        try:
+            while True:
+                if self.manager:
+                    logger.debug("Watching for position changes...")
+                    for item in self.manager.rpc.watch_flow_cell_positions():
+                        if self.tabs:
+                            logger.debug(f"Processing position changes: {item}")
+                            with self.tabs:
+                                for position in item.additions:
+                                    ui.notify(f"{position.name} connected.", type="positive")
+                                    ui.tab(f"{position.name}")
+                            with self.all_tab_panels:
+                                for position in item.additions:
+                                    with ui.tab_panel(position.name):
+                                        # Instead of creating a new Position instance,
+                                        # just update the UI to show the position is available
+                                        ui.label(f"Position {position.name} is available")
+                                        ui.button(
+                                            "Connect to this position",
+                                            on_click=lambda p=position: self.connect_to_position(p)
+                                        )
+                            self.tabs.set_value(f"{position.name}")
+                else:
+                    logger.debug("No manager available, waiting...")
+                    time.sleep(1)
+        except Exception as e:
+            logger.error(f"Error in watch_positions: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
+
+    def connect_to_position(self, position):
+        """Connect to a specific position when requested"""
+        logger.debug(f"Connecting to position: {position.name}")
+        try:
+            self.selected_position = position
+            self.choose_device()
+        except Exception as e:
+            logger.error(f"Error connecting to position: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            logger.error(traceback.format_exc())
+            ui.notify(f"Error connecting to position: {str(e)}", type="negative")
+
+    def setup_ui(self):
+        self.holder = ui.row().classes("w-full")
+
+
+class Position(MinKNOWFish):
+    """
+    Class for managing individual sequencing positions.
+    
+    Handles the monitoring and control of a specific sequencing position,
+    including data collection, status updates, and UI rendering.
+    
+    Attributes:
+        ip (str): IP address of the MinKNOW instance
+        yield_data (list): Collected yield data
+        threads (list): Background monitoring threads
+        _initialized (bool): Initialization status
+        position: Position object from MinKNOW
+        connection: Connection to the position
+        Run_ID: Current run identifier
+        shutdown_event: Thread shutdown signal
+    """
+    
+    def __init__(
+        self,
+        position,
+        ip,
+        centreID=None,
+        kit=None,
+        reference=None,
+        basecall_config=None,
+        bed_file=None,
+        experiment_duration=24,
+    ):
+        """
+        Initialize a Position instance.
+        
+        Args:
+            position: MinKNOW position object
+            ip (str): IP address of MinKNOW instance
+            centreID (str, optional): Centre identifier
+            kit (str, optional): Sequencing kit identifier
+            reference (str, optional): Reference genome path
+            basecall_config (str, optional): Basecalling configuration
+            bed_file (str, optional): Path to BED file
+            experiment_duration (int): Run duration in hours
+        """
+        logger.debug("Starting position initialization...")
+        # Call parent class init with configuration parameters
+        logger.debug("Calling parent class init")
+        super().__init__(
+            kit=kit,
+            centreID=centreID,
+            experiment_duration=experiment_duration,
+            bed_file=bed_file,
+            basecall_config=basecall_config,
+            reference=reference,
+        )
+        logger.debug("Parent class init completed")
+        
+        # Initialize instance variables
+        self.ip = ip
+        self.yield_data = []  # Initialize yield_data
+        self.threads = []  # Keep track of background threads
+        self._initialized = False  # Track initialization state
+        
+        # Add state variables for UI updates
+        self._current_state = None
+        self._current_run_info = None
+        self._needs_ui_update = False
+        
+        try:
+            logger.debug(f"Using position object: {position}")
+            logger.debug(f"Position type: {type(position)}")
+            logger.debug(f"Position attributes: {dir(position)}")
+            
+            # Use the position object directly
+            self.position = position
+            logger.debug("Attempting to connect to position...")
+            self.connection = self.position.connect()
+            logger.debug("Position connection established")
+            
+            # Initialize other attributes
+            logger.debug("Initializing attributes")
+            self.Run_ID = None
+            self.yield_summary_info = None
+            self.acquisition_run_info = None
+            self.protocol_run_info = None
+            self.flowcell_info = None
+            self.minknow_info_pane = None
+            self.watchfolder = None
+            self.shutdown_event = threading.Event()
+            
+            # Initialize data collection attributes
+            self.timestamps = []
+            self.read_counts = []
+            self.pass_reads = []
+            self.pass_bases = []
+            self.last_update = time.time()
+            self.update_interval = 10  # Update plot every 10 seconds
+            self.acquisition_run_id = None
+            
+            # Initialize current values
+            self.Read_Count = 0
+            self.Pass_Read_Count = 0
+            self.Pass_Bases = 0
+            self.Mean_Basecall_Speed = 0
+            self.N50 = 0
+            self.Estimated_N50 = 0
+            self.Basecall_Speed = 0
+            self.Channel_Count = 0
+            self.Experiment_Group = ""
+            self.Sample_ID = ""
+            self.Flowcell_Type = ""
+            self.running_kit = ""
+            self.output_folder = ""
+            self.basecalling_config_filename = ""
+            self.start_time = None
+            
+            # Mark initialization as complete
+            self._initialized = True
+            logger.debug("Position initialization completed successfully")
+        except Exception as e:
+            logger.error(f"Error in position initialization: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
+
+    def setup(self, container=None):
+        """Setup UI elements in the correct context"""
+        logger.debug("Starting setup...")
+        if not self._initialized:
+            logger.error("Error: Position not properly initialized")
+            raise RuntimeError("Position not properly initialized")
+        
+        try:
+            logger.debug("Creating UI elements")
+            # Create timer in the global UI context
+            self.timer = ui.timer(1, self._worker)
+
+            # Create UI elements in the provided container or global context
+            target = container if container is not None else ui
+            logger.debug(f"Using container: {target}")
+            
+            logger.debug("Creating UI cards")
+            with target.card().classes("w-full"):
+                # Device Header
+                with ui.card().classes("w-full p-4 mb-4 bg-gray-50").bind_visibility_from(self, 'show'):
+                    with ui.row().classes("items-center"):
+                        # Device Icon
+                        with ui.avatar(size='xl').classes("mr-4"):
+                            ui.icon('biotech', size='xl').classes("text-gray-600")
+                        # Device Info
+                        with ui.column().classes("flex-grow"):
+                            with ui.row().classes("items-baseline"):
+                                ui.label(f"MinION - {self.position.name}").classes("text-xl font-bold text-gray-900")
+                                ui.label("MinKNOW Monitoring").classes("ml-2 text-sm text-gray-600")
+                            ui.label(f"Device Type: {self.position.device_type}").classes("text-sm text-gray-700")
+                            # Add Sample ID and Experiment ID
+                            self.sample_id_label = ui.label("Sample ID: -").classes("text-lg font-semibold text-blue-700 mt-2")
+                            self.experiment_id_label = ui.label("Experiment ID: -").classes("text-lg font-semibold text-blue-700")
+                            with ui.row().classes("mt-1"):
+                                ui.badge("RUNNING", color="positive" if self.position.running else "negative")
+                                ui.badge(str(self.position.state), color="gray")
+
+                # Status and Hardware Information
+                with ui.card().classes("w-full p-4 mb-4 bg-gray-50").bind_visibility_from(self, 'show'):
+                    ui.label("Device Status").classes("text-lg font-bold mb-3 text-gray-900")
+                    with ui.grid().classes("grid-cols-3 gap-4"):
+                        # Device Info
+                        with ui.column().classes("space-y-2"):
+                            ui.label("Device Information").classes("text-md font-semibold mb-2 text-gray-800")
+                            self.status_label = ui.label("Status: Initializing...").classes("text-sm text-gray-700")
+                            ui.label().bind_text_from(
+                                self.position, "device_type",
+                                backward=lambda n: f"Device Type: {n}"
+                            ).classes("text-sm text-gray-700")
+                            ui.label().bind_text_from(
+                                self.position, "host",
+                                backward=lambda n: f"Host: {n}"
+                            ).classes("text-sm text-gray-700")
+                            self.run_id_label = ui.label("Run ID: -").classes("text-sm text-gray-700")
+                            self.run_state_label = ui.label("Run State: -").classes("text-sm text-gray-700")
+                            self.run_start_time_label = ui.label("Start Time: -").classes("text-sm text-gray-700")
+                            self.acquisition_duration_label = ui.label("Run Duration: -").classes("text-sm text-gray-700")
+                            self.expected_duration_label = ui.label("Expected Duration: -").classes("text-sm text-gray-700")
+                            self.expected_finish_label = ui.label("Expected Finish: -").classes("text-sm text-gray-700")
+                            self.run_purpose_label = ui.label("Purpose: -").classes("text-sm text-gray-700")
+                            
+                        # Flowcell Hardware
+                        with ui.column().classes("space-y-2"):
+                            ui.label("Flowcell Hardware").classes("text-md font-semibold mb-2 text-gray-800")
+                            self.flowcell_label = ui.label("Flowcell: -").classes("text-sm text-gray-700")
+                            self.flowcell_id_label = ui.label("Flow Cell ID: -").classes("text-sm text-gray-700")
+                            self.flowcell_type_label = ui.label("Type: -").classes("text-sm text-gray-700")
+                            self.asic_label = ui.label("ASIC: -").classes("text-sm text-gray-700")
+                            self.channel_label = ui.label("Channels: -").classes("text-sm text-gray-700")
+                            self.user_specified_product_code_label = ui.label("User Product Code: -").classes("text-sm text-gray-700")
+                            self.user_specified_flow_cell_id_label = ui.label("User Flow Cell ID: -").classes("text-sm text-gray-700")
+                            
+                        # Flowcell Status
+                        with ui.column().classes("space-y-2"):
+                            ui.label("Flowcell Status").classes("text-md font-semibold mb-2 text-gray-800")
+                            self.adapter_status = ui.label("Adapter: -").classes("text-sm text-gray-700")
+                            self.temp_label = ui.label("Temperature: -").classes("text-sm text-gray-700")
+                            self.usage_label = ui.label("Usage Count: -").classes("text-sm text-gray-700")
+                            self.barcode_label = ui.label("Barcode Kit: -").classes("text-sm text-gray-700")
+                            self.has_adapter_label = ui.label("Has Adapter: -").classes("text-sm text-gray-700")
+                            self.adapter_id_label = ui.label("Adapter ID: -").classes("text-sm text-gray-700")
+                            self.adapter_insertion_time_label = ui.label("Adapter Inserted: -").classes("text-sm text-gray-700")
+
+                # Yield Statistics
+                with ui.card().classes("w-full p-4 mb-4 bg-white").bind_visibility_from(self, 'show'):
+                    ui.label("Yield Statistics").classes("text-lg font-bold mb-3 text-gray-900")
+                    with ui.grid().classes("grid-cols-3 gap-6"):
+                        # Read Statistics
+                        with ui.card().classes("p-4 bg-gray-50 rounded-lg"):
+                            ui.label("Read Statistics").classes("text-md font-semibold mb-2 text-gray-800")
+                            with ui.column().classes("space-y-2"):
+                                self.read_count_label = ui.label("Reads: 0").classes("text-sm text-gray-700")
+                                self.bases_label = ui.label("Bases: 0").classes("text-sm text-gray-700")
+                                self.n50_label = ui.label("N50: -").classes("text-sm text-gray-700")
+                                self.estimated_n50_label = ui.label("Estimated N50: -").classes("text-sm text-gray-700")
+                        
+                        # Quality Metrics
+                        with ui.card().classes("p-4 bg-gray-50 rounded-lg"):
+                            ui.label("Quality Metrics").classes("text-md font-semibold mb-2 text-gray-800")
+                            with ui.column().classes("space-y-2"):
+                                self.pass_reads_label = ui.label("Pass Reads: 0").classes("text-sm text-gray-700")
+                                self.fail_reads_label = ui.label("Fail Reads: 0").classes("text-sm text-gray-700")
+                                self.mean_basecall_speed_label = ui.label("Basecall Speed: -").classes("text-sm text-gray-700")
+                        
+                        # Output Information
+                        with ui.card().classes("p-4 bg-gray-50 rounded-lg"):
+                            ui.label("Output Settings").classes("text-md font-semibold mb-2 text-gray-800")
+                            with ui.column().classes("space-y-2"):
+                                self.output_folder_label = ui.label("Output: -").classes("text-sm text-gray-700 break-all")
+                                self.basecall_config_label = ui.label("Basecall Config: -").classes("text-sm text-gray-700 break-all")
+
+                # MinKNOW Details
+                with ui.card().classes("w-full p-4 bg-white"):
+                    logger.debug("Creating Minknow_Info instance")
+                    self.minknow_info_pane = Minknow_Info(
+                        self.position,
+                        self.centreID,
+                        self.kit,
+                        self.reference,
+                        self.basecall_config,
+                        self.bed_file,
+                        self.experiment_duration,
+                    )
+                    
+                    logger.debug("Creating MinknowHistograms instance")
                     self.minknowhistogram = MinknowHistograms(self.position)
 
-                    with ui.row():
-                        with ui.card().classes("drop-shadow"):
-                            ui.label().bind_text_from(
-                                self, "Run_ID", backward=lambda n: f"Run ID: {n}"
-                            )
-                            ui.label().bind_text_from(
-                                self.position, "name", backward=lambda n: f"Name: {n}"
-                            )
-                            ui.label().bind_text_from(
-                                self.position,
-                                "device_type",
-                                backward=lambda n: f"Device Type: {n}",
-                            )
-                            ui.label().bind_text_from(
-                                self.position, "host", backward=lambda n: f"Host: {n}"
-                            )
-                            ui.label().bind_text_from(
-                                self.position,
-                                "running",
-                                backward=lambda n: f"Running: {n}",
-                            )
-                            ui.label().bind_text_from(
-                                self.position, "state", backward=lambda n: f"State: {n}"
-                            )
-                        self.protocol_run_info = ui.column().classes(
-                            "p-4 border-dashed border-2"
+            # Start background tasks
+            logger.debug("Starting background tasks")
+            self._start_background_tasks()
+            logger.debug("Setup completed successfully")
+                
+        except Exception as e:
+            logger.error(f"Error in setup: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            raise
+
+    def _start_background_tasks(self):
+        """Start background tasks with proper error handling"""
+        logger.debug("Starting background tasks...")
+        if not self._initialized:
+            logger.error("Error: Position not properly initialized")
+            raise RuntimeError("Position not properly initialized")
+            
+        tasks = [
+            (self.watch_flowcell, "Flowcell Monitor"),
+            (self.stream_current_run, "Run Monitor"),
+            (self.stream_instance_activity, "Activity Monitor")
+        ]
+        
+        for task_func, task_name in tasks:
+            try:
+                logger.debug(f"Starting {task_name}")
+                thread = threading.Thread(
+                    target=self._run_task_with_error_handling,
+                    args=(task_func, task_name),
+                    daemon=True
+                )
+                thread.start()
+                self.threads.append(thread)
+                logger.debug(f"Started {task_name} thread")
+            except Exception as e:
+                logger.error(f"Error starting {task_name}: {str(e)}")
+                logger.error(f"Error type: {type(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
+    def _run_task_with_error_handling(self, task_func, task_name):
+        """Wrapper to run a task with error handling"""
+        logger.debug(f"Starting {task_name}")
+        if not self._initialized:
+            logger.warning(f"Attempting to run {task_name} before initialization")
+            return
+            
+        try:
+            logger.debug(f"Executing {task_name}")
+            task_func()
+            logger.debug(f"{task_name} completed")
+        except Exception as e:
+            logger.error(f"Error in {task_name}: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+
+    def stop(self):
+        """Stop all background tasks"""
+        logger.debug("Stopping position tasks...")
+        self.shutdown_event.set()
+        for thread in self.threads:
+            thread.join(timeout=1.0)
+        logger.debug("Position tasks stopped")
+
+    def _worker(self):
+        """Timer callback to update UI elements"""
+        logger.debug("Starting worker update")
+        try:
+            if not self._initialized:
+                logger.warning("Warning: Position not initialized")
+                return
+                
+            if not hasattr(self, 'status_label'):
+                logger.warning("Warning: UI elements not initialized")
+                return
+            
+            # Get current acquisition info
+            try:
+                # Check if acquisition is running first
+                current_status = self.connection.acquisition.current_status()
+                logger.debug(f"Current status: {current_status}")
+                # MinKNOW status constants from acquisition_pb2
+                if current_status.status == 2:  # PROCESSING is 2 in MinKNOW API
+                    # Only try to get acquisition info if we're actually processing
+                    current_acquisition = self.connection.acquisition.get_current_acquisition_run()
+                    if current_acquisition and hasattr(current_acquisition, 'run_info'):
+                        run_info = current_acquisition.run_info
+                        
+                        # Get progress information
+                        progress = self.connection.acquisition.get_progress()
+                        if progress:
+                            logger.debug(f"Progress info: {progress}")
+                            
+                            # Update read statistics from progress info
+                            if hasattr(progress, 'raw_per_channel'):
+                                self.read_count_label.text = f"Reads: {progress.raw_per_channel.acquired:,}"
+                            
+                            if hasattr(progress, 'basecalled_per_channel'):
+                                basecalled = progress.basecalled_per_channel
+                                if hasattr(basecalled, 'pass_'):
+                                    self.pass_reads_label.text = f"Pass Reads: {basecalled.pass_:,}"
+                                if hasattr(basecalled, 'fail'):
+                                    self.fail_reads_label.text = f"Fail Reads: {basecalled.fail:,}"
+                            
+                            # Update bases count and rate
+                            if hasattr(progress, 'basecalled_bases'):
+                                base_text = f"Bases: {progress.basecalled_bases:,}"
+                                if hasattr(progress, 'estimated_bases_per_second'):
+                                    base_text += f" ({progress.estimated_bases_per_second:.1f} bases/s)"
+                                self.bases_label.text = base_text
+                # Don't update sample ID and experiment ID here - let stream_instance_activity handle it
+            except Exception as e:
+                if "No acquisition running" not in str(e):
+                    logger.error(f"Error getting acquisition info: {str(e)}")
+            
+            # Update run information if needed
+            if self._needs_ui_update and self._current_run_info:
+                info = self._current_run_info
+                state_name = manager_pb2.FlowCellPosition.State.Name(info.state)
+                self.run_state_label.text = f"Run State: {state_name}"
+                
+                if info.state == manager_pb2.FlowCellPosition.State.STATE_RUNNING:
+                    # Calculate run duration and update start time if start time is available
+                    if hasattr(info, 'start_time'):
+                        start_time = datetime.fromtimestamp(
+                            info.start_time.seconds +
+                            info.start_time.nanos / 1e9
                         )
+                        # Update start time label with formatted datetime
+                        self.run_start_time_label.text = f"Start Time: {start_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                        
+                        # Calculate and update duration
+                        duration = datetime.now() - start_time
+                        hours = duration.total_seconds() / 3600
+                        self.acquisition_duration_label.text = f"Run Duration: {hours:.1f} hours"
+                        
+                        # Get protocol run info for expected duration
+                        try:
+                            # Get current acquisition info
+                            current_acquisition = self.connection.acquisition.get_current_acquisition_run()
+                            if current_acquisition:
+                                logger.debug(f"Current acquisition: {current_acquisition}")
+                                
+                                # Access config_summary directly from AcquisitionRunInfo
+                                if hasattr(current_acquisition, 'config_summary'):
+                                    config = current_acquisition.config_summary
+                                    logger.debug(f"Acquisition config summary: {config}")
+                                    
+                                    if hasattr(config, 'target_run_until'):
+                                        target = config.target_run_until
+                                        logger.debug(f"Target run until criteria: {target}")
+                                        
+                                        if hasattr(target, 'run_time'):
+                                            # run_time is in seconds
+                                            expected_hours = target.run_time / 3600
+                                            self.expected_duration_label.text = f"Expected Duration: {expected_hours:.1f} hours"
+                                            
+                                            # Calculate and display expected finish time
+                                            finish_time = start_time + timedelta(hours=expected_hours)
+                                            self.expected_finish_label.text = f"Expected Finish: {finish_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                                        else:
+                                            self.expected_duration_label.text = "Expected Duration: Not Set (No run_time)"
+                                            self.expected_finish_label.text = "Expected Finish: Not Available"
+                                    else:
+                                        self.expected_duration_label.text = "Expected Duration: Not Set (No target)"
+                                        self.expected_finish_label.text = "Expected Finish: Not Available"
+                                else:
+                                    self.expected_duration_label.text = "Expected Duration: Not Available (No config)"
+                                    self.expected_finish_label.text = "Expected Finish: Not Available"
+                        except Exception as e:
+                            logger.error(f"Error getting acquisition run info: {str(e)}")
+                            logger.error(f"Error type: {type(e)}")
+                            import traceback
+                            logger.error(traceback.format_exc())
+                            self.expected_duration_label.text = "Expected Duration: Error"
+                            self.expected_finish_label.text = "Expected Finish: Error"
+                    
+                    # Update acquisition info
+                    if hasattr(info, 'config_summary'):
+                        config = info.config_summary
+                        config_info = []
+                        
+                        if hasattr(config, 'basecalling_enabled'):
+                            config_info.append(f"Basecalling: {'Enabled' if config.basecalling_enabled else 'Disabled'}")
+                        
+                        if hasattr(config, 'reads_directory'):
+                            config_info.append(f"Output: {config.reads_directory}")
+                            
+                        if hasattr(config, 'basecalling_config_filename'):
+                            config_info.append(f"Config: {config.basecalling_config_filename}")
+                            
+                        if config_info:
+                            self.run_purpose_label.text = " | ".join(config_info)
+                        else:
+                            self.run_purpose_label.text = "No config information available"
+                else:
+                    self.acquisition_duration_label.text = "Run Duration: -"
+                    self.run_start_time_label.text = "Start Time: -"
+                    self.expected_duration_label.text = "Expected Duration: -"
+                    self.expected_finish_label.text = "Expected Finish: -"
+                    self.run_purpose_label.text = "No active run"
+                
+                self._needs_ui_update = False
+                
+            # Update status
+            try:
+                state = self.position.state
+                self.status_label.text = f"Status: {state}"
+            except Exception as e:
+                logger.error(f"Error updating status: {str(e)}")
+                
+            # Update run ID
+            try:
+                if hasattr(self, 'Run_ID') and self.Run_ID:
+                    self.run_id_label.text = f"Run ID: {self.Run_ID}"
+            except Exception as e:
+                logger.error(f"Error updating run ID: {str(e)}")
+                
+            # Update yield statistics
+            try:
+                if hasattr(self, 'yield_summary_info') and self.yield_summary_info:
+                    # Convert yield summary info to a dictionary if it's not already
+                    yield_info = {}
+                    if hasattr(self.yield_summary_info, '__dict__'):
+                        yield_info = self.yield_summary_info.__dict__
+                    elif hasattr(self.yield_summary_info, 'DESCRIPTOR'):
+                        # Handle protobuf message
+                        for field in self.yield_summary_info.DESCRIPTOR.fields:
+                            yield_info[field.name] = getattr(self.yield_summary_info, field.name)
+                    else:
+                        # Try to use it as is
+                        yield_info = self.yield_summary_info
 
-                    self.flowcell_info = ui.row()
+                    # Update labels with safe access
+                    def safe_get(d, key, default=0):
+                        try:
+                            return d.get(key, default) if hasattr(d, 'get') else getattr(d, key, default)
+                        except:
+                            return default
 
-                    self.yield_summary_info = ui.row().classes(
-                        "p-4 border-dashed border-2"
-                    )
+                    self.read_count_label.text = f"Reads: {safe_get(yield_info, 'read_count'):,}"
+                    self.bases_label.text = f"Bases: {safe_get(yield_info, 'selected_raw_samples'):,}"
+                    self.pass_reads_label.text = f"Pass Reads: {safe_get(yield_info, 'basecalled_pass_read_count'):,}"
+                    self.fail_reads_label.text = f"Fail Reads: {safe_get(yield_info, 'basecalled_fail_read_count'):,}"
+            except Exception as e:
+                logger.error(f"Error updating yield stats: {str(e)}")
+                logger.error(f"Yield info type: {type(self.yield_summary_info)}")
+                logger.error(f"Yield info: {self.yield_summary_info}")
+                import traceback
+                logger.error(traceback.format_exc())
+                
+        except Exception as e:
+            logger.error(f"Error in worker: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
 
-                    self.acquisition_run_info = ui.column()
+    def stopped(self):
+        """Check if the position has been stopped"""
+        return self.shutdown_event.is_set()
 
     def watch_flowcell(self):
-        while not self.stopped():
-            if self.connection:
-                if self.flowcell_info:
-                    for stuff in self.connection.device.stream_flow_cell_info():
-                        self.flowcell_info.clear()
-                        with self.flowcell_info:
-                            with ui.card().classes("drop-shadow"):
-                                for field in stuff.DESCRIPTOR.fields:
-                                    ui.label(
-                                        f"{field.name}: {getattr(stuff, field.name)}"
+        """Monitor flowcell information"""
+        logger.debug("Starting flowcell monitoring")
+        try:
+            while not self.stopped():
+                if self.connection:
+                    for info in self.connection.device.stream_flow_cell_info():
+                        if self.stopped():
+                            break
+                            
+                        # Update all flowcell information
+                        if info.has_flow_cell:
+                            # Update flowcell label with connection status
+                            self.flowcell_label.text = "Flowcell: Connected"
+                            
+                            # Update hardware information
+                            self.flowcell_id_label.text = f"Flow Cell ID: {info.flow_cell_id if info.flow_cell_id else 'Not Set'}"
+                            self.flowcell_type_label.text = f"Type: {info.product_code if info.product_code else 'Standard'}"
+                            self.asic_label.text = f"ASIC: {info.asic_version} ({info.asic_id_str[:8]}...)"
+                            self.channel_label.text = f"Channels: {info.channel_count:,} ({info.wells_per_channel} wells/ch)"
+                            
+                            # Update user-specified information
+                            user_product = info.user_specified_product_code if info.user_specified_product_code else "Not Set"
+                            self.user_specified_product_code_label.text = f"User Product Code: {user_product}"
+                            
+                            user_flow_cell = info.user_specified_flow_cell_id if info.user_specified_flow_cell_id else "Not Set"
+                            self.user_specified_flow_cell_id_label.text = f"User Flow Cell ID: {user_flow_cell}"
+                            
+                            # Update adapter information
+                            self.has_adapter_label.text = f"Has Adapter: {'Yes' if info.has_adapter else 'No'}"
+                            if info.has_adapter:
+                                self.adapter_status.text = "Adapter: Connected"
+                                self.adapter_status.classes("text-sm text-green-700")
+                                self.adapter_id_label.text = f"Adapter ID: {info.adapter_id}"
+                                if hasattr(info, 'adapter_insertion_time'):
+                                    insertion_time = datetime.fromtimestamp(
+                                        info.adapter_insertion_time.seconds +
+                                        info.adapter_insertion_time.nanos / 1e9
                                     )
-            else:
-                time.sleep(1)
-        print("watch flowcell saw a shutdown")
+                                    self.adapter_insertion_time_label.text = f"Adapter Inserted: {insertion_time.strftime('%Y-%m-%d %H:%M:%S')}"
+                            else:
+                                self.adapter_status.text = "Adapter: Not Connected"
+                                self.adapter_status.classes("text-sm text-red-700")
+                                self.adapter_id_label.text = "Adapter ID: -"
+                                self.adapter_insertion_time_label.text = "Adapter Inserted: -"
+                            
+                            # Update temperature and usage information
+                            if info.temperature_offset:
+                                temp_offset = round(info.temperature_offset, 1)
+                                self.temp_label.text = f"Temperature Offset: {temp_offset}°C"
+                            else:
+                                self.temp_label.text = "Temperature Offset: Not Available"
+                            
+                            self.usage_label.text = f"Usage Count: {info.use_count}"
+                            
+                            # Update barcode information
+                            if info.barcode_kit:
+                                self.barcode_label.text = f"Barcode Kit: {info.barcode_kit}"
+                                if info.barcodes:
+                                    barcodes_str = ', '.join(info.barcodes)
+                                    self.barcode_label.text += f" ({barcodes_str})"
+                            else:
+                                self.barcode_label.text = "Barcode Kit: None"
+                        else:
+                            # Clear all labels when no flowcell is present
+                            self.flowcell_label.text = "Flowcell: Not Connected"
+                            self.flowcell_id_label.text = "Flow Cell ID: -"
+                            self.flowcell_type_label.text = "Type: -"
+                            self.asic_label.text = "ASIC: -"
+                            self.channel_label.text = "Channels: -"
+                            self.user_specified_product_code_label.text = "User Product Code: -"
+                            self.user_specified_flow_cell_id_label.text = "User Flow Cell ID: -"
+                            self.adapter_status.text = "Adapter: -"
+                            self.has_adapter_label.text = "Has Adapter: -"
+                            self.adapter_id_label.text = "Adapter ID: -"
+                            self.adapter_insertion_time_label.text = "Adapter Inserted: -"
+                            self.temp_label.text = "Temperature: -"
+                            self.usage_label.text = "Usage Count: -"
+                            self.barcode_label.text = "Barcode Kit: -"
+                            
+                            # Reset adapter status color
+                            self.adapter_status.classes("text-sm text-gray-700")
+                else:
+                    time.sleep(1)
+            logger.debug("Flowcell monitoring stopped")
+        except Exception as e:
+            logger.error(f"Error in watch_flowcell: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def stream_current_run(self) -> None:
-        first_run = True
-        while not self.stopped():
-            self._stream_current_run = (
-                self.connection.acquisition.watch_current_acquisition_run()
-            )
-            for info in self._stream_current_run:
-                if info.state == manager_pb2.FlowCellPosition.State.STATE_RUNNING:
-                    self.Run_ID = info.run_id
-                    self.Live_Run = True
-                    msg = f"Run {self.Run_ID} seen on {self.position}"
-                    title = "MinKNOW Info"
-                    severity = "information"
-                    timeout = 5
-                else:
-                    self.Run_ID = None
-                    self.Live_Run = False
-                    if first_run:
-                        msg = f"Connected to {self.position}."
-                        title = "MinKNOW Info"
-                        severity = "information"
-                        timeout = 5
-                    else:
-                        msg = f"Run {self.Run_ID} finished on {self.position}."
-                        title = "MinKNOW Info"
-                        severity = "warning"
-                        timeout = 10
-                if first_run:
-                    first_run = False
+        """Monitor current run information"""
+        logger.debug("Starting run monitoring")
+        try:
+            first_run = True
+            while not self.stopped():
+                try:
+                    self._stream_current_run = (
+                        self.connection.acquisition.watch_current_acquisition_run()
+                    )
+                    for info in self._stream_current_run:
+                        if self.stopped():
+                            break
+
+                        # Update run state and ID
+                        self.Run_ID = info.run_id
+                        
+                        # Store current run info and flag for UI update
+                        self._current_run_info = info
+                        self._needs_ui_update = True
+                        
+                        # Update run status
+                        if info.state == manager_pb2.FlowCellPosition.State.STATE_RUNNING:
+                            self.Live_Run = True
+                            if first_run:
+                                logger.info(f"Run {self.Run_ID} seen on {self.position}")
+                        else:
+                            self.Live_Run = False
+                            self.Run_ID = None
+                            if first_run:
+                                logger.info(f"Connected to {self.position}.")
+                            else:
+                                logger.warning(f"Run {self.Run_ID} finished on {self.position}.")
+                        
+                        first_run = False
+                except Exception as e:
+                    logger.error(f"Inner loop error: {str(e)}")
+                    time.sleep(1)
+            logger.debug("Run monitoring stopped")
+        except Exception as e:
+            logger.error(f"Error: {str(e)}")
+            logger.error(f"Error type: {type(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
 
     def stream_instance_activity(self) -> None:
-        while not self.stopped():
-            self._stream_instance_activity = (
-                self.connection.instance.stream_instance_activity()
-            )
-            for info in self._stream_instance_activity:
-                if self.shutdown_event.is_set():
-                    break
-                if info.HasField("device_info"):
-                    self.Channel_Count = info.device_info.device_info.max_channel_count
-                if self.acquisition_run_info:
-                    if info.HasField("acquisition_run_info"):
-                        self.acquisition_run_info.clear()
-                        with self.acquisition_run_info:
-                            for field in info.acquisition_run_info.DESCRIPTOR.fields:
-                                ui.label(
-                                    f"{field.name}: {getattr(info.acquisition_run_info, field.name)}"
-                                )
-                        self.start_time = datetime.fromtimestamp(
-                            info.acquisition_run_info.start_time.seconds
-                            + info.acquisition_run_info.start_time.nanos / 1e9
-                        )
-                if info.HasField("basecall_speed"):
-                    self.Mean_Basecall_Speed = info.basecall_speed.mean_basecall_speed
-                if info.HasField("n50"):
-                    self.N50 = info.n50.n50
-                    self.Estimated_N50 = info.n50.estimated_n50
-                if self.protocol_run_info:
-                    if info.HasField("protocol_run_info"):
-                        self.protocol_run_info.clear()
-                        with self.protocol_run_info:
-                            self.Experiment_Group = (
-                                info.protocol_run_info.user_info.protocol_group_id.value
+        """Monitor instance activity"""
+        logger.debug("Starting instance monitoring")
+        try:
+            while not self.stopped():
+                try:
+                    self._stream_instance_activity = (
+                        self.connection.instance.stream_instance_activity()
+                    )
+                    for info in self._stream_instance_activity:
+                        if self.stopped():
+                            break
+                        if info.HasField("device_info"):
+                            self.Channel_Count = info.device_info.device_info.max_channel_count
+                        if info.HasField("acquisition_run_info"):
+                            self.basecalling_config_filename = (
+                                info.acquisition_run_info.config_summary.basecalling_config_filename
                             )
-                            ui.label(f"Experiment Group: {self.Experiment_Group}")
-                            self.Sample_ID = (
-                                info.protocol_run_info.user_info.sample_id.value
+                            self.start_time = datetime.fromtimestamp(
+                                info.acquisition_run_info.start_time.seconds
+                                + info.acquisition_run_info.start_time.nanos / 1e9
                             )
-                            ui.label(f"Sample ID: {self.Sample_ID}")
-                            self.Current_Output_Directory = (
-                                info.protocol_run_info.output_path
+                            self.output_folder = (
+                                info.acquisition_run_info.config_summary.reads_directory
                             )
-                            ui.label(
-                                f"Current Output Directory: {self.Current_Output_Directory}"
-                            )
-                            self.Kit = info.protocol_run_info.meta_info.tags[
-                                "kit"
-                            ].string_value
-                            ui.label(f"Kit: {self.Kit}")
-                            self.Phase = ProtocolPhase.Name(
-                                info.protocol_run_info.phase
-                            )
-                            ui.label(f"Phase: {self.Phase}")
-                            self.Start_Time = datetime.fromtimestamp(
-                                info.protocol_run_info.start_time.seconds
-                                + info.protocol_run_info.start_time.nanos / 1e9
-                            )
-                            ui.label(f"Start Time: {self.Start_Time}")
-                if info.HasField("yield_summary"):
-                    if self.yield_summary_info:
-                        self.yield_summary_info.clear()
-                        with self.yield_summary_info:
-                            self.Read_Count = info.yield_summary.read_count
-                            ui.label(f"Read Count: {self.Read_Count}")
-                            self.Percent_Basecalled = (
-                                info.yield_summary.fraction_basecalled
-                            )
-                            ui.label(f"Percent Basecalled: {self.Percent_Basecalled}")
-                            self.Pass_Read_Count = (
-                                info.yield_summary.basecalled_pass_read_count
-                            )
-                            ui.label(f"Pass Read Count: {self.Pass_Read_Count}")
-                            self.Fail_Read_Count = (
-                                info.yield_summary.basecalled_fail_read_count
-                            )
-                            ui.label(f"Fail Read Count: {self.Fail_Read_Count}")
-                            self.Pass_Bases = info.yield_summary.basecalled_pass_bases
-                            ui.label(f"Pass Bases: {self.Pass_Bases}")
-                            self.Fail_Bases = info.yield_summary.basecalled_fail_bases
-                            ui.label(f"Fail Bases: {self.Fail_Bases}")
-
-    # def shutdown(self):
-    #    self.shutdown_event.set()
-    #    self.check_flowcell.join()
-    #    self.check_run.join()
-    #    self.check_instance.join()
-    #    self.timer.stop()
+                        if info.HasField("basecall_speed"):
+                            self.Mean_Basecall_Speed = info.basecall_speed.mean_basecall_speed
+                        if info.HasField("n50"):
+                            self.N50 = info.n50.n50
+                            self.Estimated_N50 = info.n50.estimated_n50
+                        if info.HasField("protocol_run_info"):
+                            # Log the entire protocol run info for debugging
+                            logger.debug(f"Protocol run info: {info.protocol_run_info}")
+                            
+                            # Get sample ID and experiment ID from user_info
+                            if hasattr(info.protocol_run_info, 'user_info'):
+                                user_info = info.protocol_run_info.user_info
+                                logger.debug(f"User info: {user_info}")
+                                
+                                # Update sample ID
+                                if hasattr(user_info, 'sample_id'):
+                                    sample_id = user_info.sample_id.value if hasattr(user_info.sample_id, 'value') else 'Not Set'
+                                    self.sample_id_label.text = f"Sample ID: {sample_id}"
+                                else:
+                                    self.sample_id_label.text = "Sample ID: Not Set"
+                                
+                                # Update protocol group ID (experiment ID)
+                                if hasattr(user_info, 'protocol_group_id'):
+                                    protocol_group_id = user_info.protocol_group_id.value if hasattr(user_info.protocol_group_id, 'value') else 'Not Set'
+                                    self.experiment_id_label.text = f"Experiment ID: {protocol_group_id}"
+                                else:
+                                    self.experiment_id_label.text = "Experiment ID: Not Set"
+                            
+                            # Update other existing fields from meta_info
+                            meta_info = info.protocol_run_info.meta_info
+                            if hasattr(meta_info, 'tags'):
+                                if 'kit' in meta_info.tags:
+                                    self.running_kit = meta_info.tags['kit'].string_value
+                                if 'flow cell' in meta_info.tags:
+                                    self.Flowcell_Type = meta_info.tags['flow cell'].string_value
+                            
+                            if info.protocol_run_info.phase != 0:
+                                self.show = True
+                            else:
+                                self.show = False
+                except Exception as e:
+                    logger.error(f"[Position.stream_instance_activity] Inner loop error: {str(e)}")
+                    time.sleep(1)
+            logger.debug("Instance monitoring stopped")
+        except Exception as e:
+            logger.error(f"[Position.stream_instance_activity] Error: {str(e)}")
+            logger.error(f"[Position.stream_instance_activity] Error type: {type(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
 
 
 @ui.page("/", response_timeout=30)
@@ -638,10 +1276,17 @@ async def index_page() -> None:
 
 def run_class(port: int, reload: bool):
     """
-    Helper function to run the app.
-    :param port: The port to serve the app on.
-    :param reload: Should we reload the app on changes.
-    :return:
+    Helper function to run the MinKNOW panel application.
+    
+    Sets up the web application with custom styling and configuration,
+    then starts the server.
+    
+    Args:
+        port (int): Port number to serve the application
+        reload (bool): Whether to enable auto-reload for development
+        
+    Returns:
+        None
     """
     # Add some custom CSS because - why not!
     ui.add_css(
@@ -661,7 +1306,7 @@ def run_class(port: int, reload: bool):
         reload=reload,
         title="Readfish NiceGUI",
         storage_secret="waynesworld",
-    )  # , native=True, fullscreen=False, window_size=(1200, 1000))
+    )
 
 
 def main():  # , threads, simtime, watchfolder, output, sequencing_summary):
@@ -680,6 +1325,6 @@ if __name__ in {"__main__", "__mp_main__"}:
     :return: None
     """
     if __name__ == "__mp_main__":
-        print("GUI launched by auto-reload")
+        logging.info("GUI launched by auto-reload")
 
     run_class(port=12398, reload=True)

@@ -1,3 +1,29 @@
+"""
+Sample Setup Module
+
+This module provides a user interface for setting up and configuring sequencing samples
+in the MinKNOW system. It handles sample identification, flowcell configuration,
+and run initialization.
+
+Key Features:
+- Sample ID scanning and validation
+- Flowcell ID scanning and validation
+- Device position selection
+- Run configuration and initialization
+- Real-time status updates
+
+The module includes:
+- ExperimentSpec: Class for experiment specifications
+- MinKNOWFish: Main class for MinKNOW interaction
+- ErrorChecker: Input validation utility
+
+Dependencies:
+- nicegui: Web interface framework
+- minknow_api: MinKNOW communication
+- opencv-python: Image processing for barcode scanning
+- zxingcpp: Barcode detection and decoding
+"""
+
 from nicegui import ui, run, app
 
 import asyncio
@@ -35,7 +61,24 @@ UNIQUE_ID: str = str(uuid.uuid4())
 
 
 class ExperimentSpec(object):
+    """
+    A class to hold experiment specifications for a MinKNOW sequencing position.
+    
+    This class maintains information about a sequencing position and its associated
+    protocol ID for experiment execution.
+    
+    Attributes:
+        position: The sequencing position object from MinKNOW
+        protocol_id (str): The identifier for the protocol to be run
+    """
+    
     def __init__(self, position):
+        """
+        Initialize an ExperimentSpec instance.
+        
+        Args:
+            position: A MinKNOW position object representing a sequencing position
+        """
         self.position = position
         self.protocol_id = ""
 
@@ -45,6 +88,24 @@ ExperimentSpecs = Sequence[ExperimentSpec]
 
 # Determine which protocol to run for each experiment, and add its ID to experiment_specs
 def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_id):
+    """
+    Add protocol IDs to experiment specifications based on flowcell and kit information.
+    
+    This function validates flowcell presence and compatibility, then finds and assigns
+    the appropriate protocol ID for each experiment specification.
+    
+    Args:
+        experiment_specs (list): List of ExperimentSpec objects
+        kit (str): The sequencing kit identifier
+        basecall_config (str): Basecalling configuration name
+        expected_flowcell_id (str): The expected flowcell ID to validate against
+        
+    Returns:
+        bool: True if protocol IDs were successfully added, False otherwise
+        
+    Raises:
+        None: Errors are handled internally and reported via UI notifications
+    """
     for spec in experiment_specs:
         # Connect to the sequencing position:
         position_connection = spec.position.connect()
@@ -113,6 +174,22 @@ def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_i
 
 @contextmanager
 def disable(button: ui.button):
+    """
+    Context manager to temporarily disable a UI button.
+    
+    This ensures the button is re-enabled even if an exception occurs.
+    
+    Args:
+        button (ui.button): The button to disable
+        
+    Yields:
+        None
+        
+    Example:
+        with disable(my_button):
+            # Perform some operation
+            # Button will be re-enabled after the block
+    """
     button.disable()
     try:
         yield
@@ -122,7 +199,26 @@ def disable(button: ui.button):
 
 class MinKNOWFish:
     """
-    A way of handling a minknow connection.
+    Main class for handling MinKNOW connections and experiment setup.
+    
+    This class manages the connection to MinKNOW instances, handles device
+    configuration, and coordinates experiment setup and execution.
+    
+    Attributes:
+        tabs: UI tabs container
+        manager: MinKNOW manager connection
+        positions: List of available sequencing positions
+        selected_position: Currently selected position
+        connection_ip (str): IP address of the MinKNOW instance
+        connected (bool): Connection status
+        watchfolder: Monitoring folder path
+        devices (set): Set of connected device types
+        kit (str): Sequencing kit identifier
+        basecall_config (str): Basecalling configuration
+        reference (str): Reference genome path
+        bed_file (str): BED file path
+        experiment_duration (int): Duration in hours
+        centreID (str): Centre identifier
     """
 
     def __init__(
@@ -136,17 +232,27 @@ class MinKNOWFish:
         **kwargs,
     ):
         """
-        This is called when the app is initialized.
+        Initialize a MinKNOWFish instance.
+        
+        Args:
+            kit (str): Sequencing kit identifier
+            centreID (str): Centre identifier
+            experiment_duration (int): Run duration in hours
+            bed_file (str): Path to BED file
+            basecall_config (str): Basecalling configuration name
+            reference (str): Path to reference genome
+            **kwargs: Additional keyword arguments
         """
-        # super().__init__(**kwargs)
         self.tabs = None
         self.manager = None
         self.positions = None
         self.selected_position = None
-        self.connection_ip: str | None = None
+        self.connection_ip = None
         self.connected = False
         self.watchfolder = None
         self.devices = set()
+        
+        # Store configuration parameters
         self.kit = kit
         self.basecall_config = basecall_config
         self.reference = reference
@@ -225,88 +331,72 @@ class MinKNOWFish:
         experiment_group_id=None,
         flowcell_id=None,
     ):
+        """
+        Start a sequencing run with the specified parameters.
+        
+        This method configures and initiates a sequencing run on the selected
+        position with the provided parameters.
+        
+        Args:
+            position (str, optional): Device position identifier
+            reference (str, optional): Reference genome path
+            sample_id (str, optional): Sample identifier
+            experiment_group_id (str, optional): Group identifier
+            flowcell_id (str, optional): Flowcell identifier
+            
+        Note:
+            Notifies the user of run status through the UI
+        """
         ui.notify(f"Starting Run {sample_id} on {flowcell_id}!", type="positive")
-        # ToDo: At every stage we need to confirm that the correct values have been entered.
-        # position = "1B"
-        kit = self.kit
-        ###Memo to self... basecall config must not include cfg
-        basecall_config = self.basecall_config
-        alignment_reference = self.reference
-        bed_file = self.bed_file
-        experiment_duration = self.experiment_duration
-        current_date = datetime.now()
-        centreID = self.centreID
-        experiment_group_id = (
-            f"{centreID}_{current_date.strftime('%B')}_{current_date.year}"
-        )
-        # sample_id = "SAMPLE_ID"
+        
+        # Build experiment specifications
         experiment_specs = []
-        # Add all the positions to the list:
         for pos in self.manager.flow_cell_positions():
             if pos.name == position:
                 experiment_specs.append(ExperimentSpec(position=pos))
-        # Check if the flowcell ID is correct
 
-        if add_protocol_ids(experiment_specs, kit, basecall_config, flowcell_id):
-
-            # Build arguments for starting protocol:
+        if add_protocol_ids(experiment_specs, self.kit, self.basecall_config, flowcell_id):
+            # Configure run parameters
             alignment_args = protocols.AlignmentArgs(
-                reference_files=[alignment_reference],
-                bed_file=bed_file,
+                reference_files=[self.reference],
+                bed_file=self.bed_file,
             )
 
             basecalling_args = protocols.BasecallingArgs(
-                config=basecall_config,
+                config=self.basecall_config,
                 barcoding=None,
                 alignment=alignment_args,
             )
 
             read_until_args = protocols.ReadUntilArgs(
                 filter_type="enrich",
-                reference_files=[alignment_reference],
-                bed_file=bed_file,
+                reference_files=[self.reference],
+                bed_file=self.bed_file,
                 first_channel=None,
                 last_channel=None,
             )
 
-            bam_arguments = protocols.OutputArgs(
-                reads_per_file=4000,
-                batch_duration="1",
-            )
-            pod5_arguments = protocols.OutputArgs(
-                reads_per_file=4000, batch_duration="1"
-            )
-
-            # Now start the protocol(s):
+            # Start the protocol
             for spec in experiment_specs:
                 position_connection = spec.position.connect()
-
-                # Generate stop criteria for use by Run Until
-                # The `runtime` is in seconds, while the `experiment_duration` is in hours
+                
+                # Set up stop criteria
                 stop_criteria = protocols.CriteriaValues(
-                    runtime=int(experiment_duration * 60 * 60)
+                    runtime=int(self.experiment_duration * 60 * 60)
                 )
 
+                # Start the protocol
                 run_id = protocols.start_protocol(
                     position_connection,
                     identifier=spec.protocol_id,
                     sample_id=sample_id,
                     experiment_group=experiment_group_id,
-                    barcode_info=None,
                     basecalling=basecalling_args,
                     read_until=read_until_args,
-                    fastq_arguments=None,
-                    fast5_arguments=None,
-                    pod5_arguments=pod5_arguments,
-                    bam_arguments=bam_arguments,
-                    disable_active_channel_selection=False,
-                    mux_scan_period=1.5,
                     stop_criteria=stop_criteria,
-                    args=[],  # Any extra args passed.
                 )
 
                 flow_cell_info = position_connection.device.get_flow_cell_info()
-
                 ui.notify(
                     f"Started protocol:\n    run_id={run_id}\n    position={spec.position.name}\n    flow_cell_id={flow_cell_info.flow_cell_id}\n",
                     multi_line=True,
@@ -539,11 +629,16 @@ async def content():
 
 
 def main():
-    # with theme.frame(
-    #        "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
-    #        smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
-    # ):
-    #    ui.label("hello")
+    """
+    Main entry point for the sample setup application.
+    
+    This function initializes and runs the web interface for sample setup
+    and run configuration. It sets up the necessary routes and starts
+    the web server.
+    
+    Returns:
+        None
+    """
     app.add_static_files("/fonts", str(Path(__file__).parent / "../fonts"))
     ui.run(
         storage_secret="UNIQUE_ID",
