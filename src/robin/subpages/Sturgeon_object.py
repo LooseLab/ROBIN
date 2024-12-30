@@ -1,3 +1,31 @@
+"""
+A module for analyzing and visualizing Sturgeon methylation data in real-time.
+
+This module provides functionality for processing BAM files to analyze methylation patterns
+using the Sturgeon tool suite. It includes capabilities for:
+
+- Real-time BAM file processing
+- Methylation data extraction using modkit
+- Sturgeon prediction and visualization
+- Time series analysis of methylation patterns
+
+The module integrates with the NiceGUI framework for interactive visualization
+and uses temporary files for efficient data processing.
+
+Dependencies
+-----------
+- pysam
+- pandas
+- nicegui
+- sturgeon
+- modkit
+
+Notes
+-----
+The module requires proper configuration of input/output directories and
+assumes the presence of necessary model files for Sturgeon predictions.
+"""
+
 from robin.subpages.base_analysis import BaseAnalysis
 import os
 import sys
@@ -23,10 +51,39 @@ logger = logging.getLogger(__name__)
 
 
 def run_probes_methyl_calls(merged_output_file, bed_output_file):
+    """
+    Convert merged methylation calls to BED format.
+
+    Parameters
+    ----------
+    merged_output_file : str
+        Path to the input file containing merged methylation calls
+    bed_output_file : str
+        Path where the output BED file should be written
+
+    Notes
+    -----
+    This function is a wrapper around sturgeon's probes_methyl_calls_to_bed function.
+    """
     probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
 
 
 def run_sturgeon_merge_probes(calls_per_probe_file, merged_output_file):
+    """
+    Merge multiple probe methylation call files.
+
+    Parameters
+    ----------
+    calls_per_probe_file : str
+        Path to the input file containing methylation calls per probe
+    merged_output_file : str
+        Path where the merged output should be written
+
+    Notes
+    -----
+    This function merges multiple probe methylation call files into a single output file
+    using sturgeon's merge_probes_methyl_calls function.
+    """
     merge_probes_methyl_calls(
         [calls_per_probe_file, merged_output_file],
         merged_output_file,
@@ -34,13 +91,41 @@ def run_sturgeon_merge_probes(calls_per_probe_file, merged_output_file):
 
 
 def pysam_cat(tempbam, tomerge):
+    """
+    Concatenate multiple BAM files using pysam.
+
+    Parameters
+    ----------
+    tempbam : str
+        Path where the concatenated BAM file should be written
+    tomerge : list
+        List of BAM file paths to merge
+
+    Notes
+    -----
+    This function uses pysam's cat functionality to merge multiple BAM files
+    into a single output file.
+    """
     pysam.cat("-o", tempbam, *tomerge)
 
 
 def run_modkit(file, temp, threads):
     """
-    This function runs modkit on a bam file and extracts the methylation data.
-    Adjusts command based on modkit version.
+    Run modkit to extract methylation data from a BAM file.
+
+    Parameters
+    ----------
+    file : str
+        Path to input BAM file
+    temp : str
+        Path for temporary output
+    threads : int
+        Number of threads to use for processing
+
+    Notes
+    -----
+    This function adapts its command based on the installed modkit version.
+    For versions >= 0.4, it uses 'extract full', otherwise just 'extract'.
     """
     try:
         # Get modkit version
@@ -65,6 +150,23 @@ def run_modkit(file, temp, threads):
 
 
 def run_sturgeon_predict(bedDir, dataDir, modelfile):
+    """
+    Run Sturgeon prediction on methylation data.
+
+    Parameters
+    ----------
+    bedDir : str
+        Directory containing BED format methylation data
+    dataDir : str
+        Directory where prediction output will be saved
+    modelfile : str
+        Path to the Sturgeon model file to use for predictions
+
+    Notes
+    -----
+    This function executes the Sturgeon predict command with the specified
+    model file and suppresses terminal output.
+    """
     os.system(
         f"sturgeon predict -i {bedDir} -o {dataDir} "
         f"--model-files {modelfile} >/dev/null 2>&1"
@@ -72,19 +174,63 @@ def run_sturgeon_predict(bedDir, dataDir, modelfile):
 
 
 def run_sturgeon_inputtobed(temp, temp2):
+    """
+    Convert Sturgeon input format to BED format.
+
+    Parameters
+    ----------
+    temp : str
+        Path to input file in modkit format
+    temp2 : str
+        Directory where BED format output will be saved
+
+    Notes
+    -----
+    This function converts modkit format methylation data to BED format
+    using hg38 as the reference genome. Errors are caught and printed.
+    """
     try:
         os.system(
             f"sturgeon inputtobed -i {temp} -o {temp2} -s modkit "
             f"--reference-genome hg38 >/dev/null 2>&1"
         )
-        # self.log(temp2)
     except Exception as e:
         print(e)
-        # self.log(e)
         pass
 
 
 class Sturgeon_object(BaseAnalysis):
+    """
+    A class for processing and visualizing Sturgeon methylation analysis results.
+
+    This class extends BaseAnalysis to provide specialized functionality for
+    Sturgeon methylation analysis. It handles real-time processing of BAM files,
+    methylation data extraction, and visualization of results.
+
+    Parameters
+    ----------
+    *args
+        Variable length argument list passed to BaseAnalysis
+    **kwargs
+        Arbitrary keyword arguments passed to BaseAnalysis
+
+    Attributes
+    ----------
+    sturgeon_df_store : dict
+        Store for Sturgeon dataframes
+    threshold : float
+        Confidence threshold for predictions (default: 0.05)
+    first_run : dict
+        Tracks first run status for each sample
+    modelfile : str
+        Path to the Sturgeon model file
+    dataDir : dict
+        Dictionary of temporary directories for data
+    bedDir : dict
+        Dictionary of temporary directories for BED files
+    st_num_probes : dict
+        Dictionary tracking number of probes per sample
+    """
     def __init__(self, *args, **kwargs):
         self.sturgeon_df_store = {}
         self.threshold = 0.05
@@ -98,6 +244,21 @@ class Sturgeon_object(BaseAnalysis):
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
+        """
+        Set up the user interface components for Sturgeon visualization.
+
+        This method creates and arranges the UI cards and grids for displaying
+        Sturgeon analysis results. It sets up:
+        - Main card with dark theme
+        - Grid layout for charts
+        - Sturgeon classification chart
+        - Time series chart
+        - Initial classification label
+
+        Notes
+        -----
+        The layout is responsive and adjusts based on the MENU_BREAKPOINT value.
+        """
         self.card = ui.card().classes('dark:bg-black').style("width: 100%")
         with self.card:
             with ui.grid(columns=8).classes("w-full h-auto"):
@@ -118,6 +279,21 @@ class Sturgeon_object(BaseAnalysis):
             ui.timer(5, lambda: self.show_previous_data())
 
     def show_previous_data(self):
+        """
+        Load and display previously generated Sturgeon analysis results.
+
+        This method:
+        1. Determines the correct output directory based on browse mode
+        2. Loads existing Sturgeon scores from CSV
+        3. Filters results based on confidence threshold
+        4. Updates visualization charts with loaded data
+        5. Updates classification summary
+
+        Notes
+        -----
+        The method handles both browse mode and real-time analysis mode,
+        updating the UI components with the loaded data.
+        """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
                 if item == "sample_ids":
@@ -158,10 +334,24 @@ class Sturgeon_object(BaseAnalysis):
 
     async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
         """
-        Processes the BAM files and performs the analysis.
+        Process BAM files and perform Sturgeon analysis.
 
-        Args:
-            bamfile (List[Tuple[str, float]]): List of BAM files with their timestamps.
+        This method handles the complete workflow of processing BAM files:
+        1. Merging BAM files
+        2. Extracting methylation data using modkit
+        3. Converting to BED format
+        4. Running Sturgeon predictions
+        5. Updating visualizations
+
+        Parameters
+        ----------
+        bamfile : List[Tuple[str, float]]
+            List of tuples containing BAM file paths and their timestamps
+
+        Notes
+        -----
+        The method processes files in batches and updates progress trackers.
+        Results are stored in temporary directories and visualized in real-time.
         """
         sampleID = self.sampleID
         # Initialize directories for each sampleID if not already present
@@ -290,58 +480,267 @@ class Sturgeon_object(BaseAnalysis):
         self.running = False
 
     def create_sturgeon_chart(self, title):
+        """
+        Create a bar chart for displaying Sturgeon classification results.
+
+        Creates an accessible, easy-to-read bar chart that shows classification 
+        confidence scores. The chart includes:
+        - Clear title with processing status
+        - Descriptive labels
+        - Consistent color scheme
+        - Accessible text sizes
+        - Interactive tooltips
+
+        Parameters
+        ----------
+        title : str
+            Title for the chart
+        """
         self.echart2 = self.create_chart(title)
+        # Set up base chart options following Apple HIG
+        self.echart2.options.update({
+            "backgroundColor": "transparent",
+            "title": {
+                "text": title,
+                "left": "center",
+                "top": 10,
+                "textStyle": {
+                    "fontSize": 16,
+                    "fontWeight": "normal"
+                }
+            },
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "shadow"},
+                "formatter": "{b}: {c}%"
+            },
+            "grid": {
+                "left": "10%",  # Increased to accommodate longer labels
+                "right": "10%",
+                "bottom": "10%",
+                "top": "15%",
+                "containLabel": True
+            },
+            "xAxis": {
+                "type": "value",
+                "min": 0,
+                "max": 100,
+                "interval": 20,
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{value}%"
+                }
+            },
+            "yAxis": {
+                "type": "category",
+                "inverse": True,
+                "data": [],
+                "axisLabel": {
+                    "fontSize": 12,
+                    "width": 250,  # Increased width for labels
+                    "overflow": "break",  # Changed to break instead of truncate
+                    "interval": 0,  # Show all labels
+                    "align": "right"
+                }
+            },
+            "series": [{
+                "type": "bar",
+                "name": "Confidence",
+                "barMaxWidth": "50%",
+                "itemStyle": {
+                    "color": "#007AFF",  # iOS blue
+                    "borderRadius": [0, 4, 4, 0]
+                },
+                "label": {
+                    "show": True,
+                    "position": "right",
+                    "formatter": "{c}%",
+                    "fontSize": 12
+                },
+                "data": []
+            }],
+            "aria": {
+                "enabled": True,
+                "decal": {
+                    "show": True
+                }
+            }
+        })
+
+    def create_sturgeon_time_chart(self, title):
+        """
+        Create a time series chart for Sturgeon results.
+
+        Creates an accessible line chart showing classification confidence 
+        trends over time. The chart includes:
+        - Clear title
+        - Time-based x-axis
+        - Interactive legend
+        - Smooth transitions
+        - Accessible color scheme
+        - Tooltips for data points
+
+        Parameters
+        ----------
+        title : str
+            Title for the time series chart
+        """
+        self.sturgeon_time_chart = self.create_time_chart(title)
+        # Set up base chart options following Apple HIG
+        self.sturgeon_time_chart.options.update({
+            "backgroundColor": "transparent",
+            "title": {
+                "text": title,
+                "left": "center",
+                "top": 10,
+                "textStyle": {
+                    "fontSize": 16,
+                    "fontWeight": "normal"
+                }
+            },
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "line"}
+            },
+            "grid": {
+                "left": "10%",
+                "right": "15%",
+                "bottom": "10%",
+                "top": "20%",
+                "containLabel": True
+            },
+            "legend": {
+                "type": "scroll",
+                "orient": "horizontal",
+                "top": 40,
+                "textStyle": {
+                    "fontSize": 12
+                }
+            },
+            "xAxis": {
+                "type": "time",
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{HH}:{mm}"
+                }
+            },
+            "yAxis": {
+                "type": "value",
+                "min": 0,
+                "max": 100,
+                "interval": 20,
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{value}%"
+                }
+            },
+            "aria": {
+                "enabled": True,
+                "decal": {
+                    "show": True
+                }
+            }
+        })
 
     def update_sturgeon_plot(self, x, y, count, st_num_probes):
         """
-        Replaces the data in the RapidCNS2 plot.
-        :param x: list of tumour types
-        :param y: confidence scores for each tumour type
-        :param count: the number of bams used to generate the plot
-        :return:
-        """
-        self.echart2.options["title"][
-            "text"
-        ] = f"Sturgeon: processed {count} bams and found {int(st_num_probes)} probes"
-        self.echart2.options["yAxis"]["data"] = x
-        self.echart2.options["series"] = [
-            {"type": "bar", "name": "Sturgeon", "data": y}
-        ]
-        self.echart2.update()
+        Update the Sturgeon visualization plot with new data.
 
-    def create_sturgeon_time_chart(self, title):
-        self.sturgeon_time_chart = self.create_time_chart(title)
+        Parameters
+        ----------
+        x : list
+            List of tumor types
+        y : list
+            Confidence scores for each tumor type
+        count : str
+            Number of BAM files processed
+        st_num_probes : int
+            Number of probes found
+        """
+        # Convert values to percentages and format
+        formatted_values = [float(f"{val * 100:.1f}") for val in y]
+        
+        # Create descriptive title with key information
+        title_text = (
+            f"Sturgeon Analysis Results\n"
+            f"{count} samples processed • {int(st_num_probes)} probes found"
+        )
+        
+        self.echart2.options["title"]["text"] = title_text
+        self.echart2.options["yAxis"]["data"] = x
+        self.echart2.options["series"][0].update({
+            "data": formatted_values,
+            "itemStyle": {
+                "color": "#007AFF",  # iOS blue
+                "borderRadius": [0, 4, 4, 0]
+            }
+        })
+        self.echart2.update()
 
     def update_sturgeon_time_chart(self, datadf):
         """
+        Update the time series chart with new data.
 
-        :param datadf: the data to plot
-        :return:
+        Parameters
+        ----------
+        datadf : pandas.DataFrame
+            DataFrame containing time series data for visualization
         """
         self.sturgeon_time_chart.options["series"] = []
-        for series, data in datadf.to_dict().items():
-            # print(series)
-            data_list = [[key, value] for key, value in data.items()]
-            # print(data_list)
+        
+        # iOS color palette for multiple series
+        colors = [
+            "#007AFF",  # Blue
+            "#34C759",  # Green
+            "#FF9500",  # Orange
+            "#FF2D55",  # Red
+            "#5856D6",  # Purple
+            "#FF3B30",  # Red-Orange
+            "#5AC8FA",  # Light Blue
+            "#4CD964",  # Light Green
+        ]
+        
+        for idx, (series, data) in enumerate(datadf.to_dict().items()):
             if series != "number_probes":
-                self.sturgeon_time_chart.options["series"].append(
-                    {
-                        "animation": False,
-                        "type": "line",
-                        "smooth": True,
-                        "name": series,
-                        "emphasis": {"focus": "series"},
-                        "endLabel": {
-                            "show": True,
-                            "formatter": "{a}",
-                            "distance": 20,
-                        },
-                        "lineStyle": {
-                            "width": 2,
-                        },
-                        "data": data_list,
-                    }
-                )
+                # Convert values to percentages
+                data_list = [[key, float(f"{value * 100:.1f}")] for key, value in data.items()]
+                self.sturgeon_time_chart.options["series"].append({
+                    "name": series,
+                    "type": "line",
+                    "smooth": True,
+                    "animation": False,
+                    "symbolSize": 6,
+                    "emphasis": {
+                        "focus": "series",
+                        "itemStyle": {
+                            "borderWidth": 2
+                        }
+                    },
+                    "endLabel": {
+                        "show": True,
+                        "formatter": "{a}: {c}%",
+                        "distance": 10,
+                        "fontSize": 12
+                    },
+                    "lineStyle": {
+                        "width": 2,
+                        "color": colors[idx % len(colors)]
+                    },
+                    "itemStyle": {
+                        "color": colors[idx % len(colors)]
+                    },
+                    "data": data_list
+                })
+        
+        # Update chart title with summary
+        latest_data = datadf.iloc[-1].drop("number_probes")  # Remove number_probes from latest data
+        max_confidence = latest_data.max() * 100  # Convert to percentage
+        max_type = latest_data.idxmax()
+        self.sturgeon_time_chart.options["title"]["text"] = (
+            f"Classification Confidence Over Time\n"
+            f"Current highest confidence: {max_type} ({max_confidence:.1f}%)"
+        )
+        
         self.sturgeon_time_chart.update()
 
 
@@ -353,6 +752,29 @@ def test_me(
     reload: bool = False,
     browse: bool = False,
 ):
+    """
+    Test function to run the Sturgeon analysis interface.
+
+    Parameters
+    ----------
+    port : int
+        Port number for the web interface
+    threads : int
+        Number of processing threads
+    watchfolder : str
+        Directory to watch for new BAM files
+    output : str
+        Directory for output files
+    reload : bool, optional
+        Whether to enable auto-reload (default: False)
+    browse : bool, optional
+        Whether to run in browse mode (default: False)
+
+    Notes
+    -----
+    This function sets up the web interface and starts processing BAM files
+    either from a watch folder or in browse mode.
+    """
     my_connection = None
     with theme.frame("Sturgeon Rapid CNS Diagnostic.", my_connection):
         TestObject = Sturgeon_object(threads, output, progress=True, batch=True)
@@ -402,10 +824,28 @@ def test_me(
 )
 def mainrun(port, threads, watchfolder, output, browse):
     """
-    Helper function to run the app.
-    :param port: The port to serve the app on.
-    :param reload: Should we reload the app on changes.
-    :return:
+    Main entry point for the Sturgeon analysis application.
+
+    This function handles command line arguments and launches the application
+    either in watch mode or browse mode.
+
+    Parameters
+    ----------
+    port : int
+        Port number for the web interface
+    threads : int
+        Number of processing threads
+    watchfolder : Path
+        Directory to watch for new BAM files
+    output : Path
+        Directory for output files
+    browse : bool
+        Whether to run in browse mode
+
+    Notes
+    -----
+    In watch mode, both watchfolder and output are required.
+    In browse mode, only output is required.
     """
     if browse:
         # Handle the case when --browse is set

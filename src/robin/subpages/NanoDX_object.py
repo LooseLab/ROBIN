@@ -504,73 +504,295 @@ class NanoDX_object(BaseAnalysis):
 
     def create_nanodx_chart(self, title: str) -> None:
         """
-        Creates the NanoDX chart.
+        Create a bar chart for displaying NanoDX classification results.
 
-        Args:
-            title (str): Title of the chart.
+        Creates an accessible, easy-to-read bar chart that shows classification 
+        confidence scores. The chart includes:
+        - Clear title with processing status
+        - Descriptive labels
+        - Consistent color scheme
+        - Accessible text sizes
+        - Interactive tooltips
+
+        Parameters
+        ----------
+        title : str
+            Title for the chart
         """
         self.nanodxchart = self.create_chart(title)
+        # Set up base chart options following Apple HIG
+        self.nanodxchart.options.update({
+            "backgroundColor": "transparent",
+            "title": {
+                "text": title,
+                "left": "center",
+                "top": 10,
+                "textStyle": {
+                    "fontSize": 16,
+                    "fontWeight": "normal"
+                },
+                "subtextStyle": {
+                    "fontSize": 12,
+                    "color": "#666"
+                }
+            },
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "shadow"},
+                "formatter": "{b}: {c}%"
+            },
+            "grid": {
+                "left": "10%",  # Reduced from 35% to minimize whitespace while still accommodating labels
+                "right": "10%",
+                "bottom": "10%",
+                "top": "25%",  # Increased to accommodate three-line title
+                "containLabel": True
+            },
+            "xAxis": {
+                "type": "value",
+                "min": 0,
+                "max": 100,
+                "interval": 20,
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{value}%"
+                }
+            },
+            "yAxis": {
+                "type": "category",
+                "inverse": True,
+                "data": [],
+                "axisLabel": {
+                    "fontSize": 12,
+                    "width": 250,  # Increased width for labels
+                    "overflow": "break",  # Changed to break instead of truncate
+                    "interval": 0,  # Show all labels
+                    "align": "right"
+                }
+            },
+            "series": [{
+                "type": "bar",
+                "name": "Confidence",
+                "barMaxWidth": "50%",
+                "itemStyle": {
+                    "color": "#007AFF",  # iOS blue
+                    "borderRadius": [0, 4, 4, 0]
+                },
+                "label": {
+                    "show": True,
+                    "position": "right",
+                    "formatter": "{c}%",
+                    "fontSize": 12
+                },
+                "data": []
+            }],
+            "aria": {
+                "enabled": True,
+                "decal": {
+                    "show": True
+                }
+            }
+        })
+
+    def create_nanodx_time_chart(self, title: str) -> None:
+        """
+        Create a time series chart for NanoDX results.
+
+        Creates an accessible line chart showing classification confidence 
+        trends over time. The chart includes:
+        - Clear title
+        - Time-based x-axis
+        - Interactive legend
+        - Smooth transitions
+        - Accessible color scheme
+        - Tooltips for data points
+
+        Parameters
+        ----------
+        title : str
+            Title for the time series chart
+        """
+        self.nanodx_time_chart = self.create_time_chart(title)
+        # Set up base chart options following Apple HIG
+        self.nanodx_time_chart.options.update({
+            "backgroundColor": "transparent",
+            "title": {
+                "text": title,
+                "left": "center",
+                "top": 10,
+                "textStyle": {
+                    "fontSize": 16,
+                    "fontWeight": "normal"
+                }
+            },
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "line"}
+            },
+            "grid": {
+                "left": "10%",
+                "right": "15%",
+                "bottom": "10%",
+                "top": "20%",
+                "containLabel": True
+            },
+            "legend": {
+                "type": "scroll",
+                "orient": "horizontal",
+                "top": 40,
+                "textStyle": {
+                    "fontSize": 12
+                }
+            },
+            "xAxis": {
+                "type": "time",
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{HH}:{mm}"
+                }
+            },
+            "yAxis": {
+                "type": "value",
+                "min": 0,
+                "max": 100,
+                "interval": 20,
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{value}%"
+                }
+            },
+            "aria": {
+                "enabled": True,
+                "decal": {
+                    "show": True
+                }
+            }
+        })
 
     def update_nanodx_plot(
         self, x: List[str], y: List[float], count: int, n_features: int
     ) -> None:
         """
-        Updates the NanoDX plot with new data.
+        Update the NanoDX visualization plot with new data.
 
-        Args:
-            x (List[str]): List of tumor types.
-            y (List[float]): Confidence scores for each tumor type.
-            count (int): Number of BAM files used to generate the plot.
-            n_features (int): Number of features detected during data analysis.
+        Parameters
+        ----------
+        x : List[str]
+            List of tumor types
+        y : List[float]
+            Confidence scores for each tumor type
+        count : int
+            Number of BAM files processed
+        n_features : int
+            Number of features detected during analysis
+
+        Notes
+        -----
+        Updates the bar chart with current classification results and formats
+        the display according to Apple HIG guidelines.
         """
-        self.nanodxchart.options["title"][
-            "text"
-        ] = f"NanoDX: processed {count} bams and found {int(n_features)} features"
-        self.nanodxchart.options["title"]["subtext"] = f"Model: {self.model}"
-        self.nanodxchart.options["yAxis"]["data"] = x
-        self.nanodxchart.options["series"] = [
-            {"type": "bar", "name": "NanoDX", "data": y}
-        ]
+        # Convert values to percentages and format
+        formatted_values = [float(f"{val * 100:.1f}") for val in y]
+        
+        # Sort the data in descending order
+        sorted_indices = sorted(range(len(formatted_values)), key=lambda k: formatted_values[k], reverse=True)
+        sorted_values = [formatted_values[i] for i in sorted_indices]
+        sorted_labels = [x[i] for i in sorted_indices]
+        
+        # Create descriptive title with key information
+        title_text = (
+            f"NanoDX Analysis Results\n"
+            f"{count} samples processed • {int(n_features)} features found"
+        )
+        
+        self.nanodxchart.options["title"].update({
+            "text": title_text,
+            "subtext": f"Model: {self.model}",
+            "subtextStyle": {
+                "fontSize": 12,
+                "color": "#666",
+                "align": "center"
+            }
+        })
+        self.nanodxchart.options["yAxis"]["data"] = sorted_labels
+        self.nanodxchart.options["series"][0].update({
+            "data": sorted_values,
+            "itemStyle": {
+                "color": "#007AFF",  # iOS blue
+                "borderRadius": [0, 4, 4, 0]
+            }
+        })
         self.nanodxchart.update()
-
-    def create_nanodx_time_chart(self, title: str) -> None:
-        """
-        Creates the NanoDX time series chart.
-
-        Args:
-            title (str): Title of the chart.
-        """
-        self.nanodx_time_chart = self.create_time_chart(title)
 
     def update_nanodx_time_chart(self, datadf: pd.DataFrame) -> None:
         """
-        Updates the NanoDX time series chart with new data.
+        Update the time series chart with new data.
 
-        Args:
-            datadf (pd.DataFrame): DataFrame containing the data to plot.
+        Parameters
+        ----------
+        datadf : pd.DataFrame
+            DataFrame containing time series data for visualization
+
+        Notes
+        -----
+        Updates the time series chart with current confidence trends and
+        formats the display according to Apple HIG guidelines.
         """
         self.nanodx_time_chart.options["series"] = []
-        for series, data in datadf.to_dict().items():
-            data_list = [[key, value] for key, value in data.items()]
+        
+        # iOS color palette for multiple series
+        colors = [
+            "#007AFF",  # Blue
+            "#34C759",  # Green
+            "#FF9500",  # Orange
+            "#FF2D55",  # Red
+            "#5856D6",  # Purple
+            "#FF3B30",  # Red-Orange
+            "#5AC8FA",  # Light Blue
+            "#4CD964",  # Light Green
+        ]
+        
+        for idx, (series, data) in enumerate(datadf.to_dict().items()):
             if series != "number_probes":
-                self.nanodx_time_chart.options["series"].append(
-                    {
-                        "animation": False,
-                        "type": "line",
-                        "smooth": True,
-                        "name": series,
-                        "emphasis": {"focus": "series"},
-                        "endLabel": {
-                            "show": True,
-                            "formatter": "{a}",
-                            "distance": 20,
-                        },
-                        "lineStyle": {
-                            "width": 2,
-                        },
-                        "data": data_list,
-                    }
-                )
+                # Convert values to percentages
+                data_list = [[key, float(f"{value * 100:.1f}")] for key, value in data.items()]
+                self.nanodx_time_chart.options["series"].append({
+                    "name": series,
+                    "type": "line",
+                    "smooth": True,
+                    "animation": False,
+                    "symbolSize": 6,
+                    "emphasis": {
+                        "focus": "series",
+                        "itemStyle": {
+                            "borderWidth": 2
+                        }
+                    },
+                    "endLabel": {
+                        "show": True,
+                        "formatter": "{a}: {c}%",
+                        "distance": 10,
+                        "fontSize": 12
+                    },
+                    "lineStyle": {
+                        "width": 2,
+                        "color": colors[idx % len(colors)]
+                    },
+                    "itemStyle": {
+                        "color": colors[idx % len(colors)]
+                    },
+                    "data": data_list
+                })
+        
+        # Update chart title with summary
+        latest_data = datadf.iloc[-1].drop("number_probes")  # Remove number_probes from latest data
+        max_confidence = latest_data.max() * 100  # Convert to percentage
+        max_type = latest_data.idxmax()
+        self.nanodx_time_chart.options["title"]["text"] = (
+            f"Classification Confidence Over Time\n"
+            f"Current highest confidence: {max_type} ({max_confidence:.1f}%)"
+        )
+        
         self.nanodx_time_chart.update()
 
 
