@@ -608,3 +608,73 @@ class BaseAnalysis:
         It should be overridden by subclasses to check the resources required for the analysis are present.
         """
         pass
+
+    def create_summary_card(self, classification_text, confidence_value, model_name=None, features_found=None):
+        """
+        Create a standardized summary card for displaying classification results.
+        Following Apple HIG principles for presenting machine learning results.
+
+        Parameters
+        ----------
+        classification_text : str
+            The primary classification result
+        confidence_value : float
+            The confidence value (between 0 and 1)
+        model_name : str, optional
+            The name of the model used for classification
+        features_found : int, optional
+            Number of features/probes found
+        """
+        with ui.card().classes(
+            "w-full shadow-sm rounded-lg"
+        ).style('background-color: #F5F5F7; padding: 16px; margin-bottom: 16px;'):
+            # Main classification result
+            with ui.row().classes('w-full items-center justify-between gap-4'):
+                # Left side - Classification info
+                with ui.column().classes('gap-2 flex-grow'):
+                    # Primary classification
+                    ui.label(classification_text.split(" - ")[0]).classes(
+                        'text-lg font-medium text-gray-900'
+                    )
+                    # Secondary info row
+                    with ui.row().classes('gap-4 items-center'):
+                        if model_name:
+                            ui.label(f"Model: {model_name}").classes(
+                                'text-sm text-gray-500'
+                            )
+                        if features_found:
+                            ui.label(f"Features: {features_found:,}").classes(
+                                'text-sm text-gray-500'
+                            )
+                
+                # Right side - Confidence indicator
+                confidence_percent = confidence_value * 100
+                with ui.column().classes('items-end gap-1 min-w-fit'):
+                    # Confidence value
+                    ui.label(f"{confidence_percent:.1f}%").classes(
+                        'text-xl font-semibold'
+                    ).style(
+                        f'color: {self._get_confidence_color(confidence_value)}'
+                    )
+                    # Confidence label
+                    ui.label(self._get_confidence_text(confidence_value)).classes(
+                        'text-sm text-gray-500'
+                    )
+
+    def _get_confidence_color(self, confidence):
+        """Get color based on confidence level."""
+        if confidence >= 0.9:
+            return '#34C759'  # Green for high confidence
+        elif confidence >= 0.7:
+            return '#007AFF'  # Blue for medium confidence
+        else:
+            return '#FF9500'  # Orange for low confidence
+
+    def _get_confidence_text(self, confidence):
+        """Get descriptive text based on confidence level."""
+        if confidence >= 0.9:
+            return "High confidence"
+        elif confidence >= 0.7:
+            return "Medium confidence"
+        else:
+            return "Low confidence"

@@ -203,44 +203,82 @@ class RandomForest_object(BaseAnalysis):
             ui.timer(5, lambda: self.show_previous_data())
 
     def show_previous_data(self):
-        if not self.browse:
-            for item in app.storage.general[self.mainuuid]:
-                if item == "sample_ids":
-                    for sample in app.storage.general[self.mainuuid][item]:
-                        self.sampleID = sample
-            output = self.output
-        if self.browse:
-            output = self.check_and_create_folder(self.output, self.sampleID)
+        """
+        Load and display previously generated Random Forest analysis results.
+        """
         try:
-            if self.check_file_time(os.path.join(output, "random_forest_scores.csv")):
-                self.rcns2_df_store = pd.read_csv(
-                    os.path.join(output, "random_forest_scores.csv"),
-                    index_col=0,
-                )
-                columns_greater_than_threshold = (
-                    self.rcns2_df_store > self.threshold
-                ).any()
+            logger.info("Starting show_previous_data")
+            
+            # Get output path
+            if not self.browse:
+                for item in app.storage.general[self.mainuuid]:
+                    if item == "sample_ids":
+                        for sample in app.storage.general[self.mainuuid][item]:
+                            self.sampleID = sample
+                output = self.output
+                logger.debug(f"Using output path: {output}")
+            if self.browse:
+                output = self.check_and_create_folder(self.output, self.sampleID)
+                logger.debug(f"Using browse output path: {output}")
+
+            scores_file = os.path.join(output, "random_forest_scores.csv")
+            logger.info(f"Looking for scores file: {scores_file}")
+
+            if self.check_file_time(scores_file):
+                logger.info(f"Loading scores from: {scores_file}")
+                self.rcns2_df_store = pd.read_csv(scores_file, index_col=0)
+                logger.info(f"DataFrame loaded with shape: {self.rcns2_df_store.shape}")
+                
+                columns_greater_than_threshold = (self.rcns2_df_store > self.threshold).any()
                 columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                result = self.rcns2_df_store.columns[
-                    columns_not_greater_than_threshold
-                ].tolist()
-                self.update_rcns2_time_chart(self.rcns2_df_store.drop(columns=result))
-                lastrow = self.rcns2_df_store.iloc[-1]  # .drop("number_probes")
+                result = self.rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
+                logger.debug(f"Filtered columns: {result}")
+                
+                # Update time series chart
+                filtered_df = self.rcns2_df_store.drop(columns=result)
+                logger.info(f"Updating time chart with filtered data shape: {filtered_df.shape}")
+                self.update_rcns2_time_chart(filtered_df)
+                
+                # Get last row data
+                lastrow = self.rcns2_df_store.iloc[-1]
+                logger.debug(f"Last row before processing: {lastrow.to_dict()}")
+                
+                n_features = lastrow.get("number_probes", 0)
+                if "number_probes" in lastrow.index:
+                    lastrow = lastrow.drop("number_probes")
+                    logger.info(f"Dropped number_probes column, features found: {n_features}")
+                
                 lastrow_plot = lastrow.sort_values(ascending=False).head(10)
                 lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+                logger.info(f"Top classification: {lastrow_plot_top.index[0]} ({lastrow_plot_top.values[0]:.1f}%)")
+                
+                # Update summary card
                 if self.summary:
                     with self.summary:
                         self.summary.clear()
-                        ui.label(
-                            f"Forest classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                        classification_text = f"Forest classification: {lastrow_plot_top.index[0]}"
+                        logger.debug(f"Creating summary card with text: {classification_text}")
+                        self.create_summary_card(
+                            classification_text=classification_text,
+                            confidence_value=lastrow_plot_top.values[0] / 100,
+                            features_found=int(n_features) if n_features else None
                         )
+                
+                # Update bar plot
+                logger.info("Updating bar plot with top 10 classifications")
                 self.update_rcns2_plot(
                     lastrow_plot.index.to_list(),
-                    list(lastrow_plot.values / 100),
+                    list(lastrow_plot.values),
                     "All",
+                    n_features if n_features else None
                 )
-        except FileNotFoundError:
-            pass
+                logger.info("Completed show_previous_data successfully")
+            else:
+                logger.warning(f"No valid scores file found at: {scores_file}")
+                
+        except Exception as e:
+            logger.error(f"Error in show_previous_data: {str(e)}", exc_info=True)
+            raise
 
     async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
         """
@@ -626,7 +664,7 @@ class RandomForest_object(BaseAnalysis):
             }
         })
 
-    def update_rcns2_plot(self, x, y, count):
+    def update_rcns2_plot(self, x, y, count, n_features=None):
         """
         Update the Random Forest visualization plot with new data.
 
@@ -635,39 +673,48 @@ class RandomForest_object(BaseAnalysis):
         x : List[str]
             List of tumor types
         y : List[float]
-            Confidence scores for each tumor type
+            Confidence scores for each tumor type (already in percentages)
         count : str
             Number of BAM files processed
-
-        Notes
-        -----
-        Updates the bar chart with current classification results and formats
-        the display according to Apple HIG guidelines.
+        n_features : int, optional
+            Number of features detected
         """
-        # Convert values to percentages and format
-        formatted_values = [float(f"{val * 100:.1f}") for val in y]
-        
-        # Sort the data in descending order
-        sorted_indices = sorted(range(len(formatted_values)), key=lambda k: formatted_values[k], reverse=True)
-        sorted_values = [formatted_values[i] for i in sorted_indices]
-        sorted_labels = [x[i] for i in sorted_indices]
-        
-        # Create descriptive title with key information
-        title_text = (
-            f"Random Forest Analysis Results\n"
-            f"{count} samples processed"
-        )
-        
-        self.echart.options["title"]["text"] = title_text
-        self.echart.options["yAxis"]["data"] = sorted_labels
-        self.echart.options["series"][0].update({
-            "data": sorted_values,
-            "itemStyle": {
-                "color": "#007AFF",  # iOS blue
-                "borderRadius": [0, 4, 4, 0]
-            }
-        })
-        self.echart.update()
+        try:
+            logger.debug(f"Updating plot with {len(x)} categories")
+            logger.debug(f"Input values - x: {x}, y: {y}")
+            
+            # Values are already percentages, just format them
+            formatted_values = [float(f"{val:.1f}") for val in y]
+            logger.debug(f"Formatted values: {formatted_values}")
+            
+            # Sort the data in descending order
+            sorted_indices = sorted(range(len(formatted_values)), key=lambda k: formatted_values[k], reverse=True)
+            sorted_values = [formatted_values[i] for i in sorted_indices]
+            sorted_labels = [x[i] for i in sorted_indices]
+            logger.debug(f"Sorted values: {sorted_values}")
+            logger.debug(f"Sorted labels: {sorted_labels}")
+            
+            # Create descriptive title with key information
+            title_text = f"Random Forest Analysis Results\n{count} samples processed"
+            if n_features:
+                title_text += f" • {int(n_features)} features found"
+            logger.debug(f"Setting title: {title_text}")
+            
+            self.echart.options["title"]["text"] = title_text
+            self.echart.options["yAxis"]["data"] = sorted_labels
+            self.echart.options["series"][0].update({
+                "data": sorted_values,
+                "itemStyle": {
+                    "color": "#007AFF",  # iOS blue
+                    "borderRadius": [0, 4, 4, 0]
+                }
+            })
+            self.echart.update()
+            logger.debug("Plot updated successfully")
+            
+        except Exception as e:
+            logger.error(f"Error in update_rcns2_plot: {str(e)}", exc_info=True)
+            raise
 
     def update_rcns2_time_chart(self, datadf):
         """
@@ -676,68 +723,83 @@ class RandomForest_object(BaseAnalysis):
         Parameters
         ----------
         datadf : pd.DataFrame
-            DataFrame containing time series data for visualization
-
-        Notes
-        -----
-        Updates the time series chart with current confidence trends and
-        formats the display according to Apple HIG guidelines.
+            DataFrame containing time series data for visualization (values already in percentages)
         """
-        self.rcns2_time_chart.options["series"] = []
-        
-        # iOS color palette for multiple series
-        colors = [
-            "#007AFF",  # Blue
-            "#34C759",  # Green
-            "#FF9500",  # Orange
-            "#FF2D55",  # Red
-            "#5856D6",  # Purple
-            "#FF3B30",  # Red-Orange
-            "#5AC8FA",  # Light Blue
-            "#4CD964",  # Light Green
-        ]
-        
-        for idx, (series, data) in enumerate(datadf.to_dict().items()):
-            data_list = [[key, float(f"{value:.1f}")] for key, value in data.items()]
-            if series != "number_probes":
-                self.rcns2_time_chart.options["series"].append({
-                    "name": series,
-                    "type": "line",
-                    "smooth": True,
-                    "animation": False,
-                    "symbolSize": 6,
-                    "emphasis": {
-                        "focus": "series",
+        try:
+            logger.debug(f"Updating time chart with DataFrame shape: {datadf.shape}")
+            logger.debug(f"DataFrame columns: {datadf.columns.tolist()}")
+            
+            self.rcns2_time_chart.options["series"] = []
+            
+            # iOS color palette for multiple series
+            colors = [
+                "#007AFF",  # Blue
+                "#34C759",  # Green
+                "#FF9500",  # Orange
+                "#FF2D55",  # Red
+                "#5856D6",  # Purple
+                "#FF3B30",  # Red-Orange
+                "#5AC8FA",  # Light Blue
+                "#4CD964",  # Light Green
+            ]
+            
+            for idx, (series, data) in enumerate(datadf.to_dict().items()):
+                if series != "number_probes":
+                    logger.debug(f"Processing series: {series}")
+                    # Values are already percentages, just format them
+                    data_list = [[key, float(f"{value:.1f}")] for key, value in data.items()]
+                    logger.debug(f"First few data points for {series}: {data_list[:3]}")
+                    
+                    self.rcns2_time_chart.options["series"].append({
+                        "name": series,
+                        "type": "line",
+                        "smooth": True,
+                        "animation": False,
+                        "symbolSize": 6,
+                        "emphasis": {
+                            "focus": "series",
+                            "itemStyle": {
+                                "borderWidth": 2
+                            }
+                        },
+                        "endLabel": {
+                            "show": True,
+                            "formatter": "{a}: {c}%",
+                            "distance": 10,
+                            "fontSize": 12
+                        },
+                        "lineStyle": {
+                            "width": 2,
+                            "color": colors[idx % len(colors)]
+                        },
                         "itemStyle": {
-                            "borderWidth": 2
-                        }
-                    },
-                    "endLabel": {
-                        "show": True,
-                        "formatter": "{a}: {c}%",
-                        "distance": 10,
-                        "fontSize": 12
-                    },
-                    "lineStyle": {
-                        "width": 2,
-                        "color": colors[idx % len(colors)]
-                    },
-                    "itemStyle": {
-                        "color": colors[idx % len(colors)]
-                    },
-                    "data": data_list
-                })
-        
-        # Update chart title with summary
-        latest_data = datadf.iloc[-1]  # Get latest data
-        max_confidence = latest_data.max()  # Get maximum confidence
-        max_type = latest_data.idxmax()  # Get type with maximum confidence
-        self.rcns2_time_chart.options["title"]["text"] = (
-            f"Classification Confidence Over Time\n"
-            f"Current highest confidence: {max_type} ({max_confidence:.1f}%)"
-        )
-        
-        self.rcns2_time_chart.update()
+                            "color": colors[idx % len(colors)]
+                        },
+                        "data": data_list
+                    })
+            
+            # Update chart title with summary
+            latest_data = datadf.iloc[-1]  # Get latest data
+            logger.debug(f"Latest data: {latest_data.to_dict()}")
+            
+            if "number_probes" in latest_data:
+                latest_data = latest_data.drop("number_probes")
+            
+            max_confidence = latest_data.max()  # Get maximum confidence (already percentage)
+            max_type = latest_data.idxmax()  # Get type with maximum confidence
+            logger.debug(f"Max confidence: {max_confidence:.1f}% for type: {max_type}")
+            
+            self.rcns2_time_chart.options["title"]["text"] = (
+                f"Classification Confidence Over Time\n"
+                f"Current highest confidence: {max_type} ({max_confidence:.1f}%)"
+            )
+            
+            self.rcns2_time_chart.update()
+            logger.debug("Time chart updated successfully")
+            
+        except Exception as e:
+            logger.error(f"Error in update_rcns2_time_chart: {str(e)}", exc_info=True)
+            raise
 
 
 def test_ui():

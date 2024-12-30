@@ -281,18 +281,6 @@ class Sturgeon_object(BaseAnalysis):
     def show_previous_data(self):
         """
         Load and display previously generated Sturgeon analysis results.
-
-        This method:
-        1. Determines the correct output directory based on browse mode
-        2. Loads existing Sturgeon scores from CSV
-        3. Filters results based on confidence threshold
-        4. Updates visualization charts with loaded data
-        5. Updates classification summary
-
-        Notes
-        -----
-        The method handles both browse mode and real-time analysis mode,
-        updating the UI components with the loaded data.
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
@@ -319,12 +307,18 @@ class Sturgeon_object(BaseAnalysis):
             lastrow = self.sturgeon_df_store.iloc[-1].drop("number_probes")
             lastrow_plot = lastrow.sort_values(ascending=False).head(10)
             lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+            
+            # Update summary with new card
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    ui.label(
-                        f"Sturgeon classification: {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                    classification_text = f"Sturgeon classification: {lastrow_plot_top.index[0]}"
+                    self.create_summary_card(
+                        classification_text=classification_text,
+                        confidence_value=lastrow_plot_top.values[0],
+                        features_found=int(self.sturgeon_df_store.iloc[-1]["number_probes"])
                     )
+            
             self.update_sturgeon_plot(
                 lastrow_plot.index.to_list(),
                 list(lastrow_plot.values),

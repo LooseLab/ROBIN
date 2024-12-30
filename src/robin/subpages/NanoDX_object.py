@@ -250,12 +250,9 @@ class NanoDX_object(BaseAnalysis):
         else:
             ui.timer(5, lambda: self.show_previous_data())
 
-    def show_previous_data(self) -> None:
+    def show_previous_data(self):
         """
-        Displays previously analyzed data from the specified output folder.
-
-        Args:
-            output (str): Path to the folder containing previous analysis results.
+        Load and display previously generated NanoDX analysis results.
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
@@ -265,9 +262,10 @@ class NanoDX_object(BaseAnalysis):
             output = self.output
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
+
         if self.check_file_time(os.path.join(output, self.storefile)):
             self.nanodx_df_store = pd.read_csv(
-                os.path.join(os.path.join(output, self.storefile)),
+                os.path.join(output, self.storefile),
                 index_col=0,
             )
             columns_greater_than_threshold = (
@@ -281,12 +279,19 @@ class NanoDX_object(BaseAnalysis):
             lastrow = self.nanodx_df_store.iloc[-1].drop("number_probes")
             lastrow_plot = lastrow.sort_values(ascending=False).head(10)
             lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+            
+            # Update summary with new card
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    ui.label(
-                        f"NanoDX classification ({self.model}): {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                    classification_text = f"NanoDX classification: {lastrow_plot_top.index[0]}"
+                    self.create_summary_card(
+                        classification_text=classification_text,
+                        confidence_value=lastrow_plot_top.values[0],
+                        model_name=self.model,
+                        features_found=int(self.nanodx_df_store.iloc[-1]["number_probes"])
                     )
+            
             self.update_nanodx_plot(
                 lastrow_plot.index.to_list(),
                 list(lastrow_plot.values),
