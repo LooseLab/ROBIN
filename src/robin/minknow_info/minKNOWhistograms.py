@@ -140,7 +140,7 @@ class MinknowHistograms:
 
     def renderme(self):
         # Main container with full width
-        with ui.card().classes('w-full'):
+        with ui.card().classes('w-full').bind_visibility_from(self, 'Live_Run'):
             with ui.card_section():
                 with ui.row().classes('items-center'):
                     ui.icon('bar_chart', size='lg').classes('text-primary q-mr-md')

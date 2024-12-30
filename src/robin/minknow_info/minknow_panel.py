@@ -669,7 +669,7 @@ class Position(MinKNOWFish):
             logger.debug("Creating UI cards")
             with target.card().classes("w-full"):
                 # Device Header
-                with ui.card().classes("w-full p-4 mb-4 bg-gray-50"):
+                with ui.card().classes("w-full p-4 mb-4 bg-gray-50").bind_visibility_from(self, 'show'):
                     with ui.row().classes("items-center"):
                         # Device Icon
                         with ui.avatar(size='xl').classes("mr-4"):
@@ -688,7 +688,7 @@ class Position(MinKNOWFish):
                                 ui.badge(str(self.position.state), color="gray")
 
                 # Status and Hardware Information
-                with ui.card().classes("w-full p-4 mb-4 bg-gray-50"):
+                with ui.card().classes("w-full p-4 mb-4 bg-gray-50").bind_visibility_from(self, 'show'):
                     ui.label("Device Status").classes("text-lg font-bold mb-3 text-gray-900")
                     with ui.grid().classes("grid-cols-3 gap-4"):
                         # Device Info
@@ -734,7 +734,7 @@ class Position(MinKNOWFish):
                             self.adapter_insertion_time_label = ui.label("Adapter Inserted: -").classes("text-sm text-gray-700")
 
                 # Yield Statistics
-                with ui.card().classes("w-full p-4 mb-4 bg-white"):
+                with ui.card().classes("w-full p-4 mb-4 bg-white").bind_visibility_from(self, 'show'):
                     ui.label("Yield Statistics").classes("text-lg font-bold mb-3 text-gray-900")
                     with ui.grid().classes("grid-cols-3 gap-6"):
                         # Read Statistics
