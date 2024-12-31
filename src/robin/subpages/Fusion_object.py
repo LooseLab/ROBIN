@@ -532,18 +532,31 @@ class FusionObject(BaseAnalysis):
         """
         if self.summary:
             with self.summary:
-                ui.label(f"Fusion Candidates - using panel {self.target_panel}")
-                with ui.row():
-                    ui.label("0").bind_text_from(
-                        self,
-                        "candidates",
-                        backward=lambda n: f"{n} high confidence fusions observed.",
-                    )
-                    ui.label("0").bind_text_from(
-                        self,
-                        "all_candidates",
-                        backward=lambda n: f" {n} low confidence fusions observed.",
-                    )
+                with ui.card().classes('w-full p-4 mb-4'):
+                    with ui.row().classes('w-full items-center justify-between'):
+                        # Left side - Fusion Status
+                        with ui.column().classes('gap-2'):
+                            ui.label("Gene Fusion Analysis").classes('text-lg font-medium')
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label(f"Panel: {self.target_panel}").classes('text-gray-600 font-medium')
+                                ui.label("0").bind_text_from(
+                                    self,
+                                    "candidates",
+                                    backward=lambda n: f"{n} high confidence"
+                                ).classes('px-2 py-1 rounded bg-blue-100 text-blue-600')
+
+                        # Right side - Additional metrics
+                        with ui.column().classes('gap-2 text-right'):
+                            ui.label("Analysis Details").classes('font-medium')
+                            ui.label("0").bind_text_from(
+                                self,
+                                "all_candidates",
+                                backward=lambda n: f"{n} low confidence fusions"
+                            ).classes('text-gray-600')
+
+                    # Bottom row - Information
+                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                        ui.label("Fusion candidates identified from reads with supplementary alignments")
         with ui.card().style("width: 100%"):
             ui.label("Gene Fusion Candidates").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
