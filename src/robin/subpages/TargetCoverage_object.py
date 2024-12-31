@@ -1,11 +1,43 @@
 """
-This code has the following known issues:
-1. The code lacks documentation.
-2. The code will load earlier iterations of the data on first load. This is not ideal!
+Target Coverage Analysis Module
+=============================
 
+This module provides functionality for analyzing and visualizing coverage data from targeted sequencing experiments.
+It includes features for tracking coverage depth, assessing target enrichment, and evaluating sequencing quality.
+
+The module implements coverage analysis following Apple Human Interface Guidelines for data visualization
+and provides real-time monitoring of sequencing coverage across targeted regions.
+
+Key Features
+-----------
+* Real-time coverage depth tracking
+* Target enrichment assessment
+* Quality-based coverage classification
+* Interactive data visualization
+* SNP and INDEL detection (when reference genome is provided)
+
+Quality Thresholds
+----------------
+* Excellent: ≥30x coverage
+* Good: ≥20x coverage
+* Moderate: ≥10x coverage
+* Insufficient: <10x coverage
+
+Dependencies
+-----------
+* pandas
+* numpy
+* pysam
+* docker
+* nicegui
+* natsort
+
+Notes
+-----
+The module requires Docker to be running for SNP/INDEL calling functionality.
+Coverage data is automatically saved and can be loaded for retrospective analysis.
 """
 
-from robin.subpages.base_analysis import BaseAnalysis
 import natsort
 from robin import theme, resources
 import pandas as pd
@@ -16,7 +48,7 @@ import logging
 import click
 import time
 from pathlib import Path
-from nicegui import ui, run, app  # , background_tasks
+from nicegui import ui, run, app
 from io import StringIO
 import pysam
 import tempfile
@@ -24,20 +56,39 @@ import shutil
 import queue
 import docker
 from robin.utilities.decompress import decompress_gzip_file
+from robin.subpages.base_analysis import BaseAnalysis
 
 os.environ["CI"] = "1"
-# Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
+# Decompress required reference files
 decompress_gzip_file(
     os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), "clinvar.vcf.gz")
 )
 
-
 def process_annotations(record: dict) -> dict:
     """
-    This function takes a dictionary record from a vcf file and explodes the record into multiple records based on the contents of the INFO field.
-    We expect some unit of 16 entries in the INFO field. Where there are multiples of 16 entries, we split them into a new record entry for that specific mutation.
+    Process VCF record annotations into structured data.
+
+    This function parses the INFO field of a VCF record and extracts annotation information
+    into a structured format. It handles both single and multiple annotations per record.
+
+    Parameters
+    ----------
+    record : dict
+        A dictionary containing VCF record data with an INFO field.
+
+    Returns
+    -------
+    tuple
+        A tuple containing two dictionaries:
+        - ann_dict: Dictionary of parsed annotation fields
+        - rec_dict: Dictionary of other record information
+
+    Notes
+    -----
+    The function expects annotation fields to contain 16 entries in a specific order.
+    Multiple annotations are split into separate records.
     """
     # print(record["INFO"])
     if "INFO" not in record.keys():
@@ -109,8 +160,28 @@ def process_annotations(record: dict) -> dict:
                 rec_dict[mykey] = myvalue
     return ann_dict, rec_dict
 
-
 def parse_vcf(vcf_file):
+    """
+    Parse and process a VCF file into a pandas DataFrame.
+
+    This function reads a VCF file, processes its annotations, and creates an expanded
+    DataFrame with one row per variant-annotation combination.
+
+    Parameters
+    ----------
+    vcf_file : str
+        Path to the VCF file to be parsed.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        A DataFrame containing the processed VCF data, or None if the file is empty.
+
+    Notes
+    -----
+    The function handles duplicate entries and aggregates certain fields.
+    The resulting DataFrame is saved as a CSV file alongside the original VCF.
+    """
     header = "CHROM POS ID REF ALT QUAL FILTER INFO FORMAT GT".split()
     vcf = pd.read_csv(vcf_file, delimiter="\t", comment="#", names=header)
     result = None
@@ -170,8 +241,34 @@ def parse_vcf(vcf_file):
                 print(e)
                 sys.exit(1)
 
-
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, showerrors):
+    """
+    Run the Clair3 variant caller on targeted regions.
+
+    This function executes Clair3 in a Docker container to call variants in specified
+    regions of a BAM file. It also performs annotation using snpEff and SnpSift.
+
+    Parameters
+    ----------
+    bamfile : str
+        Path to the input BAM file.
+    bedfile : str
+        Path to the BED file defining target regions.
+    workdir : str
+        Working directory for temporary files.
+    workdirout : str
+        Output directory for results.
+    threads : int
+        Number of threads to use.
+    reference : str
+        Path to the reference genome.
+    showerrors : bool
+        Whether to display error messages.
+
+    Notes
+    -----
+    Requires Docker to be running and the Clair3 image to be available.
+    """
     # ToDo: handle any platform
     # ToDo: Get basecall model from bam file info
     if sys.platform in ["darwin", "linux"]:
@@ -209,10 +306,28 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
         parse_vcf(f"{workdirout}/snpsift_output.vcf")
         parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
 
-
 def get_covdfs(bamfile):
     """
-    This function runs modkit on a bam file and extracts the methylation data.
+    Extract coverage information from a BAM file.
+
+    This function calculates coverage statistics for both the entire genome
+    and specific target regions defined in a BED file.
+
+    Parameters
+    ----------
+    bamfile : str
+        Path to the input BAM file.
+
+    Returns
+    -------
+    tuple
+        A tuple containing two pandas DataFrames:
+        - Coverage statistics for the entire genome
+        - Coverage statistics for target regions
+
+    Notes
+    -----
+    Uses pysam for efficient BAM file processing.
     """
     try:
         # no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
@@ -242,16 +357,13 @@ def get_covdfs(bamfile):
         return None
     return newcovdf, bedcovdf
 
-
 def subset_bam(bamfile, targets, output):
     pysam.view("-L", f"{targets}", "-o", f"{output}", f"{bamfile}")
-
 
 def sort_bam(bamfile, output, threads):
     pysam.sort(f"-@{threads}", "-o", output, bamfile)
     pysam.index(f"{output}", f"{output}.bai")
     print(f"Sorted bam file saved as {output}")
-
 
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
     merged_df = pd.merge(
@@ -286,7 +398,6 @@ def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
     merged_bed_df.drop(columns=["bases_df1", "bases_df2"], inplace=True)
     return merged_df, merged_bed_df
 
-
 def run_bedtools(bamfile, bedfile, tempbamfile):
     """
     This function extracts the target sites from the bamfile.
@@ -297,11 +408,59 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
     except Exception as e:
         print(e)
 
-
 class TargetCoverage(BaseAnalysis):
+    """
+    Target Coverage Analysis Class
+
+    This class provides functionality for analyzing and visualizing coverage data
+    from targeted sequencing experiments. It includes real-time monitoring,
+    quality assessment, and variant calling capabilities.
+
+    Parameters
+    ----------
+    showerrors : bool, optional
+        Whether to display error messages, by default False
+    target_panel : str, optional
+        Name of the target panel to use (e.g., "rCNS2", "AML")
+    reference : str, optional
+        Path to the reference genome for variant calling
+
+    Attributes
+    ----------
+    callthreshold : int
+        Minimum coverage threshold for variant calling
+    clair3running : bool
+        Flag indicating if variant calling is in progress
+    targets_exceeding_threshold : dict
+        Tracks regions exceeding coverage threshold
+    coverage_over_time : dict
+        Stores coverage progression data
+
+    Notes
+    -----
+    Requires Docker for variant calling functionality.
+    Implements Apple HIG principles for data visualization.
+    """
+
     def __init__(
         self, *args, showerrors=False, target_panel=None, reference=None, **kwargs
     ):
+        """
+        Initialize the TargetCoverage analysis object.
+
+        Parameters
+        ----------
+        *args
+            Variable length argument list.
+        showerrors : bool, optional
+            Whether to display error messages, by default False
+        target_panel : str, optional
+            Name of the target panel to use
+        reference : str, optional
+            Path to the reference genome
+        **kwargs
+            Arbitrary keyword arguments.
+        """
         self.callthreshold = 10
         self.clair3running = False
         self.targets_exceeding_threshold = {}
@@ -483,7 +642,23 @@ class TargetCoverage(BaseAnalysis):
 
     def create_coverage_plot(self, title):
         """
-        Create a bar chart for displaying chromosome coverage data.
+        Create an interactive coverage plot following Apple HIG guidelines.
+
+        This method initializes an ECharts plot for displaying chromosome-wide
+        coverage data with interactive features and consistent styling.
+
+        Parameters
+        ----------
+        title : str
+            Title for the coverage plot
+
+        Notes
+        -----
+        Implements Apple HIG design principles including:
+        - SF Pro Text font family
+        - iOS-style color scheme
+        - Consistent spacing and layout
+        - Interactive features (zoom, reset, export)
         """
         self.echart3 = (
             ui.echart(
@@ -582,7 +757,22 @@ class TargetCoverage(BaseAnalysis):
 
     def create_coverage_plot_targets(self, title):
         """
-        Create a scatter plot for comparing on-target vs off-target coverage.
+        Create an interactive plot comparing on-target vs off-target coverage.
+
+        This method initializes an ECharts plot that visualizes the relationship
+        between on-target and off-target coverage across chromosomes.
+
+        Parameters
+        ----------
+        title : str
+            Title for the target coverage plot
+
+        Notes
+        -----
+        Features include:
+        - Dual series for on/off target comparison
+        - Interactive tooltips
+        - Consistent styling with other plots
         """
         self.echart4 = (
             ui.echart(
@@ -687,6 +877,20 @@ class TargetCoverage(BaseAnalysis):
         )
 
     def create_coverage_time_chart(self):
+        """
+        Create a time series chart showing coverage progression.
+
+        This method initializes an ECharts line chart that displays how
+        coverage depth changes over time during sequencing.
+
+        Notes
+        -----
+        Features include:
+        - Smooth line interpolation
+        - Time-based x-axis
+        - Coverage depth y-axis
+        - Interactive features
+        """
         self.coverage_time_chart = (
             ui.echart(
                 {
@@ -800,6 +1004,20 @@ class TargetCoverage(BaseAnalysis):
         )
 
     def create_target_boxplot(self):
+        """
+        Create a boxplot showing coverage distribution across targets.
+
+        This method initializes an ECharts boxplot that displays coverage
+        statistics and outliers for each target region.
+
+        Notes
+        -----
+        Features include:
+        - Box and whisker plot for coverage distribution
+        - Outlier detection and display
+        - Gene name labels for outliers
+        - Interactive features
+        """
         self.target_boxplot = (
             ui.echart(
                 {
@@ -1407,6 +1625,23 @@ class TargetCoverage(BaseAnalysis):
         self.running = False
 
     def show_previous_data(self):
+        """
+        Display previously generated coverage analysis results.
+
+        This method loads and displays saved coverage data, including:
+        - Coverage quality assessment
+        - Coverage depth statistics
+        - Target enrichment metrics
+        - Interactive visualizations
+
+        Notes
+        -----
+        Implements quality thresholds:
+        - Excellent: ≥30x coverage
+        - Good: ≥20x coverage
+        - Moderate: ≥10x coverage
+        - Insufficient: <10x coverage
+        """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
                 if item == "sample_ids":
