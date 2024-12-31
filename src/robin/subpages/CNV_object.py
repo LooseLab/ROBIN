@@ -877,6 +877,92 @@ class CNVAnalysis(BaseAnalysis):
         """
         self.proportion_time_chart2 = self.create_time_chart(title)
 
+    def update_proportion_time_chart2(self, datadf: pd.DataFrame) -> None:
+        """
+        Updates the genome-wide CNV time series chart with new data.
+
+        Parameters
+        ----------
+        datadf : pd.DataFrame
+            DataFrame containing the genome-wide time series data to plot.
+
+        Notes
+        -----
+        Handles empty datasets gracefully by displaying an appropriate message
+        and maintaining chart visibility.
+        """
+        try:
+            if datadf.empty:
+                logger.warning("No genome-wide data available for time series chart")
+                self.proportion_time_chart2.options["title"]["text"] = "No Data Available"
+                self.proportion_time_chart2.options["series"] = []
+                self.proportion_time_chart2.update()
+                return
+
+            self.proportion_time_chart2.options["series"] = []
+            
+            # iOS color palette for consistent styling
+            colors = [
+                "#007AFF",  # Blue
+                "#34C759",  # Green
+                "#FF9500",  # Orange
+                "#FF2D55",  # Red
+                "#5856D6",  # Purple
+                "#FF3B30",  # Red-Orange
+                "#5AC8FA",  # Light Blue
+                "#4CD964",  # Light Green
+            ]
+
+            for idx, (series, data) in enumerate(datadf.to_dict().items()):
+                if series != "number_probes":
+                    data_list = [[key, value] for key, value in data.items() if pd.notnull(value)]
+                    if data_list:  # Only add series if it has valid data points
+                        self.proportion_time_chart2.options["series"].append({
+                            "animation": False,
+                            "type": "line",
+                            "smooth": True,
+                            "name": series,
+                            "emphasis": {
+                                "focus": "series",
+                                "itemStyle": {
+                                    "borderWidth": 2
+                                }
+                            },
+                            "endLabel": {
+                                "show": True,
+                                "formatter": "{a}: {c}%",
+                                "distance": 10,
+                                "fontSize": 12
+                            },
+                            "lineStyle": {
+                                "width": 2,
+                                "color": colors[idx % len(colors)]
+                            },
+                            "itemStyle": {
+                                "color": colors[idx % len(colors)]
+                            },
+                            "data": data_list
+                        })
+
+            # Update title with latest data summary if available
+            if not datadf.empty:
+                latest_data = datadf.iloc[-1]
+                if not latest_data.empty and not latest_data.isna().all():
+                    max_value = latest_data.max()
+                    max_type = latest_data.idxmax()
+                    self.proportion_time_chart2.options["title"]["text"] = (
+                        f"Genome-wide Proportions Over Time\n"
+                        f"Current highest: {max_type} ({max_value:.1f}%)"
+                    )
+
+            self.proportion_time_chart2.update()
+            
+        except Exception as e:
+            logger.error(f"Error updating genome-wide time chart: {str(e)}", exc_info=True)
+            self.proportion_time_chart2.options["title"]["text"] = "Error Updating Chart"
+            self.proportion_time_chart2.options["series"] = []
+            self.proportion_time_chart2.update()
+
     def generate_chart(
         self,
         title: Optional[str] = None,

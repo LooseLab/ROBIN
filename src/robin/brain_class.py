@@ -519,219 +519,238 @@ class BrainMeth:
         """
         Display the main information panel with analysis results.
         """
-        with ui.column().classes('w-full px-6'):
-            # Title and description
-            with ui.column().classes('space-y-2 mb-4'):
-                ui.label("CNS Tumor Methylation Classification").classes('text-2xl font-medium text-gray-900')
-                ui.label("This tool enables classification of brain tumors in real time from Oxford Nanopore Data.").classes('text-gray-600')
-
-            # Results Summary Section
-            with ui.column().classes('space-y-4'):
-                # Classification Results - Single row with equal width columns
-                with ui.grid().classes('grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4'):
-                    if "sturgeon" not in self.exclude:
-                        sturgeonsummary = ui.column().classes('space-y-1')
-                    if "nanodx" not in self.exclude:
-                        nanodxsummary = ui.column().classes('space-y-1')
-                    if "pannanodx" not in self.exclude:
-                        pannanodxsummary = ui.column().classes('space-y-1')
-                    if "forest" not in self.exclude:
-                        forestsummary = ui.column().classes('space-y-1')
-
-                # Analysis Results - Two columns grid
-                with ui.grid().classes('grid-cols-1 lg:grid-cols-2 gap-4'):
-                    # Left Column - MGMT and CNV
-                    with ui.column().classes('space-y-4'):
-                        if "mgmt" not in self.exclude:
-                            mgmt = ui.column().classes('space-y-1')
-                        if "cnv" not in self.exclude:
-                            cnvsummary = ui.column().classes('space-y-1')
-                    
-                    # Right Column - Coverage and Fusion
-                    with ui.column().classes('space-y-4'):
-                        if "coverage" not in self.exclude:
-                            coverage = ui.column().classes('space-y-1')
-                        if "fusion" not in self.exclude:
-                            fusions = ui.column().classes('space-y-1')
-
-                # Run Information - Compact inline display
-                if not self.browse:
-                    with ui.row().classes('w-full py-3 text-sm text-gray-600 border-t border-gray-200 items-center justify-between'):
-                        with ui.row().classes('gap-6 flex-wrap'):
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                "devices",
-                                backward=lambda n: [f"Device: {str(item)}" for item in n]
-                            )
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                "flowcell_ids",
-                                backward=lambda n: [f"Flow Cell: {str(item)}" for item in n]
-                            )
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                "run_time",
-                                backward=lambda n: [f"Run: {parser.parse(date).strftime('%Y-%m-%d %H:%M')}" for date in n]
-                            )
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                "sample_ids",
-                                backward=lambda n: [f"Sample: {str(item)}" for item in n]
-                            )
-
-            # Detailed Analysis Tabs
+        try:
             if sample_id:
-                selectedtab = None
-                with ui.tabs().classes('w-full mt-6') as tabs:
-                    if not (set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))):
-                        methylationtab = ui.tab("Methylation Classification")
-                        if not selectedtab:
-                            selectedtab = methylationtab
-                    if "cnv" not in self.exclude:
-                        copy_numbertab = ui.tab("Copy Number Variation")
-                        if not selectedtab:
-                            selectedtab = copy_numbertab
-                    if "coverage" not in self.exclude:
-                        coveragetab = ui.tab("Target Coverage")
-                        if not selectedtab:
-                            selectedtab = coveragetab
-                    if "mgmt" not in self.exclude:
-                        mgmttab = ui.tab("MGMT")
-                        if not selectedtab:
-                            selectedtab = mgmttab
-                    if "fusion" not in self.exclude:
-                        fusionstab = ui.tab("Fusions")
-                        if not selectedtab:
-                            selectedtab = fusionstab
+                self.sampleID = sample_id
+            if not self.browse:
+                self.show_list()
+                app.storage.general[self.mainuuid]["sample_list"].on_change(
+                    self.show_list.refresh
+                )
 
-                with ui.tab_panels(tabs, value=selectedtab).classes('w-full'):
-                    display_args = {
-                        "threads": self.threads,
-                        "output": self.output,
-                        "progress": True,
-                        "browse": self.browse,
-                        "bamqueue": None,
-                        "uuid": self.mainuuid,
-                        "force_sampleid": self.force_sampleid,
-                        "sample_id": self.sampleID,
-                    }
-                    if not (
-                        set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
-                    ):
-                        with ui.tab_panel(methylationtab).classes("w-full"):
-                            with ui.card().classes("rounded w-full"):
-                                ui.label("Methylation Classifications").classes('text-sky-600 dark:text-white').style(
-                                    "font-size: 150%; font-weight: 300"
-                                ).tailwind("drop-shadow", "font-bold")
-                                if "sturgeon" not in self.exclude:
-                                    self.Sturgeon = Sturgeon_object(
-                                        analysis_name="STURGEON",
-                                        batch=True,
-                                        summary=sturgeonsummary,
+            if sample_id:
+                if not self.browse and self.sampleID not in app.storage.general[self.mainuuid]["samples"]:
+                    ui.notify(f"Sample {self.sampleID} not found")
+                    ui.navigate.to("/live")
+                    return
+
+            with ui.column().classes('w-full px-6'):
+                # Title and description
+                with ui.column().classes('space-y-2 mb-4'):
+                    ui.label("CNS Tumor Methylation Classification").classes('text-2xl font-medium text-gray-900')
+                    ui.label("This tool enables classification of brain tumors in real time from Oxford Nanopore Data.").classes('text-gray-600')
+
+                # Results Summary Section
+                with ui.column().classes('space-y-4'):
+                    # Classification Results - Single row with equal width columns
+                    with ui.grid().classes('grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4'):
+                        if "sturgeon" not in self.exclude:
+                            sturgeonsummary = ui.column().classes('space-y-1')
+                        if "nanodx" not in self.exclude:
+                            nanodxsummary = ui.column().classes('space-y-1')
+                        if "pannanodx" not in self.exclude:
+                            pannanodxsummary = ui.column().classes('space-y-1')
+                        if "forest" not in self.exclude:
+                            forestsummary = ui.column().classes('space-y-1')
+
+                    # Analysis Results - Two columns grid
+                    with ui.grid().classes('grid-cols-1 lg:grid-cols-2 gap-4'):
+                        # Left Column - MGMT and CNV
+                        with ui.column().classes('space-y-4'):
+                            if "mgmt" not in self.exclude:
+                                mgmt = ui.column().classes('space-y-1')
+                            if "cnv" not in self.exclude:
+                                cnvsummary = ui.column().classes('space-y-1')
+                        
+                        # Right Column - Coverage and Fusion
+                        with ui.column().classes('space-y-4'):
+                            if "coverage" not in self.exclude:
+                                coverage = ui.column().classes('space-y-1')
+                            if "fusion" not in self.exclude:
+                                fusions = ui.column().classes('space-y-1')
+
+                    # Run Information - Compact inline display
+                    if not self.browse and self.sampleID and self.sampleID in app.storage.general[self.mainuuid]["samples"]:
+                        with ui.row().classes('w-full py-3 text-sm text-gray-600 border-t border-gray-200 items-center justify-between'):
+                            with ui.row().classes('gap-6 flex-wrap'):
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "devices",
+                                    backward=lambda n: [f"Device: {str(item)}" for item in n]
+                                )
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "flowcell_ids",
+                                    backward=lambda n: [f"Flow Cell: {str(item)}" for item in n]
+                                )
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "run_time",
+                                    backward=lambda n: [f"Run: {parser.parse(date).strftime('%Y-%m-%d %H:%M')}" for date in n]
+                                )
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "sample_ids",
+                                    backward=lambda n: [f"Sample: {str(item)}" for item in n]
+                                )
+
+                # Detailed Analysis Tabs
+                if sample_id:
+                    selectedtab = None
+                    with ui.tabs().classes('w-full mt-6') as tabs:
+                        if not (set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))):
+                            methylationtab = ui.tab("Methylation Classification")
+                            if not selectedtab:
+                                selectedtab = methylationtab
+                        if "cnv" not in self.exclude:
+                            copy_numbertab = ui.tab("Copy Number Variation")
+                            if not selectedtab:
+                                selectedtab = copy_numbertab
+                        if "coverage" not in self.exclude:
+                            coveragetab = ui.tab("Target Coverage")
+                            if not selectedtab:
+                                selectedtab = coveragetab
+                        if "mgmt" not in self.exclude:
+                            mgmttab = ui.tab("MGMT")
+                            if not selectedtab:
+                                selectedtab = mgmttab
+                        if "fusion" not in self.exclude:
+                            fusionstab = ui.tab("Fusions")
+                            if not selectedtab:
+                                selectedtab = fusionstab
+
+                    with ui.tab_panels(tabs, value=selectedtab).classes('w-full'):
+                        display_args = {
+                            "threads": self.threads,
+                            "output": self.output,
+                            "progress": True,
+                            "browse": self.browse,
+                            "bamqueue": None,
+                            "uuid": self.mainuuid,
+                            "force_sampleid": self.force_sampleid,
+                            "sample_id": self.sampleID,
+                        }
+                        if not (
+                            set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
+                        ):
+                            with ui.tab_panel(methylationtab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    ui.label("Methylation Classifications").classes('text-sky-600 dark:text-white').style(
+                                        "font-size: 150%; font-weight: 300"
+                                    ).tailwind("drop-shadow", "font-bold")
+                                    if "sturgeon" not in self.exclude:
+                                        self.Sturgeon = Sturgeon_object(
+                                            analysis_name="STURGEON",
+                                            batch=True,
+                                            summary=sturgeonsummary,
+                                            **display_args,
+                                        )
+                                        await self.Sturgeon.render_ui(sample_id=self.sampleID)
+                                    if "nanodx" not in self.exclude:
+                                        self.NanoDX = NanoDX_object(
+                                            analysis_name="NANODX",
+                                            batch=True,
+                                            summary=nanodxsummary,
+                                            **display_args,
+                                        )
+                                        await self.NanoDX.render_ui(sample_id=self.sampleID)
+                                    if "pannanodx" not in self.exclude:
+                                        self.PanNanoDX = NanoDX_object(
+                                            analysis_name="PANNANODX",
+                                            batch=True,
+                                            summary=pannanodxsummary,
+                                            model="pancan_devel_v5i_NN.pkl",
+                                            **display_args,
+                                        )
+                                        await self.PanNanoDX.render_ui(sample_id=self.sampleID)
+                                    if "forest" not in self.exclude:
+                                        self.RandomForest = RandomForest_object(
+                                            analysis_name="FOREST",
+                                            batch=True,
+                                            summary=forestsummary,
+                                            showerrors=self.showerrors,
+                                            **display_args,
+                                        )
+                                        await self.RandomForest.render_ui(
+                                            sample_id=self.sampleID
+                                        )
+
+                        if "cnv" not in self.exclude:
+                            with ui.tab_panel(copy_numbertab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    self.CNV = CNVAnalysis(
+                                        analysis_name="CNV",
+                                        summary=cnvsummary,
+                                        target_panel=self.target_panel,
+                                        reference_file=self.reference,
+                                        bed_file = self.bed_file,
                                         **display_args,
                                     )
-                                    await self.Sturgeon.render_ui(sample_id=self.sampleID)
-                                if "nanodx" not in self.exclude:
-                                    self.NanoDX = NanoDX_object(
-                                        analysis_name="NANODX",
-                                        batch=True,
-                                        summary=nanodxsummary,
+                                    await self.CNV.render_ui(sample_id=self.sampleID)
+
+                        if "coverage" not in self.exclude:
+                            with ui.tab_panel(coveragetab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    self.Target_Coverage = TargetCoverage(
+                                        analysis_name="COVERAGE",
+                                        summary=coverage,
+                                        target_panel=self.target_panel,
+                                        reference=self.reference,
                                         **display_args,
                                     )
-                                    await self.NanoDX.render_ui(sample_id=self.sampleID)
-                                if "pannanodx" not in self.exclude:
-                                    self.PanNanoDX = NanoDX_object(
-                                        analysis_name="PANNANODX",
-                                        batch=True,
-                                        summary=pannanodxsummary,
-                                        model="pancan_devel_v5i_NN.pkl",
-                                        **display_args,
-                                    )
-                                    await self.PanNanoDX.render_ui(sample_id=self.sampleID)
-                                if "forest" not in self.exclude:
-                                    self.RandomForest = RandomForest_object(
-                                        analysis_name="FOREST",
-                                        batch=True,
-                                        summary=forestsummary,
-                                        showerrors=self.showerrors,
-                                        **display_args,
-                                    )
-                                    await self.RandomForest.render_ui(
+                                    await self.Target_Coverage.render_ui(
                                         sample_id=self.sampleID
                                     )
 
-                    if "cnv" not in self.exclude:
-                        with ui.tab_panel(copy_numbertab).classes("w-full"):
-                            with ui.card().classes("rounded w-full"):
-                                self.CNV = CNVAnalysis(
-                                    analysis_name="CNV",
-                                    summary=cnvsummary,
-                                    target_panel=self.target_panel,
-                                    reference_file=self.reference,
-                                    bed_file = self.bed_file,
-                                    **display_args,
-                                )
-                                await self.CNV.render_ui(sample_id=self.sampleID)
+                        if "mgmt" not in self.exclude:
+                            with ui.tab_panel(mgmttab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    self.MGMT_panel = MGMT_Object(
+                                        analysis_name="MGMT", summary=mgmt, **display_args
+                                    )
+                                    await self.MGMT_panel.render_ui(sample_id=self.sampleID)
 
-                    if "coverage" not in self.exclude:
-                        with ui.tab_panel(coveragetab).classes("w-full"):
-                            with ui.card().classes("rounded w-full"):
-                                self.Target_Coverage = TargetCoverage(
-                                    analysis_name="COVERAGE",
-                                    summary=coverage,
-                                    target_panel=self.target_panel,
-                                    reference=self.reference,
-                                    **display_args,
-                                )
-                                await self.Target_Coverage.render_ui(
-                                    sample_id=self.sampleID
-                                )
+                        if "fusion" not in self.exclude:
+                            with ui.tab_panel(fusionstab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    self.Fusion_panel = FusionObject(
+                                        analysis_name="FUSION",
+                                        summary=fusions,
+                                        target_panel=self.target_panel,
+                                        **display_args,
+                                    )
+                                    await self.Fusion_panel.render_ui(sample_id=self.sampleID)
 
-                    if "mgmt" not in self.exclude:
-                        with ui.tab_panel(mgmttab).classes("w-full"):
-                            with ui.card().classes("rounded w-full"):
-                                self.MGMT_panel = MGMT_Object(
-                                    analysis_name="MGMT", summary=mgmt, **display_args
-                                )
-                                await self.MGMT_panel.render_ui(sample_id=self.sampleID)
+                    async def download_report():
+                        """
+                        Generate and download the report.
 
-                    if "fusion" not in self.exclude:
-                        with ui.tab_panel(fusionstab).classes("w-full"):
-                            with ui.card().classes("rounded w-full"):
-                                self.Fusion_panel = FusionObject(
-                                    analysis_name="FUSION",
-                                    summary=fusions,
-                                    target_panel=self.target_panel,
-                                    **display_args,
-                                )
-                                await self.Fusion_panel.render_ui(sample_id=self.sampleID)
+                        :return: None
+                        """
+                        ui.notify("Generating Report")
+                        if not self.browse:
+                            for item in app.storage.general[self.mainuuid]:
+                                if item == "sample_ids":
+                                    for sample in app.storage.general[self.mainuuid][item]:
+                                        self.sampleID = sample
+                        if self.browse:
+                            myfile = await run.io_bound(
+                                create_pdf,
+                                f"{self.sampleID}_run_report.pdf",
+                                self.check_and_create_folder(self.output, self.sampleID),
+                            )
+                        else:
+                            myfile = await run.io_bound(
+                                create_pdf, f"{self.sampleID}_run_report.pdf", self.output
+                            )
+                        ui.download(myfile)
+                        ui.notify("Report Downloaded")
 
-                async def download_report():
-                    """
-                    Generate and download the report.
+                    ui.button("Generate Report", on_click=download_report, icon="download")
 
-                    :return: None
-                    """
-                    ui.notify("Generating Report")
-                    if not self.browse:
-                        for item in app.storage.general[self.mainuuid]:
-                            if item == "sample_ids":
-                                for sample in app.storage.general[self.mainuuid][item]:
-                                    self.sampleID = sample
-                    if self.browse:
-                        myfile = await run.io_bound(
-                            create_pdf,
-                            f"{self.sampleID}_run_report.pdf",
-                            self.check_and_create_folder(self.output, self.sampleID),
-                        )
-                    else:
-                        myfile = await run.io_bound(
-                            create_pdf, f"{self.sampleID}_run_report.pdf", self.output
-                        )
-                    ui.download(myfile)
-                    ui.notify("Report Downloaded")
-
-                ui.button("Generate Report", on_click=download_report, icon="download")
+        except Exception as e:
+            logging.error(f"Error rendering analysis UI: {str(e)}", exc_info=True)
+            ui.notify(f"Error rendering analysis UI: {str(e)}", type="error")
 
     async def background_process_bams(self):
         """
