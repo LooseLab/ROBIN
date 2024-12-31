@@ -1493,23 +1493,58 @@ class TargetCoverage(BaseAnalysis):
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    with ui.row():
-                        ui.label("Coverage Depths - ")
-                        if len(self.cov_df_main) > 0:
-                            ui.label(
-                                f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
-                            )
-                            if len(self.bedcov_df_main) > 0:
-                                ui.label(
-                                    f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
-                                )
-                                ui.label(
-                                    f"Estimated enrichment: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum())/(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
-                                )
-                            else:
-                                ui.label("Targets Estimated Coverage: Calculating....")
-                        else:
-                            ui.label("No data available")
+                    with ui.card().classes('w-full p-4 mb-4'):
+                        with ui.row().classes('w-full items-center justify-between'):
+                            # Left side - Coverage quality assessment
+                            with ui.column().classes('gap-2'):
+                                if len(self.cov_df_main) > 0 and len(self.bedcov_df_main) > 0:
+                                    target_coverage = self.bedcov_df_main['bases'].sum() / self.bedcov_df_main['length'].sum()
+                                    
+                                    # Determine quality level and styling
+                                    if target_coverage >= 30:
+                                        quality = "Excellent"
+                                        quality_color = "text-green-600"
+                                        quality_bg = "bg-green-100"
+                                    elif target_coverage >= 20:
+                                        quality = "Good"
+                                        quality_color = "text-blue-600"
+                                        quality_bg = "bg-blue-100"
+                                    elif target_coverage >= 10:
+                                        quality = "Moderate"
+                                        quality_color = "text-yellow-600"
+                                        quality_bg = "bg-yellow-100"
+                                    else:
+                                        quality = "Insufficient"
+                                        quality_color = "text-red-600"
+                                        quality_bg = "bg-red-100"
+
+                                    ui.label("Coverage Analysis").classes('text-lg font-medium')
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label(f"Quality: {quality}").classes(f'{quality_color} font-medium')
+                                        ui.label(f"{target_coverage:.2f}x").classes(f'px-2 py-1 rounded {quality_bg} {quality_color}')
+
+                            # Right side - Coverage metrics
+                            with ui.column().classes('gap-2 text-right'):
+                                if len(self.cov_df_main) > 0:
+                                    global_coverage = self.cov_df_main['covbases'].sum() / self.cov_df_main['endpos'].sum()
+                                    ui.label("Coverage Depths").classes('font-medium')
+                                    ui.label(f"Global Estimated Coverage: {global_coverage:.2f}x").classes('text-gray-600')
+                                    if len(self.bedcov_df_main) > 0:
+                                        target_coverage = self.bedcov_df_main['bases'].sum() / self.bedcov_df_main['length'].sum()
+                                        enrichment = target_coverage / global_coverage
+                                        ui.label(f"Targets Estimated Coverage: {target_coverage:.2f}x").classes('text-gray-600')
+                                        ui.label(f"Estimated enrichment: {enrichment:.2f}x").classes('text-gray-600')
+                                    else:
+                                        ui.label("Targets Estimated Coverage: Calculating....").classes('text-gray-600')
+                                else:
+                                    ui.label("No data available").classes('text-gray-600')
+
+                        # Bottom row - Quality thresholds legend
+                        with ui.row().classes('w-full mt-4 gap-4 text-sm justify-center'):
+                            ui.label("≥30x Excellent").classes('text-green-600')
+                            ui.label("≥20x Good").classes('text-blue-600')
+                            ui.label("≥10x Moderate").classes('text-yellow-600')
+                            ui.label("<10x Insufficient").classes('text-red-600')
 
         if self.check_file_time(f"{output}/clair3/snpsift_output.vcf.csv"):
             df = pd.read_csv(
