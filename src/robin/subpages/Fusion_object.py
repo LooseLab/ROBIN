@@ -603,14 +603,14 @@ class FusionObject(BaseAnalysis):
                         ).style("font-size: 125%; font-weight: 300")
                         self.fusionplot = ui.row()
                         with self.fusionplot.classes("w-full"):
-                            ui.label("Plot not yet available.").style(
-                                "font-size: 125%; font-weight: 300"
-                            )
+                            with ui.column().classes('gap-2'):
+                                ui.label("Awaiting Fusion Plot").classes('text-lg font-medium')
+                                ui.label("Plot will be displayed here when fusion data is available").classes('text-gray-600')
                         self.fusiontable = ui.row().classes("w-full")
                         with self.fusiontable:
-                            ui.label("Table not yet available.").style(
-                                "font-size: 125%; font-weight: 300"
-                            )
+                            with ui.column().classes('gap-2'):
+                                ui.label("Awaiting Fusion Data").classes('text-lg font-medium')
+                                ui.label("Table will be displayed here when fusion data is available").classes('text-gray-600')
 
                 with ui.tab_panel(two):
                     with ui.card().style("width: 100%"):
@@ -625,14 +625,14 @@ class FusionObject(BaseAnalysis):
                         ).style("font-size: 125%; font-weight: 300")
                         self.fusionplot_all = ui.row()
                         with self.fusionplot_all.classes("w-full"):
-                            ui.label("Plot not yet available.").style(
-                                "font-size: 125%; font-weight: 300"
-                            )
+                            with ui.column().classes('gap-2'):
+                                ui.label("Awaiting Genome-wide Fusion Plot").classes('text-lg font-medium')
+                                ui.label("Plot will be displayed here when genome-wide fusion data is available").classes('text-gray-600')
                         self.fusiontable_all = ui.row().classes("w-full")
                         with self.fusiontable_all:
-                            ui.label("Table not yet available.").style(
-                                "font-size: 125%; font-weight: 300"
-                            )
+                            with ui.column().classes('gap-2'):
+                                ui.label("Awaiting Genome-wide Fusion Data").classes('text-lg font-medium')
+                                ui.label("Table will be displayed here when genome-wide fusion data is available").classes('text-gray-600')
 
         if self.browse:
             self.show_previous_data()

@@ -187,7 +187,24 @@ class MGMT_Object(BaseAnalysis):
                 ui.label("Plot not yet available.")
         if self.summary:
             with self.summary:
-                ui.label("Current MGMT status: Unknown")
+                with ui.card().classes('w-full p-4 mb-4'):
+                    with ui.row().classes('w-full items-center justify-between'):
+                        # Left side - Methylation Status
+                        with ui.column().classes('gap-2'):
+                            ui.label("MGMT Methylation Analysis").classes('text-lg font-medium')
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label("Status: Awaiting Data").classes('text-gray-600')
+                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+
+                        # Right side - Analysis metrics
+                        with ui.column().classes('gap-2 text-right'):
+                            ui.label("Analysis Details").classes('font-medium')
+                            ui.label("Methylation Score: --").classes('text-gray-600')
+                            ui.label("Average Methylation: --").classes('text-gray-600')
+
+                    # Bottom row - Information
+                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                        ui.label("Methylation status based on MGMT promoter analysis")
         if self.browse:
             self.show_previous_data()
         else:

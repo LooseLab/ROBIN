@@ -557,7 +557,27 @@ class TargetCoverage(BaseAnalysis):
     def setup_ui(self):
         if self.summary:
             with self.summary:
-                ui.label("Current coverage estimates: Unknown")
+                with ui.card().classes('w-full p-4 mb-4'):
+                    with ui.row().classes('w-full items-center justify-between'):
+                        # Left side - Coverage Status
+                        with ui.column().classes('gap-2'):
+                            ui.label("Target Coverage Analysis").classes('text-lg font-medium')
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label("Status: Awaiting Data").classes('text-gray-600')
+                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+
+                        # Right side - Coverage metrics
+                        with ui.column().classes('gap-2 text-right'):
+                            ui.label("Coverage Details").classes('font-medium')
+                            ui.label("Targets Analyzed: --").classes('text-gray-600')
+                            ui.label("Average Coverage: --").classes('text-gray-600')
+
+                    # Bottom row - Information
+                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                        ui.label("Coverage analysis of target regions")
+
+        with ui.card().classes("w-full"):
+            ui.label("Current coverage estimates: Unknown")
         with ui.card().classes("w-full"):
             ui.label("Coverage Data").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
@@ -614,9 +634,9 @@ class TargetCoverage(BaseAnalysis):
                     ui.card().tight().classes("w-full overflow-x-auto")
                 )
                 with self.SNPplaceholder:
-                    ui.label(
-                        "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
-                    )
+                    with ui.column().classes('gap-2'):
+                        ui.label("Awaiting SNP Data").classes('text-lg font-medium')
+                        ui.label("Candidate SNPs will be displayed here when available. SNPs are called based on available data at that time.").classes('text-gray-600')
                 # self.SNPview = SNPview(self.SNPplaceholder)
                 # ui.timer(0.1,lambda: self.SNPview.renderme(), once=True)
             ui.label("Candidate IN/DELs").classes('text-sky-600 dark:text-white').style(
@@ -628,9 +648,9 @@ class TargetCoverage(BaseAnalysis):
                 )
 
                 with self.INDELplaceholder:
-                    ui.label(
-                        "Candidate IN/DELs will be displayed here. IN/DELs are called based on available data at that time."
-                    )
+                    with ui.column().classes('gap-2'):
+                        ui.label("Awaiting INDEL Data").classes('text-lg font-medium')
+                        ui.label("Candidate IN/DELs will be displayed here when available. IN/DELs are called based on available data at that time.").classes('text-gray-600')
                 # self.INDELview = SNPview(self.INDELplaceholder)
                 # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
 

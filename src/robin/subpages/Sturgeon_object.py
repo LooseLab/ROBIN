@@ -272,7 +272,7 @@ class Sturgeon_object(BaseAnalysis):
                     self.create_sturgeon_time_chart("Sturgeon Time Series")
         if self.summary:
             with self.summary:
-                ui.label("Sturgeon classification: Unknown")
+                ui.label(f"Sturgeon classification: Unknown")
         if self.browse:
             self.show_previous_data()
         else:

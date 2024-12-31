@@ -691,7 +691,24 @@ class CNVAnalysis(BaseAnalysis):
         self.display_row = ui.row().style("width: 100")
         if self.summary:
             with self.summary:
-                ui.label("No CNV data available.")
+                with ui.card().classes('w-full p-4 mb-4'):
+                    with ui.row().classes('w-full items-center justify-between'):
+                        # Left side - CNV Status
+                        with ui.column().classes('gap-2'):
+                            ui.label("Copy Number Variation Analysis").classes('text-lg font-medium')
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label("Status: Awaiting Data").classes('text-gray-600')
+                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+
+                        # Right side - Analysis metrics
+                        with ui.column().classes('gap-2 text-right'):
+                            ui.label("Analysis Details").classes('font-medium')
+                            ui.label("Genetic Sex: --").classes('text-gray-600')
+                            ui.label("CNV Events: --").classes('text-gray-600')
+
+                    # Bottom row - Information
+                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                        ui.label("Copy number analysis across genome with breakpoint detection")
         with self.display_row:
             ui.label("Copy Number Variation").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
@@ -733,34 +750,9 @@ class CNVAnalysis(BaseAnalysis):
 
 
         with ui.card().classes("w-full"):
-
-            ui.label("New Target Information - intentionally blank.")
-
-            # self.orig_tree = ui.tree(
-            #     [self.NewBed.tree_data]
-            #     , label_key="id",
-            # )
-            # self.orig_tree.add_slot(
-            #     "default-body",
-            #     """
-            #     <div v-if="props.node.description">
-            #             <span class="text-weight-bold">{{ props.node.description }}</span>
-            #         </div>
-            #     <div v-if="props.node.range_sum">
-            #             <span class="text-weight-bold">{{props.node.range_sum}} bases</span>
-            #     </div>
-            #     <div v-if="props.node.count">
-            #             <span class="text-weight-bold">{{ props.node.count }} targets</span>
-            #     </div>
-            #     <div v-if="props.node.proportion">
-            #             <span class="text-weight-bold">{{ props.node.proportion }} proportion</span>
-            #     </div>
-            #     <div v-if="props.node.chromosome_length">
-            #             <span class="text-weight-bold">{{ props.node.chromosome_length }} chromosome length</span>
-            #     </div>
-            #
-            # """,
-            # )
+            with ui.column().classes('gap-2'):
+                ui.label("New Target Information").classes('text-lg font-medium')
+                ui.label("Target information will be displayed here when available").classes('text-gray-600')
 
 
         with ui.card().classes("w-full"):
@@ -1475,35 +1467,36 @@ class CNVAnalysis(BaseAnalysis):
             Current bin width used in the analysis
         variance : float
             Current variance value from the analysis
-
-        Notes
-        -----
-        The summary card follows Apple HIG guidelines for:
-        - Typography and spacing
-        - Color usage and contrast
-        - Information hierarchy
-        - Visual feedback
         """
-        with ui.card().classes("w-full p-4 bg-white dark:bg-gray-800"):
-            with ui.row().classes("items-center gap-4"):
-                # Genetic Sex Icon and Information
-                if xy_estimate != "Unknown":
-                    if xy_estimate == "XY":
-                        ui.icon("man").classes("text-4xl text-blue-500")
-                    else:
-                        ui.icon("woman").classes("text-4xl text-pink-500")
-                    ui.label(f"Estimated Genetic Sex: {xy_estimate}").classes(
-                        "text-lg font-medium text-gray-900 dark:text-white"
-                    )
-                
-                # Analysis Metrics
-                with ui.column().classes("gap-2"):
-                    ui.label(f"Bin Width: {bin_width:,}").classes(
-                        "text-sm text-gray-600 dark:text-gray-300"
-                    )
-                    ui.label(f"Variance: {variance:.3f}").classes(
-                        "text-sm text-gray-600 dark:text-gray-300"
-                    )
+        with self.summary:
+            self.summary.clear()
+            with ui.card().classes('w-full p-4 mb-4'):
+                with ui.row().classes('w-full items-center justify-between'):
+                    # Left side - CNV Status
+                    with ui.column().classes('gap-2'):
+                        ui.label("Copy Number Variation Analysis").classes('text-lg font-medium')
+                        with ui.row().classes('items-center gap-2'):
+                            if xy_estimate != "Unknown":
+                                status_color = "text-blue-600" if xy_estimate == "XY" else "text-pink-600"
+                                status_bg = "bg-blue-100" if xy_estimate == "XY" else "bg-pink-100"
+                                if xy_estimate == "XY":
+                                    ui.icon("man").classes("text-4xl text-blue-500")
+                                else:
+                                    ui.icon("woman").classes("text-4xl text-pink-500")
+                                ui.label(f"Genetic Sex: {xy_estimate}").classes(f'{status_color} font-medium')
+                            else:
+                                ui.label("Status: Awaiting Data").classes('text-gray-600')
+                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+
+                    # Right side - Analysis metrics
+                    with ui.column().classes('gap-2 text-right'):
+                        ui.label("Analysis Details").classes('font-medium')
+                        ui.label(f"Bin Width: {bin_width:,}").classes('text-gray-600')
+                        ui.label(f"Variance: {variance:.3f}").classes('text-gray-600')
+
+                # Bottom row - Information
+                with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                    ui.label("Copy number analysis across genome with breakpoint detection")
 
     async def show_previous_data(self) -> None:
         """
