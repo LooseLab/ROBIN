@@ -130,22 +130,17 @@ def run_modkit(tempmgmtdir: str, MGMTbamfile: str, threads: int) -> None:
     Returns:
         None
     """
-    # logger.debug(
-    #    f"Running modkit with tempmgmtdir={tempmgmtdir}, MGMTbamfile={MGMTbamfile}, threads={threads}"
-    # )
     try:
         pysam.sort("-o", os.path.join(tempmgmtdir, "mgmt.bam"), MGMTbamfile)
         pysam.index(
             os.path.join(tempmgmtdir, "mgmt.bam"), f"{tempmgmtdir}/mgmt.bam.bai"
         )
-        cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress >/dev/null 2>&1"
+        cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods --mixed-delim {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress >/dev/null 2>&1"
         os.system(cmd)
         if os.path.exists(os.path.join(tempmgmtdir, "mgmt.bed")):
             cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir, 'mgmt.bed')} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
-            # print(cmd)
             os.system(cmd)
     except Exception:
-        # logger.error(f"Error running modkit: {e}")
         raise
 
 
