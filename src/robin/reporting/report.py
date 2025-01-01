@@ -25,6 +25,7 @@ from reportlab.platypus import (
     TableStyle,
     PageBreak,
     CondPageBreak,
+    HRFlowable,
 )
 from reportlab.lib import colors
 
@@ -205,22 +206,63 @@ def create_pdf(filename, output):
 
     styles = getSampleStyleSheet()
     
-    # Update all text styles for consistency with Apple HIG
-    styles["Heading1"].fontSize = 14  # Apple's recommended large title size
-    styles["Heading1"].spaceAfter = 3
-    styles["Heading1"].spaceBefore = 4
+    # Update all text styles for a modern, clean look aligned with UI
+    styles["Title"].fontSize = 16  # Reduced from default
+    styles["Title"].spaceAfter = 0  # Remove space after title
+    
+    styles["Heading1"].fontSize = 14  # Reduced from 20
+    styles["Heading1"].spaceAfter = 8  # Reduced from 16
+    styles["Heading1"].spaceBefore = 8  # Reduced from 16
     styles["Heading1"].fontName = "FiraSans-Bold"
-    styles["Heading1"].textColor = colors.HexColor('#000000')  # Apple prefers true black for important text
+    styles["Heading1"].textColor = colors.HexColor('#1a237e')
 
-    styles["Heading2"].fontSize = 12  # Apple's recommended title size
-    styles["Heading2"].spaceAfter = 2
-    styles["Heading2"].spaceBefore = 3
+    styles["Heading2"].fontSize = 12  # Reduced from 16
+    styles["Heading2"].spaceAfter = 6  # Reduced from 12
+    styles["Heading2"].spaceBefore = 6  # Reduced from 12
     styles["Heading2"].fontName = "FiraSans-Bold"
-    styles["Heading2"].textColor = colors.HexColor('#000000')
+    styles["Heading2"].textColor = colors.HexColor('#283593')
 
-    styles["BodyText"].fontSize = 10  # Apple's recommended body text size
+    styles["Heading3"].fontSize = 11  # Reduced from 14
+    styles["Heading3"].spaceAfter = 4  # Reduced from 8
+    styles["Heading3"].spaceBefore = 4  # Reduced from 8
+    styles["Heading3"].fontName = "FiraSans-Bold"
+    styles["Heading3"].textColor = colors.HexColor('#303f9f')
+
+    # Modern body text style
+    styles["BodyText"].fontSize = 9
+    styles["BodyText"].leading = 11  # Increased from 6 to prevent overlapping
     styles["BodyText"].fontName = "FiraSans"
-    styles["BodyText"].textColor = colors.HexColor('#000000')
+    styles["BodyText"].textColor = colors.HexColor('#37474f')
+
+    # Update table styles for a cleaner look
+    MODERN_TABLE_STYLE = TableStyle([
+        # Header styling
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#e8eaf6')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1a237e')),
+        ('FONTNAME', (0, 0), (-1, 0), 'FiraSans-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('TOPPADDING', (0, 0), (-1, 0), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
+        
+        # Body styling
+        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
+        ('TEXTCOLOR', (0, 1), (-1, -1), colors.HexColor('#37474f')),
+        ('FONTNAME', (0, 1), (-1, -1), 'FiraSans'),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('TOPPADDING', (0, 1), (-1, -1), 4),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
+        
+        # Grid styling
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#c5cae9')),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#7986cb')),
+        
+        # Alignment
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        
+        # Alternating row colors
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f5f5f5')]),
+    ])
 
     # Add styles for summary results
     styles.add(
@@ -228,7 +270,7 @@ def create_pdf(filename, output):
             name='SummaryResult',
             parent=styles['BodyText'],
             fontSize=13,
-            leading=16,
+            leading=15,  # Increased from 8 to prevent overlapping
             fontName="FiraSans",
             textColor=colors.HexColor('#000000'),
             spaceAfter=2,
@@ -243,7 +285,7 @@ def create_pdf(filename, output):
             name='Metric',
             parent=styles['BodyText'],
             fontSize=15,
-            leading=18,
+            leading=17,  # Increased from 10 to prevent overlapping
             fontName="FiraSans-Bold",
             textColor=colors.HexColor('#000000'),
             spaceAfter=2
@@ -256,7 +298,7 @@ def create_pdf(filename, output):
             name='Caption',
             parent=styles['Normal'],
             fontSize=8,
-            leading=10,
+            leading=10,  # Increased from 6 to prevent overlapping
             fontName="FiraSans",
             textColor=colors.HexColor('#666666'),
             alignment=1,  # Center alignment
@@ -269,7 +311,7 @@ def create_pdf(filename, output):
             name='Bold',
             parent=styles['Normal'],
             fontSize=9,
-            leading=11,
+            leading=11,  # Increased from 6 to prevent overlapping
             fontName="FiraSans-Bold",
             textColor=colors.HexColor('#2C3E50')
         )
@@ -280,7 +322,7 @@ def create_pdf(filename, output):
             name='Smaller',
             parent=styles['Normal'],
             fontSize=8,
-            leading=10,
+            leading=10,  # Increased from 6 to prevent overlapping
             fontName="FiraSans",
             textColor=colors.HexColor('#2C3E50')
         )
@@ -299,62 +341,46 @@ def create_pdf(filename, output):
         )
     )
 
-    # Define a consistent modern table style
-    MODERN_TABLE_STYLE = TableStyle([
-        # Header styling
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#F5F6FA')),  # Light blue-grey header
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#2C3E50')),   # Dark blue-grey text
-        ('FONTNAME', (0, 0), (-1, 0), 'FiraSans-Bold'),
-        ('FONTSIZE', (0, 0), (-1, 0), 8),
-        ('TOPPADDING', (0, 0), (-1, 0), 6),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 6),
-        
-        # Body styling
-        ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-        ('TEXTCOLOR', (0, 1), (-1, -1), colors.HexColor('#2C3E50')),
-        ('FONTNAME', (0, 1), (-1, -1), 'FiraSans'),
-        ('FONTSIZE', (0, 1), (-1, -1), 7),
-        ('TOPPADDING', (0, 1), (-1, -1), 4),
-        ('BOTTOMPADDING', (0, 1), (-1, -1), 4),
-        
-        # Grid styling
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#E2E8F0')),  # Light grey grid
-        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#CBD5E1')), # Slightly darker line below header
-        
-        # Alignment
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        
-        # Alternating row colors
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#F8FAFC')]),
-    ])
-
-    # Update document margins for more compact but safe layout
+    # Update document margins for better use of space
     doc = SimpleDocTemplate(
         filename,
         pagesize=A4,
-        rightMargin=0.5*inch,
-        leftMargin=0.5*inch,
-        topMargin=1.0*inch,      # Increased to 1 inch
-        bottomMargin=0.5*inch,   # Reduced to 0.5 inch
+        rightMargin=0.5*inch,     # Reduced from 0.75
+        leftMargin=0.5*inch,      # Reduced from 0.75
+        topMargin=1.3*inch,       # Keep this for header
+        bottomMargin=0.6*inch,    # Keep this for footer
     )
 
-    # Update image handling function for more compact but safe layout
-    def add_figure(elements, img, caption=None, width_scale=0.8):
+    # Update image handling function for better presentation
+    def add_figure(elements, img, caption=None, width_scale=0.85):
         """Helper function for consistent image formatting"""
-        elements.append(Spacer(1, 16))  # Increased spacing
+        elements.append(Spacer(1, 20))  # More space before figure
         width, height = A4
-        img_width = width * width_scale  # More compact images
+        img_width = width * width_scale
         elements.append(Image(img, width=img_width, height=img_width/1.6))
         if caption:
-            elements.append(Spacer(1, 4))
+            elements.append(Spacer(1, 6))
             elements.append(Paragraph(caption, styles["Caption"]))
-        elements.append(Spacer(1, 12))  # Added space after figure
-        elements.append(CondPageBreak(inch * 1))  # Add conditional page break if not enough space
+        elements.append(Spacer(1, 16))  # More space after figure
+        elements.append(CondPageBreak(inch * 1.2))  # Increased space for page break
+
+    # Add a divider line function
+    def add_divider(elements):
+        """Adds a subtle divider line between sections"""
+        elements.append(Spacer(1, 12))
+        elements.append(HRFlowable(
+            width="100%",
+            thickness=0.5,
+            color=colors.HexColor('#e3f2fd'),
+            spaceBefore=6,
+            spaceAfter=6
+        ))
+        elements.append(Spacer(1, 12))
 
     elements_summary = []
     elements = []
 
+    # Load masterdf and get centreID first
     masterdf = (
         pd.read_csv(os.path.join(output, "master.csv"), index_col=0, header=None)
         if os.path.exists(os.path.join(output, "master.csv"))
@@ -362,28 +388,66 @@ def create_pdf(filename, output):
     )
     
     try:
-        centreID = masterdf.loc['centreID'][1]
+        centreID = masterdf.loc['centreID'][1] if masterdf is not None else None
     except KeyError:
         centreID = None  # or some default value
 
+    # Start with a clean title page
+    elements_summary.append(Paragraph("Analysis Report", styles["Title"]))
+    
+    # Add sample information in a more prominent way
+    elements_summary.append(Paragraph("Sample Information", styles["Heading1"]))
+    elements_summary.append(Spacer(1, 5))
+    
+    # Create a summary box
+    summary_style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor('#f3e5f5')),
+        ('TEXTCOLOR', (0, 0), (-1, -1), colors.HexColor('#4a148c')),
+        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+        ('FONTNAME', (0, 0), (-1, -1), 'FiraSans'),
+        ('FONTSIZE', (0, 0), (-1, -1), 9),
+        ('TOPPADDING', (0, 0), (-1, -1), 6),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+        ('LEFTPADDING', (0, 0), (-1, -1), 12),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 12),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor('#e1bee7')),
+    ])
+    
+    # Add sample summary table
+    summary_data = [
+        ["Sample ID:", sample_id],
+        ["Centre ID:", centreID if centreID else "Not specified"],
+        ["Report Date:", datetime.now().strftime("%Y-%m-%d %H:%M:%S")],
+    ]
+    summary_table = Table(summary_data, colWidths=[2*inch, 4*inch])
+    summary_table.setStyle(summary_style)
+    elements_summary.append(summary_table)
+    elements_summary.append(Spacer(1, 15))  # Reduced from 30
+
+    # Add classification details with improved spacing
     elements_summary.append(Paragraph("Classification Details", styles["Heading1"]))
+    elements_summary.append(Spacer(1, 5))  # Reduced from 10
     elements_summary.append(
         Paragraph(f"Sample {sample_id} has the following classifications:", styles["BodyText"])
     )
+    elements_summary.append(Spacer(1, 16))
 
     threshold = 0.05
 
     try:
         elements.append(PageBreak())
         elements.append(Paragraph("Classification Summary", styles["Heading2"]))
-        # Add classification plots and details
+        elements.append(Spacer(1, 16))
+
+        # Update the classification plots section
         for name, df_name in [
             ("Sturgeon", "sturgeon_scores.csv"),
-            ("NanoDX", "nanoDX_scores.csv"),
+            ("NanoDX", "nanodx_scores.csv"),
             ("PanNanoDX", "pannanodx_scores.csv"),
             ("Forest", "random_forest_scores.csv"),
-        ]:
+         ]:
             elements.append(Paragraph(name, styles["Heading3"]))
+            elements.append(Spacer(1, 8))
             # List files in the directory and convert them to lowercase
             files_in_directory = [f.lower() for f in os.listdir(output)]
 
@@ -425,18 +489,8 @@ def create_pdf(filename, output):
                 img = Image(img_buf, width=width * 0.95, height=height, kind="proportional")
                 elements.append(img)
 
-                elements.append(Spacer(1, 6))
-                df = lastrow_plot.reset_index()
-                df.columns = ["Classification", "Score"]
-                df["Score"] = df["Score"].apply(lambda x: round(x, 5))
-                df_transposed = df.set_index("Classification").T.reset_index()
-                df_transposed.columns = [split_text(col) for col in df_transposed.columns]
-                df_transposed.columns.name = None
-                data = [df_transposed.columns.to_list()] + df_transposed.values.tolist()
-                table = create_auto_adjusting_table(data, MODERN_TABLE_STYLE)
-                elements.append(table)
-                elements.append(Spacer(1, 12))
-                #elements.append(PageBreak())
+                elements.append(Spacer(1, 20))  # More space between classification sections
+
             else:
                 elements.append(
                     Paragraph(f"No {name} Classification Available", styles["BodyText"])
@@ -448,6 +502,7 @@ def create_pdf(filename, output):
     try:
         elements.append(PageBreak())
         elements.append(Paragraph("Copy Number Variation Detail", styles["Heading2"]))
+        elements.append(Spacer(1, 16))
         # Add CNV plots
         if os.path.exists(os.path.join(output, "CNV.npy")):
             CNVresult = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
@@ -740,6 +795,7 @@ def create_pdf(filename, output):
             bedcov_df_main = pd.read_csv(os.path.join(output, "bed_coverage_main.csv"))
             target_coverage_df = pd.read_csv(os.path.join(output, "target_coverage.csv"))
             elements_summary.append(Paragraph("Coverage Summary", styles["Heading2"]))
+            elements_summary.append(Spacer(1, 16))
             elements_summary.append(
                 Paragraph(
                     f"Coverage Depths - Global Estimated Coverage: {(cov_df_main['covbases'].sum() / cov_df_main['endpos'].sum()):.2f}x Targets Estimated Coverage: {(bedcov_df_main['bases'].sum() / bedcov_df_main['length'].sum()):.2f}x",
@@ -951,9 +1007,10 @@ def create_pdf(filename, output):
         raise
 
     try:
-        # Combine all elements in the correct order
+        # Combine all elements with improved spacing
         final_elements = elements_summary + elements + end_of_report_elements
         
+        # Build the PDF with the updated header/footer
         doc.multiBuild(
             final_elements,
             canvasmaker=header_footer_canvas_factory(sample_id, centreID, styles, fonts_dir),

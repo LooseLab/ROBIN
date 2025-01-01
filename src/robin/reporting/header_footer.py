@@ -19,113 +19,89 @@ from robin.__about__ import __version__
 
 VERSION = __version__
 
-
-class HeaderFooterCanvas(canvas.Canvas):
-    """
-    A custom canvas class for adding headers and footers to the PDF report.
-    """
-
-    def __init__(self, sample_id, centreID, styles, fonts_dir, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.pages = []
-        self.sample_id = sample_id  # Store the sample_id
-        self.centreID = centreID  # Store the centreID
-        self.styles = styles  # Store the styles
-        self.fonts_dir = fonts_dir  # Store the fonts directory
-
-    def showPage(self):
-        self.pages.append(dict(self.__dict__))
-        self._startPage()
-
-    def save(self):
-        page_count = len(self.pages)
-        for page in self.pages:
-            self.__dict__.update(page)
-            self.draw_canvas(page_count)
-            canvas.Canvas.showPage(self)
-        canvas.Canvas.save(self)
-
-    def draw_canvas(self, page_count):
+def header_footer_canvas_factory(sample_id, centreID, styles, fonts_dir):
+    """Creates a canvas with headers and footers."""
+    def header_footer_canvas(canvas, doc):
+        canvas.saveState()
         width, height = A4
-        
-        # Add header background - using ROBIN green theme
-        self.setFillColor(colors.HexColor('#4F9153'))  # Match the ROBIN theme green
-        self.rect(0, height-1.0*inch, width, 1.0*inch, fill=True, stroke=0)
-        
-        # Calculate center point of header (header spans 1 inch)
-        header_center = height - 0.5*inch
-        
-        # Add ROBIN logo - centered vertically
-        logo_path = os.path.join(os.path.dirname(images.__file__), "ROBIN_logo_small.png")  # Use the same logo as theme
+
+        # Header
+        # Draw header bar with ROBIN green theme
+        canvas.setFillColor(colors.HexColor('#4F9153'))  # ROBIN theme green
+        canvas.rect(0, height - 1.2*inch, width, 1.2*inch, fill=1, stroke=0)
+
+        # Add ROBIN logo
+        logo_path = os.path.join(os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png")
         if os.path.exists(logo_path):
             # Open and convert logo to RGBA if it isn't already
             img = PILImage.open(logo_path)
             if img.mode != 'RGBA':
                 img = img.convert('RGBA')
-                
-            # Create a new image with theme-colored background
-            bg = PILImage.new('RGBA', img.size, (79, 145, 83, 255))  # #4F9153 in RGB
-            composite = PILImage.alpha_composite(bg, img)
             
-            # Save to temporary file
-            temp_path = os.path.join(os.path.dirname(logo_path), 'temp_logo.png')
-            composite.save(temp_path, format='PNG')
-            
-            # Draw the processed logo
-            logo_offset = 25.0
-            self.drawImage(temp_path, width-1.4*inch, header_center - logo_offset, 
-                         width=0.9*inch, height=0.7*inch, preserveAspectRatio=True)
-            
-            # Clean up temporary file
-            os.remove(temp_path)
+            # Calculate logo dimensions while maintaining aspect ratio
+            img_width, img_height = img.size
+            aspect = img_height / float(img_width)
+            # Position logo in top right with reduced size
+            canvas.drawImage(
+                logo_path,
+                width - 1.75*inch,
+                height - 1.1*inch,
+                width=1.0*inch,
+                height=1.0*inch*aspect,
+                mask='auto'
+            )
+
+        # Add title and Research Use Only warning
+        canvas.setFont("FiraSans-Bold", 16)
+        canvas.setFillColor(colors.white)
+        canvas.drawString(0.75*inch, height - 0.5*inch, "ROBIN Report")
+        canvas.setFont("FiraSans-Bold", 12)
+        canvas.setFillColor(colors.HexColor('#FF0000'))  # Red color for warning
+        canvas.drawString(0.75*inch, height - 0.8*inch, "RESEARCH USE ONLY")
+
+        # Add sample ID and centre ID
+        canvas.setFont("FiraSans-Bold", 10)
+        canvas.setFillColor(colors.white)
+        canvas.drawString(0.75*inch, height - 1.1*inch, f"Sample ID: {sample_id}")
+        if centreID:
+            canvas.drawString(3*inch, height - 1.1*inch, f"Centre ID: {centreID}")
+
+        # Footer
+        # Draw footer bar with ROBIN green theme
+        canvas.setFillColor(colors.HexColor('#4F9153'))  # ROBIN theme green
+        canvas.rect(0, 0, width, 0.5*inch, fill=1, stroke=0)
         
-        # Title text - white text on green background with red warning
-        header1 = Paragraph(
-            '<font name="FiraSans-Bold" color="#FFFFFF" size="14">ROBIN Reports</font>'
-            '<font name="FiraSans-Bold" color="#FF0000" size="12"> RESEARCH USE ONLY</font>', 
-            self.styles["Bold"]
-        )
-        w, h = header1.wrap(width - 3*inch, inch)
-        header1.drawOn(self, 0.5*inch, header_center + 1.5*12)  # Shift up by 1.5 lines (12 points per line)
+        # Add page numbers, timestamp, and version on the left
+        canvas.setFont("FiraSans", 8)
+        canvas.setFillColor(colors.white)
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        page_text = f"Page {doc.page} | Generated: {timestamp} | Version: {VERSION}"
+        canvas.drawString(0.5*inch, 0.2*inch, page_text)
         
-        # Metadata section - white text on green background
-        metadata = [
-            f"Sample ID: {self.sample_id}",
-            f"Centre ID: {self.centreID}",
-            datetime.now().strftime("Report Generated: %Y-%m-%d %H:%M:%S")
-        ]
-        y_position = header_center - 0.1*inch
-        for line in metadata:
-            self.setFont("FiraSans", 9)
-            self.setFillColor(colors.white)  # White text on green background
-            self.drawString(0.5*inch, y_position, line)
-            y_position -= 12
+        # Add Research Use Only warning on the right
+        warning_text = "RESEARCH USE ONLY"
+        canvas.drawRightString(width - 0.5*inch, 0.2*inch, warning_text)
 
-        # Footer - using ROBIN green theme
-        self.setFillColor(colors.HexColor('#4F9153'))
-        self.rect(0, 0, width, 0.35*inch, fill=True, stroke=0)
-        
-        # Footer text - white on green
-        page = f"Sample: {self.sample_id} | Centre: {self.centreID} | ROBIN Version: v{VERSION} | Page {self._pageNumber} of {page_count}"
-        self.setFont("FiraSans", 8)
-        self.setFillColor(colors.white)
-        self.drawString(width/2 - len(page)*2.5, 0.15*inch, page)
+        canvas.restoreState()
 
+    class HeaderFooterCanvas(canvas.Canvas):
+        def __init__(self, *args, **kwargs):
+            canvas.Canvas.__init__(self, *args, **kwargs)
+            self.pages = []
 
-def header_footer_canvas_factory(sample_id, centreID, styles, fonts_dir):
-    """
-    A factory function for creating HeaderFooterCanvas objects.
+        def showPage(self):
+            self.pages.append(dict(self.__dict__))
+            self._startPage()
 
-    Args:
-        sample_id (str): The sample ID.
-        styles: The styles object.
-        fonts_dir: The fonts directory.
+        def save(self):
+            page_count = len(self.pages)
+            for page in self.pages:
+                self.__dict__.update(page)
+                self._drawPageContent()
+                canvas.Canvas.showPage(self)
+            canvas.Canvas.save(self)
 
-    Returns:
-        function: A function for creating HeaderFooterCanvas objects.
-    """
+        def _drawPageContent(self):
+            header_footer_canvas(self, self._doctemplate)
 
-    def create_canvas(*args, **kwargs):
-        return HeaderFooterCanvas(sample_id, centreID, styles, fonts_dir, *args, **kwargs)
-
-    return create_canvas
+    return HeaderFooterCanvas
