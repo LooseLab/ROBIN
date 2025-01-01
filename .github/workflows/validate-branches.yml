@@ -10,7 +10,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Check branch creation rules
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Check Branch Rules
         run: |
           branch_name="${{ github.ref_name }}"
 
@@ -36,4 +39,5 @@ jobs:
                   echo "Error: Feature branches must be created from 'dev'."
                   exit 1
               fi
+          fi
           fi
