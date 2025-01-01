@@ -513,11 +513,11 @@ class RandomForest_object(BaseAnalysis):
             "title": {
                 "text": title,
                 "left": "center",
-                "top": 20,  # Increased for consistency
+                "top": 10,
                 "textStyle": {
                     "fontSize": 16,
                     "fontWeight": "normal",
-                    "color": "#000000"  # Explicit color for better contrast
+                    "color": "#000000"
                 }
             },
             "tooltip": {
@@ -527,10 +527,10 @@ class RandomForest_object(BaseAnalysis):
                 "textStyle": {"fontSize": 14}
             },
             "grid": {
-                "left": "15%",  # Standardized margin
-                "right": "10%",
-                "bottom": "10%",
-                "top": "25%",  # Increased for title and legend
+                "left": "5%",
+                "right": "5%",
+                "bottom": "5%",
+                "top": "25%",
                 "containLabel": True
             },
             "xAxis": {
@@ -541,7 +541,7 @@ class RandomForest_object(BaseAnalysis):
                 "axisLabel": {
                     "fontSize": 12,
                     "formatter": "{value}%",
-                    "color": "#666666"  # Subtle color for axis labels
+                    "color": "#666666"
                 },
                 "splitLine": {
                     "show": True,
@@ -567,7 +567,7 @@ class RandomForest_object(BaseAnalysis):
             "series": [{
                 "type": "bar",
                 "name": "Confidence",
-                "barMaxWidth": "60%",  # Standardized bar width
+                "barMaxWidth": "60%",
                 "itemStyle": {
                     "color": "#007AFF",
                     "borderRadius": [0, 4, 4, 0]
@@ -580,13 +580,7 @@ class RandomForest_object(BaseAnalysis):
                     "color": "#666666"
                 },
                 "data": []
-            }],
-            "aria": {
-                "enabled": True,
-                "decal": {
-                    "show": True
-                }
-            }
+            }]
         })
 
     def create_rcns2_time_chart(self, title):
@@ -599,12 +593,13 @@ class RandomForest_object(BaseAnalysis):
             "title": {
                 "text": title,
                 "left": "center",
-                "top": 20,
+                "top": 5,
                 "textStyle": {
                     "fontSize": 16,
                     "fontWeight": "normal",
                     "color": "#000000"
-                }
+                },
+                "padding": [0, 0, 20, 0]  # Add padding below title
             },
             "tooltip": {
                 "trigger": "axis",
@@ -612,20 +607,35 @@ class RandomForest_object(BaseAnalysis):
                 "textStyle": {"fontSize": 14}
             },
             "grid": {
-                "left": "15%",
-                "right": "15%",
-                "bottom": "10%",
+                "left": "5%",
+                "right": "5%",
+                "bottom": "5%",
                 "top": "25%",
                 "containLabel": True
             },
             "legend": {
                 "type": "scroll",
                 "orient": "horizontal",
-                "top": 50,
+                "top": 45,  # Increased from 35
+                "width": "90%",
+                "left": "center",
                 "textStyle": {
                     "fontSize": 12,
                     "color": "#666666"
-                }
+                },
+                "pageButtonPosition": "end",
+                "pageButtonGap": 5,
+                "pageButtonItemGap": 5,
+                "pageIconColor": "#666666",
+                "pageIconInactiveColor": "#aaa",
+                "pageIconSize": 12,
+                "pageTextStyle": {
+                    "color": "#666666"
+                },
+                "itemGap": 25,
+                "itemWidth": 14,
+                "itemHeight": 14,
+                "selectedMode": True
             },
             "xAxis": {
                 "type": "time",
@@ -659,12 +669,6 @@ class RandomForest_object(BaseAnalysis):
                         "type": "dashed"
                     }
                 }
-            },
-            "aria": {
-                "enabled": True,
-                "decal": {
-                    "show": True
-                }
             }
         })
 
@@ -691,12 +695,12 @@ class RandomForest_object(BaseAnalysis):
             formatted_values = [float(f"{val:.1f}") for val in y]
             logger.debug(f"Formatted values: {formatted_values}")
             
-            # Sort the data in descending order
-            sorted_indices = sorted(range(len(formatted_values)), key=lambda k: formatted_values[k], reverse=True)
+            # Sort the data in descending order and take top 10
+            sorted_indices = sorted(range(len(formatted_values)), key=lambda k: formatted_values[k], reverse=True)[:10]
             sorted_values = [formatted_values[i] for i in sorted_indices]
             sorted_labels = [x[i] for i in sorted_indices]
-            logger.debug(f"Sorted values: {sorted_values}")
-            logger.debug(f"Sorted labels: {sorted_labels}")
+            logger.debug(f"Top 10 sorted values: {sorted_values}")
+            logger.debug(f"Top 10 sorted labels: {sorted_labels}")
             
             # Create descriptive title with key information
             title_text = f"Random Forest Analysis Results\n{count} samples processed"
@@ -747,48 +751,50 @@ class RandomForest_object(BaseAnalysis):
                 "#4CD964",  # Light Green
             ]
             
-            for idx, (series, data) in enumerate(datadf.to_dict().items()):
-                if series != "number_probes":
-                    logger.debug(f"Processing series: {series}")
-                    # Values are already percentages, just format them
-                    data_list = [[key, float(f"{value:.1f}")] for key, value in data.items()]
-                    logger.debug(f"First few data points for {series}: {data_list[:3]}")
-                    
-                    self.rcns2_time_chart.options["series"].append({
-                        "name": series,
-                        "type": "line",
-                        "smooth": True,
-                        "animation": False,
-                        "symbolSize": 6,
-                        "emphasis": {
-                            "focus": "series",
-                            "itemStyle": {
-                                "borderWidth": 2
-                            }
-                        },
-                        "endLabel": {
-                            "show": True,
-                            "formatter": "{a}: {c}%",
-                            "distance": 10,
-                            "fontSize": 12
-                        },
-                        "lineStyle": {
-                            "width": 2,
-                            "color": colors[idx % len(colors)]
-                        },
-                        "itemStyle": {
-                            "color": colors[idx % len(colors)]
-                        },
-                        "data": data_list
-                    })
-            
-            # Update chart title with summary
-            latest_data = datadf.iloc[-1]  # Get latest data
-            logger.debug(f"Latest data: {latest_data.to_dict()}")
-            
+            # Get the top 10 diagnoses based on the latest data point
+            latest_data = datadf.iloc[-1]
             if "number_probes" in latest_data:
                 latest_data = latest_data.drop("number_probes")
+            top_10_diagnoses = latest_data.nlargest(10).index.tolist()
             
+            # Filter dataframe to only include top 10 diagnoses
+            filtered_df = datadf[top_10_diagnoses]
+            
+            for idx, (series, data) in enumerate(filtered_df.to_dict().items()):
+                logger.debug(f"Processing series: {series}")
+                # Values are already percentages, just format them
+                data_list = [[key, float(f"{value:.1f}")] for key, value in data.items()]
+                logger.debug(f"First few data points for {series}: {data_list[:3]}")
+                
+                self.rcns2_time_chart.options["series"].append({
+                    "name": series,
+                    "type": "line",
+                    "smooth": True,
+                    "animation": False,
+                    "symbolSize": 6,
+                    "emphasis": {
+                        "focus": "series",
+                        "itemStyle": {
+                            "borderWidth": 2
+                        }
+                    },
+                    "endLabel": {
+                        "show": True,
+                        "formatter": "{a}: {c}%",
+                        "distance": 10,
+                        "fontSize": 12
+                    },
+                    "lineStyle": {
+                        "width": 2,
+                        "color": colors[idx % len(colors)]
+                    },
+                    "itemStyle": {
+                        "color": colors[idx % len(colors)]
+                    },
+                    "data": data_list
+                })
+            
+            # Update chart title with summary
             max_confidence = latest_data.max()  # Get maximum confidence (already percentage)
             max_type = latest_data.idxmax()  # Get type with maximum confidence
             logger.debug(f"Max confidence: {max_confidence:.1f}% for type: {max_type}")

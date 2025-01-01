@@ -517,7 +517,7 @@ class NanoDX_object(BaseAnalysis):
             "title": {
                 "text": title,
                 "left": "center",
-                "top": 20,
+                "top": 10,
                 "textStyle": {
                     "fontSize": 16,
                     "fontWeight": "normal",
@@ -536,9 +536,9 @@ class NanoDX_object(BaseAnalysis):
                 "textStyle": {"fontSize": 14}
             },
             "grid": {
-                "left": "15%",
-                "right": "10%",
-                "bottom": "10%",
+                "left": "5%",
+                "right": "5%",
+                "bottom": "5%",
                 "top": "25%",
                 "containLabel": True
             },
@@ -589,13 +589,7 @@ class NanoDX_object(BaseAnalysis):
                     "color": "#666666"
                 },
                 "data": []
-            }],
-            "aria": {
-                "enabled": True,
-                "decal": {
-                    "show": True
-                }
-            }
+            }]
         })
 
     def create_nanodx_time_chart(self, title):
@@ -608,12 +602,13 @@ class NanoDX_object(BaseAnalysis):
             "title": {
                 "text": title,
                 "left": "center",
-                "top": 20,
+                "top": 5,
                 "textStyle": {
                     "fontSize": 16,
                     "fontWeight": "normal",
                     "color": "#000000"
-                }
+                },
+                "padding": [0, 0, 20, 0]
             },
             "tooltip": {
                 "trigger": "axis",
@@ -621,20 +616,35 @@ class NanoDX_object(BaseAnalysis):
                 "textStyle": {"fontSize": 14}
             },
             "grid": {
-                "left": "15%",
-                "right": "15%",
-                "bottom": "10%",
+                "left": "5%",
+                "right": "5%",
+                "bottom": "5%",
                 "top": "25%",
                 "containLabel": True
             },
             "legend": {
                 "type": "scroll",
                 "orient": "horizontal",
-                "top": 50,
+                "top": 45,
+                "width": "90%",
+                "left": "center",
                 "textStyle": {
                     "fontSize": 12,
                     "color": "#666666"
-                }
+                },
+                "pageButtonPosition": "end",
+                "pageButtonGap": 5,
+                "pageButtonItemGap": 5,
+                "pageIconColor": "#666666",
+                "pageIconInactiveColor": "#aaa",
+                "pageIconSize": 12,
+                "pageTextStyle": {
+                    "color": "#666666"
+                },
+                "itemGap": 25,
+                "itemWidth": 14,
+                "itemHeight": 14,
+                "selectedMode": True
             },
             "xAxis": {
                 "type": "time",
@@ -667,12 +677,6 @@ class NanoDX_object(BaseAnalysis):
                         "color": "#E0E0E0",
                         "type": "dashed"
                     }
-                }
-            },
-            "aria": {
-                "enabled": True,
-                "decal": {
-                    "show": True
                 }
             }
         })
