@@ -613,20 +613,11 @@ class BrainMeth:
                 # Run Information - Compact display at the top
                 if self.sampleID and self.sampleID in app.storage.general[self.mainuuid]["samples"]:
                     logging.info("Rendering run information display")
-                    with ui.row().classes('w-full py-3 text-sm text-gray-600 items-center justify-between bg-gray-50 rounded-lg px-4 mb-4'):
-                        if self.browse:
-                            # In browse mode, only show sample ID
-                            with ui.row().classes('items-center gap-2'):
-                                ui.icon('label').classes('text-gray-400')
-                                ui.label().bind_text_from(
-                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                    "sample_ids",
-                                    backward=lambda n: f"Sample: {str(n[0])}" if n else "--"
-                                )
-                        else:
-                            # In live mode, show all information
-                            # Left column - Device and Run Info
-                            with ui.column().classes('space-y-1'):
+                    with ui.card().classes('w-full p-3 sm:p-4 bg-gray-50 rounded-lg mb-4'):
+                        ui.label("Run Information").classes('font-medium text-gray-900 mb-3')
+                        with ui.grid().classes('grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3'):
+                            # Device and Model Info
+                            with ui.column().classes('space-y-2'):
                                 with ui.row().classes('items-center gap-2'):
                                     ui.icon('devices').classes('text-gray-400')
                                     ui.label().bind_text_from(
@@ -642,8 +633,8 @@ class BrainMeth:
                                         backward=lambda n: f"Model: {str(n[0])}" if n else "--"
                                     )
                             
-                            # Middle column - Flow Cell and Sample
-                            with ui.column().classes('space-y-1'):
+                            # Flow Cell and Sample Info
+                            with ui.column().classes('space-y-2'):
                                 with ui.row().classes('items-center gap-2'):
                                     ui.icon('view_module').classes('text-gray-400')
                                     ui.label().bind_text_from(
@@ -659,8 +650,8 @@ class BrainMeth:
                                         backward=lambda n: f"Sample: {str(n[0])}" if n else "--"
                                     )
                             
-                            # Right column - Time and Stats
-                            with ui.column().classes('space-y-1'):
+                            # Run Time Info
+                            with ui.column().classes('space-y-2'):
                                 with ui.row().classes('items-center gap-2'):
                                     ui.icon('schedule').classes('text-gray-400')
                                     ui.label().bind_text_from(
@@ -668,20 +659,21 @@ class BrainMeth:
                                         "run_time",
                                         backward=lambda n: f"Run: {parser.parse(n[0]).strftime('%Y-%m-%d %H:%M')}" if n else "--"
                                     )
-                    logging.info("Run information display rendered")
 
                 # Results Summary Section
                 with ui.column().classes('space-y-4'):
                     # Classification Results - Single row with equal width columns
-                    with ui.grid().classes('grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4'):
-                        if "sturgeon" not in self.exclude:
-                            sturgeonsummary = ui.column().classes('space-y-1')
-                        if "nanodx" not in self.exclude:
-                            nanodxsummary = ui.column().classes('space-y-1')
-                        if "pannanodx" not in self.exclude:
-                            pannanodxsummary = ui.column().classes('space-y-1')
-                        if "forest" not in self.exclude:
-                            forestsummary = ui.column().classes('space-y-1')
+                    with ui.card().classes('w-full p-3 sm:p-4 bg-gray-50 rounded-lg'):
+                        ui.label("Classification Summary").classes('font-medium text-gray-900 mb-3')
+                        with ui.grid().classes('grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4'):
+                            if "sturgeon" not in self.exclude:
+                                sturgeonsummary = ui.column().classes('space-y-2')
+                            if "nanodx" not in self.exclude:
+                                nanodxsummary = ui.column().classes('space-y-2')
+                            if "pannanodx" not in self.exclude:
+                                pannanodxsummary = ui.column().classes('space-y-2')
+                            if "forest" not in self.exclude:
+                                forestsummary = ui.column().classes('space-y-2')
 
                     # Analysis Results - Two columns grid
                     with ui.grid().classes('grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4'):
@@ -697,31 +689,29 @@ class BrainMeth:
                     # Add monitoring information panel - Now positioned after diagnosis cards
                     # Only show in live mode
                     if not self.browse:
-                        with ui.expansion("Monitoring Information", icon="folder"): #.classes('mt-4 sm:mt-5 md:mt-6 mb-2 sm:mb-3 md:mb-4'):
-                            with ui.column():#.classes('p-2 sm:p-3 md:p-4 space-y-2 sm:space-y-3 md:space-y-4 bg-white rounded-lg shadow-sm'):
-                                # Paths Section
-                                with ui.column(): #.classes('space-y-3 pb-4 border-b border-gray-200'):
-                                    ui.label("File Paths")#.classes('break-all font-medium text-gray-900')
-                                    # Monitoring Path
-                                    with ui.column():#.classes('space-y-2'):
-                                        with ui.row():#.classes('items-start gap-2 flex-wrap'):
-                                            ui.icon('folder_open')#.classes('text-blue-600 shrink-0 mt-1')
-                                            with ui.column():#classes('flex-grow min-w-0'):
+                        with ui.card().classes('w-full bg-white rounded-lg shadow-sm'):
+                            with ui.expansion("Monitoring Information", icon="folder").classes('w-full'):
+                                with ui.column().classes('space-y-4 p-4'):
+                                    # File Paths Section
+                                    ui.label("File Paths").classes('text-xl font-medium text-gray-900')
+                                    with ui.column().classes('space-y-4 ml-1'):
+                                        # Monitoring Path
+                                        with ui.row().classes('items-start gap-2'):
+                                            ui.icon('folder_open').classes('text-blue-600 shrink-0 mt-1')
+                                            with ui.column().classes('flex-grow min-w-0'):
                                                 ui.label("Monitoring:").classes('text-gray-600')
                                                 ui.label(f"{self.watchfolder}").classes('break-all text-gray-900 font-mono')
                                         
                                         # Output Path
-                                        with ui.row().classes('items-start gap-2 flex-wrap'):
+                                        with ui.row().classes('items-start gap-2'):
                                             ui.icon('output').classes('text-blue-600 shrink-0 mt-1')
-                                            with ui.column():#.classes('flex-grow min-w-0'):
+                                            with ui.column().classes('flex-grow min-w-0'):
                                                 ui.label("Output:").classes('text-gray-600')
                                                 ui.label(f"{self.output}").classes('break-all text-gray-900 font-mono')
-                                
-                                
-                                # BAM File Statistics
-                                with ui.column().classes('space-y-3 pb-4 border-b border-gray-200 w-full'):
-                                    ui.label("BAM File Summary").classes('font-medium text-gray-900')
-                                    with ui.card().classes('w-full p-3 sm:p-4 bg-gray-50 rounded-lg'):
+                                    
+                                    # BAM File Summary Section
+                                    ui.label("BAM File Summary").classes('text-xl font-medium text-gray-900 mt-6')
+                                    with ui.card().classes('w-full p-4 bg-gray-50 rounded-lg'):
                                         with ui.column().classes('space-y-3'):
                                             # Total Files
                                             with ui.row().classes('items-center justify-between w-full'):
@@ -757,109 +747,112 @@ class BrainMeth:
                                                 app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_failed)
                                                 update_failed()
 
-                                # Detailed Statistics Grid
-                                with ui.column().classes('space-y-3 w-full'):
-                                    ui.label("Sequencing Statistics").classes('font-medium text-gray-900')
-                                    with ui.grid().classes('grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 w-full'):
-                                        # Read Statistics
-                                        with ui.card().classes('w-full p-2 sm:p-3 bg-gray-50 rounded-lg'):
-                                            ui.label("Read Statistics").classes('text-sm font-medium text-gray-700 mb-2')
-                                            with ui.column().classes('space-y-1.5'):
-                                                # Total Reads
-                                                with ui.row().classes('justify-between items-center'):
-                                                    ui.label("Total:").classes('text-gray-600 text-sm')
-                                                    total_reads = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                    def update_total_reads():
-                                                        mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["mapped_count"]
-                                                        unmapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["unmapped_count"]
-                                                        total = mapped + unmapped if mapped is not None and unmapped is not None else 0
-                                                        total_reads.text = f"{total:,}" if total > 0 else "--"
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_reads)
-                                                    update_total_reads()
+                                    # Sequencing Statistics Section
+                                    ui.label("Sequencing Statistics").classes('text-xl font-medium text-gray-900 mt-6')
 
-                                                # Mapped Reads
-                                                with ui.row().classes('justify-between items-center'):
-                                                    ui.label("Mapped:").classes('text-gray-600 text-sm')
-                                                    mapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                    def update_mapped():
-                                                        mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['mapped_count'] is not None else "--"
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_mapped)
-                                                    update_mapped()
+                                    # Detailed Statistics Grid
+                                    with ui.column().classes('space-y-3'):
+                                        ui.label("Sequencing Statistics").classes('font-medium text-gray-900 mb-2')
+                                        with ui.grid().classes('grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 w-full'):
+                                            # Read Statistics
+                                            with ui.card().classes('w-full p-2 sm:p-3 bg-white rounded-lg'):
+                                                ui.label("Read Statistics").classes('text-sm font-medium text-gray-700 mb-2')
+                                                with ui.column().classes('space-y-1.5'):
+                                                    # Total Reads
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Total:").classes('text-gray-600 text-sm')
+                                                        total_reads = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_total_reads():
+                                                            mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["mapped_count"]
+                                                            unmapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["unmapped_count"]
+                                                            total = mapped + unmapped if mapped is not None and unmapped is not None else 0
+                                                            total_reads.text = f"{total:,}" if total > 0 else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_reads)
+                                                        update_total_reads()
 
-                                                # Unmapped Reads
-                                                with ui.row().classes('justify-between items-center'):
-                                                    ui.label("Unmapped:").classes('text-gray-600 text-sm')
-                                                    unmapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                    def update_unmapped():
-                                                        unmapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['unmapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['unmapped_count'] is not None else "--"
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_unmapped)
-                                                    update_unmapped()
+                                                    # Mapped Reads
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Mapped:").classes('text-gray-600 text-sm')
+                                                        mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_mapped():
+                                                            mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['mapped_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_mapped)
+                                                        update_mapped()
 
-                                        # Mapping Quality
-                                        with ui.card().classes('p-2 sm:p-3 bg-gray-50 rounded-lg'):
-                                            ui.label("Mapping Quality").classes('text-sm font-medium text-gray-700 mb-2')
-                                            with ui.column().classes('space-y-1.5'):
-                                                # Total Mapped
-                                                with ui.row().classes('justify-between items-center'):
-                                                    ui.label("Total:").classes('text-gray-600 text-sm')
-                                                    total_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                    def update_total_mapped():
-                                                        pass_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["pass_mapped_count"]
-                                                        fail_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["fail_mapped_count"]
-                                                        total = pass_mapped + fail_mapped if pass_mapped is not None and fail_mapped is not None else 0
-                                                        total_mapped.text = f"{total:,}" if total > 0 else "--"
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_mapped)
-                                                    update_total_mapped()
+                                                    # Unmapped Reads
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Unmapped:").classes('text-gray-600 text-sm')
+                                                        unmapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_unmapped():
+                                                            unmapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['unmapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['unmapped_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_unmapped)
+                                                        update_unmapped()
 
-                                                # Pass Mapped
-                                                with ui.row().classes('justify-between items-center'):
-                                                    ui.label("Pass:").classes('text-gray-600 text-sm')
-                                                    pass_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                    def update_pass_mapped():
-                                                        pass_mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_mapped_count'] is not None else "--"
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_mapped)
-                                                    update_pass_mapped()
+                                            # Mapping Quality
+                                            with ui.card().classes('p-2 sm:p-3 bg-gray-50 rounded-lg'):
+                                                ui.label("Mapping Quality").classes('text-sm font-medium text-gray-700 mb-2')
+                                                with ui.column().classes('space-y-1.5'):
+                                                    # Total Mapped
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Total:").classes('text-gray-600 text-sm')
+                                                        total_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_total_mapped():
+                                                            pass_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["pass_mapped_count"]
+                                                            fail_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["fail_mapped_count"]
+                                                            total = pass_mapped + fail_mapped if pass_mapped is not None and fail_mapped is not None else 0
+                                                            total_mapped.text = f"{total:,}" if total > 0 else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_mapped)
+                                                        update_total_mapped()
 
-                                                # Fail Mapped
-                                                with ui.row().classes('justify-between items-center'):
-                                                    ui.label("Fail:").classes('text-gray-600 text-sm')
-                                                    fail_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                    def update_fail_mapped():
-                                                        fail_mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_mapped_count'] is not None else "--"
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_mapped)
-                                                    update_fail_mapped()
+                                                    # Pass Mapped
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Pass:").classes('text-gray-600 text-sm')
+                                                        pass_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_pass_mapped():
+                                                            pass_mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_mapped_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_mapped)
+                                                        update_pass_mapped()
 
-                                        # Base Statistics
-                                        with ui.card().classes('p-2 sm:p-3 bg-gray-50 rounded-lg'):
-                                            ui.label("Base Statistics").classes('text-sm font-medium text-gray-700 mb-2')
-                                            with ui.column().classes('space-y-1.5'):
-                                                # Total Bases
-                                                with ui.row().classes('justify-between items-center'):
-                                                    ui.label("Total:").classes('text-gray-600 text-sm')
-                                                    total_bases = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                    def update_total_bases():
-                                                        total = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["bases_count"]
-                                                        total_bases.text = f"{total:,}" if total > 0 else "--"
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_bases)
-                                                    update_total_bases()
+                                                    # Fail Mapped
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Fail:").classes('text-gray-600 text-sm')
+                                                        fail_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_fail_mapped():
+                                                            fail_mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_mapped_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_mapped)
+                                                        update_fail_mapped()
 
-                                                # Pass Bases
-                                                with ui.row().classes('justify-between items-center'):
-                                                    ui.label("Pass:").classes('text-gray-600 text-sm')
-                                                    pass_bases = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                    def update_pass_bases():
-                                                        pass_bases.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_bases_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_bases_count'] is not None else "--"
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_bases)
-                                                    update_pass_bases()
+                                            # Base Statistics
+                                            with ui.card().classes('p-2 sm:p-3 bg-gray-50 rounded-lg'):
+                                                ui.label("Base Statistics").classes('text-sm font-medium text-gray-700 mb-2')
+                                                with ui.column().classes('space-y-1.5'):
+                                                    # Total Bases
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Total:").classes('text-gray-600 text-sm')
+                                                        total_bases = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_total_bases():
+                                                            total = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["bases_count"]
+                                                            total_bases.text = f"{total:,}" if total > 0 else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_bases)
+                                                        update_total_bases()
 
-                                                # Fail Bases
-                                                with ui.row().classes('justify-between items-center'):
-                                                    ui.label("Fail:").classes('text-gray-600 text-sm')
-                                                    fail_bases = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                    def update_fail_bases():
-                                                        fail_bases.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_bases_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_bases_count'] is not None else "--"
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_bases)
-                                                    update_fail_bases()
+                                                    # Pass Bases
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Pass:").classes('text-gray-600 text-sm')
+                                                        pass_bases = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_pass_bases():
+                                                            pass_bases.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_bases_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_bases_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_bases)
+                                                        update_pass_bases()
+
+                                                    # Fail Bases
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Fail:").classes('text-gray-600 text-sm')
+                                                        fail_bases = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_fail_bases():
+                                                            fail_bases.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_bases_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_bases_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_bases)
+                                                        update_fail_bases()
                                     
                 # Detailed Analysis Tabs
                 if sample_id:
