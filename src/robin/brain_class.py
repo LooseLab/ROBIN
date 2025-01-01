@@ -540,6 +540,120 @@ class BrainMeth:
                     ui.label("CNS Tumor Methylation Classification").classes('text-2xl font-medium text-gray-900')
                     ui.label("This tool enables classification of brain tumors in real time from Oxford Nanopore Data.").classes('text-gray-600')
 
+                # Run Information - Compact display at the top
+                if not self.browse and self.sampleID and self.sampleID in app.storage.general[self.mainuuid]["samples"]:
+                    with ui.row().classes('w-full py-3 text-sm text-gray-600 items-center justify-between bg-gray-50 rounded-lg px-4 mb-4'):
+                        # Left column - Device and Run Info
+                        with ui.column().classes('space-y-1'):
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('devices').classes('text-gray-400')
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "devices",
+                                    backward=lambda n: f"Device: {str(n[0])}" if n else "--"
+                                )
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('memory').classes('text-gray-400')
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "basecall_models",
+                                    backward=lambda n: f"Model: {str(n[0])}" if n else "--"
+                                )
+                        
+                        # Middle column - Flow Cell and Sample
+                        with ui.column().classes('space-y-1'):
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('view_module').classes('text-gray-400')
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "flowcell_ids",
+                                    backward=lambda n: f"Flow Cell: {str(n[0])}" if n else "--"
+                                )
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('label').classes('text-gray-400')
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "sample_ids",
+                                    backward=lambda n: f"Sample: {str(n[0])}" if n else "--"
+                                )
+                        
+                        # Right column - Time and Stats
+                        with ui.column().classes('space-y-1'):
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('schedule').classes('text-gray-400')
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "run_time",
+                                    backward=lambda n: f"Run: {parser.parse(n[0]).strftime('%Y-%m-%d %H:%M')}" if n else "--"
+                                )
+
+                    # Sequencing Statistics
+                    with ui.row().classes('w-full gap-4 mb-4'):
+                        with ui.row().classes('flex-1 gap-4 text-sm bg-gray-50 rounded-lg p-4'):
+                            # Read Statistics
+                            with ui.column().classes('flex-1'):
+                                ui.label("Read Statistics").classes('font-medium mb-2')
+                                with ui.column().classes('space-y-1'):
+                                    with ui.row().classes('justify-between'):
+                                        ui.label("Mapped Reads:")
+                                        ui.label().bind_text_from(
+                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
+                                            "mapped_count",
+                                            backward=lambda n: f"{n:,}" if n else "--"
+                                        ).classes('font-medium text-blue-600')
+                                    with ui.row().classes('justify-between'):
+                                        ui.label("Unmapped Reads:")
+                                        ui.label().bind_text_from(
+                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
+                                            "unmapped_count",
+                                            backward=lambda n: f"{n:,}" if n else "--"
+                                        ).classes('font-medium text-gray-600')
+                            
+                            # Mapping Quality
+                            with ui.column().classes('flex-1'):
+                                ui.label("Mapping Quality").classes('font-medium mb-2')
+                                with ui.column().classes('space-y-1'):
+                                    with ui.row().classes('justify-between'):
+                                        ui.label("Pass Mapped:")
+                                        ui.label().bind_text_from(
+                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
+                                            "pass_mapped_count",
+                                            backward=lambda n: f"{n:,}" if n else "--"
+                                        ).classes('font-medium text-green-600')
+                                    with ui.row().classes('justify-between'):
+                                        ui.label("Fail Mapped:")
+                                        ui.label().bind_text_from(
+                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
+                                            "fail_mapped_count",
+                                            backward=lambda n: f"{n:,}" if n else "--"
+                                        ).classes('font-medium text-red-600')
+                            
+                            # Base Statistics
+                            with ui.column().classes('flex-1'):
+                                ui.label("Base Statistics").classes('font-medium mb-2')
+                                with ui.column().classes('space-y-1'):
+                                    with ui.row().classes('justify-between'):
+                                        ui.label("Total Bases:")
+                                        ui.label().bind_text_from(
+                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
+                                            "bases_count",
+                                            backward=lambda n: f"{n:,}" if n else "--"
+                                        ).classes('font-medium text-blue-600')
+                                    with ui.row().classes('justify-between'):
+                                        ui.label("Pass Bases:")
+                                        ui.label().bind_text_from(
+                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
+                                            "pass_bases_count",
+                                            backward=lambda n: f"{n:,}" if n else "--"
+                                        ).classes('font-medium text-green-600')
+                                    with ui.row().classes('justify-between'):
+                                        ui.label("Fail Bases:")
+                                        ui.label().bind_text_from(
+                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"],
+                                            "fail_bases_count",
+                                            backward=lambda n: f"{n:,}" if n else "--"
+                                        ).classes('font-medium text-red-600')
+
                 # Results Summary Section
                 with ui.column().classes('space-y-4'):
                     # Classification Results - Single row with equal width columns
@@ -568,31 +682,6 @@ class BrainMeth:
                                 coverage = ui.column().classes('space-y-1')
                             if "fusion" not in self.exclude:
                                 fusions = ui.column().classes('space-y-1')
-
-                    # Run Information - Compact inline display
-                    if not self.browse and self.sampleID and self.sampleID in app.storage.general[self.mainuuid]["samples"]:
-                        with ui.row().classes('w-full py-3 text-sm text-gray-600 border-t border-gray-200 items-center justify-between'):
-                            with ui.row().classes('gap-6 flex-wrap'):
-                                ui.label().bind_text_from(
-                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                    "devices",
-                                    backward=lambda n: [f"Device: {str(item)}" for item in n]
-                                )
-                                ui.label().bind_text_from(
-                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                    "flowcell_ids",
-                                    backward=lambda n: [f"Flow Cell: {str(item)}" for item in n]
-                                )
-                                ui.label().bind_text_from(
-                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                    "run_time",
-                                    backward=lambda n: [f"Run: {parser.parse(date).strftime('%Y-%m-%d %H:%M')}" for date in n]
-                                )
-                                ui.label().bind_text_from(
-                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                    "sample_ids",
-                                    backward=lambda n: [f"Sample: {str(item)}" for item in n]
-                                )
 
                 # Detailed Analysis Tabs
                 if sample_id:

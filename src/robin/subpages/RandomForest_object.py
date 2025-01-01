@@ -224,57 +224,61 @@ class RandomForest_object(BaseAnalysis):
             scores_file = os.path.join(output, "random_forest_scores.csv")
             logger.info(f"Looking for scores file: {scores_file}")
 
-            if self.check_file_time(scores_file):
+            if os.path.exists(scores_file):
                 logger.info(f"Loading scores from: {scores_file}")
-                self.rcns2_df_store = pd.read_csv(scores_file, index_col=0)
-                logger.info(f"DataFrame loaded with shape: {self.rcns2_df_store.shape}")
-                
-                columns_greater_than_threshold = (self.rcns2_df_store > self.threshold).any()
-                columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                result = self.rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
-                logger.debug(f"Filtered columns: {result}")
-                
-                # Update time series chart
-                filtered_df = self.rcns2_df_store.drop(columns=result)
-                logger.info(f"Updating time chart with filtered data shape: {filtered_df.shape}")
-                self.update_rcns2_time_chart(filtered_df)
-                
-                # Get last row data
-                lastrow = self.rcns2_df_store.iloc[-1]
-                logger.debug(f"Last row before processing: {lastrow.to_dict()}")
-                
-                n_features = lastrow.get("number_probes", 0)
-                if "number_probes" in lastrow.index:
-                    lastrow = lastrow.drop("number_probes")
-                    logger.info(f"Dropped number_probes column, features found: {n_features}")
-                
-                lastrow_plot = lastrow.sort_values(ascending=False).head(10)
-                lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-                logger.info(f"Top classification: {lastrow_plot_top.index[0]} ({lastrow_plot_top.values[0]:.1f}%)")
-                
-                # Update summary card
-                if self.summary:
-                    with self.summary:
-                        self.summary.clear()
-                        classification_text = f"Forest classification: {lastrow_plot_top.index[0]}"
-                        logger.debug(f"Creating summary card with text: {classification_text}")
-                        self.create_summary_card(
-                            classification_text=classification_text,
-                            confidence_value=lastrow_plot_top.values[0] / 100,
-                            features_found=int(n_features) if n_features else None
+                try:
+                    self.rcns2_df_store = pd.read_csv(scores_file, index_col=0)
+                    logger.info(f"DataFrame loaded with shape: {self.rcns2_df_store.shape}")
+                    
+                    if not self.rcns2_df_store.empty:
+                        columns_greater_than_threshold = (self.rcns2_df_store > self.threshold).any()
+                        columns_not_greater_than_threshold = ~columns_greater_than_threshold
+                        result = self.rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
+                        logger.debug(f"Filtered columns: {result}")
+                        
+                        # Update time series chart
+                        filtered_df = self.rcns2_df_store.drop(columns=result)
+                        logger.info(f"Updating time chart with filtered data shape: {filtered_df.shape}")
+                        self.update_rcns2_time_chart(filtered_df)
+                        
+                        # Get last row data
+                        lastrow = self.rcns2_df_store.iloc[-1]
+                        logger.debug(f"Last row before processing: {lastrow.to_dict()}")
+                        
+                        n_features = lastrow.get("number_probes", 0)
+                        if "number_probes" in lastrow.index:
+                            lastrow = lastrow.drop("number_probes")
+                            logger.info(f"Dropped number_probes column, features found: {n_features}")
+                        
+                        lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+                        lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+                        logger.info(f"Top classification: {lastrow_plot_top.index[0]} ({lastrow_plot_top.values[0]:.1f}%)")
+                        
+                        # Update summary card
+                        if self.summary:
+                            with self.summary:
+                                self.summary.clear()
+                                classification_text = f"Forest classification: {lastrow_plot_top.index[0]}"
+                                logger.debug(f"Creating summary card with text: {classification_text}")
+                                self.create_summary_card(
+                                    classification_text=classification_text,
+                                    confidence_value=lastrow_plot_top.values[0] / 100,
+                                    features_found=int(n_features) if n_features else None
+                                )
+                        
+                        # Update bar plot
+                        logger.info("Updating bar plot with top 10 classifications")
+                        self.update_rcns2_plot(
+                            lastrow_plot.index.to_list(),
+                            list(lastrow_plot.values),
+                            "All",
+                            n_features if n_features else None
                         )
-                
-                # Update bar plot
-                logger.info("Updating bar plot with top 10 classifications")
-                self.update_rcns2_plot(
-                    lastrow_plot.index.to_list(),
-                    list(lastrow_plot.values),
-                    "All",
-                    n_features if n_features else None
-                )
-                logger.info("Completed show_previous_data successfully")
+                        logger.info("Completed show_previous_data successfully")
+                except Exception as e:
+                    logger.error(f"Error reading scores file: {str(e)}", exc_info=True)
             else:
-                logger.warning(f"No valid scores file found at: {scores_file}")
+                logger.debug(f"No scores file found at: {scores_file}")
                 
         except Exception as e:
             logger.error(f"Error in show_previous_data: {str(e)}", exc_info=True)
