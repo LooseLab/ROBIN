@@ -1,0 +1,32 @@
+name: Auto-Summarize Commits
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  summarize_commits:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Summarize Commits
+        id: summarize
+        run: |
+          PR_BRANCH=$(echo "${{ github.head_ref }}")
+          BASE_BRANCH=$(echo "${{ github.base_ref }}")
+          COMMITS=$(git log origin/$BASE_BRANCH..origin/$PR_BRANCH --pretty=format:"- %s" --no-merges)
+          if [[ -z "$COMMITS" ]]; then
+            echo "No commits found between $BASE_BRANCH and $PR_BRANCH."
+            exit 1
+          fi
+          echo "::set-output name=commits::$COMMITS"
+
+      - name: Post Summary to Pull Request
+        uses: thollander/actions-comment-pull-request@v1
+        with:
+          message: |
+            ### Summary of Commits
+            ${{ steps.summarize.outputs.commits }}
