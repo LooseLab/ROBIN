@@ -578,33 +578,33 @@ class TargetCoverage(BaseAnalysis):
 
         with ui.card().classes("w-full"):
             ui.label("Current coverage estimates: Unknown")
-        with ui.card().classes("w-full"):
+        with ui.card().classes("w-full p-2"):
             ui.label("Coverage Data").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
-            with ui.grid(columns=2).classes("w-full h-auto"):
+            with ui.grid(columns=2).classes("w-full h-auto gap-2"):
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2"
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2 p-2"
                 ):
                     self.create_coverage_plot("Chromosome Coverage")
 
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2"
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2 p-2"
                 ):
                     self.create_coverage_plot_targets("Target Coverage")
-        with ui.card().classes("w-full"):
+        with ui.card().classes("w-full p-2"):
             ui.label("Target Outliers").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.column().classes("w-full"):
-                with ui.card().classes("w-full"):
+                with ui.card().classes("w-full p-2"):
                     self.create_target_boxplot()
-        with ui.card().classes("w-full"):
+        with ui.card().classes("w-full p-2"):
             ui.label("Coverage over time").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.column().classes("w-full"):
-                with ui.card().classes("w-full"):
+                with ui.card().classes("w-full p-2"):
                     self.create_coverage_time_chart()
         with ui.card().classes("w-full"):
             ui.label("Coverage over targets").classes('text-sky-600 dark:text-white').style(
@@ -689,16 +689,16 @@ class TargetCoverage(BaseAnalysis):
                         "fontSize": 12
                     },
                     "grid": {
-                        "top": 80,
-                        "bottom": 90,
-                        "left": 80,
-                        "right": 80,
+                        "left": "5%",
+                        "right": "5%",
+                        "bottom": "5%",
+                        "top": "15%",
                         "containLabel": True
                     },
                     "title": {
                         "text": title,
                         "left": "center",
-                        "top": 20,
+                        "top": 5,
                         "textStyle": {
                             "fontSize": 16,
                             "fontWeight": "500",
@@ -803,16 +803,16 @@ class TargetCoverage(BaseAnalysis):
                         "fontSize": 12
                     },
                     "grid": {
-                        "top": 80,
-                        "bottom": 90,
-                        "left": 80,
-                        "right": 80,
+                        "left": "5%",
+                        "right": "5%",
+                        "bottom": "5%",
+                        "top": "15%",
                         "containLabel": True
                     },
                     "title": {
                         "text": title,
                         "left": "center",
-                        "top": 20,
+                        "top": 5,
                         "textStyle": {
                             "fontSize": 16,
                             "fontWeight": "500",
@@ -920,16 +920,16 @@ class TargetCoverage(BaseAnalysis):
                         "fontSize": 12
                     },
                     "grid": {
-                        "top": 80,
-                        "bottom": 90,
-                        "left": 80,
-                        "right": 80,
+                        "left": "5%",
+                        "right": "5%",
+                        "bottom": "5%",
+                        "top": "15%",
                         "containLabel": True
                     },
                     "title": {
                         "text": "Coverage Over Time",
                         "left": "center",
-                        "top": 20,
+                        "top": 5,
                         "textStyle": {
                             "fontSize": 16,
                             "fontWeight": "500",
@@ -1047,16 +1047,16 @@ class TargetCoverage(BaseAnalysis):
                         "fontSize": 12
                     },
                     "grid": {
-                        "top": 80,
-                        "bottom": 90,
-                        "left": 80,
-                        "right": 80,
+                        "left": "5%",
+                        "right": "5%",
+                        "bottom": "5%",
+                        "top": "15%",
                         "containLabel": True
                     },
                     "title": {
                         "text": "Target Coverage",
                         "left": "center",
-                        "top": 20,
+                        "top": 5,
                         "textStyle": {
                             "fontSize": 16,
                             "fontWeight": "500",

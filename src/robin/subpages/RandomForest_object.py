@@ -183,15 +183,15 @@ class RandomForest_object(BaseAnalysis):
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
-        self.card = ui.card().style("width: 100%")
+        self.card = ui.card().classes("w-full p-2")
         with self.card:
-            with ui.grid(columns=8).classes("w-full h-auto"):
+            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 p-2"
                 ):
                     self.create_rcns2_chart("Random Forest")
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 p-2"
                 ):
                     self.create_rcns2_time_chart("Random Forest Time Series")
         if self.summary:

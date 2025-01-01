@@ -259,16 +259,16 @@ class Sturgeon_object(BaseAnalysis):
         -----
         The layout is responsive and adjusts based on the MENU_BREAKPOINT value.
         """
-        self.card = ui.card().classes('dark:bg-black').style("width: 100%")
+        self.card = ui.card().classes('dark:bg-black w-full p-2')
         with self.card:
-            with ui.grid(columns=8).classes("w-full h-auto gap-4"):
+            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg"
-                ).style('background-color: #FFFFFF; padding: 16px;'):
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg p-2"
+                ):
                     self.create_sturgeon_chart("Sturgeon")
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg"
-                ).style('background-color: #FFFFFF; padding: 16px;'):
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg p-2"
+                ):
                     self.create_sturgeon_time_chart("Sturgeon Time Series")
         if self.summary:
             with self.summary:

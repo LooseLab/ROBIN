@@ -972,34 +972,6 @@ class CNVAnalysis(BaseAnalysis):
     ) -> ui.echart:
         """
         Generate an ECharts object for displaying CNV scatter plots.
-
-        Creates a chart with consistent styling following Apple HIG guidelines and matching
-        other analysis modules. The chart includes interactive features like zooming and
-        saving, while maintaining visual consistency across the application.
-
-        Parameters
-        ----------
-        title : str, optional
-            Title of the chart. Will be displayed prominently at the top.
-        initmax : int, optional
-            Initial maximum value for the y-axis range.
-        initmin : int, default=0
-            Initial minimum value for the y-axis range.
-        type : str, default="value"
-            Type of x-axis to use.
-
-        Returns
-        -------
-        ui.echart
-            Configured ECharts object ready for CNV data visualization.
-
-        Notes
-        -----
-        The chart follows Apple HIG principles:
-        - Uses consistent colors from the iOS palette
-        - Maintains clear visual hierarchy
-        - Provides appropriate contrast for accessibility
-        - Includes interactive elements for data exploration
         """
         return (
             ui.echart(
@@ -1011,10 +983,10 @@ class CNVAnalysis(BaseAnalysis):
                     },
                     "animation": False,
                     "grid": {
-                        "top": 80,
-                        "bottom": 90,
-                        "left": 80,
-                        "right": 80,
+                        "top": "25%",
+                        "bottom": "5%",
+                        "left": "5%",
+                        "right": "5%",
                         "containLabel": True
                     },
                     "title": {
@@ -1246,7 +1218,7 @@ class CNVAnalysis(BaseAnalysis):
                     data = list(
                         zip(
                             (np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"],
-                            cnv,
+                            cnv
                         )
                     )
 
@@ -1348,7 +1320,10 @@ class CNVAnalysis(BaseAnalysis):
 
                 # Prepare the data for plotting
                 data = list(
-                    zip((np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"], cnv)
+                    zip(
+                        (np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"],
+                        cnv
+                    )
                 )
 
 
@@ -1687,28 +1662,6 @@ class CNVAnalysis(BaseAnalysis):
     def create_time_chart(self, title: str) -> ui.echart:
         """
         Create a time series chart for CNV data visualization.
-
-        Creates a chart specifically designed for time-based CNV data display,
-        following Apple HIG guidelines and maintaining consistency with other
-        analysis modules.
-
-        Parameters
-        ----------
-        title : str
-            Title of the chart to be displayed.
-
-        Returns
-        -------
-        ui.echart
-            Configured ECharts object for time series visualization.
-
-        Notes
-        -----
-        The chart includes:
-        - iOS-style color palette for multiple series
-        - Interactive legend with emphasis states
-        - Smooth animations for data updates
-        - Consistent typography and spacing
         """
         # iOS color palette for multiple series
         colors = [
@@ -1730,10 +1683,10 @@ class CNVAnalysis(BaseAnalysis):
             },
             "animation": False,
             "grid": {
-                "top": 80,
-                "bottom": 90,
-                "left": 80,
-                "right": 80,
+                "top": "25%",
+                "bottom": "5%",
+                "left": "5%",
+                "right": "5%",
                 "containLabel": True
             },
             "title": {

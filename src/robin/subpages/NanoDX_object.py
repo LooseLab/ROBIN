@@ -232,15 +232,15 @@ class NanoDX_object(BaseAnalysis):
         """
         Sets up the user interface for the NanoDX analysis.
         """
-        with ui.card().style("width: 100%"):
-            with ui.grid(columns=8).classes("w-full h-auto gap-4"):
+        with ui.card().classes("w-full p-2"):
+            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg"
-                ).style('background-color: #FFFFFF; padding: 16px;'):
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg p-2"
+                ):
                     self.create_nanodx_chart("NanoDX")
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg"
-                ).style('background-color: #FFFFFF; padding: 16px;'):
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg p-2"
+                ):
                     self.create_nanodx_time_chart("NanoDX Time Series")
         if self.summary:
             with self.summary:

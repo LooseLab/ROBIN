@@ -63,6 +63,7 @@ from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
 import matplotlib
 from matplotlib.ticker import FuncFormatter
+from matplotlib import font_manager
 from robin.subpages.base_analysis import BaseAnalysis
 from robin.utilities.decompress import decompress_gzip_file
 from collections import Counter
@@ -72,6 +73,14 @@ from matplotlib import pyplot as plt
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
+
+# Configure matplotlib font settings
+plt.rcParams['font.family'] = ['sans-serif']
+plt.rcParams['font.sans-serif'] = ['SF Pro Text', '-apple-system', 'BlinkMacSystemFont', 'Helvetica', 'Arial', 'sans-serif']
+
+# Override DNA Features Viewer default font settings
+#GraphicRecord.default_font_family = "sans-serif"
+#GraphicFeature.default_font_family = "sans-serif"
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
@@ -1070,28 +1079,33 @@ class FusionObject(BaseAnalysis):
 
             if len(result) > 1:
                 gene_table = self.gene_table
-                with ui.pyplot(figsize=(19, 5)).classes("w-full"):  # figsize=(20, 5)):
+                with ui.pyplot(figsize=(19, 5)).classes("w-full"):
+                    # Create figure with tight layout
+                    plt.rcParams['figure.constrained_layout.use'] = True
+                    plt.rcParams['figure.constrained_layout.h_pad'] = 0.05
+                    plt.rcParams['figure.constrained_layout.w_pad'] = 0.05
+                    
                     num_plots = 2 * len(result)
-                    num_cols = len(result)  # 2  # Number of columns in the subplot grid
-                    num_rows = (
-                        num_plots + num_cols - 1
-                    ) // num_cols  # Calculate the number of rows needed
+                    num_cols = len(result)
+                    num_rows = (num_plots + num_cols - 1) // num_cols
 
                     for i, ax in enumerate(range(num_plots), start=1):
-                        plt.subplot(num_rows, num_cols, i)
+                        ax = plt.subplot(num_rows, num_cols, i)
+                        # Remove extra padding around subplot
+                        ax.set_position([ax.get_position().x0, 
+                                       ax.get_position().y0, 
+                                       ax.get_position().width * 1.1,
+                                       ax.get_position().height * 1.1])
+                        
                         row, col = divmod(i - 1, num_cols)
-                        # plt.title(f'Subplot {i} (Row {row + 1}, Col {col + 1})')
                         data = result.iloc[col]
 
                         chrom = data["chromosome"]
                         start = data["start"]
                         end = data["end"]
 
-                        # start = df[df["chromosome"].eq(chrom)]["start2"].min()-100_000
-                        # end = df[df["chromosome"].eq(chrom)]["end2"].max()+100_000
-
                         def human_readable_format(x, pos):
-                            return f"{x / 1e6:.2f}"  # Mb'
+                            return f"{x / 1e6:.2f}"
 
                         if row == 1:
                             features = []
@@ -1110,7 +1124,6 @@ class FusionObject(BaseAnalysis):
                                             color="#ffd700",
                                             label=row["gene_name"],
                                             fontdict={
-                                                "family": "sans",
                                                 "color": "black",
                                                 "fontsize": 8,
                                             },
@@ -1135,12 +1148,6 @@ class FusionObject(BaseAnalysis):
                                         strand=STRAND[row["Strand"]],
                                         thickness=4,
                                         color="#C0C0C0",
-                                        # label=row["gene_name"],
-                                        # fontdict = {
-                                        #    'family': 'sans',
-                                        #    'color':  'black',
-                                        #    'fontsize': 8,
-                                        # }
                                     )
                                 )
 
@@ -1154,10 +1161,10 @@ class FusionObject(BaseAnalysis):
                                 ax=ax,
                                 with_ruler=False,
                                 draw_line=True,
-                                strand_in_label_threshold=4,
+                                strand_in_label_threshold=4
                             )
-
-                            # plt.tight_layout()
+                            # Adjust subplot spacing
+                            ax.margins(x=0.02, y=0.1)
 
                         else:
                             features2 = []
@@ -1185,16 +1192,16 @@ class FusionObject(BaseAnalysis):
                             ax.xaxis.set_major_formatter(
                                 FuncFormatter(human_readable_format)
                             )
-                            ax.tick_params(
-                                axis="x", labelsize=8
-                            )  # Set font size for x-axis labels in ax0
+                            ax.tick_params(axis="x", labelsize=8)
                             ax.set_xlabel(
                                 f'Position (Mb) - {chrom} - {data["gene"]}', fontsize=10
                             )
-                            ax.set_title(f'{data["gene"]}')
+                            ax.set_title(f'{data["gene"]}', pad=2)
+                            # Adjust subplot spacing
+                            ax.margins(x=0.02, y=0.1)
 
-                            axdict[data["gene"]] = ax
-                            # plt.tight_layout()
+                    # Adjust overall figure layout
+                    plt.subplots_adjust(hspace=0.4, wspace=0.3)
                     gene_counter = Counter()
 
                     for index, row in lines.iterrows():
