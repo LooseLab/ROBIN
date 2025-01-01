@@ -395,17 +395,65 @@ class BrainMeth:
 
         :return: None
         """
+        logging.info("Starting file picker in browse mode")
         ui.notify("Select a folder to monitor")
         result = await LocalFilePicker(f"{self.runsfolder}", multiple=True)
         if result:
+            logging.info(f"Selected folder: {result}")
             ui.notify(f"You selected {result}")
             self.content.clear()
             with self.content:
-                ui.label(f"Monitoring the path: {result}").tailwind(
-                    "drop-shadow", "font-bold"
-                )
                 self.output, self.sampleID = os.path.split(result[0])
+                logging.info(f"Split path - output: {self.output}, sampleID: {self.sampleID}")
+                
+                # Initialize storage for browse mode
+                if self.sampleID not in app.storage.general[self.mainuuid]["samples"]:
+                    logging.info(f"Initializing storage for sample {self.sampleID}")
+                    app.storage.general[self.mainuuid]["samples"][self.sampleID] = {}
+                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"] = {
+                        "bam_passed": 0,
+                        "bam_failed": 0,
+                        "mapped_count": 0,
+                        "unmapped_count": 0,
+                        "pass_mapped_count": 0,
+                        "fail_mapped_count": 0,
+                        "pass_bases_count": 0,
+                        "fail_bases_count": 0,
+                        "bases_count": 0
+                    }
+                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["devices"] = []
+                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["basecall_models"] = []
+                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["run_time"] = []
+                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["flowcell_ids"] = []
+                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["sample_ids"] = [self.sampleID]
+                else:
+                    logging.info(f"Storage already exists for sample {self.sampleID}")
+                
+                if self.sampleID not in app.storage.general[self.mainuuid]["sample_list"]:
+                    logging.info(f"Adding {self.sampleID} to sample list")
+                    app.storage.general[self.mainuuid]["sample_list"].append(self.sampleID)
+
+                # Try to load existing data from master.csv if it exists
+                master_csv = os.path.join(result[0], "master.csv")
+                logging.info(f"Looking for master.csv at: {master_csv}")
+                if os.path.exists(master_csv):
+                    try:
+                        logging.info("Found master.csv, loading data")
+                        df = pd.read_csv(master_csv)
+                        # Update storage with data from master.csv
+                        for key in df.keys():
+                            if key in app.storage.general[self.mainuuid]["samples"][self.sampleID]:
+                                logging.info(f"Updating {key} from master.csv")
+                                app.storage.general[self.mainuuid]["samples"][self.sampleID][key] = df[key].tolist()
+                    except Exception as e:
+                        logging.error(f"Error loading master.csv: {str(e)}", exc_info=True)
+                else:
+                    logging.warning(f"No master.csv found at {master_csv}")
+
+                logging.info("Calling information_panel")
                 await self.information_panel(sample_id=self.sampleID)
+        else:
+            logging.warning("No folder selected in file picker")
 
     def replay(self):
         """
@@ -517,408 +565,454 @@ class BrainMeth:
 
     async def information_panel(self, sample_id=None):
         """
-        Render the information panel for a sample.
-
-        :param sample_id: Sample ID to render the panel for.
-        :return: None
+        Display the main information panel with analysis results.
         """
-        if sample_id:
-            self.sampleID = sample_id
-        if not self.browse:
-            self.show_list()
-            app.storage.general[self.mainuuid]["sample_list"].on_change(
-                self.show_list.refresh
-            )
-
-        if sample_id:
-            self.frontpage = ui.card().classes("rounded w-full")
-            with (self.frontpage):
-                if not self.browse:
-                    if (
-                        self.sampleID
-                        not in app.storage.general[self.mainuuid]["samples"]
-                    ):
-                        ui.notify(f"Sample {self.sampleID} not found")
-                        ui.navigate.to("/live")
-                        return
-
-                ui.label(
-                    f"CNS Tumor Methylation Classification - {self.sampleID}"
-                ).classes('text-sky-600 dark:text-white').style(
-                    "font-size: 150%; font-weight: 300"
-                ).tailwind("drop-shadow", "font-bold")
-
-                ui.label(
-                    "This tool enables classification of brain tumors in real time from Oxford Nanopore Data."
-                ).style("font-size: 100%; font-weight: 300").classes(
-                    "drop-shadow font-bold"
+        try:
+            logging.info(f"Starting information_panel with sample_id: {sample_id}")
+            if sample_id:
+                self.sampleID = sample_id
+                logging.info(f"Set self.sampleID to {self.sampleID}")
+            else:
+                logging.warning("No sample_id provided")
+                if self.browse:
+                    ui.label("Please select a sample folder to view").classes('text-xl text-gray-600 my-4')
+                    return
+                
+            if not self.browse:
+                logging.info("Live mode - showing sample list")
+                self.show_list()
+                app.storage.general[self.mainuuid]["sample_list"].on_change(
+                    self.show_list.refresh
                 )
 
-                with ui.row():
-                    ui.label("Results Summary").classes('text-sky-600 dark:text-white').style(
-                    "font-size: 150%; font-weight: 300"
-                ).tailwind("drop-shadow", "font-bold")
+            if self.sampleID and not self.browse and self.sampleID not in app.storage.general[self.mainuuid]["samples"]:
+                logging.error(f"Sample {self.sampleID} not found in storage")
+                ui.notify(f"Sample {self.sampleID} not found")
+                ui.navigate.to("/live")
+                return
 
-                with ui.row().style(
-                    "font-size: 120%; font-weight: 300"
-                ):
-                    if "sturgeon" not in self.exclude:
-                        sturgeonsummary = ui.column()
-                    if "nanodx" not in self.exclude:
-                        nanodxsummary = ui.column()
-                    if "pannanodx" not in self.exclude:
-                        pannanodxsummary = ui.column()
-                    if "forest" not in self.exclude:
-                        forestsummary = ui.column()
+            if not self.sampleID:
+                logging.warning("No sample ID set, cannot render panel")
+                return
 
-                with ui.row():
+            logging.info("Starting UI rendering")
+            if self.sampleID in app.storage.general[self.mainuuid]["samples"]:
+                logging.info(f"Storage state for sample {self.sampleID}: {app.storage.general[self.mainuuid]['samples'][self.sampleID]}")
+            else:
+                logging.warning(f"No storage found for sample {self.sampleID}")
+                return
+
+            with ui.column().classes('w-full px-6'):
+                logging.info("Rendering title section")
+                # Title and description
+                with ui.column().classes('space-y-2 mb-4'):
+                    ui.label("CNS Tumor Methylation Classification").classes('text-2xl font-medium text-gray-900')
+                    ui.label("This tool enables classification of brain tumors in real time from Oxford Nanopore Data.").classes('text-gray-600')
+                logging.info("Title section rendered")
+
+                # Run Information - Compact display at the top
+                if self.sampleID and self.sampleID in app.storage.general[self.mainuuid]["samples"]:
+                    logging.info("Rendering run information display")
+                    with ui.card().classes('w-full p-3 sm:p-4 bg-gray-50 rounded-lg mb-4'):
+                        ui.label("Run Information").classes('font-medium text-gray-900 mb-3')
+                        with ui.grid().classes('grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3'):
+                            # Device and Model Info
+                            with ui.column().classes('space-y-2'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.icon('devices').classes('text-gray-400')
+                                    ui.label().bind_text_from(
+                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                        "devices",
+                                        backward=lambda n: f"Device: {str(n[0])}" if n else "--"
+                                    )
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.icon('memory').classes('text-gray-400')
+                                    ui.label().bind_text_from(
+                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                        "basecall_models",
+                                        backward=lambda n: f"Model: {str(n[0])}" if n else "--"
+                                    )
+                            
+                            # Flow Cell and Sample Info
+                            with ui.column().classes('space-y-2'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.icon('view_module').classes('text-gray-400')
+                                    ui.label().bind_text_from(
+                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                        "flowcell_ids",
+                                        backward=lambda n: f"Flow Cell: {str(n[0])}" if n else "--"
+                                    )
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.icon('label').classes('text-gray-400')
+                                    ui.label().bind_text_from(
+                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                        "sample_ids",
+                                        backward=lambda n: f"Sample: {str(n[0])}" if n else "--"
+                                    )
+                            
+                            # Run Time Info
+                            with ui.column().classes('space-y-2'):
+                                with ui.row().classes('items-center gap-2'):
+                                    ui.icon('schedule').classes('text-gray-400')
+                                    ui.label().bind_text_from(
+                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                        "run_time",
+                                        backward=lambda n: f"Run: {parser.parse(n[0]).strftime('%Y-%m-%d %H:%M')}" if n else "--"
+                                    )
+
+                # Results Summary Section
+                with ui.column().classes('space-y-4'):
+                    # Classification Results - Single row with equal width columns
+                    with ui.card().classes('w-full p-3 sm:p-4 bg-gray-50 rounded-lg'):
+                        ui.label("Classification Summary").classes('font-medium text-gray-900 mb-3')
+                        with ui.grid().classes('grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4'):
+                            if "sturgeon" not in self.exclude:
+                                sturgeonsummary = ui.column().classes('space-y-2')
+                            if "nanodx" not in self.exclude:
+                                nanodxsummary = ui.column().classes('space-y-2')
+                            if "pannanodx" not in self.exclude:
+                                pannanodxsummary = ui.column().classes('space-y-2')
+                            if "forest" not in self.exclude:
+                                forestsummary = ui.column().classes('space-y-2')
+
+                    # Analysis Results - Two columns grid
+                    with ui.grid().classes('grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4'):
+                        if "coverage" not in self.exclude:
+                            coverage = ui.column().classes('space-y-1')
+                        if "cnv" not in self.exclude:
+                            cnvsummary = ui.column().classes('space-y-1')
+                        if "mgmt" not in self.exclude:
+                            mgmt = ui.column().classes('space-y-1')
+                        if "fusion" not in self.exclude:
+                            fusions = ui.column().classes('space-y-1')
+
+                    # Add monitoring information panel - Now positioned after diagnosis cards
+                    # Only show in live mode
                     if not self.browse:
-                        ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
-                            "devices",
-                            backward=lambda n: [f"Devices: {str(item)}" for item in n],
-                        ).style("font-size: 100%; font-weight: 300")
-                        ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
-                            "basecall_models",
-                            backward=lambda n: [
-                                f"Basecall Models: {str(item)}" for item in n
-                            ],
-                        ).style("font-size: 100%; font-weight: 300")
-                        ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
-                            "flowcell_ids",
-                            backward=lambda n: [
-                                f"Flowcell IDs: {str(item)}" for item in n
-                            ],
-                        ).style("font-size: 100%; font-weight: 300")
-                        ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
-                            "run_time",
-                            backward=lambda n: [
-                                f"Run Start Time: {parser.parse(date).astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S %Z')}"
-                                for date in n
-                            ],
-                        ).style("font-size: 100%; font-weight: 300")
-                        ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid]["samples"][
-                                self.sampleID
-                            ],
-                            "sample_ids",
-                            backward=lambda n: [
-                                f"Sample ID: {str(item)}" for item in n
-                            ],
-                        ).style("font-size: 100%; font-weight: 300")
+                        with ui.card().classes('w-full bg-white rounded-lg shadow-sm'):
+                            with ui.expansion("Monitoring Information", icon="folder").classes('w-full'):
+                                with ui.column().classes('space-y-4 p-4'):
+                                    # File Paths Section
+                                    ui.label("File Paths").classes('text-xl font-medium text-gray-900')
+                                    with ui.column().classes('space-y-4 ml-1'):
+                                        # Monitoring Path
+                                        with ui.row().classes('items-start gap-2'):
+                                            ui.icon('folder_open').classes('text-blue-600 shrink-0 mt-1')
+                                            with ui.column().classes('flex-grow min-w-0'):
+                                                ui.label("Monitoring:").classes('text-gray-600')
+                                                ui.label(f"{self.watchfolder}").classes('break-all text-gray-900 font-mono')
+                                        
+                                        # Output Path
+                                        with ui.row().classes('items-start gap-2'):
+                                            ui.icon('output').classes('text-blue-600 shrink-0 mt-1')
+                                            with ui.column().classes('flex-grow min-w-0'):
+                                                ui.label("Output:").classes('text-gray-600')
+                                                ui.label(f"{self.output}").classes('break-all text-gray-900 font-mono')
+                                    
+                                    # BAM File Summary Section
+                                    ui.label("BAM File Summary").classes('text-xl font-medium text-gray-900 mt-6')
+                                    with ui.card().classes('w-full p-4 bg-gray-50 rounded-lg'):
+                                        with ui.column().classes('space-y-3'):
+                                            # Total Files
+                                            with ui.row().classes('items-center justify-between w-full'):
+                                                with ui.row().classes('items-center gap-2'):
+                                                    ui.icon('description').classes('text-blue-600 shrink-0')
+                                                    ui.label("Total Files:").classes('text-gray-600')
+                                                total_files = ui.label().classes('font-medium text-gray-900')
+                                                def update_total_files():
+                                                    total = len(app.storage.general[self.mainuuid]["bam_count"]["file"])
+                                                    total_files.text = f"{total:,}" if total > 0 else "--"
+                                                app.storage.general[self.mainuuid]["bam_count"].on_change(update_total_files)
+                                                update_total_files()
+                                            
+                                            # Passed Files
+                                            with ui.row().classes('items-center justify-between w-full'):
+                                                with ui.row().classes('items-center gap-2'):
+                                                    ui.icon('check_circle').classes('text-green-600 shrink-0')
+                                                    ui.label("Passed:").classes('text-gray-600')
+                                                passed = ui.label().classes('font-medium text-gray-900')
+                                                def update_passed():
+                                                    passed.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_passed']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_passed'] is not None else "--"
+                                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_passed)
+                                                update_passed()
+                                            
+                                            # Failed Files
+                                            with ui.row().classes('items-center justify-between w-full'):
+                                                with ui.row().classes('items-center gap-2'):
+                                                    ui.icon('error').classes('text-red-600 shrink-0')
+                                                    ui.label("Failed:").classes('text-gray-600')
+                                                failed = ui.label().classes('font-medium text-gray-900')
+                                                def update_failed():
+                                                    failed.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_failed']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_failed'] is not None else "--"
+                                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_failed)
+                                                update_failed()
 
-                if "mgmt" not in self.exclude:
-                    with ui.row().style(
-                        "font-size: 120%; font-weight: 300"
-                    ):
-                        mgmt = ui.column()
-                if "cnv" not in self.exclude:
-                    with ui.row().style(
-                        "font-size: 120%; font-weight: 300"
-                    ):
-                        cnvsummary = ui.column()
-                if "fusion" not in self.exclude:
-                    with ui.row().style(
-                        "font-size: 120%; font-weight: 300"
-                    ):
-                        fusions = ui.column()
-                if "coverage" not in self.exclude:
-                    with ui.row().style(
-                        "font-size: 120%; font-weight: 300"
-                    ):
-                        coverage = ui.column()
+                                    # Sequencing Statistics Section
+                                    ui.label("Sequencing Statistics").classes('text-xl font-medium text-gray-900 mt-6')
 
-                if not self.browse:
-                    with ui.expansion(icon="work").bind_text_from(
-                        self,
-                        "watchfolder",
-                        backward=lambda n: f"Monitoring the path: {n}",
-                    ):
-                        with ui.row():
-                            ui.label(f"Outputting to: {self.output}").style(
-                                "font-size: 100%; font-weight: 300"
+                                    # Detailed Statistics Grid
+                                    with ui.column().classes('space-y-3'):
+                                        ui.label("Sequencing Statistics").classes('font-medium text-gray-900 mb-2')
+                                        with ui.grid().classes('grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 w-full'):
+                                            # Read Statistics
+                                            with ui.card().classes('w-full p-2 sm:p-3 bg-white rounded-lg'):
+                                                ui.label("Read Statistics").classes('text-sm font-medium text-gray-700 mb-2')
+                                                with ui.column().classes('space-y-1.5'):
+                                                    # Total Reads
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Total:").classes('text-gray-600 text-sm')
+                                                        total_reads = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_total_reads():
+                                                            mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["mapped_count"]
+                                                            unmapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["unmapped_count"]
+                                                            total = mapped + unmapped if mapped is not None and unmapped is not None else 0
+                                                            total_reads.text = f"{total:,}" if total > 0 else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_reads)
+                                                        update_total_reads()
+
+                                                    # Mapped Reads
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Mapped:").classes('text-gray-600 text-sm')
+                                                        mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_mapped():
+                                                            mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['mapped_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_mapped)
+                                                        update_mapped()
+
+                                                    # Unmapped Reads
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Unmapped:").classes('text-gray-600 text-sm')
+                                                        unmapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_unmapped():
+                                                            unmapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['unmapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['unmapped_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_unmapped)
+                                                        update_unmapped()
+
+                                            # Mapping Quality
+                                            with ui.card().classes('p-2 sm:p-3 bg-gray-50 rounded-lg'):
+                                                ui.label("Mapping Quality").classes('text-sm font-medium text-gray-700 mb-2')
+                                                with ui.column().classes('space-y-1.5'):
+                                                    # Total Mapped
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Total:").classes('text-gray-600 text-sm')
+                                                        total_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_total_mapped():
+                                                            pass_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["pass_mapped_count"]
+                                                            fail_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["fail_mapped_count"]
+                                                            total = pass_mapped + fail_mapped if pass_mapped is not None and fail_mapped is not None else 0
+                                                            total_mapped.text = f"{total:,}" if total > 0 else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_mapped)
+                                                        update_total_mapped()
+
+                                                    # Pass Mapped
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Pass:").classes('text-gray-600 text-sm')
+                                                        pass_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_pass_mapped():
+                                                            pass_mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_mapped_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_mapped)
+                                                        update_pass_mapped()
+
+                                                    # Fail Mapped
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Fail:").classes('text-gray-600 text-sm')
+                                                        fail_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_fail_mapped():
+                                                            fail_mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_mapped_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_mapped)
+                                                        update_fail_mapped()
+
+                                            # Base Statistics
+                                            with ui.card().classes('p-2 sm:p-3 bg-gray-50 rounded-lg'):
+                                                ui.label("Base Statistics").classes('text-sm font-medium text-gray-700 mb-2')
+                                                with ui.column().classes('space-y-1.5'):
+                                                    # Total Bases
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Total:").classes('text-gray-600 text-sm')
+                                                        total_bases = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_total_bases():
+                                                            total = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["bases_count"]
+                                                            total_bases.text = f"{total:,}" if total > 0 else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_bases)
+                                                        update_total_bases()
+
+                                                    # Pass Bases
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Pass:").classes('text-gray-600 text-sm')
+                                                        pass_bases = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_pass_bases():
+                                                            pass_bases.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_bases_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_bases_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_bases)
+                                                        update_pass_bases()
+
+                                                    # Fail Bases
+                                                    with ui.row().classes('justify-between items-center'):
+                                                        ui.label("Fail:").classes('text-gray-600 text-sm')
+                                                        fail_bases = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                        def update_fail_bases():
+                                                            fail_bases.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_bases_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_bases_count'] is not None else "--"
+                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_bases)
+                                                        update_fail_bases()
+                                    
+                # Detailed Analysis Tabs
+                if sample_id:
+                    selectedtab = None
+                    with ui.tabs().classes('w-full') as tabs:
+                        if not (set(["sturgeon", "pannanodx", "nanodx", "forest"]).issubset(set(self.exclude))):
+                            methylationtab = ui.tab("Methylation Classification")
+                            if not selectedtab:
+                                selectedtab = methylationtab
+                        if "cnv" not in self.exclude:
+                            copy_numbertab = ui.tab("Copy Number Variation")
+                            if not selectedtab:
+                                selectedtab = copy_numbertab
+                        if "coverage" not in self.exclude:
+                            coveragetab = ui.tab("Target Coverage")
+                            if not selectedtab:
+                                selectedtab = coveragetab
+                        if "mgmt" not in self.exclude:
+                            mgmttab = ui.tab("MGMT")
+                            if not selectedtab:
+                                selectedtab = mgmttab
+                        if "fusion" not in self.exclude:
+                            fusionstab = ui.tab("Fusions")
+                            if not selectedtab:
+                                selectedtab = fusionstab
+                
+                    with ui.tab_panels(tabs, value=selectedtab).classes('w-full'):
+                        display_args = {
+                            "threads": self.threads,
+                            "output": self.output,
+                            "progress": True,
+                            "browse": self.browse,
+                            "bamqueue": None,
+                            "uuid": self.mainuuid,
+                            "force_sampleid": self.force_sampleid,
+                            "sample_id": self.sampleID,
+                        }
+                        if not (
+                            set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
+                        ):
+                            with ui.tab_panel(methylationtab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    ui.label("Methylation Classifications").classes('text-sky-600 dark:text-white').style(
+                                        "font-size: 150%; font-weight: 300"
+                                    ).tailwind("drop-shadow", "font-bold")
+                                    if "sturgeon" not in self.exclude:
+                                        self.Sturgeon = Sturgeon_object(
+                                            analysis_name="STURGEON",
+                                            batch=True,
+                                            summary=sturgeonsummary,
+                                            **display_args,
+                                        )
+                                        await self.Sturgeon.render_ui(sample_id=self.sampleID)
+                                    if "nanodx" not in self.exclude:
+                                        self.NanoDX = NanoDX_object(
+                                            analysis_name="NANODX",
+                                            batch=True,
+                                            summary=nanodxsummary,
+                                            **display_args,
+                                        )
+                                        await self.NanoDX.render_ui(sample_id=self.sampleID)
+                                    if "pannanodx" not in self.exclude:
+                                        self.PanNanoDX = NanoDX_object(
+                                            analysis_name="PANNANODX",
+                                            batch=True,
+                                            summary=pannanodxsummary,
+                                            model="pancan_devel_v5i_NN.pkl",
+                                            **display_args,
+                                        )
+                                        await self.PanNanoDX.render_ui(sample_id=self.sampleID)
+                                    if "forest" not in self.exclude:
+                                        self.RandomForest = RandomForest_object(
+                                            analysis_name="FOREST",
+                                            batch=True,
+                                            summary=forestsummary,
+                                            showerrors=self.showerrors,
+                                            **display_args,
+                                        )
+                                        await self.RandomForest.render_ui(
+                                            sample_id=self.sampleID
+                                        )
+
+                        if "cnv" not in self.exclude:
+                            with ui.tab_panel(copy_numbertab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    self.CNV = CNVAnalysis(
+                                        analysis_name="CNV",
+                                        summary=cnvsummary,
+                                        target_panel=self.target_panel,
+                                        reference_file=self.reference,
+                                        bed_file = self.bed_file,
+                                        **display_args,
+                                    )
+                                    await self.CNV.render_ui(sample_id=self.sampleID)
+
+                        if "coverage" not in self.exclude:
+                            with ui.tab_panel(coveragetab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    self.Target_Coverage = TargetCoverage(
+                                        analysis_name="COVERAGE",
+                                        summary=coverage,
+                                        target_panel=self.target_panel,
+                                        reference=self.reference,
+                                        **display_args,
+                                    )
+                                    await self.Target_Coverage.render_ui(
+                                        sample_id=self.sampleID
+                                    )
+
+                        if "mgmt" not in self.exclude:
+                            with ui.tab_panel(mgmttab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    self.MGMT_panel = MGMT_Object(
+                                        analysis_name="MGMT", summary=mgmt, **display_args
+                                    )
+                                    await self.MGMT_panel.render_ui(sample_id=self.sampleID)
+
+                        if "fusion" not in self.exclude:
+                            with ui.tab_panel(fusionstab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    self.Fusion_panel = FusionObject(
+                                        analysis_name="FUSION",
+                                        summary=fusions,
+                                        target_panel=self.target_panel,
+                                        **display_args,
+                                    )
+                                    await self.Fusion_panel.render_ui(sample_id=self.sampleID)
+
+                    async def download_report():
+                        '''
+                        Generate and download the report.
+
+                        :return: None
+                        '''
+                        ui.notify("Generating Report")
+                        if not self.browse:
+                            for item in app.storage.general[self.mainuuid]:
+                                if item == "sample_ids":
+                                    for sample in app.storage.general[self.mainuuid][item]:
+                                        self.sampleID = sample
+                        if self.browse:
+                            myfile = await run.io_bound(
+                                create_pdf,
+                                f"{self.sampleID}_run_report.pdf",
+                                self.check_and_create_folder(self.output, self.sampleID),
                             )
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["bam_count"],
-                                "counter",
-                                backward=lambda n: f"BAM files seen: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
-                                "bam_passed",
-                                backward=lambda n: f"BAM pass: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
-                                "bam_failed",
-                                backward=lambda n: f"BAM fail: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-
-                        with ui.row():
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
-                                "mapped_count",
-                                backward=lambda n: f"Mapped Read Count: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
-                                "unmapped_count",
-                                backward=lambda n: f"Unmapped Read Count: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
-                                "pass_mapped_count",
-                                backward=lambda n: f"Pass Mapped Read Count: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
-                                "fail_mapped_count",
-                                backward=lambda n: f"Fail Mapped Read Count: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-
-                        with ui.row():
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
-                                "bases_count",
-                                backward=lambda n: f"Total Mapped Bases: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
-                                "pass_bases_count",
-                                backward=lambda n: f"Total Mapped Pass Bases: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid]["samples"][
-                                    self.sampleID
-                                ]["file_counters"],
-                                "fail_bases_count",
-                                backward=lambda n: f"Total Mapped Fail Bases: {n:,}",
-                            ).style("font-size: 100%; font-weight: 300")
-
-                        with ui.row():
-                            if "forest" not in self.exclude:
-                                ui.label().bind_text_from(
-                                    self,
-                                    "bamforcns",
-                                    backward=lambda n: f"BAM files for CNS: {n.qsize()}",
-                                ).style(
-                                    "font-size: 100%; font-weight: 300"
-                                )
-                            if "sturgeon" not in self.exclude:
-                                ui.label().bind_text_from(
-                                    self,
-                                    "bamforsturgeon",
-                                    backward=lambda n: f"BAM files for Sturgeon: {n.qsize()}",
-                                ).style(
-                                    "font-size: 100%; font-weight: 300"
-                                )
-                            if "nanodx" not in self.exclude:
-                                ui.label().bind_text_from(
-                                    self,
-                                    "bamfornanodx",
-                                    backward=lambda n: f"BAM files for NanoDX: {n.qsize()}",
-                                ).style(
-                                    "font-size: 100%; font-weight: 300"
-                                )
-                            if "pannanodx" not in self.exclude:
-                                ui.label().bind_text_from(
-                                    self,
-                                    "bamforpannanodx",
-                                    backward=lambda n: f"BAM files for Pan NanoDX: {n.qsize()}",
-                                ).style(
-                                    "font-size: 100%; font-weight: 300"
-                                )
-
-        if sample_id:
-            selectedtab = None
-            with ui.tabs().classes("w-full") as tabs:
-                if not (
-                    set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
-                ):
-                    methylationtab = ui.tab("Methylation Classification").classes('text-sky-600 dark:text-white').style(
-                        "font-size: 150%; font-weight: 600"
-                    )
-                    if not selectedtab:
-                        selectedtab = methylationtab
-                if "cnv" not in self.exclude:
-                    copy_numbertab = ui.tab("Copy Number Variation").classes('text-sky-600 dark:text-white').style(
-                        "font-size: 150%; font-weight: 600"
-                    )
-                    if not selectedtab:
-                        selectedtab = copy_numbertab
-                if "coverage" not in self.exclude:
-                    coveragetab = ui.tab("Target Coverage").classes('text-sky-600 dark:text-white').style(
-                        "font-size: 150%; font-weight: 600"
-                    )
-                    if not selectedtab:
-                        selectedtab = coveragetab
-                if "mgmt" not in self.exclude:
-                    mgmttab = ui.tab("MGMT").classes('text-sky-600 dark:text-white').style(
-                        "font-size: 150%; font-weight: 600"
-                    )
-                    if not selectedtab:
-                        selectedtab = mgmttab
-                if "fusion" not in self.exclude:
-                    fusionstab = ui.tab("Fusions").classes('text-sky-600 dark:text-white').style(
-                        "font-size: 150%; font-weight: 600"
-                    )
-                    if not selectedtab:
-                        selectedtab = fusionstab
-            with ui.tab_panels(tabs, value=selectedtab).classes("w-screen"):
-                display_args = {
-                    "threads": self.threads,
-                    "output": self.output,
-                    "progress": True,
-                    "browse": self.browse,
-                    "bamqueue": None,
-                    "uuid": self.mainuuid,
-                    "force_sampleid": self.force_sampleid,
-                    "sample_id": self.sampleID,
-                }
-                if not (
-                    set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
-                ):
-                    with ui.tab_panel(methylationtab).classes("w-full"):
-                        with ui.card().classes("rounded w-full"):
-                            ui.label("Methylation Classifications").classes('text-sky-600 dark:text-white').style(
-                                "font-size: 150%; font-weight: 300"
-                            ).tailwind("drop-shadow", "font-bold")
-                            if "sturgeon" not in self.exclude:
-                                self.Sturgeon = Sturgeon_object(
-                                    analysis_name="STURGEON",
-                                    batch=True,
-                                    summary=sturgeonsummary,
-                                    **display_args,
-                                )
-                                await self.Sturgeon.render_ui(sample_id=self.sampleID)
-                            if "nanodx" not in self.exclude:
-                                self.NanoDX = NanoDX_object(
-                                    analysis_name="NANODX",
-                                    batch=True,
-                                    summary=nanodxsummary,
-                                    **display_args,
-                                )
-                                await self.NanoDX.render_ui(sample_id=self.sampleID)
-                            if "pannanodx" not in self.exclude:
-                                self.PanNanoDX = NanoDX_object(
-                                    analysis_name="PANNANODX",
-                                    batch=True,
-                                    summary=pannanodxsummary,
-                                    model="pancan_devel_v5i_NN.pkl",
-                                    **display_args,
-                                )
-                                await self.PanNanoDX.render_ui(sample_id=self.sampleID)
-                            if "forest" not in self.exclude:
-                                self.RandomForest = RandomForest_object(
-                                    analysis_name="FOREST",
-                                    batch=True,
-                                    summary=forestsummary,
-                                    showerrors=self.showerrors,
-                                    **display_args,
-                                )
-                                await self.RandomForest.render_ui(
-                                    sample_id=self.sampleID
-                                )
-
-                if "cnv" not in self.exclude:
-                    with ui.tab_panel(copy_numbertab).classes("w-full"):
-                        with ui.card().classes("rounded w-full"):
-                            self.CNV = CNVAnalysis(
-                                analysis_name="CNV",
-                                summary=cnvsummary,
-                                target_panel=self.target_panel,
-                                reference_file=self.reference,
-                                bed_file = self.bed_file,
-                                **display_args,
+                        else:
+                            myfile = await run.io_bound(
+                                create_pdf, f"{self.sampleID}_run_report.pdf", self.output
                             )
-                            await self.CNV.render_ui(sample_id=self.sampleID)
+                        ui.download(myfile)
+                        ui.notify("Report Downloaded")
+                        
+                
 
-                if "coverage" not in self.exclude:
-                    with ui.tab_panel(coveragetab).classes("w-full"):
-                        with ui.card().classes("rounded w-full"):
-                            self.Target_Coverage = TargetCoverage(
-                                analysis_name="COVERAGE",
-                                summary=coverage,
-                                target_panel=self.target_panel,
-                                reference=self.reference,
-                                **display_args,
-                            )
-                            await self.Target_Coverage.render_ui(
-                                sample_id=self.sampleID
-                            )
+                ui.button("Generate Report", on_click=download_report, icon="download")
 
-                if "mgmt" not in self.exclude:
-                    with ui.tab_panel(mgmttab).classes("w-full"):
-                        with ui.card().classes("rounded w-full"):
-                            self.MGMT_panel = MGMT_Object(
-                                analysis_name="MGMT", summary=mgmt, **display_args
-                            )
-                            await self.MGMT_panel.render_ui(sample_id=self.sampleID)
-
-                if "fusion" not in self.exclude:
-                    with ui.tab_panel(fusionstab).classes("w-full"):
-                        with ui.card().classes("rounded w-full"):
-                            self.Fusion_panel = FusionObject(
-                                analysis_name="FUSION",
-                                summary=fusions,
-                                target_panel=self.target_panel,
-                                **display_args,
-                            )
-                            await self.Fusion_panel.render_ui(sample_id=self.sampleID)
-
-            async def download_report():
-                """
-                Generate and download the report.
-
-                :return: None
-                """
-                ui.notify("Generating Report")
-                if not self.browse:
-                    for item in app.storage.general[self.mainuuid]:
-                        if item == "sample_ids":
-                            for sample in app.storage.general[self.mainuuid][item]:
-                                self.sampleID = sample
-                if self.browse:
-                    myfile = await run.io_bound(
-                        create_pdf,
-                        f"{self.sampleID}_run_report.pdf",
-                        self.check_and_create_folder(self.output, self.sampleID),
-                    )
-                else:
-                    myfile = await run.io_bound(
-                        create_pdf, f"{self.sampleID}_run_report.pdf", self.output
-                    )
-                ui.download(myfile)
-                ui.notify("Report Downloaded")
-
-            ui.button("Generate Report", on_click=download_report, icon="download")
+        except Exception as e:
+            logging.error(f"Error rendering analysis UI: {str(e)}", exc_info=True)
+            ui.notify(f"Error rendering analysis UI: {str(e)}", type="error")
 
     async def background_process_bams(self):
         """
@@ -944,6 +1038,9 @@ class BrainMeth:
             folder_name = self.force_sampleid
 
         if folder_name:
+            # Check if the path already ends with the folder_name
+            if path.endswith(folder_name):
+                return path
             full_path = os.path.join(path, folder_name)
             if not os.path.exists(full_path):
                 os.makedirs(full_path)
@@ -1083,7 +1180,7 @@ class BrainMeth:
                 mydf.to_csv(
                     os.path.join(
                         self.check_and_create_folder(self.output, sample_id),
-                        "master.csv",
+                        "master.csv"
                     )
                 )
 

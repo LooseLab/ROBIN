@@ -130,22 +130,17 @@ def run_modkit(tempmgmtdir: str, MGMTbamfile: str, threads: int) -> None:
     Returns:
         None
     """
-    # logger.debug(
-    #    f"Running modkit with tempmgmtdir={tempmgmtdir}, MGMTbamfile={MGMTbamfile}, threads={threads}"
-    # )
     try:
         pysam.sort("-o", os.path.join(tempmgmtdir, "mgmt.bam"), MGMTbamfile)
         pysam.index(
             os.path.join(tempmgmtdir, "mgmt.bam"), f"{tempmgmtdir}/mgmt.bam.bai"
         )
-        cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress >/dev/null 2>&1"
+        cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods --mixed-delim {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress >/dev/null 2>&1"
         os.system(cmd)
         if os.path.exists(os.path.join(tempmgmtdir, "mgmt.bed")):
             cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir, 'mgmt.bed')} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
-            # print(cmd)
             os.system(cmd)
     except Exception:
-        # logger.error(f"Error running modkit: {e}")
         raise
 
 
@@ -187,7 +182,24 @@ class MGMT_Object(BaseAnalysis):
                 ui.label("Plot not yet available.")
         if self.summary:
             with self.summary:
-                ui.label("Current MGMT status: Unknown")
+                with ui.card().classes('w-full p-4 mb-4'):
+                    with ui.row().classes('w-full items-center justify-between'):
+                        # Left side - Methylation Status
+                        with ui.column().classes('gap-2'):
+                            ui.label("MGMT Methylation Analysis").classes('text-lg font-medium')
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label("Status: Awaiting Data").classes('text-gray-600')
+                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+
+                        # Right side - Analysis metrics
+                        with ui.column().classes('gap-2 text-right'):
+                            ui.label("Analysis Details").classes('font-medium')
+                            ui.label("Methylation Score: --").classes('text-gray-600')
+                            ui.label("Average Methylation: --").classes('text-gray-600')
+
+                    # Bottom row - Information
+                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                        ui.label("Methylation status based on MGMT promoter analysis")
         if self.browse:
             self.show_previous_data()
         else:
@@ -395,9 +407,37 @@ class MGMT_Object(BaseAnalysis):
                         if self.summary:
                             with self.summary:
                                 self.summary.clear()
-                                ui.label(
-                                    f"Current MGMT status: {results['status'].values[0]}"
-                                )
+                                with ui.card().classes('w-full p-4 mb-4'):
+                                    with ui.row().classes('w-full items-center justify-between'):
+                                        # Left side - MGMT Status
+                                        with ui.column().classes('gap-2'):
+                                            if 'status' in results.columns:
+                                                status = results['status'].values[0]
+                                                average = float(results['average'].values[0])
+                                                pred = float(results['pred'].values[0])
+                                                
+                                                # Determine status styling
+                                                if status.lower() == 'methylated':
+                                                    status_color = "text-blue-600"
+                                                    status_bg = "bg-blue-100"
+                                                else:
+                                                    status_color = "text-amber-600"
+                                                    status_bg = "bg-amber-100"
+
+                                                ui.label("MGMT Methylation Analysis").classes('text-lg font-medium')
+                                                with ui.row().classes('items-center gap-2'):
+                                                    ui.label(f"Status: {status}").classes(f'{status_color} font-medium')
+                                                    ui.label(f"{pred:.1f}%").classes(f'px-2 py-1 rounded {status_bg} {status_color}')
+
+                                        # Right side - Additional metrics
+                                        with ui.column().classes('gap-2 text-right'):
+                                            ui.label("Analysis Details").classes('font-medium')
+                                            ui.label(f"Average Methylation: {average:.1f}%").classes('text-gray-600')
+                                            ui.label(f"Prediction Score: {pred:.1f}%").classes('text-gray-600')
+
+                                    # Bottom row - Information
+                                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                                        ui.label("MGMT status determined from methylation analysis of 137 CpG sites")
                         self.last_seen = count
 
 

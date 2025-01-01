@@ -1,68 +1,92 @@
 """
 Copy Number Variation (CNV) Analysis Module
+=========================================
 
-This module provides functionality for analyzing copy number variations (CNVs) from BAM files generated during sequencing runs. It includes classes and functions for iterating over BAM files, processing CNV data, and visualizing results using NiceGUI for web-based user interfaces.
+This module provides functionality for analyzing copy number variations (CNVs) from BAM files
+generated during sequencing runs. It implements real-time CNV detection and visualization
+following Apple Human Interface Guidelines.
 
-Key Components:
+Key Features
+-----------
+- Real-time CNV detection from BAM files
+- Interactive visualization of CNV data
+- Genetic sex estimation (XX/XY)
+- Break point detection and analysis
+- Time series tracking of CNV changes
 
-1. **Result Class**:
-   - A simple class to store CNV results.
+Classes
+-------
+Result
+    Simple container class for CNV results.
 
-2. **Helper Functions**:
-   - `iterate_bam`: Iterates over a BAM file and returns CNV data and associated metrics.
-   - `iterate_bam_bin`: Iterates over a BAM file with specified bin width and returns CNV data and associated metrics.
-   - `reduce_list`: Reduces the length of a list to a specified maximum length by subsampling.
-   - `moving_average`: Calculates the moving average of a given data array.
-   - `pad_arrays`: Pads two arrays to the same length with a specified value.
-   - `ruptures_plotting`: Applies the Kernel Change Point Detection (CPD) algorithm to identify change points in data.
+CNVAnalysis
+    Main analysis class inheriting from BaseAnalysis, providing CNV-specific functionality.
 
-3. **CNVAnalysis Class**:
-   - Inherits from `BaseAnalysis` and provides specific methods for CNV analysis.
-   - Initializes with specific target panel information and loads reference data.
-   - Implements methods to estimate genetic sex (XX or XY) based on CNV data.
-   - Processes BAM files to extract CNV data and updates visualizations.
-   - Provides a user interface for visualizing CNV data using NiceGUI.
+Functions
+---------
+run_ruptures(r_cnv, penalty_value, bin_width)
+    Detects change points in CNV data using Kernel Change Point Detection.
 
-4. **User Interface and Visualization**:
-   - `setup_ui`: Sets up the user interface for CNV analysis, including selection controls and plots.
-   - `generate_chart`: Generates ECharts objects for displaying CNV scatter plots and difference plots.
-   - `_update_cnv_plot`: Updates CNV plots with new data and annotations based on selected chromosomes and genes.
-   - `show_previous_data`: Loads and displays previously computed CNV data.
+iterate_bam(bamfile, threads, mapq_filter, copy_numbers, log_level)
+    Processes BAM files to extract CNV data.
 
-5. **Command-Line Interface**:
-   - Uses Click for defining command-line options and arguments to run the CNV analysis application.
-   - `test_me`: Helper function to initialize and run the CNV analysis application.
-   - `main`: Entry point for the command-line interface to start the CNV analysis application.
+moving_average(data, n)
+    Calculates moving averages for smoothing CNV data.
 
-Dependencies:
-- `cnv_from_bam.iterate_bam_file`
-- `robin.subpages.base_analysis.BaseAnalysis`
-- `natsort`
-- `pandas`
-- `logging`
-- `numpy`
-- `os`
-- `sys`
-- `nicegui` (ui, app, run)
-- `click`
-- `pathlib.Path`
-- `pickle`
-- `ruptures`
+pad_arrays(arr1, arr2, pad_value)
+    Utility function to pad arrays to equal lengths.
 
-Example usage::
-    @click.command()
-    @click.option("--port", default=12345, help="Port for GUI")
-    @click.option("--threads", default=4, help="Number of threads available.")
-    @click.argument("watchfolder", type=click.Path(exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path), required=False)
-    @click.argument("output", type=click.Path(exists=True, file_okay=False, dir_okay=True, resolve_path=True, path_type=Path), required=False)
-    @click.option("--browse", is_flag=True, show_default=True, default=False, help="Browse Historic Data.")
-    @click.option("--target_panel", "-t", default="rCNS2", help="Select analysis gene panel from one of these options. Default is rCNS2", type=click.Choice(["rCNS2", "AML"], case_sensitive=True))
-    def main(port, threads, watchfolder, output, browse, target_panel):
-        # Run the CNV analysis application
-        pass
+Visualization
+------------
+The module implements several visualization components following Apple HIG:
 
-if __name__ in {"__main__", "__mp_main__"}:
-    main()
+- CNV scatter plots with interactive zooming
+- Time series charts for tracking changes
+- Summary cards with key metrics
+- Chromosome and gene selection controls
+
+Dependencies
+-----------
+- cnv_from_bam.iterate_bam_file
+- robin.subpages.base_analysis.BaseAnalysis
+- natsort
+- pandas
+- logging
+- numpy
+- nicegui (ui, app, run)
+- ruptures
+
+Example Usage
+-----------
+.. code-block:: python
+
+    from robin.subpages.CNV_object import CNVAnalysis
+    
+    # Initialize analysis
+    cnv_analysis = CNVAnalysis(
+        threads=4,
+        output_dir="output/",
+        target_panel="rCNS2"
+    )
+    
+    # Process BAM files
+    cnv_analysis.add_bam("sample.bam")
+    
+    # Run the UI
+    cnv_analysis.setup_ui()
+
+Notes
+-----
+The module follows Apple Human Interface Guidelines for:
+- Color usage and accessibility
+- Typography and spacing
+- Interactive elements
+- Visual feedback
+- Information hierarchy
+
+Authors
+-------
+Matt Loose
 """
 
 import pysam
@@ -667,7 +691,24 @@ class CNVAnalysis(BaseAnalysis):
         self.display_row = ui.row().style("width: 100")
         if self.summary:
             with self.summary:
-                ui.label("No CNV data available.")
+                with ui.card().classes('w-full p-4 mb-4'):
+                    with ui.row().classes('w-full items-center justify-between'):
+                        # Left side - CNV Status
+                        with ui.column().classes('gap-2'):
+                            ui.label("Copy Number Variation Analysis").classes('text-lg font-medium')
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label("Status: Awaiting Data").classes('text-gray-600')
+                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+
+                        # Right side - Analysis metrics
+                        with ui.column().classes('gap-2 text-right'):
+                            ui.label("Analysis Details").classes('font-medium')
+                            ui.label("Genetic Sex: --").classes('text-gray-600')
+                            ui.label("CNV Events: --").classes('text-gray-600')
+
+                    # Bottom row - Information
+                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                        ui.label("Copy number analysis across genome with breakpoint detection")
         with self.display_row:
             ui.label("Copy Number Variation").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
@@ -709,34 +750,9 @@ class CNVAnalysis(BaseAnalysis):
 
 
         with ui.card().classes("w-full"):
-
-            ui.label("New Target Information - intentionally blank.")
-
-            # self.orig_tree = ui.tree(
-            #     [self.NewBed.tree_data]
-            #     , label_key="id",
-            # )
-            # self.orig_tree.add_slot(
-            #     "default-body",
-            #     """
-            #     <div v-if="props.node.description">
-            #             <span class="text-weight-bold">{{ props.node.description }}</span>
-            #         </div>
-            #     <div v-if="props.node.range_sum">
-            #             <span class="text-weight-bold">{{props.node.range_sum}} bases</span>
-            #     </div>
-            #     <div v-if="props.node.count">
-            #             <span class="text-weight-bold">{{ props.node.count }} targets</span>
-            #     </div>
-            #     <div v-if="props.node.proportion">
-            #             <span class="text-weight-bold">{{ props.node.proportion }} proportion</span>
-            #     </div>
-            #     <div v-if="props.node.chromosome_length">
-            #             <span class="text-weight-bold">{{ props.node.chromosome_length }} chromosome length</span>
-            #     </div>
-            #
-            # """,
-            # )
+            with ui.column().classes('gap-2'):
+                ui.label("New Target Information").classes('text-lg font-medium')
+                ui.label("Target information will be displayed here when available").classes('text-gray-600')
 
 
         with ui.card().classes("w-full"):
@@ -761,74 +777,191 @@ class CNVAnalysis(BaseAnalysis):
 
     def update_proportion_time_chart(self, datadf: pd.DataFrame) -> None:
         """
-        Updates the NanoDX time series chart with new data.
+        Updates the CNV time series chart with new data.
 
-        Args:
-            datadf (pd.DataFrame): DataFrame containing the data to plot.
+        Parameters
+        ----------
+        datadf : pd.DataFrame
+            DataFrame containing the time series data to plot.
+
+        Notes
+        -----
+        Handles empty datasets gracefully by displaying an appropriate message
+        and maintaining chart visibility.
         """
-        self.proportion_time_chart.options["series"] = []
-        for series, data in datadf.to_dict().items():
-            data_list = [[key, value] for key, value in data.items()]
-            if series != "number_probes":
-                self.proportion_time_chart.options["series"].append(
-                    {
-                        "animation": False,
-                        "type": "line",
-                        "smooth": True,
-                        "name": series,
-                        "emphasis": {"focus": "series"},
-                        "endLabel": {
-                            "show": True,
-                            "formatter": "{a}",
-                            "distance": 20,
-                        },
-                        "lineStyle": {
-                            "width": 2,
-                        },
-                        "data": data_list,
-                    }
-                )
-        self.proportion_time_chart.update()
+        try:
+            if datadf.empty:
+                logger.warning("No data available for time series chart")
+                self.proportion_time_chart.options["title"]["text"] = "No Data Available"
+                self.proportion_time_chart.options["series"] = []
+                self.proportion_time_chart.update()
+                return
+
+            self.proportion_time_chart.options["series"] = []
+            
+            # iOS color palette for consistent styling
+            colors = [
+                "#007AFF",  # Blue
+                "#34C759",  # Green
+                "#FF9500",  # Orange
+                "#FF2D55",  # Red
+                "#5856D6",  # Purple
+                "#FF3B30",  # Red-Orange
+                "#5AC8FA",  # Light Blue
+                "#4CD964",  # Light Green
+            ]
+
+            for idx, (series, data) in enumerate(datadf.to_dict().items()):
+                if series != "number_probes":
+                    data_list = [[key, value] for key, value in data.items() if pd.notnull(value)]
+                    if data_list:  # Only add series if it has valid data points
+                        self.proportion_time_chart.options["series"].append({
+                            "animation": False,
+                            "type": "line",
+                            "smooth": True,
+                            "name": series,
+                            "emphasis": {
+                                "focus": "series",
+                                "itemStyle": {
+                                    "borderWidth": 2
+                                }
+                            },
+                            "endLabel": {
+                                "show": True,
+                                "formatter": "{a}: {c}%",
+                                "distance": 10,
+                                "fontSize": 12
+                            },
+                            "lineStyle": {
+                                "width": 2,
+                                "color": colors[idx % len(colors)]
+                            },
+                            "itemStyle": {
+                                "color": colors[idx % len(colors)]
+                            },
+                            "data": data_list
+                        })
+
+            # Update title with latest data summary if available
+            if not datadf.empty:
+                latest_data = datadf.iloc[-1]
+                if not latest_data.empty and not latest_data.isna().all():
+                    max_value = latest_data.max()
+                    max_type = latest_data.idxmax()
+                    self.proportion_time_chart.options["title"]["text"] = (
+                        f"Proportions Over Time\n"
+                        f"Current highest: {max_type} ({max_value:.1f}%)"
+                    )
+
+            self.proportion_time_chart.update()
+            
+        except Exception as e:
+            logger.error(f"Error updating time chart: {str(e)}", exc_info=True)
+            self.proportion_time_chart.options["title"]["text"] = "Error Updating Chart"
+            self.proportion_time_chart.options["series"] = []
+            self.proportion_time_chart.update()
 
     def create_proportion_time_chart2(self, title: str) -> None:
         """
-        Creates the NanoDX time series chart.
+        Creates the genome-wide CNV time series chart.
 
-        Args:
-            title (str): Title of the chart.
+        Parameters
+        ----------
+        title : str
+            Title of the chart.
+
+        Notes
+        -----
+        Creates a time series chart specifically for genome-wide data,
+        using consistent styling with other charts in the application.
         """
         self.proportion_time_chart2 = self.create_time_chart(title)
 
     def update_proportion_time_chart2(self, datadf: pd.DataFrame) -> None:
         """
-        Updates the NanoDX time series chart with new data.
+        Updates the genome-wide CNV time series chart with new data.
 
-        Args:
-            datadf (pd.DataFrame): DataFrame containing the data to plot.
+        Parameters
+        ----------
+        datadf : pd.DataFrame
+            DataFrame containing the genome-wide time series data to plot.
+
+        Notes
+        -----
+        Handles empty datasets gracefully by displaying an appropriate message
+        and maintaining chart visibility.
         """
-        self.proportion_time_chart2.options["series"] = []
-        for series, data in datadf.to_dict().items():
-            data_list = [[key, value] for key, value in data.items()]
-            if series != "number_probes":
-                self.proportion_time_chart2.options["series"].append(
-                    {
-                        "animation": False,
-                        "type": "line",
-                        "smooth": True,
-                        "name": series,
-                        "emphasis": {"focus": "series"},
-                        "endLabel": {
-                            "show": True,
-                            "formatter": "{a}",
-                            "distance": 20,
-                        },
-                        "lineStyle": {
-                            "width": 2,
-                        },
-                        "data": data_list,
-                    }
-                )
-        self.proportion_time_chart2.update()
+        try:
+            if datadf.empty:
+                logger.warning("No genome-wide data available for time series chart")
+                self.proportion_time_chart2.options["title"]["text"] = "No Data Available"
+                self.proportion_time_chart2.options["series"] = []
+                self.proportion_time_chart2.update()
+                return
+
+            self.proportion_time_chart2.options["series"] = []
+            
+            # iOS color palette for consistent styling
+            colors = [
+                "#007AFF",  # Blue
+                "#34C759",  # Green
+                "#FF9500",  # Orange
+                "#FF2D55",  # Red
+                "#5856D6",  # Purple
+                "#FF3B30",  # Red-Orange
+                "#5AC8FA",  # Light Blue
+                "#4CD964",  # Light Green
+            ]
+
+            for idx, (series, data) in enumerate(datadf.to_dict().items()):
+                if series != "number_probes":
+                    data_list = [[key, value] for key, value in data.items() if pd.notnull(value)]
+                    if data_list:  # Only add series if it has valid data points
+                        self.proportion_time_chart2.options["series"].append({
+                            "animation": False,
+                            "type": "line",
+                            "smooth": True,
+                            "name": series,
+                            "emphasis": {
+                                "focus": "series",
+                                "itemStyle": {
+                                    "borderWidth": 2
+                                }
+                            },
+                            "endLabel": {
+                                "show": True,
+                                "formatter": "{a}: {c}%",
+                                "distance": 10,
+                                "fontSize": 12
+                            },
+                            "lineStyle": {
+                                "width": 2,
+                                "color": colors[idx % len(colors)]
+                            },
+                            "itemStyle": {
+                                "color": colors[idx % len(colors)]
+                            },
+                            "data": data_list
+                        })
+
+            # Update title with latest data summary if available
+            if not datadf.empty:
+                latest_data = datadf.iloc[-1]
+                if not latest_data.empty and not latest_data.isna().all():
+                    max_value = latest_data.max()
+                    max_type = latest_data.idxmax()
+                    self.proportion_time_chart2.options["title"]["text"] = (
+                        f"Genome-wide Proportions Over Time\n"
+                        f"Current highest: {max_type} ({max_value:.1f}%)"
+                    )
+
+            self.proportion_time_chart2.update()
+            
+        except Exception as e:
+            logger.error(f"Error updating genome-wide time chart: {str(e)}", exc_info=True)
+            self.proportion_time_chart2.options["title"]["text"] = "Error Updating Chart"
+            self.proportion_time_chart2.options["series"] = []
+            self.proportion_time_chart2.update()
 
     def generate_chart(
         self,
@@ -839,29 +972,63 @@ class CNVAnalysis(BaseAnalysis):
     ) -> ui.echart:
         """
         Generate an ECharts object for displaying CNV scatter plots.
-
-        Args:
-            title (Optional[str]): Title of the chart.
-            initmax (int): Initial maximum value for the y-axis.
-            initmin (int): Initial minimum value for the y-axis.
-            type (str): Type of the x-axis.
-
-        Returns:
-            ui.echart: The ECharts object configured for the scatter plot.
         """
         return (
             ui.echart(
                 {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12
+                    },
                     "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": f"{title}"},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    # "tooltip": {"trigger": "axis"},
+                    "grid": {
+                        "top": "25%",
+                        "bottom": "5%",
+                        "left": "5%",
+                        "right": "5%",
+                        "containLabel": True
+                    },
+                    "title": {
+                        "text": f"{title}",
+                        "left": "center",
+                        "top": 20,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {
+                            "saveAsImage": {
+                                "title": "Save Chart"
+                            }
+                        }
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {
+                            "color": "#1D1D1F"
+                        }
+                    },
                     "xAxis": {
                         "type": f"{type}",
                         "max": "dataMax",
-                        "splitLine": {"show": False},
+                        "splitLine": {
+                            "show": True,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#E5E5EA"
+                            }
+                        },
+                        "axisLabel": {
+                            "color": "#86868B"
+                        }
                     },
                     "yAxis": [
                         {
@@ -869,18 +1036,43 @@ class CNVAnalysis(BaseAnalysis):
                             "logBase": 2,
                             "name": "Ploidy",
                             "position": "left",
+                            "nameTextStyle": {
+                                "color": "#86868B",
+                                "fontSize": 12,
+                                "padding": [0, 30, 0, 0]
+                            },
+                            "axisLabel": {
+                                "color": "#86868B"
+                            },
+                            "splitLine": {
+                                "show": True,
+                                "lineStyle": {
+                                    "type": "dashed",
+                                    "color": "#E5E5EA"
+                                }
+                            }
                         },
                         {
-                            "type": "value",  # Secondary y-axis for the line plot
+                            "type": "value",
                             "name": "Candidate Break Points",
                             "position": "right",
+                            "nameTextStyle": {
+                                "color": "#007AFF",
+                                "fontSize": 12,
+                                "padding": [0, 0, 0, 30]
+                            },
                             "axisLine": {
-                                "lineStyle": {"color": "blue"}
-                            },  # Color the axis line to distinguish it
+                                "lineStyle": {
+                                    "color": "#007AFF"
+                                }
+                            },
+                            "axisLabel": {
+                                "color": "#007AFF"
+                            },
                             "splitLine": {
                                 "show": False
-                            },  # Optionally hide the grid lines for the secondary axis
-                        },
+                            }
+                        }
                     ],
                     "dataZoom": [
                         {
@@ -888,27 +1080,55 @@ class CNVAnalysis(BaseAnalysis):
                             "yAxisIndex": "none",
                             "xAxisIndex": "0",
                             "filterMode": "none",
+                            "height": 20,
+                            "bottom": 50,
+                            "borderColor": "#E5E5EA",
+                            "backgroundColor": "#F5F5F7",
+                            "fillerColor": "rgba(0, 122, 255, 0.2)",
+                            "handleStyle": {
+                                "color": "#007AFF"
+                            }
                         },
                         {
                             "type": "slider",
                             "yAxisIndex": "0",
                             "xAxisIndex": "none",
                             "filterMode": "none",
+                            "width": 20,
+                            "right": 50,
                             "startValue": initmin,
                             "endValue": initmax,
-                        },
+                            "borderColor": "#E5E5EA",
+                            "backgroundColor": "#F5F5F7",
+                            "fillerColor": "rgba(0, 122, 255, 0.2)",
+                            "handleStyle": {
+                                "color": "#007AFF"
+                            }
+                        }
                     ],
                     "series": [
                         {
                             "type": "scatter",
-                            "symbolSize": 1,
-                            "data": [],
+                            "symbolSize": 4,
+                            "itemStyle": {
+                                "color": "#007AFF",
+                                "opacity": 0.7
+                            },
+                            "emphasis": {
+                                "itemStyle": {
+                                    "color": "#007AFF",
+                                    "opacity": 1,
+                                    "borderColor": "#FFFFFF",
+                                    "borderWidth": 2
+                                }
+                            },
+                            "data": []
                         }
-                    ],
+                    ]
                 }
             )
-            .style("height: 450px")
-            .classes("border-double")
+            .style("height: 450px; margin: 20px 0;")
+            .classes("border rounded-lg shadow-sm")
         )
 
     def _update_cnv_plot(
@@ -998,7 +1218,7 @@ class CNVAnalysis(BaseAnalysis):
                     data = list(
                         zip(
                             (np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"],
-                            cnv,
+                            cnv
                         )
                     )
 
@@ -1100,7 +1320,10 @@ class CNVAnalysis(BaseAnalysis):
 
                 # Prepare the data for plotting
                 data = list(
-                    zip((np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"], cnv)
+                    zip(
+                        (np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"],
+                        cnv
+                    )
                 )
 
 
@@ -1290,12 +1513,66 @@ class CNVAnalysis(BaseAnalysis):
                     plot_to_update  # If not in UI mode, return the updated plot object
                 )
 
+    def create_summary_card(self, xy_estimate: str, bin_width: int, variance: float) -> None:
+        """
+        Create a summary card displaying key CNV analysis information.
+
+        Creates a visually consistent summary card that matches other analysis modules,
+        displaying genetic sex estimation and key CNV metrics.
+
+        Parameters
+        ----------
+        xy_estimate : str
+            Estimated genetic sex (XX, XY, or Unknown)
+        bin_width : int
+            Current bin width used in the analysis
+        variance : float
+            Current variance value from the analysis
+        """
+        with self.summary:
+            self.summary.clear()
+            with ui.card().classes('w-full p-4 mb-4'):
+                with ui.row().classes('w-full items-center justify-between'):
+                    # Left side - CNV Status
+                    with ui.column().classes('gap-2'):
+                        ui.label("Copy Number Variation Analysis").classes('text-lg font-medium')
+                        with ui.row().classes('items-center gap-2'):
+                            if xy_estimate != "Unknown":
+                                status_color = "text-blue-600" if xy_estimate == "XY" else "text-pink-600"
+                                status_bg = "bg-blue-100" if xy_estimate == "XY" else "bg-pink-100"
+                                if xy_estimate == "XY":
+                                    ui.icon("man").classes("text-4xl text-blue-500")
+                                else:
+                                    ui.icon("woman").classes("text-4xl text-pink-500")
+                                ui.label(f"Genetic Sex: {xy_estimate}").classes(f'{status_color} font-medium')
+                            else:
+                                ui.label("Status: Awaiting Data").classes('text-gray-600')
+                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+
+                    # Right side - Analysis metrics
+                    with ui.column().classes('gap-2 text-right'):
+                        ui.label("Analysis Details").classes('font-medium')
+                        ui.label(f"Bin Width: {bin_width:,}").classes('text-gray-600')
+                        ui.label(f"Variance: {variance:.3f}").classes('text-gray-600')
+
+                # Bottom row - Information
+                with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                    ui.label("Copy number analysis across genome with breakpoint detection")
+
     async def show_previous_data(self) -> None:
         """
         Load and display previously computed CNV data.
 
-        Args:
-            output (str): The directory containing previous CNV data.
+        Loads saved CNV analysis results and updates the visualization components
+        with the data. Creates a consistent visual presentation that matches
+        other analysis modules.
+
+        Notes
+        -----
+        - Loads CNV data from saved numpy files
+        - Updates scatter plots and time series charts
+        - Creates summary cards with key metrics
+        - Maintains visual consistency with other modules
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
@@ -1338,12 +1615,8 @@ class CNVAnalysis(BaseAnalysis):
                     )
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
 
-            # self.CNVDetectorResults = CNVChangeDetectorTracker()
             self.CNVResults = {}
             if self.check_file_time(os.path.join(output, "ruptures.npy")):
-                # self.DATA_ARRAY = np.load(
-                #    os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
-                # )
                 self.CNVResults = np.load(
                     os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
                 ).item()
@@ -1358,9 +1631,6 @@ class CNVAnalysis(BaseAnalysis):
                     local_update = True
 
             self.NewBed.load_from_string(bedcontent, merge=False)
-                    #self.NewBed.load_from_string("chr2\t1\t1000000\t.\t.\t+", merge=True)
-
-            #self.orig_tree.update()
 
             if self.check_file_time(os.path.join(output, "bedranges.csv")):
                 self.proportions_df_store = pd.read_csv(
@@ -1368,41 +1638,127 @@ class CNVAnalysis(BaseAnalysis):
                     index_col=0,
                 )
 
-                #print (self.proportions_df_store)
-
                 df_filtered = self.proportions_df_store[self.proportions_df_store['chromosome'] != 'Genome-wide']
-                # Pivot the dataframe
                 pivot_df = df_filtered.pivot(index='timestamp', columns='chromosome', values='proportion')
 
                 df_filtered2 = self.proportions_df_store[self.proportions_df_store['chromosome'] == 'Genome-wide']
-                # Pivot the dataframe
                 pivot_df2 = df_filtered2.pivot(index='timestamp', columns='chromosome', values='proportion')
 
-                self.update_proportion_time_chart(
-                    pivot_df
-                )
-                self.update_proportion_time_chart2(
-                    pivot_df2
-                )
-
-            #self.BEDDisplay.set_content(f"{bedcontent}")
+                self.update_proportion_time_chart(pivot_df)
+                self.update_proportion_time_chart2(pivot_df2)
 
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    with ui.row():
-                        with open(os.path.join(output, "XYestimate.pkl"), "rb") as file:
-                            XYestimate = pickle.load(file)
-                            if XYestimate != "Unknown":
-                                if XYestimate == "XY":
-                                    ui.icon("man").classes("text-4xl")
-                                else:
-                                    ui.icon("woman").classes("text-4xl")
-                                ui.label(f"Estimated Genetic Sex: {XYestimate}")
-                            ui.label(f"Current Bin Width: {self.cnv_dict['bin_width']}")
-                            ui.label(
-                                f"Current Variance: {round(self.cnv_dict['variance'], 3)}"
-                            )
+                    with open(os.path.join(output, "XYestimate.pkl"), "rb") as file:
+                        xy_estimate = pickle.load(file)
+                        self.create_summary_card(
+                            xy_estimate=xy_estimate,
+                            bin_width=self.cnv_dict["bin_width"],
+                            variance=self.cnv_dict["variance"]
+                        )
+
+
+    def create_time_chart(self, title: str) -> ui.echart:
+        """
+        Create a time series chart for CNV data visualization.
+        """
+        # iOS color palette for multiple series
+        colors = [
+            "#007AFF",  # Blue
+            "#34C759",  # Green
+            "#FF9500",  # Orange
+            "#FF2D55",  # Red
+            "#5856D6",  # Purple
+            "#FF3B30",  # Red-Orange
+            "#5AC8FA",  # Light Blue
+            "#4CD964",  # Light Green
+        ]
+
+        return ui.echart({
+            "backgroundColor": "transparent",
+            "textStyle": {
+                "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                "fontSize": 12
+            },
+            "animation": False,
+            "grid": {
+                "top": "25%",
+                "bottom": "5%",
+                "left": "5%",
+                "right": "5%",
+                "containLabel": True
+            },
+            "title": {
+                "text": title,
+                "left": "center",
+                "top": 20,
+                "textStyle": {
+                    "fontSize": 16,
+                    "fontWeight": "500",
+                    "color": "#1D1D1F"
+                }
+            },
+            "tooltip": {
+                "trigger": "axis",
+                "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                "borderColor": "#E5E5EA",
+                "textStyle": {
+                    "color": "#1D1D1F"
+                }
+            },
+            "legend": {
+                "type": "scroll",
+                "top": 50,
+                "textStyle": {
+                    "color": "#86868B"
+                }
+            },
+            "toolbox": {
+                "show": True,
+                "right": 20,
+                "feature": {
+                    "saveAsImage": {
+                        "title": "Save Chart"
+                    }
+                }
+            },
+            "xAxis": {
+                "type": "time",
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "type": "dashed",
+                        "color": "#E5E5EA"
+                    }
+                },
+                "axisLabel": {
+                    "color": "#86868B"
+                }
+            },
+            "yAxis": {
+                "type": "value",
+                "name": "Proportion",
+                "nameTextStyle": {
+                    "color": "#86868B",
+                    "fontSize": 12,
+                    "padding": [0, 30, 0, 0]
+                },
+                "axisLabel": {
+                    "color": "#86868B",
+                    "formatter": "{value}%"
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "type": "dashed",
+                        "color": "#E5E5EA"
+                    }
+                }
+            },
+            "color": colors,
+            "series": []
+        }).style("height: 450px; margin: 20px 0;").classes("border rounded-lg shadow-sm")
 
 
 def test_me(

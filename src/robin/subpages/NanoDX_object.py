@@ -232,14 +232,14 @@ class NanoDX_object(BaseAnalysis):
         """
         Sets up the user interface for the NanoDX analysis.
         """
-        with ui.card().style("width: 100%"):
-            with ui.grid(columns=8).classes("w-full h-auto"):
+        with ui.card().classes("w-full p-2"):
+            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg p-2"
                 ):
                     self.create_nanodx_chart("NanoDX")
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8"
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg p-2"
                 ):
                     self.create_nanodx_time_chart("NanoDX Time Series")
         if self.summary:
@@ -250,12 +250,9 @@ class NanoDX_object(BaseAnalysis):
         else:
             ui.timer(5, lambda: self.show_previous_data())
 
-    def show_previous_data(self) -> None:
+    def show_previous_data(self):
         """
-        Displays previously analyzed data from the specified output folder.
-
-        Args:
-            output (str): Path to the folder containing previous analysis results.
+        Load and display previously generated NanoDX analysis results.
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
@@ -265,9 +262,10 @@ class NanoDX_object(BaseAnalysis):
             output = self.output
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
+
         if self.check_file_time(os.path.join(output, self.storefile)):
             self.nanodx_df_store = pd.read_csv(
-                os.path.join(os.path.join(output, self.storefile)),
+                os.path.join(output, self.storefile),
                 index_col=0,
             )
             columns_greater_than_threshold = (
@@ -281,12 +279,19 @@ class NanoDX_object(BaseAnalysis):
             lastrow = self.nanodx_df_store.iloc[-1].drop("number_probes")
             lastrow_plot = lastrow.sort_values(ascending=False).head(10)
             lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+            
+            # Update summary with new card
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    ui.label(
-                        f"NanoDX classification ({self.model}): {lastrow_plot_top.index[0]} - {lastrow_plot_top.values[0]:.2f}"
+                    classification_text = f"NanoDX classification: {lastrow_plot_top.index[0]}"
+                    self.create_summary_card(
+                        classification_text=classification_text,
+                        confidence_value=lastrow_plot_top.values[0],
+                        model_name=self.model,
+                        features_found=int(self.nanodx_df_store.iloc[-1]["number_probes"])
                     )
+            
             self.update_nanodx_plot(
                 lastrow_plot.index.to_list(),
                 list(lastrow_plot.values),
@@ -502,76 +507,315 @@ class NanoDX_object(BaseAnalysis):
             ] -= len(tomerge)
         self.running = False
 
-    def create_nanodx_chart(self, title: str) -> None:
+    def create_nanodx_chart(self, title):
         """
-        Creates the NanoDX chart.
-
-        Args:
-            title (str): Title of the chart.
+        Create a bar chart for displaying NanoDX classification results.
         """
         self.nanodxchart = self.create_chart(title)
+        self.nanodxchart.options.update({
+            "backgroundColor": "transparent",
+            "title": {
+                "text": title,
+                "left": "center",
+                "top": 10,
+                "textStyle": {
+                    "fontSize": 16,
+                    "fontWeight": "normal",
+                    "color": "#000000"
+                },
+                "subtextStyle": {
+                    "fontSize": 12,
+                    "color": "#666666",
+                    "align": "center"
+                }
+            },
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "shadow"},
+                "formatter": "{b}: {c}%",
+                "textStyle": {"fontSize": 14}
+            },
+            "grid": {
+                "left": "5%",
+                "right": "5%",
+                "bottom": "5%",
+                "top": "25%",
+                "containLabel": True
+            },
+            "xAxis": {
+                "type": "value",
+                "min": 0,
+                "max": 100,
+                "interval": 20,
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{value}%",
+                    "color": "#666666"
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "color": "#E0E0E0",
+                        "type": "dashed"
+                    }
+                }
+            },
+            "yAxis": {
+                "type": "category",
+                "inverse": True,
+                "data": [],
+                "axisLabel": {
+                    "fontSize": 12,
+                    "width": 250,
+                    "overflow": "break",
+                    "interval": 0,
+                    "align": "right",
+                    "color": "#666666"
+                }
+            },
+            "series": [{
+                "type": "bar",
+                "name": "Confidence",
+                "barMaxWidth": "60%",
+                "itemStyle": {
+                    "color": "#007AFF",
+                    "borderRadius": [0, 4, 4, 0]
+                },
+                "label": {
+                    "show": True,
+                    "position": "right",
+                    "formatter": "{c}%",
+                    "fontSize": 12,
+                    "color": "#666666"
+                },
+                "data": []
+            }]
+        })
 
-    def update_nanodx_plot(
-        self, x: List[str], y: List[float], count: int, n_features: int
-    ) -> None:
+    def create_nanodx_time_chart(self, title):
         """
-        Updates the NanoDX plot with new data.
-
-        Args:
-            x (List[str]): List of tumor types.
-            y (List[float]): Confidence scores for each tumor type.
-            count (int): Number of BAM files used to generate the plot.
-            n_features (int): Number of features detected during data analysis.
-        """
-        self.nanodxchart.options["title"][
-            "text"
-        ] = f"NanoDX: processed {count} bams and found {int(n_features)} features"
-        self.nanodxchart.options["title"]["subtext"] = f"Model: {self.model}"
-        self.nanodxchart.options["yAxis"]["data"] = x
-        self.nanodxchart.options["series"] = [
-            {"type": "bar", "name": "NanoDX", "data": y}
-        ]
-        self.nanodxchart.update()
-
-    def create_nanodx_time_chart(self, title: str) -> None:
-        """
-        Creates the NanoDX time series chart.
-
-        Args:
-            title (str): Title of the chart.
+        Create a time series chart for NanoDX results.
         """
         self.nanodx_time_chart = self.create_time_chart(title)
+        self.nanodx_time_chart.options.update({
+            "backgroundColor": "transparent",
+            "title": {
+                "text": title,
+                "left": "center",
+                "top": 5,
+                "textStyle": {
+                    "fontSize": 16,
+                    "fontWeight": "normal",
+                    "color": "#000000"
+                },
+                "padding": [0, 0, 20, 0]
+            },
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "line"},
+                "textStyle": {"fontSize": 14}
+            },
+            "grid": {
+                "left": "5%",
+                "right": "5%",
+                "bottom": "5%",
+                "top": "25%",
+                "containLabel": True
+            },
+            "legend": {
+                "type": "scroll",
+                "orient": "horizontal",
+                "top": 45,
+                "width": "90%",
+                "left": "center",
+                "textStyle": {
+                    "fontSize": 12,
+                    "color": "#666666"
+                },
+                "pageButtonPosition": "end",
+                "pageButtonGap": 5,
+                "pageButtonItemGap": 5,
+                "pageIconColor": "#666666",
+                "pageIconInactiveColor": "#aaa",
+                "pageIconSize": 12,
+                "pageTextStyle": {
+                    "color": "#666666"
+                },
+                "itemGap": 25,
+                "itemWidth": 14,
+                "itemHeight": 14,
+                "selectedMode": True
+            },
+            "xAxis": {
+                "type": "time",
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{HH}:{mm}",
+                    "color": "#666666"
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "color": "#E0E0E0",
+                        "type": "dashed"
+                    }
+                }
+            },
+            "yAxis": {
+                "type": "value",
+                "min": 0,
+                "max": 100,
+                "interval": 20,
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{value}%",
+                    "color": "#666666"
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {
+                        "color": "#E0E0E0",
+                        "type": "dashed"
+                    }
+                }
+            }
+        })
 
-    def update_nanodx_time_chart(self, datadf: pd.DataFrame) -> None:
+    def update_nanodx_plot(self, x, y, count, n_features):
         """
-        Updates the NanoDX time series chart with new data.
+        Update the NanoDX visualization plot with new data.
 
-        Args:
-            datadf (pd.DataFrame): DataFrame containing the data to plot.
+        Parameters
+        ----------
+        x : List[str]
+            List of tumor types
+        y : List[float]
+            Confidence scores for each tumor type
+        count : str
+            Number of BAM files processed
+        n_features : int
+            Number of features detected
         """
-        self.nanodx_time_chart.options["series"] = []
-        for series, data in datadf.to_dict().items():
-            data_list = [[key, value] for key, value in data.items()]
-            if series != "number_probes":
-                self.nanodx_time_chart.options["series"].append(
-                    {
-                        "animation": False,
+        # Convert values to percentages and format
+        formatted_values = [float(f"{val * 100:.1f}") for val in y]
+        
+        # Sort the data in descending order
+        sorted_indices = sorted(range(len(formatted_values)), key=lambda k: formatted_values[k], reverse=True)
+        sorted_values = [formatted_values[i] for i in sorted_indices]
+        sorted_labels = [x[i] for i in sorted_indices]
+        
+        # Create descriptive title with key information
+        title_text = (
+            f"NanoDX Analysis Results\n"
+            f"{count} samples processed • {int(n_features)} features found"
+        )
+        
+        self.nanodxchart.options["title"].update({
+            "text": title_text,
+            "subtext": f"Model: {self.model}"
+        })
+        self.nanodxchart.options["yAxis"]["data"] = sorted_labels
+        self.nanodxchart.options["series"][0].update({
+            "data": sorted_values,
+            "itemStyle": {
+                "color": "#007AFF",
+                "borderRadius": [0, 4, 4, 0]
+            }
+        })
+        self.nanodxchart.update()
+
+    def update_nanodx_time_chart(self, datadf):
+        """
+        Update the time series chart with new data.
+
+        Parameters
+        ----------
+        datadf : pd.DataFrame
+            DataFrame containing time series data for visualization
+        """
+        try:
+            logger.debug(f"Updating NanoDX time chart with DataFrame shape: {datadf.shape}")
+            logger.debug(f"DataFrame columns: {datadf.columns.tolist()}")
+
+            if datadf.empty:
+                logger.warning("No data available for NanoDX time series chart")
+                self.nanodx_time_chart.options["title"]["text"] = "No Data Available"
+                self.nanodx_time_chart.options["series"] = []
+                self.nanodx_time_chart.update()
+                return
+
+            self.nanodx_time_chart.options["series"] = []
+            
+            # iOS color palette for multiple series
+            colors = [
+                "#007AFF",  # Blue
+                "#34C759",  # Green
+                "#FF9500",  # Orange
+                "#FF2D55",  # Red
+                "#5856D6",  # Purple
+                "#FF3B30",  # Red-Orange
+                "#5AC8FA",  # Light Blue
+                "#4CD964",  # Light Green
+            ]
+            
+            for idx, (series, data) in enumerate(datadf.to_dict().items()):
+                if series != "number_probes":
+                    logger.debug(f"Processing series: {series}")
+                    # Convert values to percentages
+                    data_list = [[key, float(f"{value * 100:.1f}")] for key, value in data.items()]
+                    logger.debug(f"First few data points for {series}: {data_list[:3]}")
+                    
+                    self.nanodx_time_chart.options["series"].append({
+                        "name": series,
                         "type": "line",
                         "smooth": True,
-                        "name": series,
-                        "emphasis": {"focus": "series"},
+                        "animation": False,
+                        "symbolSize": 6,
+                        "emphasis": {
+                            "focus": "series",
+                            "itemStyle": {
+                                "borderWidth": 2
+                            }
+                        },
                         "endLabel": {
                             "show": True,
-                            "formatter": "{a}",
-                            "distance": 20,
+                            "formatter": "{a}: {c}%",
+                            "distance": 10,
+                            "fontSize": 12
                         },
                         "lineStyle": {
                             "width": 2,
+                            "color": colors[idx % len(colors)]
                         },
-                        "data": data_list,
-                    }
-                )
-        self.nanodx_time_chart.update()
+                        "itemStyle": {
+                            "color": colors[idx % len(colors)]
+                        },
+                        "data": data_list
+                    })
+
+            # Update chart title with summary
+            if not datadf.empty:
+                latest_data = datadf.iloc[-1]
+                if "number_probes" in latest_data:
+                    latest_data = latest_data.drop("number_probes")  # Remove number_probes from latest data
+                
+                if not latest_data.empty and not latest_data.isna().all():
+                    max_confidence = latest_data.max() * 100  # Convert to percentage
+                    max_type = latest_data.idxmax()
+                    self.nanodx_time_chart.options["title"]["text"] = (
+                        f"Classification Confidence Over Time\n"
+                        f"Current highest confidence: {max_type} ({max_confidence:.1f}%)"
+                    )
+                else:
+                    self.nanodx_time_chart.options["title"]["text"] = "Classification Confidence Over Time"
+            
+            self.nanodx_time_chart.update()
+            
+        except Exception as e:
+            logger.error(f"Error updating NanoDX time chart: {str(e)}", exc_info=True)
+            self.nanodx_time_chart.options["title"]["text"] = "Error Updating Chart"
+            self.nanodx_time_chart.options["series"] = []
+            self.nanodx_time_chart.update()
 
 
 def test_me(

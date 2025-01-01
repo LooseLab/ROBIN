@@ -1,11 +1,43 @@
 """
-This code has the following known issues:
-1. The code lacks documentation.
-2. The code will load earlier iterations of the data on first load. This is not ideal!
+Target Coverage Analysis Module
+=============================
 
+This module provides functionality for analyzing and visualizing coverage data from targeted sequencing experiments.
+It includes features for tracking coverage depth, assessing target enrichment, and evaluating sequencing quality.
+
+The module implements coverage analysis following Apple Human Interface Guidelines for data visualization
+and provides real-time monitoring of sequencing coverage across targeted regions.
+
+Key Features
+-----------
+* Real-time coverage depth tracking
+* Target enrichment assessment
+* Quality-based coverage classification
+* Interactive data visualization
+* SNP and INDEL detection (when reference genome is provided)
+
+Quality Thresholds
+----------------
+* Excellent: ≥30x coverage
+* Good: ≥20x coverage
+* Moderate: ≥10x coverage
+* Insufficient: <10x coverage
+
+Dependencies
+-----------
+* pandas
+* numpy
+* pysam
+* docker
+* nicegui
+* natsort
+
+Notes
+-----
+The module requires Docker to be running for SNP/INDEL calling functionality.
+Coverage data is automatically saved and can be loaded for retrospective analysis.
 """
 
-from robin.subpages.base_analysis import BaseAnalysis
 import natsort
 from robin import theme, resources
 import pandas as pd
@@ -16,7 +48,7 @@ import logging
 import click
 import time
 from pathlib import Path
-from nicegui import ui, run, app  # , background_tasks
+from nicegui import ui, run, app
 from io import StringIO
 import pysam
 import tempfile
@@ -24,20 +56,39 @@ import shutil
 import queue
 import docker
 from robin.utilities.decompress import decompress_gzip_file
+from robin.subpages.base_analysis import BaseAnalysis
 
 os.environ["CI"] = "1"
-# Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
+# Decompress required reference files
 decompress_gzip_file(
     os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), "clinvar.vcf.gz")
 )
 
-
 def process_annotations(record: dict) -> dict:
     """
-    This function takes a dictionary record from a vcf file and explodes the record into multiple records based on the contents of the INFO field.
-    We expect some unit of 16 entries in the INFO field. Where there are multiples of 16 entries, we split them into a new record entry for that specific mutation.
+    Process VCF record annotations into structured data.
+
+    This function parses the INFO field of a VCF record and extracts annotation information
+    into a structured format. It handles both single and multiple annotations per record.
+
+    Parameters
+    ----------
+    record : dict
+        A dictionary containing VCF record data with an INFO field.
+
+    Returns
+    -------
+    tuple
+        A tuple containing two dictionaries:
+        - ann_dict: Dictionary of parsed annotation fields
+        - rec_dict: Dictionary of other record information
+
+    Notes
+    -----
+    The function expects annotation fields to contain 16 entries in a specific order.
+    Multiple annotations are split into separate records.
     """
     # print(record["INFO"])
     if "INFO" not in record.keys():
@@ -109,8 +160,28 @@ def process_annotations(record: dict) -> dict:
                 rec_dict[mykey] = myvalue
     return ann_dict, rec_dict
 
-
 def parse_vcf(vcf_file):
+    """
+    Parse and process a VCF file into a pandas DataFrame.
+
+    This function reads a VCF file, processes its annotations, and creates an expanded
+    DataFrame with one row per variant-annotation combination.
+
+    Parameters
+    ----------
+    vcf_file : str
+        Path to the VCF file to be parsed.
+
+    Returns
+    -------
+    pandas.DataFrame or None
+        A DataFrame containing the processed VCF data, or None if the file is empty.
+
+    Notes
+    -----
+    The function handles duplicate entries and aggregates certain fields.
+    The resulting DataFrame is saved as a CSV file alongside the original VCF.
+    """
     header = "CHROM POS ID REF ALT QUAL FILTER INFO FORMAT GT".split()
     vcf = pd.read_csv(vcf_file, delimiter="\t", comment="#", names=header)
     result = None
@@ -170,8 +241,34 @@ def parse_vcf(vcf_file):
                 print(e)
                 sys.exit(1)
 
-
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, showerrors):
+    """
+    Run the Clair3 variant caller on targeted regions.
+
+    This function executes Clair3 in a Docker container to call variants in specified
+    regions of a BAM file. It also performs annotation using snpEff and SnpSift.
+
+    Parameters
+    ----------
+    bamfile : str
+        Path to the input BAM file.
+    bedfile : str
+        Path to the BED file defining target regions.
+    workdir : str
+        Working directory for temporary files.
+    workdirout : str
+        Output directory for results.
+    threads : int
+        Number of threads to use.
+    reference : str
+        Path to the reference genome.
+    showerrors : bool
+        Whether to display error messages.
+
+    Notes
+    -----
+    Requires Docker to be running and the Clair3 image to be available.
+    """
     # ToDo: handle any platform
     # ToDo: Get basecall model from bam file info
     if sys.platform in ["darwin", "linux"]:
@@ -209,10 +306,28 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
         parse_vcf(f"{workdirout}/snpsift_output.vcf")
         parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
 
-
 def get_covdfs(bamfile):
     """
-    This function runs modkit on a bam file and extracts the methylation data.
+    Extract coverage information from a BAM file.
+
+    This function calculates coverage statistics for both the entire genome
+    and specific target regions defined in a BED file.
+
+    Parameters
+    ----------
+    bamfile : str
+        Path to the input BAM file.
+
+    Returns
+    -------
+    tuple
+        A tuple containing two pandas DataFrames:
+        - Coverage statistics for the entire genome
+        - Coverage statistics for target regions
+
+    Notes
+    -----
+    Uses pysam for efficient BAM file processing.
     """
     try:
         # no_secondary_bam = tempfile.NamedTemporaryFile(dir=output, suffix=".bam").name
@@ -242,16 +357,13 @@ def get_covdfs(bamfile):
         return None
     return newcovdf, bedcovdf
 
-
 def subset_bam(bamfile, targets, output):
     pysam.view("-L", f"{targets}", "-o", f"{output}", f"{bamfile}")
-
 
 def sort_bam(bamfile, output, threads):
     pysam.sort(f"-@{threads}", "-o", output, bamfile)
     pysam.index(f"{output}", f"{output}.bai")
     print(f"Sorted bam file saved as {output}")
-
 
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
     merged_df = pd.merge(
@@ -286,7 +398,6 @@ def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
     merged_bed_df.drop(columns=["bases_df1", "bases_df2"], inplace=True)
     return merged_df, merged_bed_df
 
-
 def run_bedtools(bamfile, bedfile, tempbamfile):
     """
     This function extracts the target sites from the bamfile.
@@ -297,11 +408,59 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
     except Exception as e:
         print(e)
 
-
 class TargetCoverage(BaseAnalysis):
+    """
+    Target Coverage Analysis Class
+
+    This class provides functionality for analyzing and visualizing coverage data
+    from targeted sequencing experiments. It includes real-time monitoring,
+    quality assessment, and variant calling capabilities.
+
+    Parameters
+    ----------
+    showerrors : bool, optional
+        Whether to display error messages, by default False
+    target_panel : str, optional
+        Name of the target panel to use (e.g., "rCNS2", "AML")
+    reference : str, optional
+        Path to the reference genome for variant calling
+
+    Attributes
+    ----------
+    callthreshold : int
+        Minimum coverage threshold for variant calling
+    clair3running : bool
+        Flag indicating if variant calling is in progress
+    targets_exceeding_threshold : dict
+        Tracks regions exceeding coverage threshold
+    coverage_over_time : dict
+        Stores coverage progression data
+
+    Notes
+    -----
+    Requires Docker for variant calling functionality.
+    Implements Apple HIG principles for data visualization.
+    """
+
     def __init__(
         self, *args, showerrors=False, target_panel=None, reference=None, **kwargs
     ):
+        """
+        Initialize the TargetCoverage analysis object.
+
+        Parameters
+        ----------
+        *args
+            Variable length argument list.
+        showerrors : bool, optional
+            Whether to display error messages, by default False
+        target_panel : str, optional
+            Name of the target panel to use
+        reference : str, optional
+            Path to the reference genome
+        **kwargs
+            Arbitrary keyword arguments.
+        """
         self.callthreshold = 10
         self.clair3running = False
         self.targets_exceeding_threshold = {}
@@ -398,34 +557,54 @@ class TargetCoverage(BaseAnalysis):
     def setup_ui(self):
         if self.summary:
             with self.summary:
-                ui.label("Current coverage estimates: Unknown")
+                with ui.card().classes('w-full p-4 mb-4'):
+                    with ui.row().classes('w-full items-center justify-between'):
+                        # Left side - Coverage Status
+                        with ui.column().classes('gap-2'):
+                            ui.label("Target Coverage Analysis").classes('text-lg font-medium')
+                            with ui.row().classes('items-center gap-2'):
+                                ui.label("Status: Awaiting Data").classes('text-gray-600')
+                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+
+                        # Right side - Coverage metrics
+                        with ui.column().classes('gap-2 text-right'):
+                            ui.label("Coverage Details").classes('font-medium')
+                            ui.label("Targets Analyzed: --").classes('text-gray-600')
+                            ui.label("Average Coverage: --").classes('text-gray-600')
+
+                    # Bottom row - Information
+                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                        ui.label("Coverage analysis of target regions")
+
         with ui.card().classes("w-full"):
+            ui.label("Current coverage estimates: Unknown")
+        with ui.card().classes("w-full p-2"):
             ui.label("Coverage Data").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
-            with ui.grid(columns=2).classes("w-full h-auto"):
+            with ui.grid(columns=2).classes("w-full h-auto gap-2"):
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2"
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2 p-2"
                 ):
                     self.create_coverage_plot("Chromosome Coverage")
 
                 with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2"
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-1 max-[{self.MENU_BREAKPOINT}px]:col-span-2 p-2"
                 ):
                     self.create_coverage_plot_targets("Target Coverage")
-        with ui.card().classes("w-full"):
+        with ui.card().classes("w-full p-2"):
             ui.label("Target Outliers").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.column().classes("w-full"):
-                with ui.card().classes("w-full"):
+                with ui.card().classes("w-full p-2"):
                     self.create_target_boxplot()
-        with ui.card().classes("w-full"):
+        with ui.card().classes("w-full p-2"):
             ui.label("Coverage over time").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.column().classes("w-full"):
-                with ui.card().classes("w-full"):
+                with ui.card().classes("w-full p-2"):
                     self.create_coverage_time_chart()
         with ui.card().classes("w-full"):
             ui.label("Coverage over targets").classes('text-sky-600 dark:text-white').style(
@@ -455,9 +634,9 @@ class TargetCoverage(BaseAnalysis):
                     ui.card().tight().classes("w-full overflow-x-auto")
                 )
                 with self.SNPplaceholder:
-                    ui.label(
-                        "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
-                    )
+                    with ui.column().classes('gap-2'):
+                        ui.label("Awaiting SNP Data").classes('text-lg font-medium')
+                        ui.label("Candidate SNPs will be displayed here when available. SNPs are called based on available data at that time.").classes('text-gray-600')
                 # self.SNPview = SNPview(self.SNPplaceholder)
                 # ui.timer(0.1,lambda: self.SNPview.renderme(), once=True)
             ui.label("Candidate IN/DELs").classes('text-sky-600 dark:text-white').style(
@@ -469,9 +648,9 @@ class TargetCoverage(BaseAnalysis):
                 )
 
                 with self.INDELplaceholder:
-                    ui.label(
-                        "Candidate IN/DELs will be displayed here. IN/DELs are called based on available data at that time."
-                    )
+                    with ui.column().classes('gap-2'):
+                        ui.label("Awaiting INDEL Data").classes('text-lg font-medium')
+                        ui.label("Candidate IN/DELs will be displayed here when available. IN/DELs are called based on available data at that time.").classes('text-gray-600')
                 # self.INDELview = SNPview(self.INDELplaceholder)
                 # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
 
@@ -482,26 +661,114 @@ class TargetCoverage(BaseAnalysis):
             self.page_timer = ui.timer(30, lambda: self.show_previous_data())
 
     def create_coverage_plot(self, title):
+        """
+        Create an interactive coverage plot following Apple HIG guidelines.
+
+        This method initializes an ECharts plot for displaying chromosome-wide
+        coverage data with interactive features and consistent styling.
+
+        Parameters
+        ----------
+        title : str
+            Title for the coverage plot
+
+        Notes
+        -----
+        Implements Apple HIG design principles including:
+        - SF Pro Text font family
+        - iOS-style color scheme
+        - Consistent spacing and layout
+        - Interactive features (zoom, reset, export)
+        """
         self.echart3 = (
             ui.echart(
                 {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "yAxis": {"type": "value"},
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12
+                    },
+                    "grid": {
+                        "left": "5%",
+                        "right": "5%",
+                        "bottom": "5%",
+                        "top": "15%",
+                        "containLabel": True
+                    },
+                    "title": {
+                        "text": title,
+                        "left": "center",
+                        "top": 5,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {
+                            "dataZoom": {
+                                "show": True,
+                                "title": {
+                                    "zoom": "Zoom",
+                                    "back": "Reset Zoom"
+                                }
+                            },
+                            "restore": {
+                                "show": True,
+                                "title": "Reset"
+                            },
+                            "saveAsImage": {
+                                "show": True,
+                                "title": "Save Image",
+                                "pixelRatio": 2
+                            }
+                        }
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {
+                            "color": "#1D1D1F"
+                        }
+                    },
                     "xAxis": {
                         "type": "category",
                         "data": [],
-                        "axisTick": {"alignWithLabel": True},
                         "axisLabel": {
                             "interval": 0,
-                            "rotate": 30,
+                            "rotate": 45,
+                            "color": "#86868B",
+                            "fontSize": 12
                         },
-                        "inverse": False,
+                        "axisTick": {
+                            "alignWithLabel": True
+                        }
                     },
-                    #'legend': {},
-                    "series": [],
+                    "yAxis": {
+                        "type": "value",
+                        "name": "Coverage Depth",
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "padding": [0, 30, 0, 0]
+                        },
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "formatter": "{value}x"
+                        },
+                        "splitLine": {
+                            "show": True,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#E5E5EA"
+                            }
+                        }
+                    },
+                    "series": []
                 }
             )
             .style("height: 350px")
@@ -509,26 +776,120 @@ class TargetCoverage(BaseAnalysis):
         )
 
     def create_coverage_plot_targets(self, title):
+        """
+        Create an interactive plot comparing on-target vs off-target coverage.
+
+        This method initializes an ECharts plot that visualizes the relationship
+        between on-target and off-target coverage across chromosomes.
+
+        Parameters
+        ----------
+        title : str
+            Title for the target coverage plot
+
+        Notes
+        -----
+        Features include:
+        - Dual series for on/off target comparison
+        - Interactive tooltips
+        - Consistent styling with other plots
+        """
         self.echart4 = (
             ui.echart(
                 {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "yAxis": {"type": "value"},
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12
+                    },
+                    "grid": {
+                        "left": "5%",
+                        "right": "5%",
+                        "bottom": "5%",
+                        "top": "15%",
+                        "containLabel": True
+                    },
+                    "title": {
+                        "text": title,
+                        "left": "center",
+                        "top": 5,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {
+                            "dataZoom": {
+                                "show": True,
+                                "title": {
+                                    "zoom": "Zoom",
+                                    "back": "Reset Zoom"
+                                }
+                            },
+                            "restore": {
+                                "show": True,
+                                "title": "Reset"
+                            },
+                            "saveAsImage": {
+                                "show": True,
+                                "title": "Save Image",
+                                "pixelRatio": 2
+                            }
+                        }
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "legend": {
+                        "data": ["Off Target", "On Target"],
+                        "top": 50,
+                        "textStyle": {
+                            "color": "#86868B"
+                        }
+                    },
                     "xAxis": {
                         "type": "category",
                         "data": [],
-                        "axisTick": {"alignWithLabel": True},
                         "axisLabel": {
                             "interval": 0,
-                            "rotate": 30,
+                            "rotate": 45,
+                            "color": "#86868B",
+                            "fontSize": 12
                         },
-                        "inverse": False,
+                        "axisTick": {
+                            "alignWithLabel": True
+                        }
                     },
-                    "legend": {"data": ["Off Target", "On Target"]},
-                    "series": [],
+                    "yAxis": {
+                        "type": "value",
+                        "name": "Coverage Depth",
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "padding": [0, 30, 0, 0]
+                        },
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "formatter": "{value}x"
+                        },
+                        "splitLine": {
+                            "show": True,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#E5E5EA"
+                            }
+                        }
+                    },
+                    "series": []
                 }
             )
             .style("height: 350px")
@@ -536,33 +897,126 @@ class TargetCoverage(BaseAnalysis):
         )
 
     def create_coverage_time_chart(self):
+        """
+        Create a time series chart showing coverage progression.
+
+        This method initializes an ECharts line chart that displays how
+        coverage depth changes over time during sequencing.
+
+        Notes
+        -----
+        Features include:
+        - Smooth line interpolation
+        - Time-based x-axis
+        - Coverage depth y-axis
+        - Interactive features
+        """
         self.coverage_time_chart = (
             ui.echart(
                 {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "grid": {"containLabel": True},
-                    "title": {"text": "Coverage Over Time"},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "time"},
-                    "yAxis": {"type": "value", "data": [], "inverse": False},
-                    "tooltip": {"order": "valueDesc", "trigger": "axis"},
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12
+                    },
+                    "grid": {
+                        "left": "5%",
+                        "right": "5%",
+                        "bottom": "5%",
+                        "top": "15%",
+                        "containLabel": True
+                    },
+                    "title": {
+                        "text": "Coverage Over Time",
+                        "left": "center",
+                        "top": 5,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {
+                            "dataZoom": {
+                                "show": True,
+                                "title": {
+                                    "zoom": "Zoom",
+                                    "back": "Reset Zoom"
+                                }
+                            },
+                            "restore": {
+                                "show": True,
+                                "title": "Reset"
+                            },
+                            "saveAsImage": {
+                                "show": True,
+                                "title": "Save Image",
+                                "pixelRatio": 2
+                            }
+                        }
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "xAxis": {
+                        "type": "time",
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "formatter": "{HH}:{mm}:{ss}"
+                        }
+                    },
+                    "yAxis": {
+                        "type": "value",
+                        "name": "Coverage Depth",
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "padding": [0, 30, 0, 0]
+                        },
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "formatter": "{value}x"
+                        },
+                        "splitLine": {
+                            "show": True,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#E5E5EA"
+                            }
+                        }
+                    },
                     "series": [
                         {
                             "type": "line",
                             "smooth": True,
                             "name": "Coverage",
-                            "emphasis": {"focus": "series"},
-                            "endLabel": {
-                                "show": True,
-                                "formatter": "{a}",
-                                "distance": 20,
+                            "emphasis": {
+                                "focus": "series",
+                                "itemStyle": {
+                                    "color": "#0A84FF"  # iOS blue (highlighted)
+                                }
                             },
                             "lineStyle": {
                                 "width": 2,
+                                "color": "#007AFF"  # iOS blue
                             },
-                            "data": [],
+                            "itemStyle": {
+                                "color": "#007AFF"  # iOS blue
+                            },
+                            "symbol": "circle",
+                            "symbolSize": 6,
+                            "data": []
                         }
-                    ],
+                    ]
                 }
             )
             .style("height: 350px")
@@ -570,15 +1024,67 @@ class TargetCoverage(BaseAnalysis):
         )
 
     def create_target_boxplot(self):
+        """
+        Create a boxplot showing coverage distribution across targets.
+
+        This method initializes an ECharts boxplot that displays coverage
+        statistics and outliers for each target region.
+
+        Notes
+        -----
+        Features include:
+        - Box and whisker plot for coverage distribution
+        - Outlier detection and display
+        - Gene name labels for outliers
+        - Interactive features
+        """
         self.target_boxplot = (
             ui.echart(
                 {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "title": [
-                        {
-                            "text": "Target Coverage",
-                        },
-                    ],
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12
+                    },
+                    "grid": {
+                        "left": "5%",
+                        "right": "5%",
+                        "bottom": "5%",
+                        "top": "15%",
+                        "containLabel": True
+                    },
+                    "title": {
+                        "text": "Target Coverage",
+                        "left": "center",
+                        "top": 5,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F"
+                        }
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {
+                            "dataZoom": {
+                                "show": True,
+                                "title": {
+                                    "zoom": "Zoom",
+                                    "back": "Reset Zoom"
+                                }
+                            },
+                            "restore": {
+                                "show": True,
+                                "title": "Reset"
+                            },
+                            "saveAsImage": {
+                                "show": True,
+                                "title": "Save Image",
+                                "pixelRatio": 2
+                            }
+                        }
+                    },
                     "dataset": [
                         {
                             "id": "raw",
@@ -609,108 +1115,134 @@ class TargetCoverage(BaseAnalysis):
                             "source": [],
                         },
                     ],
-                    "tooltip": {"trigger": "item", "axisPointer": {"type": "shadow"}},
+                    "tooltip": {
+                        "trigger": "item",
+                        "axisPointer": {"type": "shadow"},
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {
+                            "color": "#1D1D1F"
+                        }
+                    },
                     "dataZoom": [
                         {
                             "type": "slider",
-                            "yAxisIndex": 0,
+                            "show": True,
+                            "xAxisIndex": [0],
+                            "start": 0,
+                            "end": 100,
+                            "borderColor": "#E5E5EA",
+                            "textStyle": {
+                                "color": "#86868B"
+                            }
                         }
                     ],
-                    "grid": {"left": "10%", "right": "10%", "bottom": "15%"},
                     "xAxis": {
                         "type": "category",
                         "name": "Chromosome",
-                        "boundaryGap": True,
                         "nameGap": 30,
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12
+                        },
+                        "axisLabel": {
+                            "interval": 0,
+                            "rotate": 45,
+                            "color": "#86868B",
+                            "fontSize": 12
+                        },
                         "splitArea": {"show": False},
-                        "splitLine": {"show": False},
+                        "splitLine": {"show": False}
                     },
                     "yAxis": {
-                        # "type": 'value',
+                        "type": "value",
                         "name": "Coverage",
-                        # "splitArea": {
-                        #    "show": True
-                        # }
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "padding": [0, 30, 0, 0]
+                        },
+                        "axisLabel": {
+                            "color": "#86868B",
+                            "formatter": "{value}x"
+                        },
+                        "splitArea": {
+                            "show": True
+                        }
                     },
                     "legend": {
-                        "data": ["boxplot", "raw data", "outliers", "global outliers"],
+                        "top": 50,
+                        "textStyle": {
+                            "color": "#86868B"
+                        },
                         "selected": {
-                            "boxplot": True,
+                            "box plot": True,
+                            "outliers": True,
                             "global outliers": True,
-                            "raw data": False,
-                            "outliers": False,
+                            "raw data": False
                         },
                     },
                     "series": [
                         {
-                            "name": "boxplot",
+                            "name": "box plot",
                             "type": "boxplot",
                             "datasetId": "raw",
+                            "itemStyle": {
+                                "color": "#007AFF",  # iOS blue
+                                "borderColor": "#0A84FF"  # iOS blue (highlighted)
+                            },
                             "encode": {
-                                "y": ["min", "Q1", "median", "Q3", "max"],
                                 "x": "chrom",
+                                "y": ["min", "Q1", "median", "Q3", "max"],
                                 "itemName": ["chrom"],
                                 "tooltip": ["min", "Q1", "median", "Q3", "max"],
-                            },
-                        },
-                        {
-                            "name": "raw data",
-                            "type": "scatter",
-                            "datasetId": "rawdata",
-                            "encode": {
-                                "y": "coverage",
-                                "x": "chrom",
-                                "label": "name",
-                                "itemName": "name",
-                                "tooltip": ["chrom", "name", "coverage"],
-                            },
-                            "label": {
-                                "show": True,
-                                "position": "right",
-                                "itemName": "name",
-                                "color": "black",
-                                "fontSize": 16,
                             },
                         },
                         {
                             "name": "outliers",
                             "type": "scatter",
                             "datasetId": "outliers",
-                            "encode": {
-                                "y": "coverage",
-                                "x": "chrom",
-                                "label": "name",
-                                "itemName": "name",
-                                "tooltip": ["chrom", "name", "coverage"],
+                            "symbolSize": 6,
+                            "itemStyle": {
+                                "color": "#FF9F0A"  # iOS orange
                             },
                             "label": {
                                 "show": True,
                                 "position": "right",
-                                "itemName": "name",
-                                "color": "black",
-                                "fontSize": 16,
+                                "formatter": "{@name}",
+                                "color": "#1D1D1F",
+                                "fontSize": 12
                             },
+                            "encode": {
+                                "x": "chrom",
+                                "y": "coverage",
+                                "label": ["name"],
+                                "tooltip": ["name", "coverage"]
+                            }
                         },
                         {
                             "name": "global outliers",
                             "type": "scatter",
                             "datasetId": "globaloutliers",
-                            "encode": {
-                                "y": "coverage",
-                                "x": "chrom",
-                                "label": "name",
-                                "itemName": "name",
-                                "tooltip": ["chrom", "name", "coverage"],
+                            "symbolSize": 6,
+                            "itemStyle": {
+                                "color": "#FF453A"  # iOS red
                             },
                             "label": {
                                 "show": True,
                                 "position": "right",
-                                "itemName": "name",
-                                "color": "black",
-                                "fontSize": 16,
+                                "formatter": "{@name}",
+                                "color": "#1D1D1F",
+                                "fontSize": 12
                             },
-                        },
-                    ],
+                            "encode": {
+                                "x": "chrom",
+                                "y": "coverage",
+                                "label": ["name"],
+                                "tooltip": ["name", "coverage"]
+                            }
+                        }
+                    ]
                 }
             )
             .style("height: 500px")
@@ -1113,6 +1645,23 @@ class TargetCoverage(BaseAnalysis):
         self.running = False
 
     def show_previous_data(self):
+        """
+        Display previously generated coverage analysis results.
+
+        This method loads and displays saved coverage data, including:
+        - Coverage quality assessment
+        - Coverage depth statistics
+        - Target enrichment metrics
+        - Interactive visualizations
+
+        Notes
+        -----
+        Implements quality thresholds:
+        - Excellent: ≥30x coverage
+        - Good: ≥20x coverage
+        - Moderate: ≥10x coverage
+        - Insufficient: <10x coverage
+        """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
                 if item == "sample_ids":
@@ -1199,23 +1748,58 @@ class TargetCoverage(BaseAnalysis):
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    with ui.row():
-                        ui.label("Coverage Depths - ")
-                        if len(self.cov_df_main) > 0:
-                            ui.label(
-                                f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
-                            )
-                            if len(self.bedcov_df_main) > 0:
-                                ui.label(
-                                    f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
-                                )
-                                ui.label(
-                                    f"Estimated enrichment: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum())/(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
-                                )
-                            else:
-                                ui.label("Targets Estimated Coverage: Calculating....")
-                        else:
-                            ui.label("No data available")
+                    with ui.card().classes('w-full p-4 mb-4'):
+                        with ui.row().classes('w-full items-center justify-between'):
+                            # Left side - Coverage quality assessment
+                            with ui.column().classes('gap-2'):
+                                if len(self.cov_df_main) > 0 and len(self.bedcov_df_main) > 0:
+                                    target_coverage = self.bedcov_df_main['bases'].sum() / self.bedcov_df_main['length'].sum()
+                                    
+                                    # Determine quality level and styling
+                                    if target_coverage >= 30:
+                                        quality = "Excellent"
+                                        quality_color = "text-green-600"
+                                        quality_bg = "bg-green-100"
+                                    elif target_coverage >= 20:
+                                        quality = "Good"
+                                        quality_color = "text-blue-600"
+                                        quality_bg = "bg-blue-100"
+                                    elif target_coverage >= 10:
+                                        quality = "Moderate"
+                                        quality_color = "text-yellow-600"
+                                        quality_bg = "bg-yellow-100"
+                                    else:
+                                        quality = "Insufficient"
+                                        quality_color = "text-red-600"
+                                        quality_bg = "bg-red-100"
+
+                                    ui.label("Coverage Analysis").classes('text-lg font-medium')
+                                    with ui.row().classes('items-center gap-2'):
+                                        ui.label(f"Quality: {quality}").classes(f'{quality_color} font-medium')
+                                        ui.label(f"{target_coverage:.2f}x").classes(f'px-2 py-1 rounded {quality_bg} {quality_color}')
+
+                            # Right side - Coverage metrics
+                            with ui.column().classes('gap-2 text-right'):
+                                if len(self.cov_df_main) > 0:
+                                    global_coverage = self.cov_df_main['covbases'].sum() / self.cov_df_main['endpos'].sum()
+                                    ui.label("Coverage Depths").classes('font-medium')
+                                    ui.label(f"Global Estimated Coverage: {global_coverage:.2f}x").classes('text-gray-600')
+                                    if len(self.bedcov_df_main) > 0:
+                                        target_coverage = self.bedcov_df_main['bases'].sum() / self.bedcov_df_main['length'].sum()
+                                        enrichment = target_coverage / global_coverage
+                                        ui.label(f"Targets Estimated Coverage: {target_coverage:.2f}x").classes('text-gray-600')
+                                        ui.label(f"Estimated enrichment: {enrichment:.2f}x").classes('text-gray-600')
+                                    else:
+                                        ui.label("Targets Estimated Coverage: Calculating....").classes('text-gray-600')
+                                else:
+                                    ui.label("No data available").classes('text-gray-600')
+
+                        # Bottom row - Quality thresholds legend
+                        with ui.row().classes('w-full mt-4 gap-4 text-sm justify-center'):
+                            ui.label("≥30x Excellent").classes('text-green-600')
+                            ui.label("≥20x Good").classes('text-blue-600')
+                            ui.label("≥10x Moderate").classes('text-yellow-600')
+                            ui.label("<10x Insufficient").classes('text-red-600')
 
         if self.check_file_time(f"{output}/clair3/snpsift_output.vcf.csv"):
             df = pd.read_csv(
