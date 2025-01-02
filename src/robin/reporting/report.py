@@ -16,6 +16,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.pdfgen.canvas import Canvas
+from reportlab.platypus import Frame, PageTemplate, BaseDocTemplate
+
 from reportlab.platypus import (
     SimpleDocTemplate,
     Paragraph,
@@ -207,171 +209,145 @@ def create_pdf(filename, output):
 
     styles = getSampleStyleSheet()
     
-    # Update all text styles for a modern, clean look aligned with UI
-    styles["Title"].fontSize = 18  # Main title
-    styles["Title"].spaceAfter = 20
-    styles["Title"].textColor = colors.HexColor('#1a237e')
-    styles["Title"].alignment = 1  # Center alignment
+    # Color palette for consistent branding
+    COLORS = {
+        'primary': colors.HexColor('#1a237e'),
+        'secondary': colors.HexColor('#283593'),
+        'text': colors.HexColor('#37474f'),
+        'success': colors.HexColor('#2e7d32'),
+        'warning': colors.HexColor('#f57c00'),
+        'error': colors.HexColor('#c62828'),
+        'muted': colors.HexColor('#546e7a'),
+        'border': colors.HexColor('#e9ecef'),
+        'background': colors.HexColor('#f8f9fa'),
+    }
     
-    styles["Heading1"].fontSize = 14  # Major sections
-    styles["Heading1"].spaceAfter = 4   # Reduced from 10
-    styles["Heading1"].spaceBefore = 6  # Reduced from 10
-    styles["Heading1"].fontName = "FiraSans"
-    styles["Heading1"].textColor = colors.HexColor('#1a237e')
+    # Update all styles to use regular font weight
+    for style_name in ['Title', 'Heading1', 'Heading2', 'Normal']:
+        styles[style_name].fontName = 'FiraSans'
+        if style_name == 'Title':
+            styles[style_name].fontSize = 18
+            styles[style_name].spaceAfter = 14
+            styles[style_name].spaceBefore = 7
+            styles[style_name].textColor = COLORS['primary']
+            styles[style_name].alignment = 1
+        elif style_name == 'Heading1':
+            styles[style_name].fontSize = 14
+            styles[style_name].spaceAfter = 7
+            styles[style_name].spaceBefore = 4
+            styles[style_name].textColor = COLORS['primary']
+        elif style_name == 'Heading2':
+            styles[style_name].fontSize = 12
+            styles[style_name].spaceAfter = 6
+            styles[style_name].spaceBefore = 4
+            styles[style_name].textColor = COLORS['secondary']
+        else:  # Normal
+            styles[style_name].fontSize = 9
+            styles[style_name].leading = 14
+            styles[style_name].spaceBefore = 2
+            styles[style_name].spaceAfter = 2
+            styles[style_name].textColor = COLORS['text']
     
-    styles["Heading2"].fontSize = 12  # Sub-sections
-    styles["Heading2"].spaceAfter = 4   # Reduced from 8
-    styles["Heading2"].spaceBefore = 6  # Reduced from 8
-    styles["Heading2"].fontName = "FiraSans"
-    styles["Heading2"].textColor = colors.HexColor('#283593')
+    # Add additional styles
+    additional_styles = {
+        'Smaller': {
+            'fontSize': 7,
+            'leading': 11,
+            'textColor': COLORS['text']
+        },
+        'Bold': {  # Keep name for compatibility
+            'fontSize': 10,
+            'leading': 12,
+            'textColor': COLORS['primary']
+        },
+        'Underline': {
+            'fontSize': 10,
+            'leading': 12,
+            'textColor': COLORS['secondary']
+        },
+        'SummaryCard': {
+            'fontSize': 11,
+            'leading': 14,
+            'textColor': COLORS['primary'],
+            'backColor': COLORS['background'],
+            'borderColor': COLORS['border'],
+            'borderWidth': 1,
+            'borderPadding': 8,
+            'spaceBefore': 8,
+            'spaceAfter': 8,
+            'bulletIndent': 0,
+            'leftIndent': 8,
+            'rightIndent': 8
+        },
+        'Metric': {
+            'fontSize': 12,
+            'leading': 16,
+            'textColor': COLORS['secondary'],
+            'alignment': 1,
+            'spaceBefore': 4,
+            'spaceAfter': 4
+        },
+        'Caption': {
+            'fontSize': 9,
+            'leading': 11,
+            'textColor': COLORS['muted'],
+            'alignment': 1,
+            'spaceBefore': 4,
+            'spaceAfter': 12
+        }
+    }
     
-    styles["Heading3"].fontSize = 11  # Minor sections
-    styles["Heading3"].spaceAfter = 3   # Reduced from 6
-    styles["Heading3"].spaceBefore = 4  # Reduced from 6
-    styles["Heading3"].fontName = "FiraSans"
-    styles["Heading3"].textColor = colors.HexColor('#303f9f')
+    for style_name, style_props in additional_styles.items():
+        style_props['parent'] = styles['Normal']
+        style_props['fontName'] = 'FiraSans'
+        styles.add(ParagraphStyle(name=style_name, **style_props))
     
-    # Modern body text style with improved readability
-    styles["BodyText"].fontSize = 9  # Standard text
-    styles["BodyText"].leading = 11
-    styles["BodyText"].fontName = "FiraSans"
-    styles["BodyText"].textColor = colors.HexColor('#37474f')
-    
-    # Add styles for summary results with improved visual hierarchy
-    styles.add(
-        ParagraphStyle(
-            name='SummaryResult',
-            parent=styles['BodyText'],
-            fontSize=10,
-            leading=12,
-            fontName="FiraSans",
-            textColor=colors.HexColor('#1a237e'),
-            spaceAfter=2,
-            bulletIndent=0,        # Removed indentation
-            leftIndent=0,          # Removed indentation
-            borderWidth=0,         # Removed border
-            borderPadding=0,       # Removed padding
-            backColor=None         # Removed background color
-        )
-    )
-
-    # Add style for important metrics
-    styles.add(
-        ParagraphStyle(
-            name='Metric',
-            parent=styles['BodyText'],
-            fontSize=11,
-            leading=13,
-            fontName="FiraSans-Bold",
-            textColor=colors.HexColor('#283593'),
-            spaceAfter=4,
-            alignment=1
-        )
-    )
-
-    # Update caption style
-    styles.add(
-        ParagraphStyle(
-            name='Caption',
-            parent=styles['Normal'],
-            fontSize=8,
-            leading=10,
-            fontName="FiraSans",
-            textColor=colors.HexColor('#546e7a'),
-            alignment=1,
-            spaceAfter=4
-        )
-    )
-
-    # Add style for confidence indicators
-    styles.add(
-        ParagraphStyle(
-            name='Confidence',
-            parent=styles['BodyText'],
-            fontSize=9,
-            leading=11,
-            fontName="FiraSans-Bold",
-            textColor=colors.HexColor('#2e7d32'),
-            spaceAfter=2
-        )
-    )
-
-    # Modern table style definition with improved readability
+    # Update table style to use regular font
     MODERN_TABLE_STYLE = TableStyle([
-        # Header styling
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#f8f9fa')),  # Lighter background
-        ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1a237e')),
-        ('FONTNAME', (0, 0), (-1, 0), 'FiraSans'),
-        ('FONTSIZE', (0, 0), (-1, 0), 9),
-        ('TOPPADDING', (0, 0), (-1, 0), 8),
-        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
-        ('LINEBELOW', (0, 0), (-1, 0), 1, colors.HexColor('#e9ecef')),  # Subtle header border
-        
-        # Body styling
+        ('BACKGROUND', (0, 0), (-1, 0), COLORS['background']),
+        ('TEXTCOLOR', (0, 0), (-1, 0), COLORS['primary']),
+        ('FONTNAME', (0, 0), (-1, -1), 'FiraSans'),
+        ('FONTSIZE', (0, 0), (-1, 0), 10),
+        ('TOPPADDING', (0, 0), (-1, 0), 12),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+        ('LINEBELOW', (0, 0), (-1, 0), 1, COLORS['border']),
         ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-        ('TEXTCOLOR', (0, 1), (-1, -1), colors.HexColor('#212529')),  # Darker for better contrast
-        ('FONTNAME', (0, 1), (-1, -1), 'FiraSans'),
-        ('FONTSIZE', (0, 1), (-1, -1), 8),
-        ('TOPPADDING', (0, 1), (-1, -1), 6),
-        ('BOTTOMPADDING', (0, 1), (-1, -1), 6),
-        ('LEFTPADDING', (0, 0), (-1, -1), 12),  # Consistent padding
-        ('RIGHTPADDING', (0, 0), (-1, -1), 12),
-        
-        # Grid styling - more subtle
-        ('GRID', (0, 0), (-1, -1), 0.25, colors.HexColor('#dee2e6')),
-        
-        # Alignment
+        ('TEXTCOLOR', (0, 1), (-1, -1), COLORS['text']),
+        ('FONTSIZE', (0, 1), (-1, -1), 9),
+        ('TOPPADDING', (0, 1), (-1, -1), 8),
+        ('BOTTOMPADDING', (0, 1), (-1, -1), 8),
+        ('LEFTPADDING', (0, 0), (-1, -1), 16),
+        ('RIGHTPADDING', (0, 0), (-1, -1), 16),
+        ('GRID', (0, 0), (-1, -1), 0.5, COLORS['border']),
         ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
         ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        
-        # Alternating row colors - more subtle
-        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, COLORS['background']]),
     ])
 
-    # Update custom styles
-    styles.add(
-        ParagraphStyle(
-            name='Bold',
-            parent=styles['Normal'],
-            fontSize=9,
-            leading=11,
-            fontName="FiraSans-Bold",
-            textColor=colors.HexColor('#2C3E50')
-        )
-    )
+    # Helper function for section dividers
+    def add_section_divider(elements):
+        elements.append(HRFlowable(
+            width="100%",
+            thickness=1,
+            color=COLORS['border'],
+            spaceBefore=12,
+            spaceAfter=12
+        ))
 
-    styles.add(
-        ParagraphStyle(
-            name='Smaller',
-            parent=styles['Normal'],
-            fontSize=8,
-            leading=10,
-            fontName="FiraSans",
-            textColor=colors.HexColor('#2C3E50')
-        )
-    )
+    # Helper function for summary cards - remove bold from title
+    def add_summary_card(elements, title, content):
+        #elements.append(Paragraph(title, styles["SummaryCard"]))  # Removed <b> tags
+        elements.append(Paragraph(content, styles["Normal"]))
+        elements.append(Spacer(1, 8))
 
-    # Add Underline style
-    styles.add(
-        ParagraphStyle(
-            name='Underline',
-            parent=styles['Heading2'],
-            fontSize=10,  # Reduced from 12
-            fontName="FiraSans-Bold",
-            textColor=colors.HexColor('#2C3E50'),
-            spaceAfter=2,
-            spaceBefore=2
-        )
-    )
-
-    # Update document margins for better use of space
+    # Update document margins for better spacing
     doc = SimpleDocTemplate(
         filename,
         pagesize=A4,
-        rightMargin=0.5*inch,
-        leftMargin=0.5*inch,
-        topMargin=1.35*inch,      # Increased to ensure no header overlap
-        bottomMargin=0.5*inch,
+        rightMargin=0.75*inch,    # Increased margins for better readability
+        leftMargin=0.75*inch,
+        topMargin=1.35*inch,
+        bottomMargin=0.75*inch,
     )
 
     # Initialize lists to store document elements
@@ -417,175 +393,140 @@ def create_pdf(filename, output):
     classification_data = []
     current_row = []
 
-    # Start directly with classification details
-    elements_summary.append(Paragraph("Classification Details", styles["Heading1"]))
-    elements_summary.append(Spacer(1, 4))
-    elements_summary.append(
-        Paragraph(f"Sample {sample_id} has the following classifications:", styles["BodyText"])
-    )
-    elements_summary.append(Spacer(1, 8))
+    # Load CNV data and XYestimate before using them
+    XYestimate = "Unknown"  # Default value
+    if os.path.exists(os.path.join(output, "CNV.npy")):
+        CNVresult = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
+        CNVresult = Result(CNVresult)
+        cnv_dict = np.load(
+            os.path.join(output, "CNV_dict.npy"), allow_pickle=True
+        ).item()
+        if os.path.exists(os.path.join(output, "XYestimate.pkl")):
+            with open(os.path.join(output, "XYestimate.pkl"), "rb") as file:
+                XYestimate = pickle.load(file)
 
-    try:
-        # Update the classification plots section
-        for name, df_name in [
-            ("Sturgeon", "sturgeon_scores.csv"),
-            ("NanoDX", "nanodx_scores.csv"),
-            ("PanNanoDX", "pannanodx_scores.csv"),
-            ("Forest", "random_forest_scores.csv"),
-         ]:
-            # Process classification data as before
-            if df_name.lower() in [f.lower() for f in os.listdir(output)]:
-                def find_case_insensitive_file(target_name, search_path):
-                    target_name_lower = target_name.lower()
-                    for path in Path(search_path).rglob('*'):
-                        if path.is_file() and path.name.lower() == target_name_lower:
-                            return str(path)
-                    return None
-                file_path = find_case_insensitive_file(df_name, output) or os.path.join(output, df_name)
+    # Start with the report content
+    #elements_summary.append(Paragraph("Analysis Summary", styles["Title"]))
+    #add_section_divider(elements_summary)
+    
+    # Classification section
+    elements_summary.append(Paragraph("Classification Results", styles["Heading1"]))
+    #add_summary_card(
+    #    elements_summary,
+    #    "Sample Information",
+    #    f"Sample ID: {sample_id}"
+    #)
+    
+    # Add the function definition before the classification processing
+    def find_case_insensitive_file(target_name, search_path):
+        """Find a file regardless of case sensitivity."""
+        target_name_lower = target_name.lower()
+        for path in Path(search_path).rglob('*'):
+            if path.is_file() and path.name.lower() == target_name_lower:
+                return str(path)
+        return None
 
-                df_store = pd.read_csv(file_path)
-                df_store2 = df_store.drop(columns=["timestamp"])
-                lastrow = df_store2.iloc[-1].drop("number_probes") if "number_probes" in df_store2.columns else df_store2.iloc[-1]
-                lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-                
-                raw_confidence = float(lastrow_plot_top.values[0])
-                confidence_value = raw_confidence / 100.0 if name == "Forest" else raw_confidence
-                
-                confidence_text = "High confidence" if confidence_value >= 0.75 else \
-                                "Medium confidence" if confidence_value >= 0.5 else \
-                                "Low confidence"
-                confidence_color = '#2e7d32' if confidence_value >= 0.75 else \
-                                 '#f57c00' if confidence_value >= 0.5 else \
-                                 '#c62828'
-
-                # Create classification content
-                classification_content = (
-                    Paragraph(
-                        f'{name} classification: {lastrow_plot_top.index[0]}<br/>'
-                        f'<font color="{confidence_color}">{confidence_value:.1%} - {confidence_text}</font>',
-                        styles["SummaryResult"]
-                    )
-                )
-
-                features_content = None
-                if "number_probes" in df_store.columns:
-                    features_content = Paragraph(
-                        f'Features found: {int(df_store.iloc[-1]["number_probes"])}',
-                        styles["BodyText"]
-                    )
-
-                # Add to current row
-                current_row.append([classification_content, features_content] if features_content else [classification_content])
-                
-                # When row is complete (2 columns), add to classification data
-                if len(current_row) == 2:
-                    classification_data.append(current_row)
-                    current_row = []
-
-                # Process plots separately
-                img_buf = classification_plot(df_store, name, 0.05)
-                img_pil = PILImage.open(img_buf)
-                width_img, height_img = img_pil.size
-                width, height = A4
-                height = (width * 0.95) / width_img * height_img
-                img = Image(img_buf, width=width * 0.95, height=height, kind="proportional")
-                elements.append(img)
-                elements.append(Spacer(1, 8))
-
-        # Handle any remaining items in the last row
-        if current_row:
-            while len(current_row) < 2:
-                current_row.append([''])  # Add empty cells to complete the row
-            classification_data.append(current_row)
-
-        # Create and add the classification table
-        if classification_data:
-            table = Table(classification_data, colWidths=[width/2 - 20, width/2 - 20])
-            table.setStyle(TableStyle([
-                ('LEFTPADDING', (0, 0), (-1, -1), 10),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 10),
-                ('TOPPADDING', (0, 0), (-1, -1), 5),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
-                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-            ]))
-            elements_summary.append(table)
-            elements_summary.append(Spacer(1, 8))
-
-    except Exception as e:
-        logger.error(f"Error processing classification plots: {e}")
-        raise
-
-    try:
-        elements.append(PageBreak())
-        elements.append(Paragraph("Copy Number Variation Detail", styles["Heading2"]))
-        elements.append(Spacer(1, 16))
-        # Add CNV plots
-        if os.path.exists(os.path.join(output, "CNV.npy")):
-            CNVresult = np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
-            CNVresult = Result(CNVresult)
-            cnv_dict = np.load(
-                os.path.join(output, "CNV_dict.npy"), allow_pickle=True
-            ).item()
-            file = open(os.path.join(output, "XYestimate.pkl"), "rb")
-            XYestimate = pickle.load(file)
-            elements_summary.append(Paragraph("Estimated Genetic Sex", styles["Heading3"]))
-            elements_summary.append(
-                Paragraph(
-                    f"{XYestimate}",
-                    styles["BodyText"],
-                )
-            )
-
-            cnv_summary = create_CNV_plot(CNVresult, cnv_dict)
-            img = Image(cnv_summary, width=6 * inch, height=1.5 * inch)
-            elements.append(img)
-            elements.append(Spacer(1, 6))
-
-            # Create CNV per chromosome plots in a 2-column grid
-            cnv_plots = create_CNV_plot_per_chromosome(CNVresult, cnv_dict)
+    # Process classification data with new styling
+    for name, df_name in [
+        ("Sturgeon", "sturgeon_scores.csv"),
+        ("NanoDX", "nanodx_scores.csv"),
+        ("PanNanoDX", "pannanodx_scores.csv"),
+        ("Forest", "random_forest_scores.csv"),
+    ]:
+        if df_name.lower() in [f.lower() for f in os.listdir(output)]:
+            file_path = find_case_insensitive_file(df_name, output) or os.path.join(output, df_name)
+            df_store = pd.read_csv(file_path)
+            df_store2 = df_store.drop(columns=["timestamp"])
+            lastrow = df_store2.iloc[-1].drop("number_probes") if "number_probes" in df_store2.columns else df_store2.iloc[-1]
+            lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
             
-            # Calculate dimensions for 2-column layout
+            raw_confidence = float(lastrow_plot_top.values[0])
+            confidence_value = raw_confidence / 100.0 if name == "Forest" else raw_confidence
+            
+            confidence_text = "High confidence" if confidence_value >= 0.75 else \
+                            "Medium confidence" if confidence_value >= 0.5 else \
+                            "Low confidence"
+            confidence_color = COLORS['success'] if confidence_value >= 0.75 else \
+                             COLORS['warning'] if confidence_value >= 0.5 else \
+                             COLORS['error']
+            
+            # Create classification card
+            card_content = (
+                f'<b>{name} Classification</b><br/>'
+                f'Result: {lastrow_plot_top.index[0]}<br/>'
+                f'<font color="{confidence_color.hexval()}">{confidence_value:.1%} - {confidence_text}</font>'
+            )
+            if "number_probes" in df_store.columns:
+                card_content += f'<br/>Features found: {int(df_store.iloc[-1]["number_probes"])}'
+            
+            add_summary_card(elements_summary, name, card_content)
+            
+            # Add classification plot with improved styling
+            img_buf = classification_plot(df_store, name, 0.05)
+            img_pil = PILImage.open(img_buf)
+            width_img, height_img = img_pil.size
             width, height = A4
-            col_width = (width * 0.95) / 2  # 95% of page width split into 2 columns
-            plot_height = col_width / 4  # Maintain aspect ratio
+            scaled_width = width * 0.85  # Slightly narrower for better presentation
+            scaled_height = (scaled_width / width_img) * height_img
             
-            # Process plots two at a time
-            for i in range(0, len(cnv_plots), 2):
-                # Create a list to hold the current row's plots
-                row_plots = []
-                
-                # Add plots for this row (either 1 or 2 plots)
-                for j in range(2):
-                    if i + j < len(cnv_plots):
-                        contig, img_buf = cnv_plots[i + j]
-                        row_plots.append((contig, Image(img_buf, width=col_width, height=plot_height)))
-                
-                # Create a table for this row of plots
-                plot_data = [[plot[1] for plot in row_plots]]
-                if len(plot_data[0]) < 2:  # If odd number of plots, add empty cell
-                    plot_data[0].append('')
-                
-                table = Table(plot_data, colWidths=[col_width] * 2)
-                elements.append(table)
-                elements.append(Spacer(1, 6))
-
-            if XYestimate != "Unknown":
-                elements.append(
-                    Paragraph(f"Estimated Genetic Sex: {XYestimate}", styles["Smaller"])
-                )
-            elements.append(
-                Paragraph(f"Current Bin Width: {cnv_dict['bin_width']}", styles["Smaller"])
-            )
+            elements.append(Paragraph(f"{name} Classification Timeline", styles["Heading2"]))
+            elements.append(Image(img_buf, width=scaled_width, height=scaled_height))
             elements.append(
                 Paragraph(
-                    f"Current Variance: {round(cnv_dict['variance'], 3)}", styles["Smaller"]
+                    f"Classification confidence over time for {name}",
+                    ParagraphStyle(
+                        'Caption',
+                        parent=styles['Normal'],
+                        fontSize=9,
+                        leading=11,
+                        textColor=COLORS['muted'],
+                        alignment=1,
+                        spaceBefore=4,
+                        spaceAfter=12
+                    )
                 )
             )
-            elements.append(Spacer(1, 12))
-            elements.append(PageBreak())
-    except Exception as e:
-        logger.error(f"Error processing CNV plots: {e}")
-        raise
+            add_section_divider(elements)
+
+    # Genetic Sex Summary
+    if XYestimate != "Unknown":
+        elements_summary.append(Paragraph("Genetic Sex Analysis", styles["Heading2"]))
+        
+        sex_color = COLORS['primary'] if XYestimate == "XX" else \
+                   COLORS['secondary'] if XYestimate == "XY" else \
+                   COLORS['muted']
+        
+        sex_icon = "♀" if XYestimate == "XX" else \
+                  "♂" if XYestimate == "XY" else \
+                  "?"
+        
+        add_summary_card(
+            elements_summary,
+            "Genetic Sex Estimate",
+            f'<font size="16" color="{sex_color.hexval()}">{sex_icon}</font> '
+            f'<font color="{sex_color.hexval()}">Estimated: {XYestimate}</font>'
+        )
+    
+    # Add CNV summary if available
+    if os.path.exists(os.path.join(output, "cnv.png")):
+        elements_summary.append(Paragraph("Copy Number Variation", styles["Heading2"]))
+        img = Image(os.path.join(output, "cnv.png"), width=width * 0.85)
+        elements_summary.append(img)
+        elements_summary.append(
+            Paragraph(
+                "Copy number variation across chromosomes",
+                ParagraphStyle(
+                    'Caption',
+                    parent=styles['Normal'],
+                    fontSize=9,
+                    leading=11,
+                    textColor=COLORS['muted'],
+                    alignment=1,
+                    spaceBefore=4,
+                    spaceAfter=12
+                )
+            )
+        )
 
     try:
         # Add fusion gene plots and summary
@@ -683,7 +624,7 @@ def create_pdf(filename, output):
                         Paragraph(
                             f"Total Significant Fusion Events (at least 3 reads): {len(significant_fusions)}<br/>"
                             f"Total Supporting Reads: {total_supporting_reads}",
-                            styles["BodyText"],
+                            styles["Normal"],
                         )
                     )
                     fusion_list = []
@@ -695,7 +636,7 @@ def create_pdf(filename, output):
                     elements_summary.append(
                         Paragraph(
                             "<br/>".join(fusion_list),
-                            styles["BodyText"],
+                            styles["Normal"],
                         )
                     )
 
@@ -706,7 +647,7 @@ def create_pdf(filename, output):
                         Paragraph(
                             f"Total Significant Fusion Events (at least 3 reads): {len(significant_fusions_all)}<br/>"
                             f"Total Supporting Reads: {total_supporting_reads_all}",
-                            styles["BodyText"],
+                            styles["Normal"],
                         )
                     )
                     fusion_list = []
@@ -719,14 +660,14 @@ def create_pdf(filename, output):
                     #    Paragraph(
                     #        "<br/>".join(fusion_list),
                     #   )
-                    #        styles["BodyText"],
+                    #        styles["Normal"],
                     #)
 
                 if not significant_fusions and not significant_fusions_all:
                     elements_summary.append(
                         Paragraph(
                             "No significant fusion events detected (minimum 3 supporting reads required)",
-                            styles["BodyText"],
+                            styles["Normal"],
                         )
                     )
 
@@ -742,7 +683,7 @@ def create_pdf(filename, output):
                                     Paragraph(
                                         f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads) - "
                                         "Plot skipped due to complexity",
-                                        styles["BodyText"]
+                                        styles["Normal"]
                                     )
                                 )
                                 continue
@@ -757,7 +698,7 @@ def create_pdf(filename, output):
                             elements.append(
                                 Paragraph(
                                     f"Gene Fusion: {' - '.join(gene_group)} ({supporting_reads} supporting reads)", 
-                                    styles["BodyText"]
+                                    styles["Normal"]
                                 )
                             )
                             elements.append(
@@ -780,7 +721,7 @@ def create_pdf(filename, output):
                             f"• Minimum supporting reads threshold: 3"
                         )
                         
-                        elements.append(Paragraph(summary_text, styles["BodyText"]))
+                        elements.append(Paragraph(summary_text, styles["Normal"]))
                         elements.append(Spacer(1, 12))
                         
                         # Add note about complexity
@@ -815,7 +756,7 @@ def create_pdf(filename, output):
             elements_summary.append(
                 Paragraph(
                     f"Coverage Depths - Global Estimated Coverage: {(cov_df_main['covbases'].sum() / cov_df_main['endpos'].sum()):.2f}x Targets Estimated Coverage: {(bedcov_df_main['bases'].sum() / bedcov_df_main['length'].sum()):.2f}x",
-                    styles["BodyText"],
+                    styles["Normal"],
                 )
             )
 
@@ -823,7 +764,7 @@ def create_pdf(filename, output):
                 elements_summary.append(
                     Paragraph(
                         "Target Coverage is below the recommended 10x threshold",
-                        styles["BodyText"],
+                        styles["Normal"],
                     )
                 )
 
@@ -890,7 +831,7 @@ def create_pdf(filename, output):
             elements.append(table)
             elements.append(Spacer(1, 12))
         else:
-            elements.append(Paragraph("No Coverage Data Available", styles["BodyText"]))
+            elements.append(Paragraph("No Coverage Data Available", styles["Normal"]))
 
         # Add MGMT results
         last_seen = 0
@@ -919,7 +860,7 @@ def create_pdf(filename, output):
                 elements_summary.append(
                     Paragraph(
                         summary_text,
-                        styles["BodyText"],
+                        styles["Normal"],
                     )
                 )
 
