@@ -413,19 +413,19 @@ def create_pdf(filename, output):
             elements.append(Paragraph(caption, styles["Caption"]))
         elements.append(Spacer(1, 8))   # Reduced from 12
 
-    # Add classification details with reduced spacing
+    # Initialize storage for classification data
+    classification_data = []
+    current_row = []
+
+    # Start directly with classification details
     elements_summary.append(Paragraph("Classification Details", styles["Heading1"]))
-    elements_summary.append(Spacer(1, 4))  # Reduced from 5
+    elements_summary.append(Spacer(1, 4))
     elements_summary.append(
         Paragraph(f"Sample {sample_id} has the following classifications:", styles["BodyText"])
     )
-    elements_summary.append(Spacer(1, 8))  # Reduced from 16
+    elements_summary.append(Spacer(1, 8))
 
     try:
-        elements.append(PageBreak())
-        elements.append(Paragraph("Classification Summary", styles["Heading2"]))
-        elements.append(Spacer(1, 16))
-
         # Update the classification plots section
         for name, df_name in [
             ("Sturgeon", "sturgeon_scores.csv"),
@@ -433,13 +433,8 @@ def create_pdf(filename, output):
             ("PanNanoDX", "pannanodx_scores.csv"),
             ("Forest", "random_forest_scores.csv"),
          ]:
-            elements.append(Paragraph(name, styles["Heading3"]))
-            elements.append(Spacer(1, 8))
-            # List files in the directory and convert them to lowercase
-            files_in_directory = [f.lower() for f in os.listdir(output)]
-
-            # Check if the lowercase version of df_name exists in the directory
-            if df_name.lower() in files_in_directory:
+            # Process classification data as before
+            if df_name.lower() in [f.lower() for f in os.listdir(output)]:
                 def find_case_insensitive_file(target_name, search_path):
                     target_name_lower = target_name.lower()
                     for path in Path(search_path).rglob('*'):
@@ -448,19 +443,11 @@ def create_pdf(filename, output):
                     return None
                 file_path = find_case_insensitive_file(df_name, output) or os.path.join(output, df_name)
 
-                # Read the CSV file
                 df_store = pd.read_csv(file_path)
-
                 df_store2 = df_store.drop(columns=["timestamp"])
-
-                if "number_probes" in df_store2.columns:
-                    lastrow = df_store2.iloc[-1].drop("number_probes")
-                else:
-                    lastrow = df_store2.iloc[-1]
-
-                lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+                lastrow = df_store2.iloc[-1].drop("number_probes") if "number_probes" in df_store2.columns else df_store2.iloc[-1]
                 lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-                # Get confidence value and adjust for Random Forest
+                
                 raw_confidence = float(lastrow_plot_top.values[0])
                 confidence_value = raw_confidence / 100.0 if name == "Forest" else raw_confidence
                 
@@ -470,27 +457,32 @@ def create_pdf(filename, output):
                 confidence_color = '#2e7d32' if confidence_value >= 0.75 else \
                                  '#f57c00' if confidence_value >= 0.5 else \
                                  '#c62828'
-                
-                # Create a cleaner classification summary without background and borders
-                elements_summary.append(
+
+                # Create classification content
+                classification_content = (
                     Paragraph(
                         f'{name} classification: {lastrow_plot_top.index[0]}<br/>'
                         f'<font color="{confidence_color}">{confidence_value:.1%} - {confidence_text}</font>',
-                        styles["SummaryResult"],
+                        styles["SummaryResult"]
                     )
                 )
-                try:
-                    if "number_probes" in df_store.columns:
-                        elements_summary.append(
-                            Paragraph(
-                                f'Features found: {int(df_store.iloc[-1]["number_probes"])}',
-                                styles["BodyText"],
-                            )
-                        )
-                except:
-                    pass
-                elements_summary.append(Spacer(1, 4))  # Small space between classifications
 
+                features_content = None
+                if "number_probes" in df_store.columns:
+                    features_content = Paragraph(
+                        f'Features found: {int(df_store.iloc[-1]["number_probes"])}',
+                        styles["BodyText"]
+                    )
+
+                # Add to current row
+                current_row.append([classification_content, features_content] if features_content else [classification_content])
+                
+                # When row is complete (2 columns), add to classification data
+                if len(current_row) == 2:
+                    classification_data.append(current_row)
+                    current_row = []
+
+                # Process plots separately
                 img_buf = classification_plot(df_store, name, 0.05)
                 img_pil = PILImage.open(img_buf)
                 width_img, height_img = img_pil.size
@@ -498,14 +490,27 @@ def create_pdf(filename, output):
                 height = (width * 0.95) / width_img * height_img
                 img = Image(img_buf, width=width * 0.95, height=height, kind="proportional")
                 elements.append(img)
-                elements.append(Spacer(1, 8))  # Reduced spacing between plots
+                elements.append(Spacer(1, 8))
 
-                elements.append(Spacer(1, 20))  # More space between classification sections
+        # Handle any remaining items in the last row
+        if current_row:
+            while len(current_row) < 2:
+                current_row.append([''])  # Add empty cells to complete the row
+            classification_data.append(current_row)
 
-            else:
-                elements.append(
-                    Paragraph(f"No {name} Classification Available", styles["BodyText"])
-                )
+        # Create and add the classification table
+        if classification_data:
+            table = Table(classification_data, colWidths=[width/2 - 20, width/2 - 20])
+            table.setStyle(TableStyle([
+                ('LEFTPADDING', (0, 0), (-1, -1), 10),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+                ('TOPPADDING', (0, 0), (-1, -1), 5),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            elements_summary.append(table)
+            elements_summary.append(Spacer(1, 8))
+
     except Exception as e:
         logger.error(f"Error processing classification plots: {e}")
         raise
