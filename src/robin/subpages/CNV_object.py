@@ -429,6 +429,18 @@ class CNVAnalysis(BaseAnalysis):
             header=None,
             sep="\s+",
         )
+        
+        # Add cytobands file loading
+        self.cytobands_file = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "cytoBand.txt",
+        )
+        self.cytobands_bed = pd.read_csv(
+            self.cytobands_file,
+            names=["chrom", "start_pos", "end_pos", "name", "gieStain"],
+            header=None,
+            sep="\s+"
+        )
         super().__init__(*args, **kwargs)
         self.NewBed = BedTree(preserve_original_tree=True, reference_file=f"{self.reference_file}.fai", readfish_toml=self.readfish_toml)
         self.NewBed.load_from_file(self.bed_file)
@@ -614,8 +626,8 @@ class CNVAnalysis(BaseAnalysis):
             if len(bedcontent2)>0:
                 #print(bedcontent2)
                 self.NewBed.load_from_string(bedcontent2, merge=False, write_files=True, output_location=os.path.join(
-                              self.check_and_create_folder(self.output, self.sampleID))
-                                             )
+                    self.check_and_create_folder(self.output, self.sampleID)
+                ))
 
             np.save(
                 os.path.join(
@@ -1123,6 +1135,34 @@ class CNVAnalysis(BaseAnalysis):
                                 }
                             },
                             "data": []
+                        },
+                        {
+                            "type": "scatter",
+                            "name": "centromeres_highlight",
+                            "data": [],  # Empty data because this series is just for highlighting
+                            "symbolSize": 3,
+                            "markArea": {
+                                "itemStyle": {
+                                    "color": "rgba(135, 206, 250, 0.4)"  # Light blue color
+                                },
+                                "data": [],
+                            },
+                        },
+                        {
+                            "type": "scatter",
+                            "name": "cytobands_highlight",
+                            "data": [],  # Empty data because this series is just for highlighting
+                            "symbolSize": 3,
+                            "markArea": {
+                                "itemStyle": {
+                                    "color": "rgba(200, 200, 200, 0.4)"  # Light gray color for default
+                                },
+                                "data": [],
+                            },
+                            "markLine": {
+                                "symbol": "none",
+                                "data": []
+                            }
                         }
                     ]
                 }
@@ -1194,6 +1234,15 @@ class CNVAnalysis(BaseAnalysis):
                 # Adjust the x-axis min and max to focus on the region around the gene target
                 min = start_pos - 10 * self.cnv_dict["bin_width"]
                 max = end_pos + 10 * self.cnv_dict["bin_width"]
+
+                # Further adjust the axis limits if the gene region is large
+                if start_pos - min > 2_000_000:
+                    min = start_pos - 2_000_000
+                if max - end_pos > 2_000_000:
+                    max = end_pos + 2_000_000
+
+                if min < 0:
+                    min = 0  # Ensure the minimum x-axis value is not negative
 
             # If all chromosomes are selected, prepare the plot to display all chromosomes
             if self.chrom_filter == "All":
@@ -1270,10 +1319,6 @@ class CNVAnalysis(BaseAnalysis):
 
             # If a specific chromosome is selected, plot only that chromosome
             else:
-                plot_to_update.options["series"] = (
-                    []
-                )  # Clear existing series in the plot
-
                 # Update dropdown options for chromosomes
                 for counter, contig in enumerate(
                     natsort.natsorted(result.cnv), start=1
@@ -1282,30 +1327,9 @@ class CNVAnalysis(BaseAnalysis):
 
                 # Define the main chromosomes to be included in the plot
                 main_chromosomes = [
-                    "chr1",
-                    "chr2",
-                    "chr3",
-                    "chr4",
-                    "chr5",
-                    "chr6",
-                    "chr7",
-                    "chr8",
-                    "chr9",
-                    "chr10",
-                    "chr11",
-                    "chr12",
-                    "chr13",
-                    "chr14",
-                    "chr15",
-                    "chr16",
-                    "chr17",
-                    "chr18",
-                    "chr19",
-                    "chr20",
-                    "chr21",
-                    "chr22",
-                    "chrX",
-                    "chrY",
+                    "chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9",
+                    "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17",
+                    "chr18", "chr19", "chr20", "chr21", "chr22", "chrX", "chrY",
                 ]
 
                 # Filter CNV data to include only the main chromosomes
@@ -1325,7 +1349,6 @@ class CNVAnalysis(BaseAnalysis):
                         cnv
                     )
                 )
-
 
                 ymax = math.ceil(filter_and_find_max(np.array(cnv)))
 
@@ -1371,21 +1394,49 @@ class CNVAnalysis(BaseAnalysis):
 
                 plot_to_update.options["xAxis"]["max"] = max
                 plot_to_update.options["xAxis"]["min"] = min
-                #print(plot_to_update.options["dataZoom"][1])
-                #plot_to_update.options["dataZoom"][1]["startValue"] = 0
                 plot_to_update.options["dataZoom"][1]["endValue"] = ymax
-                plot_to_update.options["series"].append(
+
+                # Now initialize the series after we have contig defined
+                plot_to_update.options["series"] = [
                     {
                         "type": "scatter",
                         "name": contig,
                         "data": data,
-                        "symbolSize": 3,  # Smaller point size for this view
+                        "symbolSize": 3,
                         "markArea": {
                             "itemStyle": {"color": "rgba(255, 173, 177, 0.4)"},
                             "data": [],
                         },
+                    },
+                    {
+                        "type": "scatter",
+                        "name": "centromeres_highlight",
+                        "data": [],
+                        "symbolSize": 3,
+                        "markArea": {
+                            "itemStyle": {
+                                "color": "rgba(135, 206, 250, 0.4)"
+                            },
+                            "data": [],
+                        },
+                    },
+                    {
+                        "type": "scatter",
+                        "name": "cytobands_highlight",
+                        "data": [],
+                        "symbolSize": 3,
+                        "markArea": {
+                            "itemStyle": {
+                                "color": "rgba(200, 200, 200, 0.4)"
+                            },
+                            "data": [],
+                        },
+                        "markLine": {
+                            "symbol": "none",
+                            "data": []
+                        }
                     }
-                )
+                ]
 
                 # Add gene information to the dropdown options and highlight gene regions in the plot
                 for index, gene in self.gene_bed[
@@ -1402,6 +1453,17 @@ class CNVAnalysis(BaseAnalysis):
                             {
                                 "name": row["gene"],
                                 "xAxis": row["start_pos"],
+                                "label": {
+                                    "position": "insideTop",
+                                    "distance": 0,  # Reduced from 25 to 15
+                                    "color": "#000000",
+                                    "fontSize": 12,
+                                    "show": True,
+                                    "emphasis": {
+                                        "show": True,
+                                        "distance": 0  # Reduced from 40 to 25
+                                    }
+                                }
                             },
                             {
                                 "xAxis": row["end_pos"],
@@ -1409,22 +1471,7 @@ class CNVAnalysis(BaseAnalysis):
                         ]
                     )
 
-                plot_to_update.options["series"].append(
-                    {
-                        "type": "scatter",
-                        "name": contig + "_highlight",
-                        "data": [],  # Empty data because this series is just for highlighting
-                        "symbolSize": 3,
-                        "markArea": {
-                            "itemStyle": {
-                                "color": "rgba(135, 206, 250, 0.4)"
-                            },  # Light blue color
-                            "data": [],
-                        },
-                    }
-                )
-
-                # Highlight the centromeres with another shaded area:
+                # Highlight the centromeres with shaded area:
                 for _, row in self.centromere_bed[
                     self.centromere_bed["chrom"] == contig
                 ].iterrows():
@@ -1433,6 +1480,52 @@ class CNVAnalysis(BaseAnalysis):
                             {
                                 "name": row["name"],
                                 "xAxis": row["start_pos"],
+                                "label": {
+                                    "position": "insideBottom",
+                                    "distance": 10
+                                }
+                            },
+                            {
+                                "xAxis": row["end_pos"],
+                            },
+                        ]
+                    )
+
+                # Add cytoband highlighting
+                for _, row in self.cytobands_bed[
+                    self.cytobands_bed["chrom"] == contig
+                ].iterrows():
+                    # Set color based on Giemsa stain pattern
+                    color = "rgba(255, 255, 255, 0.0)"  # Default transparent
+                    if row["gieStain"].startswith("g"):
+                        if row["gieStain"] == "gvar":
+                            color = "rgba(128, 128, 128, 0.02)"  # Variable regions, further reduced
+                        elif row["gieStain"] == "gneg":
+                            color = "rgba(255, 255, 255, 0.0)"  # Negative bands
+                        else:
+                            # Extract intensity from gposNN
+                            try:
+                                intensity = int(row["gieStain"][4:])
+                                opacity = intensity / 100 * 0.05  # Further reduced scaling factor to 0.05
+                                color = f"rgba(0, 0, 0, {opacity})"
+                            except ValueError:
+                                pass
+                    elif row["gieStain"] == "acen":
+                        color = "rgba(217, 83, 79, 0.02)"  # Centromere, further reduced
+                    elif row["gieStain"] == "stalk":
+                        color = "rgba(91, 192, 222, 0.02)"  # Stalks, further reduced
+
+                    plot_to_update.options["series"][2]["markArea"]["data"].append(
+                        [
+                            {
+                                "name": f"{row['name']}",
+                                "xAxis": row["start_pos"],
+                                "itemStyle": {"color": color},
+                                "label": {
+                                    "position": "insideTop",
+                                    "distance": 25,  # Keep the higher position
+                                    "color": "#000000"  # Restored to full opacity
+                                }
                             },
                             {
                                 "xAxis": row["end_pos"],
@@ -1447,12 +1540,12 @@ class CNVAnalysis(BaseAnalysis):
                         {
                             "type": "line",
                             "name": "Line Plot",
-                            "data": coordinates,  # Your line plot data (e.g., [(x1, y1), (x2, y2), ...])
-                            "yAxisIndex": 1,  # Specify to use the secondary y-axis (index 1)
+                            "data": coordinates,
+                            "yAxisIndex": 1,
                             "lineStyle": {
                                 "color": "blue"
-                            },  # Color the line to match the y-axis
-                            "symbol": "none",  # Optionally remove symbols from the line plot
+                            },
+                            "symbol": "none",
                             "markLine": {
                                 "symbol": "none",
                                 "data": [
@@ -1469,28 +1562,34 @@ class CNVAnalysis(BaseAnalysis):
                     )
                     starts = self.CNVResults[contig]["start_positions"]
                     ends = self.CNVResults[contig]["end_positions"]
-                    # (starts, ends) = detector.get_breakpoints()
-                    # (starts, ends) = [],[]
+
+                    # Add start and end markers to the markLine data
                     for start in starts:
                         plot_to_update.options["series"][2]["markLine"]["data"].append(
                             {
                                 "lineStyle": {"width": 2},
-                                "label": {"formatter": "s"},
+                                "label": {
+                                    "formatter": "s",
+                                    "position": "insideEndTop"
+                                },
                                 "name": "Target",
                                 "color": "green",
-                                "xAxis": (start),
-                            },
+                                "xAxis": start,
+                            }
                         )
 
                     for end in ends:
                         plot_to_update.options["series"][2]["markLine"]["data"].append(
                             {
                                 "lineStyle": {"width": 2},
-                                "label": {"formatter": "e"},
+                                "label": {
+                                    "formatter": "e",
+                                    "position": "insideEndBottom"
+                                },
                                 "name": "Target",
                                 "color": "red",
-                                "xAxis": (end),
-                            },
+                                "xAxis": end,
+                            }
                         )
 
             # Update the chromosome dropdown options in the UI
