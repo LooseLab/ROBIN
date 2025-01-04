@@ -984,9 +984,9 @@ class CNVAnalysis(BaseAnalysis):
                     "animation": False,
                     "grid": {
                         "top": "25%",
-                        "bottom": "5%",
+                        "bottom": "20%",
                         "left": "5%",
-                        "right": "5%",
+                        "right": "10%",
                         "containLabel": True
                     },
                     "title": {
@@ -1081,7 +1081,7 @@ class CNVAnalysis(BaseAnalysis):
                             "xAxisIndex": "0",
                             "filterMode": "none",
                             "height": 20,
-                            "bottom": 50,
+                            "bottom": 35,
                             "borderColor": "#E5E5EA",
                             "backgroundColor": "#F5F5F7",
                             "fillerColor": "rgba(0, 122, 255, 0.2)",
@@ -1684,9 +1684,9 @@ class CNVAnalysis(BaseAnalysis):
             "animation": False,
             "grid": {
                 "top": "25%",
-                "bottom": "5%",
+                "bottom": "20%",
                 "left": "5%",
-                "right": "5%",
+                "right": "10%",
                 "containLabel": True
             },
             "title": {
