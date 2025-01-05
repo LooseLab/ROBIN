@@ -807,7 +807,8 @@ class CNVAnalysis(BaseAnalysis):
                     {'name': 'cytoband', 'label': 'Cytoband', 'field': 'name', 'align': 'left', 'sortable': True},
                     {'name': 'mean_cnv', 'label': 'Mean CNV', 'field': 'mean_cnv', 'align': 'right',
                      ':format': 'val => Number(val).toFixed(3)', 'sortable': True},
-                    {'name': 'state', 'label': 'State', 'field': 'cnv_state', 'align': 'center', 'sortable': True}
+                    {'name': 'state', 'label': 'State', 'field': 'cnv_state', 'align': 'center', 'sortable': True},
+                    {'name': 'genes', 'label': 'Genes', 'field': 'genes', 'align': 'left', 'sortable': True}
                 ],
                 rows=[],
                 row_key='name',
@@ -837,6 +838,9 @@ class CNVAnalysis(BaseAnalysis):
                     <q-td key="state" :props="props">
                         <q-badge :color="props.row.cnv_state === 'GAIN' ? 'positive' : props.row.cnv_state === 'LOSS' ? 'negative' : 'grey'"
                                  :label="props.row.cnv_state"/>
+                    </q-td>
+                    <q-td key="genes" :props="props">
+                        {{ props.row.genes ? props.row.genes.join(', ') : '' }}
                     </q-td>
                 </q-tr>
             ''')
@@ -1992,8 +1996,7 @@ class CNVAnalysis(BaseAnalysis):
     def analyze_cytoband_cnv(self, cnv_data: dict, chromosome: str) -> pd.DataFrame:
         """
         Analyze CNV values within each cytoband to detect duplications and deletions.
-        Merges adjacent cytobands with the same CNV state.
-        Handles X and Y chromosomes differently based on genetic sex.
+        Merges adjacent cytobands with the same CNV state and identifies genes in affected regions.
 
         Args:
             cnv_data (dict): Dictionary containing CNV values
@@ -2095,7 +2098,8 @@ class CNVAnalysis(BaseAnalysis):
                     'mean_cnv': [row['mean_cnv']],
                     'cnv_state': row['cnv_state'],
                     'bands': [row['name']],
-                    'length': row['end_pos'] - row['start_pos']
+                    'length': row['end_pos'] - row['start_pos'],
+                    'genes': []
                 }
             elif row['cnv_state'] == current_group['cnv_state']:
                 # Extend the current group
@@ -2103,11 +2107,21 @@ class CNVAnalysis(BaseAnalysis):
                 current_group['mean_cnv'].append(row['mean_cnv'])
                 current_group['bands'].append(row['name'])
             else:
+                # Find genes in the current group's region if it's a gain or loss
+                if current_group['cnv_state'] in ['GAIN', 'LOSS']:
+                    genes_in_region = self.gene_bed[
+                        (self.gene_bed['chrom'] == current_group['chrom']) &
+                        (self.gene_bed['start_pos'] <= current_group['end_pos']) &
+                        (self.gene_bed['end_pos'] >= current_group['start_pos'])
+                    ]['gene'].tolist()
+                    current_group['genes'] = genes_in_region
+                
                 # Finalize current group
                 current_group['name'] = f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
                 current_group['mean_cnv'] = np.mean(current_group['mean_cnv'])
                 current_group['length'] = current_group['end_pos'] - current_group['start_pos']
                 merged_cytobands.append(current_group)
+                
                 # Start new group
                 current_group = {
                     'chrom': row['chrom'],
@@ -2117,11 +2131,21 @@ class CNVAnalysis(BaseAnalysis):
                     'mean_cnv': [row['mean_cnv']],
                     'cnv_state': row['cnv_state'],
                     'bands': [row['name']],
-                    'length': row['end_pos'] - row['start_pos']
+                    'length': row['end_pos'] - row['start_pos'],
+                    'genes': []
                 }
         
         # Add the last group if it exists
         if current_group is not None:
+            # Find genes in the last group's region if it's a gain or loss
+            if current_group['cnv_state'] in ['GAIN', 'LOSS']:
+                genes_in_region = self.gene_bed[
+                    (self.gene_bed['chrom'] == current_group['chrom']) &
+                    (self.gene_bed['start_pos'] <= current_group['end_pos']) &
+                    (self.gene_bed['end_pos'] >= current_group['start_pos'])
+                ]['gene'].tolist()
+                current_group['genes'] = genes_in_region
+            
             current_group['name'] = f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
             current_group['mean_cnv'] = np.mean(current_group['mean_cnv'])
             current_group['length'] = current_group['end_pos'] - current_group['start_pos']
