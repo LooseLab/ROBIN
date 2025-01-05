@@ -1788,6 +1788,35 @@ class CNVAnalysis(BaseAnalysis):
                         ui.label(f"Bin Width: {bin_width:,}").classes('text-gray-600')
                         ui.label(f"Variance: {variance:.3f}").classes('text-gray-600')
 
+                        # Calculate gene counts for gains and losses
+                        total_gained_genes = set()
+                        total_lost_genes = set()
+                        
+                        if hasattr(self, "result3") and self.result3.cnv:
+                            main_chromosomes = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
+                            for chrom in main_chromosomes:
+                                if chrom in self.result3.cnv:
+                                    analysis = self.analyze_cytoband_cnv(self.result3.cnv, chrom)
+                                    if not analysis.empty:
+                                        # Get genes in gained regions
+                                        gained = analysis[analysis['cnv_state'] == 'GAIN']
+                                        for _, row in gained.iterrows():
+                                            if row['genes']:
+                                                total_gained_genes.update(row['genes'])
+                                        
+                                        # Get genes in lost regions
+                                        lost = analysis[analysis['cnv_state'] == 'LOSS']
+                                        for _, row in lost.iterrows():
+                                            if row['genes']:
+                                                total_lost_genes.update(row['genes'])
+
+                        # Display gene counts in the right column
+                        with ui.row().classes('gap-2 justify-end mt-2'):
+                            with ui.card().classes('py-1 px-2 bg-green-50 rounded'):
+                                ui.label(f"Gained: {len(total_gained_genes)}").classes('text-sm text-green-800')
+                            with ui.card().classes('py-1 px-2 bg-red-50 rounded'):
+                                ui.label(f"Lost: {len(total_lost_genes)}").classes('text-sm text-red-800')
+
                 # Bottom row - Information
                 with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
                     ui.label("Copy number analysis across genome with breakpoint detection")
