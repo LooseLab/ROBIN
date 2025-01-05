@@ -113,9 +113,17 @@ def check_bam(bamfile):
 
 
 def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
+    """
+    Sort BAM files by timestamp.
+    
+    :param files_and_timestamps: List to store sorted files and timestamps
+    :param watchfolder: Folder to watch for BAM files
+    :param file_endings: Set of file endings to look for
+    :param simtime: Whether to simulate time
+    :return: Sorted list of files and timestamps
+    """
     import bisect
 
-    # Function to insert into sorted list
     def insert_sorted(file_timestamp_tuple):
         file, timestamp, elapsed = file_timestamp_tuple
         datetime_obj = datetime.fromisoformat(timestamp)
@@ -129,26 +137,21 @@ def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
                     if simtime:
                         bam = ReadBam(os.path.join(path, f))
                         baminfo = bam.process_reads()
-                        insert_sorted(
-                            (
-                                os.path.join(path, f),
-                                baminfo["last_start"],
-                                baminfo["elapsed_time"],
-                            )
-                        )
+                        insert_sorted((
+                            os.path.join(path, f),
+                            baminfo["last_start"],
+                            baminfo["elapsed_time"]
+                        ))
                     else:
                         filetime = datetime.fromtimestamp(
                             os.path.getctime(os.path.join(path, f))
                         )
                         elapsedtime = datetime.now() - filetime
-                        insert_sorted(
-                            (
-                                os.path.join(path, f),
-                                filetime.isoformat(),
-                                elapsedtime,
-                            )
-                        )
-
+                        insert_sorted((
+                            os.path.join(path, f),
+                            filetime.isoformat(),
+                            elapsedtime
+                        ))
                 bar()
     return files_and_timestamps
 
@@ -223,26 +226,37 @@ class BrainMeth:
         :param sample_id: Sample ID to configure storage for.
         """
         logging.info(f"Configuring storage for sample ID: {sample_id}")
-        app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"] = (
-            Counter(
-                bam_passed=0,
-                bam_failed=0,
-                mapped_count=0,
-                pass_mapped_count=0,
-                fail_mapped_count=0,
-                unmapped_count=0,
-                pass_unmapped_count=0,
-                fail_unmapped_count=0,
-                pass_bases_count=0,
-                fail_bases_count=0,
-                bases_count=0,
-            )
-        )
+        app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"] = {
+            "bam_passed": 0,
+            "bam_failed": 0,
+            "mapped_count": 0,
+            "pass_mapped_count": 0,
+            "fail_mapped_count": 0,
+            "unmapped_count": 0,
+            "pass_unmapped_count": 0,
+            "fail_unmapped_count": 0,
+            "pass_bases_count": 0,
+            "fail_bases_count": 0,
+            "bases_count": 0
+        }
         app.storage.general[self.mainuuid]["samples"][sample_id]["devices"] = []
         app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"] = []
         app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"] = []
         app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"] = []
         app.storage.general[self.mainuuid]["samples"][sample_id]["sample_ids"] = []
+
+    def update_counter(self, sample_id, counter_name, value):
+        """
+        Safely update a counter value.
+
+        :param sample_id: Sample ID to update counter for
+        :param counter_name: Name of the counter to update
+        :param value: Value to add to the counter
+        """
+        current = app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][counter_name]
+        new_value = max(0, current + value)  # Ensure we don't go below 0
+        app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][counter_name] = new_value
+        logging.debug(f"Counter {counter_name} updated for sample {sample_id}: {current} -> {new_value}")
 
     async def start_background(self):
         """
@@ -251,7 +265,8 @@ class BrainMeth:
         logging.info(f"Starting background tasks for UUID: {self.mainuuid}")
         app.storage.general[self.mainuuid]["bam_count"] = {}
         app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
-        app.storage.general[self.mainuuid]["bam_count"]["files"] = {}
+        app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
+        app.storage.general[self.mainuuid]["bam_count"]["total_files"] = 0  # Add total files counter
         self.bam_tracking = Queue()
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
@@ -708,152 +723,157 @@ class BrainMeth:
                                             with ui.column().classes('flex-grow min-w-0'):
                                                 ui.label("Output:").classes('text-gray-600')
                                                 ui.label(f"{self.output}").classes('break-all text-gray-900 font-mono')
-                                    
-                                    # BAM File Summary Section
-                                    ui.label("BAM File Summary").classes('text-xl font-medium text-gray-900 mt-6')
-                                    with ui.card().classes('w-full p-4 bg-gray-50 rounded-lg'):
-                                        with ui.column().classes('space-y-3'):
-                                            # Total Files
-                                            with ui.row().classes('items-center justify-between w-full'):
-                                                with ui.row().classes('items-center gap-2'):
-                                                    ui.icon('description').classes('text-blue-600 shrink-0')
-                                                    ui.label("Total Files:").classes('text-gray-600')
-                                                total_files = ui.label().classes('font-medium text-gray-900')
-                                                def update_total_files():
-                                                    total = len(app.storage.general[self.mainuuid]["bam_count"]["file"])
-                                                    total_files.text = f"{total:,}" if total > 0 else "--"
-                                                app.storage.general[self.mainuuid]["bam_count"].on_change(update_total_files)
-                                                update_total_files()
-                                            
-                                            # Passed Files
-                                            with ui.row().classes('items-center justify-between w-full'):
-                                                with ui.row().classes('items-center gap-2'):
-                                                    ui.icon('check_circle').classes('text-green-600 shrink-0')
-                                                    ui.label("Passed:").classes('text-gray-600')
-                                                passed = ui.label().classes('font-medium text-gray-900')
-                                                def update_passed():
-                                                    passed.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_passed']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_passed'] is not None else "--"
-                                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_passed)
-                                                update_passed()
-                                            
-                                            # Failed Files
-                                            with ui.row().classes('items-center justify-between w-full'):
-                                                with ui.row().classes('items-center gap-2'):
-                                                    ui.icon('error').classes('text-red-600 shrink-0')
-                                                    ui.label("Failed:").classes('text-gray-600')
-                                                failed = ui.label().classes('font-medium text-gray-900')
-                                                def update_failed():
-                                                    failed.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_failed']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_failed'] is not None else "--"
-                                                app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_failed)
-                                                update_failed()
 
-                                    # Sequencing Statistics Section
-                                    ui.label("Sequencing Statistics").classes('text-xl font-medium text-gray-900 mt-6')
+                                    # Summary Statistics Section - Grid layout for BAM File Summary and Sequencing Statistics
+                                    with ui.grid().classes('grid-cols-4 gap-6 mt-6'):
+                                        # BAM File Summary Card - Takes 1 column (1/4)
+                                        with ui.card().classes('col-span-1 p-4 bg-gray-50 rounded-lg'):
+                                            ui.label("BAM File Summary").classes('text-lg font-medium text-gray-900 mb-4')
+                                            with ui.column().classes('space-y-3'):
+                                                # Total Files
+                                                with ui.row().classes('items-center justify-between w-full'):
+                                                    with ui.row().classes('items-center gap-2'):
+                                                        ui.icon('description').classes('text-blue-600 shrink-0')
+                                                        ui.label("Total Files:").classes('text-gray-600')
+                                                    total_files = ui.label().classes('font-medium text-gray-900')
+                                                    def update_total_files():
+                                                        total = app.storage.general[self.mainuuid]["bam_count"]["total_files"]
+                                                        total_files.text = f"{total:,}" if total > 0 else "--"
+                                                    app.storage.general[self.mainuuid]["bam_count"].on_change(update_total_files)
+                                                    update_total_files()
+                                                
+                                                # Passed Files
+                                                with ui.row().classes('items-center justify-between w-full'):
+                                                    with ui.row().classes('items-center gap-2'):
+                                                        ui.icon('check_circle').classes('text-green-600 shrink-0')
+                                                        ui.label("Passed:").classes('text-gray-600')
+                                                    passed = ui.label().classes('font-medium text-gray-900')
+                                                    def update_passed():
+                                                        passed.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_passed']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_passed'] is not None else "--"
+                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_passed)
+                                                    update_passed()
+                                                
+                                                # Failed Files
+                                                with ui.row().classes('items-center justify-between w-full'):
+                                                    with ui.row().classes('items-center gap-2'):
+                                                        ui.icon('error').classes('text-red-600 shrink-0')
+                                                        ui.label("Failed:").classes('text-gray-600')
+                                                    failed = ui.label().classes('font-medium text-gray-900')
+                                                    def update_failed():
+                                                        failed.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_failed']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['bam_failed'] is not None else "--"
+                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_failed)
+                                                    update_failed()
 
-                                    # Detailed Statistics Grid
-                                    with ui.column().classes('space-y-3'):
-                                        ui.label("Sequencing Statistics").classes('font-medium text-gray-900 mb-2')
-                                        with ui.grid().classes('grid-cols-1 sm:grid-cols-3 gap-2 sm:gap-4 w-full'):
-                                            # Read Statistics
-                                            with ui.card().classes('w-full p-2 sm:p-3 bg-white rounded-lg'):
-                                                ui.label("Read Statistics").classes('text-sm font-medium text-gray-700 mb-2')
-                                                with ui.column().classes('space-y-1.5'):
-                                                    # Total Reads
-                                                    with ui.row().classes('justify-between items-center'):
-                                                        ui.label("Total:").classes('text-gray-600 text-sm')
-                                                        total_reads = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                        def update_total_reads():
-                                                            mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["mapped_count"]
-                                                            unmapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["unmapped_count"]
-                                                            total = mapped + unmapped if mapped is not None and unmapped is not None else 0
-                                                            total_reads.text = f"{total:,}" if total > 0 else "--"
-                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_reads)
-                                                        update_total_reads()
+                                        # Sequencing Statistics Card - Takes 3 columns (3/4)
+                                        with ui.card().classes('col-span-3 p-4 bg-gray-50 rounded-lg'):
+                                            ui.label("Sequencing Statistics").classes('text-lg font-medium text-gray-900 mb-4')
+                                            with ui.grid().classes('grid-cols-3 gap-4'):
+                                                # Read Statistics
+                                                with ui.card().classes('w-full p-2 sm:p-3 bg-white rounded-lg'):
+                                                    ui.label("Base Count by Read Type").classes('text-sm font-medium text-gray-700 mb-2')
+                                                    with ui.column().classes('space-y-1.5'):
+                                                        # Total Reads
+                                                        with ui.row().classes('justify-between items-center'):
+                                                            ui.label("Total bases in reads:").classes('text-gray-600 text-sm')
+                                                            total_reads = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                            def update_total_reads():
+                                                                mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["mapped_count"]
+                                                                unmapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["unmapped_count"]
+                                                                total = mapped + unmapped if mapped is not None and unmapped is not None else 0
+                                                                total_reads.text = f"{total:,} bp" if total > 0 else "--"
+                                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_reads)
+                                                            update_total_reads()
 
-                                                    # Mapped Reads
-                                                    with ui.row().classes('justify-between items-center'):
-                                                        ui.label("Mapped:").classes('text-gray-600 text-sm')
-                                                        mapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                        def update_mapped():
-                                                            mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['mapped_count'] is not None else "--"
-                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_mapped)
-                                                        update_mapped()
+                                                        # Mapped Reads
+                                                        with ui.row().classes('justify-between items-center'):
+                                                            ui.label("Bases in mapped reads:").classes('text-gray-600 text-sm')
+                                                            mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                            def update_mapped():
+                                                                count = app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['mapped_count']
+                                                                mapped.text = f"{count:,} bp" if count is not None else "--"
+                                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_mapped)
+                                                            update_mapped()
 
-                                                    # Unmapped Reads
-                                                    with ui.row().classes('justify-between items-center'):
-                                                        ui.label("Unmapped:").classes('text-gray-600 text-sm')
-                                                        unmapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                        def update_unmapped():
-                                                            unmapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['unmapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['unmapped_count'] is not None else "--"
-                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_unmapped)
-                                                        update_unmapped()
+                                                        # Unmapped Reads
+                                                        with ui.row().classes('justify-between items-center'):
+                                                            ui.label("Bases in unmapped reads:").classes('text-gray-600 text-sm')
+                                                            unmapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                            def update_unmapped():
+                                                                count = app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['unmapped_count']
+                                                                unmapped.text = f"{count:,} bp" if count is not None else "--"
+                                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_unmapped)
+                                                            update_unmapped()
 
-                                            # Mapping Quality
-                                            with ui.card().classes('p-2 sm:p-3 bg-gray-50 rounded-lg'):
-                                                ui.label("Mapping Quality").classes('text-sm font-medium text-gray-700 mb-2')
-                                                with ui.column().classes('space-y-1.5'):
-                                                    # Total Mapped
-                                                    with ui.row().classes('justify-between items-center'):
-                                                        ui.label("Total:").classes('text-gray-600 text-sm')
-                                                        total_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                        def update_total_mapped():
-                                                            pass_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["pass_mapped_count"]
-                                                            fail_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["fail_mapped_count"]
-                                                            total = pass_mapped + fail_mapped if pass_mapped is not None and fail_mapped is not None else 0
-                                                            total_mapped.text = f"{total:,}" if total > 0 else "--"
-                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_mapped)
-                                                        update_total_mapped()
+                                                # Read Quality Statistics
+                                                with ui.card().classes('w-full p-2 sm:p-3 bg-white rounded-lg'):
+                                                    ui.label("Read Quality Statistics").classes('text-sm font-medium text-gray-700 mb-2')
+                                                    with ui.column().classes('space-y-1.5'):
+                                                        # Total Mapped
+                                                        with ui.row().classes('justify-between items-center'):
+                                                            ui.label("Total mapped reads:").classes('text-gray-600 text-sm')
+                                                            total_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                            def update_total_mapped():
+                                                                pass_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["pass_mapped_count"]
+                                                                fail_mapped = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["fail_mapped_count"]
+                                                                total = pass_mapped + fail_mapped if pass_mapped is not None and fail_mapped is not None else 0
+                                                                total_mapped.text = f"{total:,} reads" if total > 0 else "--"
+                                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_mapped)
+                                                            update_total_mapped()
 
-                                                    # Pass Mapped
-                                                    with ui.row().classes('justify-between items-center'):
-                                                        ui.label("Pass:").classes('text-gray-600 text-sm')
-                                                        pass_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                        def update_pass_mapped():
-                                                            pass_mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_mapped_count'] is not None else "--"
-                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_mapped)
-                                                        update_pass_mapped()
+                                                        # High Quality Reads
+                                                        with ui.row().classes('justify-between items-center'):
+                                                            ui.label("High quality reads:").classes('text-gray-600 text-sm')
+                                                            pass_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                            def update_pass_mapped():
+                                                                count = app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_mapped_count']
+                                                                pass_mapped.text = f"{count:,} reads" if count is not None else "--"
+                                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_mapped)
+                                                            update_pass_mapped()
 
-                                                    # Fail Mapped
-                                                    with ui.row().classes('justify-between items-center'):
-                                                        ui.label("Fail:").classes('text-gray-600 text-sm')
-                                                        fail_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                        def update_fail_mapped():
-                                                            fail_mapped.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_mapped_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_mapped_count'] is not None else "--"
-                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_mapped)
-                                                        update_fail_mapped()
+                                                        # Low Quality Reads
+                                                        with ui.row().classes('justify-between items-center'):
+                                                            ui.label("Low quality reads:").classes('text-gray-600 text-sm')
+                                                            fail_mapped = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                            def update_fail_mapped():
+                                                                count = app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_mapped_count']
+                                                                fail_mapped.text = f"{count:,} reads" if count is not None else "--"
+                                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_mapped)
+                                                            update_fail_mapped()
 
-                                            # Base Statistics
-                                            with ui.card().classes('p-2 sm:p-3 bg-gray-50 rounded-lg'):
-                                                ui.label("Base Statistics").classes('text-sm font-medium text-gray-700 mb-2')
-                                                with ui.column().classes('space-y-1.5'):
-                                                    # Total Bases
-                                                    with ui.row().classes('justify-between items-center'):
-                                                        ui.label("Total:").classes('text-gray-600 text-sm')
-                                                        total_bases = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                        def update_total_bases():
-                                                            total = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["bases_count"]
-                                                            total_bases.text = f"{total:,}" if total > 0 else "--"
-                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_bases)
-                                                        update_total_bases()
+                                                # Base Statistics
+                                                with ui.card().classes('w-full p-2 sm:p-3 bg-white rounded-lg'):
+                                                    ui.label("Base Statistics").classes('text-sm font-medium text-gray-700 mb-2')
+                                                    with ui.column().classes('space-y-1.5'):
+                                                        # Total Bases
+                                                        with ui.row().classes('justify-between items-center'):
+                                                            ui.label("Total bases:").classes('text-gray-600 text-sm')
+                                                            total_bases = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                            def update_total_bases():
+                                                                total = app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"]["bases_count"]
+                                                                total_bases.text = f"{total:,} bp" if total > 0 else "--"
+                                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_total_bases)
+                                                            update_total_bases()
 
-                                                    # Pass Bases
-                                                    with ui.row().classes('justify-between items-center'):
-                                                        ui.label("Pass:").classes('text-gray-600 text-sm')
-                                                        pass_bases = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                        def update_pass_bases():
-                                                            pass_bases.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_bases_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_bases_count'] is not None else "--"
-                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_bases)
-                                                        update_pass_bases()
+                                                        # High Quality Bases
+                                                        with ui.row().classes('justify-between items-center'):
+                                                            ui.label("High quality bases:").classes('text-gray-600 text-sm')
+                                                            pass_bases = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                            def update_pass_bases():
+                                                                count = app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['pass_bases_count']
+                                                                pass_bases.text = f"{count:,} bp" if count is not None else "--"
+                                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_pass_bases)
+                                                            update_pass_bases()
 
-                                                    # Fail Bases
-                                                    with ui.row().classes('justify-between items-center'):
-                                                        ui.label("Fail:").classes('text-gray-600 text-sm')
-                                                        fail_bases = ui.label().classes('font-medium text-gray-900 text-sm')
-                                                        def update_fail_bases():
-                                                            fail_bases.text = f"{app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_bases_count']:,}" if app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_bases_count'] is not None else "--"
-                                                        app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_bases)
-                                                        update_fail_bases()
-                                    
+                                                        # Low Quality Bases
+                                                        with ui.row().classes('justify-between items-center'):
+                                                            ui.label("Low quality bases:").classes('text-gray-600 text-sm')
+                                                            fail_bases = ui.label().classes('font-medium text-gray-900 text-sm')
+                                                            def update_fail_bases():
+                                                                count = app.storage.general[self.mainuuid]['samples'][self.sampleID]['file_counters']['fail_bases_count']
+                                                                fail_bases.text = f"{count:,} bp" if count is not None else "--"
+                                                            app.storage.general[self.mainuuid]["samples"][self.sampleID]["file_counters"].on_change(update_fail_bases)
+                                                            update_fail_bases()
+
                 # Detailed Analysis Tabs
                 if sample_id:
                     selectedtab = None
@@ -1062,6 +1082,7 @@ class BrainMeth:
             while self.watchdogbamqueue.qsize() > 0:
                 filename, timestamp = self.watchdogbamqueue.get()
                 app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
+                app.storage.general[self.mainuuid]["bam_count"]["total_files"] += 1  # Increment total files
                 app.storage.general[self.mainuuid]["bam_count"]["file"][
                     filename
                 ] = timestamp
@@ -1081,31 +1102,27 @@ class BrainMeth:
                     self.configure_storage(sample_id)
                     app.storage.general[self.mainuuid]["sample_list"].append(sample_id)
                 if baminfo["state"] == "pass":
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["bam_passed"] += 1
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_mapped_count"] += bamdata["mapped_reads"]
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_unmapped_count"] += bamdata["unmapped_reads"]
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_bases_count"] += bamdata["yield_tracking"]
+                    self.update_counter(sample_id, "bam_passed", 1)
+                    self.update_counter(sample_id, "pass_mapped_count", bamdata["mapped_reads"])
+                    self.update_counter(sample_id, "pass_unmapped_count", bamdata["unmapped_reads"])
+                    self.update_counter(sample_id, "pass_bases_count", bamdata["yield_tracking"])
                 else:
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["bam_failed"] += 1
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_mapped_count"] += bamdata["mapped_reads"]
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_unmapped_count"] += bamdata["unmapped_reads"]
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_bases_count"] += bamdata["yield_tracking"]
+                    self.update_counter(sample_id, "bam_failed", 1)
+                    self.update_counter(sample_id, "fail_mapped_count", bamdata["mapped_reads"])
+                    self.update_counter(sample_id, "fail_unmapped_count", bamdata["unmapped_reads"])
+                    self.update_counter(sample_id, "fail_bases_count", bamdata["yield_tracking"])
+
+                # Update the total counts based on pass/fail counts
+                self.update_counter(sample_id, "mapped_count", 
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"]["pass_mapped_count"] +
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"]["fail_mapped_count"])
+                self.update_counter(sample_id, "unmapped_count",
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"]["pass_unmapped_count"] +
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"]["fail_unmapped_count"])
+                self.update_counter(sample_id, "bases_count",
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"]["pass_bases_count"] +
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"]["fail_bases_count"])
+
                 if (
                     baminfo["device_position"]
                     not in app.storage.general[self.mainuuid]["samples"][sample_id][
@@ -1162,15 +1179,6 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "run_time"
                     ].append(baminfo["time_of_run"])
-                app.storage.general[self.mainuuid]["samples"][sample_id][
-                    "file_counters"
-                ]["mapped_count"] += bamdata["mapped_reads"]
-                app.storage.general[self.mainuuid]["samples"][sample_id][
-                    "file_counters"
-                ]["unmapped_count"] += bamdata["unmapped_reads"]
-                app.storage.general[self.mainuuid]["samples"][sample_id][
-                    "file_counters"
-                ]["bases_count"] += bamdata["yield_tracking"]
 
                 mydf = pd.DataFrame.from_dict(app.storage.general)
                 if not self.force_sampleid:
@@ -1280,11 +1288,12 @@ class BrainMeth:
         for timestamp, f, elapsed_time in files_and_timestamps:
             logging.debug(f"Processing existing BAM file: {f} at {timestamp}")
             app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
+            app.storage.general[self.mainuuid]["bam_count"]["total_files"] += 1  # Increment total files counter
             if "file" not in app.storage.general[self.mainuuid]["bam_count"]:
                 app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
             app.storage.general[self.mainuuid]["bam_count"]["file"][
                 f
-            ] = timestamp.timestamp()  # time.time()
+            ] = timestamp.timestamp()
             if self.simtime:
                 await asyncio.sleep(1)
             else:
