@@ -781,7 +781,7 @@ class CNVAnalysis(BaseAnalysis):
                 value="All",
             ).style("width: 150px")
             ui.label().bind_text_from(
-                self.cnv_dict, "bin_width", backward=lambda n: f"Bin Width: {n}"
+                self.cnv_dict, "bin_width", backward=lambda n: f"Bin Width: {n:,}"
             )
             ui.label().bind_text_from(
                 self.cnv_dict, "variance", backward=lambda n: f"Variance: {round(n, 3)}"
@@ -1357,7 +1357,20 @@ class CNVAnalysis(BaseAnalysis):
                 # Update the table with combined analysis results
                 try:
                     combined_analysis = pd.concat(all_cytoband_analysis) if all_cytoband_analysis else pd.DataFrame()
-                    self.cnv_table.rows = combined_analysis.to_dict('records')
+                    if combined_analysis.empty and self.cnv_dict["bin_width"] > 10_000_000:
+                        # Create a single row DataFrame with a message
+                        message_df = pd.DataFrame([{
+                            'chrom': '',
+                            'start_pos': 0,
+                            'end_pos': 0,
+                            'name': 'More data needed for CNV analysis',
+                            'mean_cnv': 0,
+                            'cnv_state': f'Current bin width: {self.cnv_dict["bin_width"]:,}bp (need ≤ 10,000,000bp)',
+                            'length': 0
+                        }])
+                        self.cnv_table.rows = message_df.to_dict('records')
+                    else:
+                        self.cnv_table.rows = combined_analysis.to_dict('records')
                     ui.update(self.cnv_table)
                 except AttributeError:
                     pass  # Ignore if the table component is not available
@@ -1708,7 +1721,20 @@ class CNVAnalysis(BaseAnalysis):
                 cytoband_analysis = self.analyze_cytoband_cnv(self.result3.cnv, contig)
                 # Update the table with the analysis results
                 try:
-                    self.cnv_table.rows = cytoband_analysis.to_dict('records')
+                    if cytoband_analysis.empty and self.cnv_dict["bin_width"] > 10_000_000:
+                        # Create a single row DataFrame with a message
+                        message_df = pd.DataFrame([{
+                            'chrom': contig,
+                            'start_pos': 0,
+                            'end_pos': 0,
+                            'name': 'More data needed for CNV analysis',
+                            'mean_cnv': 0,
+                            'cnv_state': f'Current bin width: {self.cnv_dict["bin_width"]:,}bp (need ≤ 10,000,000bp)',
+                            'length': 0
+                        }])
+                        self.cnv_table.rows = message_df.to_dict('records')
+                    else:
+                        self.cnv_table.rows = cytoband_analysis.to_dict('records')
                     ui.update(self.cnv_table)
                 except AttributeError:
                     pass  # Ignore if the table component is not available
@@ -1967,6 +1993,7 @@ class CNVAnalysis(BaseAnalysis):
         """
         Analyze CNV values within each cytoband to detect duplications and deletions.
         Merges adjacent cytobands with the same CNV state.
+        Handles X and Y chromosomes differently based on genetic sex.
 
         Args:
             cnv_data (dict): Dictionary containing CNV values
@@ -1974,7 +2001,13 @@ class CNVAnalysis(BaseAnalysis):
 
         Returns:
             pd.DataFrame: DataFrame containing merged cytoband CNV analysis results
+            or empty DataFrame if resolution is insufficient
         """
+        # Check if bin width is small enough for accurate CNV calling
+        if self.cnv_dict["bin_width"] > 10_000_000:
+            # Return empty DataFrame if resolution is insufficient
+            return pd.DataFrame()
+        
         # Get the bin width for position calculations
         bin_width = self.cnv_dict["bin_width"]
         
@@ -1996,13 +2029,47 @@ class CNVAnalysis(BaseAnalysis):
                 region_cnv = cnv_data[chromosome][start_bin:end_bin+1]
                 mean_cnv = np.mean(region_cnv) if len(region_cnv) > 0 else 0
                 
-                # Determine CNV state based on thresholds
-                if mean_cnv > 0.5:  # Duplication threshold
-                    state = "GAIN"
-                elif mean_cnv < -0.5:  # Deletion threshold
-                    state = "LOSS"
+                # Determine CNV state based on thresholds and chromosome type
+                if chromosome == "chrX":
+                    if self.XYestimate == "XY":  # Male
+                        # For males, X chromosome is normally at half dosage
+                        if mean_cnv > 0.1:  # Gain from male baseline
+                            state = "GAIN"
+                        elif mean_cnv < -0.3:  # Loss from male baseline
+                            state = "LOSS"
+                        else:
+                            state = "NORMAL"
+                    else:  # Female or Unknown
+                        # For females, use standard thresholds
+                        if mean_cnv > 0.5:
+                            state = "GAIN"
+                        elif mean_cnv < -0.5:
+                            state = "LOSS"
+                        else:
+                            state = "NORMAL"
+                elif chromosome == "chrY":
+                    if self.XYestimate == "XY":  # Male
+                        # For males, Y chromosome should be present
+                        if mean_cnv > 0.5:
+                            state = "GAIN"
+                        elif mean_cnv < -0.5:
+                            state = "LOSS"
+                        else:
+                            state = "NORMAL"
+                    else:  # Female or Unknown
+                        # For females, any Y material is abnormal
+                        if mean_cnv > -0.2:
+                            state = "GAIN"
+                        else:
+                            state = "NORMAL"
                 else:
-                    state = "NORMAL"
+                    # Standard thresholds for autosomes
+                    if mean_cnv > 0.5:
+                        state = "GAIN"
+                    elif mean_cnv < -0.5:
+                        state = "LOSS"
+                    else:
+                        state = "NORMAL"
             else:
                 mean_cnv = 0
                 state = "NO_DATA"
@@ -2028,7 +2095,7 @@ class CNVAnalysis(BaseAnalysis):
                     'mean_cnv': [row['mean_cnv']],
                     'cnv_state': row['cnv_state'],
                     'bands': [row['name']],
-                    'length': row['end_pos'] - row['start_pos']  # Initialize length for new group
+                    'length': row['end_pos'] - row['start_pos']
                 }
             elif row['cnv_state'] == current_group['cnv_state']:
                 # Extend the current group
@@ -2050,7 +2117,7 @@ class CNVAnalysis(BaseAnalysis):
                     'mean_cnv': [row['mean_cnv']],
                     'cnv_state': row['cnv_state'],
                     'bands': [row['name']],
-                    'length': row['end_pos'] - row['start_pos']  # Initialize length for new group
+                    'length': row['end_pos'] - row['start_pos']
                 }
         
         # Add the last group if it exists
@@ -2067,7 +2134,7 @@ class CNVAnalysis(BaseAnalysis):
         if not merged_df.empty:
             merged_df = merged_df.sort_values('start_pos')
         
-        return merged_df  # Return all states, including NORMAL regions
+        return merged_df
 
     def get_cytoband_cnv_summary(self, chromosome: str) -> str:
         """
