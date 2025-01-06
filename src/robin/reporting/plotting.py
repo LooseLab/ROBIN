@@ -250,22 +250,36 @@ def create_CNV_plot_per_chromosome(result, cnv_dict):
 
     plots = []
     for contig, values in result.cnv.items():
-        # if contig != "chrM":,
         if contig in ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]:
-            plt.figure(figsize=(10, 2))
+            # Calculate mean and standard deviation for this chromosome
+            values_array = np.array(values)
+            mean_cnv = np.mean(values_array)
+            std_cnv = np.std(values_array)
+            
+            # Set y-axis limits based on mean and standard deviation
+            y_min = 0
+            y_max = mean_cnv + (2 * std_cnv)
+            
+            # Calculate positions in megabases
+            positions = np.arange(len(values)) * cnv_dict["bin_width"] / 1_000_000  # Convert to Mb
+            
+            plt.figure(figsize=(4, 2))
             sns.scatterplot(
-                x=range(len(values)),
+                x=positions,
                 y=values,
                 s=2,
                 color=MODERN_COLORS["accent"],
                 alpha=0.6,
             )
 
-            plt.title(f"Copy Number Variation - {contig}")
-            plt.xlabel("Position")
+            plt.xlabel("Position (Mb)")
             plt.ylabel("Estimated Ploidy")
-            ymax = math.ceil(filter_and_find_max(np.array(values)))
-            plt.ylim(0, ymax)  # Adjust as needed
+            plt.ylim(y_min, y_max)
+
+            # Add horizontal lines for mean and standard deviations
+            plt.axhline(y=mean_cnv, color='gray', linestyle='--', alpha=0.5)
+            plt.axhline(y=mean_cnv + std_cnv, color='gray', linestyle=':', alpha=0.3)
+            plt.axhline(y=mean_cnv + (2 * std_cnv), color='gray', linestyle=':', alpha=0.3)
 
             buf = io.BytesIO()
             plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")

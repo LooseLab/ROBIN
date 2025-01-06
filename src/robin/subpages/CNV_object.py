@@ -442,8 +442,13 @@ class CNVAnalysis(BaseAnalysis):
             sep="\s+"
         )
         super().__init__(*args, **kwargs)
-        self.NewBed = BedTree(preserve_original_tree=True, reference_file=f"{self.reference_file}.fai", readfish_toml=self.readfish_toml)
-        self.NewBed.load_from_file(self.bed_file)
+        # Only initialize BedTree if reference file is provided
+        if self.reference_file:
+            self.NewBed = BedTree(preserve_original_tree=True, reference_file=f"{self.reference_file}.fai", readfish_toml=self.readfish_toml)
+            if self.bed_file:
+                self.NewBed.load_from_file(self.bed_file)
+        else:
+            self.NewBed = None
         self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
 
 
@@ -2050,6 +2055,16 @@ class CNVAnalysis(BaseAnalysis):
         cnv_means = []
         cnv_states = []
         
+        # Get chromosome-specific thresholds if available
+        if hasattr(self, 'chromosome_stats') and chromosome in self.chromosome_stats:
+            stats = self.chromosome_stats[chromosome]
+            gain_threshold = stats['gain_threshold']
+            loss_threshold = stats['loss_threshold']
+        else:
+            # Fallback to default thresholds
+            gain_threshold = 0.5
+            loss_threshold = -0.5
+        
         # Analyze each cytoband
         for _, cytoband in chromosome_cytobands.iterrows():
             # Calculate the bin indices for this cytoband
@@ -2061,47 +2076,13 @@ class CNVAnalysis(BaseAnalysis):
                 region_cnv = cnv_data[chromosome][start_bin:end_bin+1]
                 mean_cnv = np.mean(region_cnv) if len(region_cnv) > 0 else 0
                 
-                # Determine CNV state based on thresholds and chromosome type
-                if chromosome == "chrX":
-                    if self.XYestimate == "XY":  # Male
-                        # For males, X chromosome is normally at half dosage
-                        if mean_cnv > 0.1:  # Gain from male baseline
-                            state = "GAIN"
-                        elif mean_cnv < -0.3:  # Loss from male baseline
-                            state = "LOSS"
-                        else:
-                            state = "NORMAL"
-                    else:  # Female or Unknown
-                        # For females, use standard thresholds
-                        if mean_cnv > 0.5:
-                            state = "GAIN"
-                        elif mean_cnv < -0.5:
-                            state = "LOSS"
-                        else:
-                            state = "NORMAL"
-                elif chromosome == "chrY":
-                    if self.XYestimate == "XY":  # Male
-                        # For males, Y chromosome should be present
-                        if mean_cnv > 0.5:
-                            state = "GAIN"
-                        elif mean_cnv < -0.5:
-                            state = "LOSS"
-                        else:
-                            state = "NORMAL"
-                    else:  # Female or Unknown
-                        # For females, any Y material is abnormal
-                        if mean_cnv > -0.2:
-                            state = "GAIN"
-                        else:
-                            state = "NORMAL"
+                # Determine CNV state based on chromosome-specific thresholds
+                if mean_cnv > gain_threshold:
+                    state = "GAIN"
+                elif mean_cnv < loss_threshold:
+                    state = "LOSS"
                 else:
-                    # Standard thresholds for autosomes
-                    if mean_cnv > 0.5:
-                        state = "GAIN"
-                    elif mean_cnv < -0.5:
-                        state = "LOSS"
-                    else:
-                        state = "NORMAL"
+                    state = "NORMAL"
             else:
                 mean_cnv = 0
                 state = "NO_DATA"
