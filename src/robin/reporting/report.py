@@ -6,14 +6,12 @@ This module contains the main report class that coordinates the generation of th
 
 import os
 import logging
-from reportlab.platypus import SimpleDocTemplate
-from reportlab.lib.pagesizes import A4, inch
 import pandas as pd
-
-from robin import fonts
-from robin.__about__ import __version__
+from reportlab.platypus import SimpleDocTemplate
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import inch
 from .styling.styles import ReportStyles
-from .utils.formatting import format_timestamp, convert_to_space_separated_string
+from robin import fonts
 
 logger = logging.getLogger(__name__)
 
@@ -22,7 +20,7 @@ class RobinReport:
 
     def __init__(self, filename, output):
         """Initialize the report generator.
-        
+
         Args:
             filename: Output PDF filename
             output: Directory containing analysis output files
@@ -153,11 +151,11 @@ class RobinReport:
 
 def create_pdf(filename, output):
     """Create a PDF report from ROBIN analysis results.
-    
+
     Args:
         filename: Output PDF filename
         output: Directory containing analysis output files
-        
+
     Returns:
         Path to the generated PDF file
     """

@@ -235,13 +235,14 @@ def create_CNV_plot(result, cnv_dict):
     return buf
 
 
-def create_CNV_plot_per_chromosome(result, cnv_dict):
-    """
-    Creates CNV plots per chromosome.
+def create_CNV_plot_per_chromosome(result, cnv_dict, significant_regions=None):
+    """Creates CNV plots per chromosome.
 
     Args:
         result (Result): CNV result object.
         cnv_dict (dict): Dictionary containing CNV data.
+        significant_regions (dict): Dictionary mapping chromosomes to lists of significant regions.
+            Each region should be a dict with keys: 'start_pos', 'end_pos', 'type' ('GAIN' or 'LOSS')
 
     Returns:
         List[Tuple[str, io.BytesIO]]: List of tuples containing chromosome names and plot buffers.
@@ -264,12 +265,53 @@ def create_CNV_plot_per_chromosome(result, cnv_dict):
             positions = np.arange(len(values)) * cnv_dict["bin_width"] / 1_000_000  # Convert to Mb
             
             plt.figure(figsize=(4, 2))
+            
+            # If we have significant regions for this chromosome, highlight them
+            if significant_regions and contig in significant_regions:
+                for region in significant_regions[contig]:
+                    start_mb = region['start_pos'] / 1_000_000  # Convert to Mb
+                    end_mb = region['end_pos'] / 1_000_000  # Convert to Mb
+                    
+                    # Choose color based on type
+                    color = '#e8f5e9' if region['type'] == 'GAIN' else '#ffebee'  # Light green for gains, light red for losses
+                    alpha = 0.3
+                    
+                    # Add shaded region
+                    plt.axvspan(start_mb, end_mb, color=color, alpha=alpha, zorder=1)
+                    
+                    # Add cytoband label with background
+                    mid_point = (start_mb + end_mb) / 2
+                    y_pos = y_max - (0.1 * (y_max - y_min))  # Position near the top
+                    
+                    # Create background box for text
+                    bbox_props = dict(
+                        boxstyle="round,pad=0.3",
+                        fc='white',
+                        ec=color.replace('e8', 'a5').replace('ff', 'ef'),  # Darker version of highlight color
+                        alpha=0.8
+                    )
+                    
+                    # Add text with background
+                    plt.text(
+                        mid_point, 
+                        y_pos,
+                        region.get('name', ''),  # Add cytoband name if available
+                        fontsize=8,
+                        fontweight='bold',
+                        ha='center',
+                        va='center',
+                        bbox=bbox_props,
+                        zorder=4
+                    )
+
+            # Plot CNV data points on top of highlighted regions
             sns.scatterplot(
                 x=positions,
                 y=values,
                 s=2,
                 color=MODERN_COLORS["accent"],
                 alpha=0.6,
+                zorder=2
             )
 
             plt.xlabel("Position (Mb)")
@@ -277,9 +319,9 @@ def create_CNV_plot_per_chromosome(result, cnv_dict):
             plt.ylim(y_min, y_max)
 
             # Add horizontal lines for mean and standard deviations
-            plt.axhline(y=mean_cnv, color='gray', linestyle='--', alpha=0.5)
-            plt.axhline(y=mean_cnv + std_cnv, color='gray', linestyle=':', alpha=0.3)
-            plt.axhline(y=mean_cnv + (2 * std_cnv), color='gray', linestyle=':', alpha=0.3)
+            plt.axhline(y=mean_cnv, color='gray', linestyle='--', alpha=0.5, zorder=3)
+            plt.axhline(y=mean_cnv + std_cnv, color='gray', linestyle=':', alpha=0.3, zorder=3)
+            plt.axhline(y=mean_cnv + (2 * std_cnv), color='gray', linestyle=':', alpha=0.3, zorder=3)
 
             buf = io.BytesIO()
             plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")
@@ -357,7 +399,7 @@ def classification_plot(df, title, threshold):
 
     # Save the plot as a JPG file with reduced DPI
     buf = io.BytesIO()
-    plt.savefig(buf, format="jpg", dpi=150, bbox_inches="tight")
+    plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")
     plt.close(fig)  # Close the figure to free memory
     buf.seek(0)
     return buf
@@ -433,7 +475,7 @@ def coverage_plot(df):
 
     # Save the plot as a JPG file with reduced DPI
     buf = io.BytesIO()
-    plt.savefig(buf, format="jpg", dpi=150, bbox_inches="tight")
+    plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")
     plt.close(fig)  # Close the figure to free memory
     buf.seek(0)
     return buf

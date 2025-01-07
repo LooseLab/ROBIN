@@ -451,6 +451,174 @@ class CNVAnalysis(BaseAnalysis):
             self.NewBed = None
         self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
 
+    def calculate_chromosome_stats(self, result, ref_result):
+        """Calculate chromosome-wide statistics and baselines.
+        
+        Args:
+            result: CNV result object for sample
+            ref_result: CNV result object for reference
+        
+        Returns:
+            Dictionary of chromosome statistics including means, baselines, and thresholds
+        """
+        stats = {}
+        autosome_means = []
+        
+        # Calculate normalized values and stats for each chromosome
+        for chrom in result.cnv.keys():
+            if chrom != "chrM" and chrom in ref_result:
+                # Calculate normalized CNV values
+                sample_avg = moving_average(result.cnv[chrom])
+                ref_avg = moving_average(ref_result[chrom])
+                
+                # Pad arrays if needed
+                max_len = max(len(sample_avg), len(ref_avg))
+                if len(sample_avg) < max_len:
+                    sample_avg = np.pad(sample_avg, (0, max_len - len(sample_avg)))
+                if len(ref_avg) < max_len:
+                    ref_avg = np.pad(ref_avg, (0, max_len - len(ref_avg)))
+                
+                # Calculate normalized CNV
+                normalized_cnv = sample_avg - ref_avg
+                
+                # Calculate basic statistics
+                chr_mean = np.mean(normalized_cnv)
+                chr_std = np.std(normalized_cnv)
+                
+                # Store autosome means for global statistics
+                if chrom.startswith('chr') and chrom[3:].isdigit():
+                    autosome_means.append(chr_mean)
+                
+                # Set baseline and thresholds based on chromosome and sex
+                if chrom == "chrX":
+                    if self.XYestimate == "XX":  # Female
+                        baseline = 1.0  # Expected +1 relative to male control
+                    else:  # Male
+                        baseline = 0.0  # Expected same as male control
+                elif chrom == "chrY":
+                    if self.XYestimate == "XY":  # Male
+                        baseline = 0.0
+                    else:  # Female
+                        baseline = -1.0  # Expected absence
+                else:  # Autosomes
+                    baseline = 0.0
+                
+                stats[chrom] = {
+                    'mean': chr_mean,
+                    'std': chr_std,
+                    'baseline': baseline,
+                    'normalized_cnv': normalized_cnv
+                }
+        
+        # Calculate global autosome statistics
+        global_mean = np.mean(autosome_means)
+        global_std = np.std(autosome_means)
+        
+        # Store global stats
+        stats['global'] = {
+            'mean': global_mean,
+            'std': global_std
+        }
+        
+        self.chromosome_stats = stats
+        return stats
+
+    def detect_chromosome_events(self, z_score_threshold=3.0):
+        """Detect significant chromosome-wide CNV events.
+        
+        Args:
+            z_score_threshold: Number of standard deviations for significance
+        
+        Returns:
+            List of chromosome-wide CNV events
+        """
+        if not self.chromosome_stats:
+            raise ValueError("Must call calculate_chromosome_stats first")
+            
+        events = []
+        global_stats = self.chromosome_stats['global']
+        
+        for chrom, stats in self.chromosome_stats.items():
+            if chrom == 'global':
+                continue
+                
+            mean_cnv = stats['mean']
+            baseline = stats['baseline']
+            
+            if chrom == "chrX":
+                if self.XYestimate == "XY":  # Male
+                    if mean_cnv > 0.3:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'GAIN',
+                            'description': 'Potential XXY'
+                        })
+                    elif mean_cnv < -0.3:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'LOSS',
+                            'description': 'X chromosome loss'
+                        })
+                elif self.XYestimate == "XX":  # Female
+                    if mean_cnv >= 1.0:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'GAIN',
+                            'description': 'Potential trisomy X'
+                        })
+                    elif mean_cnv < -0.75:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'LOSS',
+                            'description': 'X chromosome loss'
+                        })
+            elif chrom == "chrY":
+                if self.XYestimate == "XY":  # Male
+                    if mean_cnv > 0.5:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'GAIN',
+                            'description': 'Y chromosome gain'
+                        })
+                    elif mean_cnv < -0.5:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'LOSS',
+                            'description': 'Y chromosome loss'
+                        })
+                elif mean_cnv > -0.2 and self.XYestimate == "XX":
+                    events.append({
+                        'chromosome': chrom,
+                        'mean_cnv': mean_cnv,
+                        'type': 'PRESENT',
+                        'description': 'Y chromosome material detected'
+                    })
+            else:  # Autosomes
+                adjusted_mean = mean_cnv - baseline
+                z_score = (adjusted_mean - global_stats['mean']) / global_stats['std']
+                
+                if z_score > z_score_threshold:
+                    events.append({
+                        'chromosome': chrom,
+                        'mean_cnv': mean_cnv,
+                        'type': 'GAIN',
+                        'description': f'Whole chromosome gain (z-score: {z_score:.2f})'
+                    })
+                elif z_score < -z_score_threshold:
+                    events.append({
+                        'chromosome': chrom,
+                        'mean_cnv': mean_cnv,
+                        'type': 'LOSS',
+                        'description': f'Whole chromosome loss (z-score: {z_score:.2f})'
+                    })
+        
+        return events
 
     def estimate_XY(self) -> None:
         """

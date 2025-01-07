@@ -636,29 +636,41 @@ class RobinReport:
         
         # Check for required files
         if not os.path.exists(cnv_file):
-            logger.info("No CNV.npy file found in output directory")
+            logger.error("No CNV.npy file found in output directory")
             return
             
         # Load CNV data
-        logger.info("Found CNV.npy file")
-        CNVresult = np.load(cnv_file, allow_pickle="TRUE").item()
-        CNVresult = Result(CNVresult)
-        logger.info(f"Loaded CNVresult with attributes: {dir(CNVresult)}")
+        logger.debug("Loading CNV data from %s", cnv_file)
+        try:
+            CNVresult = np.load(cnv_file, allow_pickle="TRUE").item()
+            CNVresult = Result(CNVresult)
+            logger.debug("CNV data loaded with keys: %s", list(CNVresult.cnv.keys())[:5])
+        except Exception as e:
+            logger.error("Failed to load CNV data: %s", str(e))
+            return
         
-        cnv_dict = np.load(
-            os.path.join(self.output, "CNV_dict.npy"), allow_pickle=True
-        ).item()
-        logger.info(f"Loaded CNV dictionary with keys: {cnv_dict.keys()}")
+        try:
+            cnv_dict = np.load(
+                os.path.join(self.output, "CNV_dict.npy"), allow_pickle=True
+            ).item()
+            logger.debug("CNV dict loaded with keys: %s", list(cnv_dict.keys()))
+        except Exception as e:
+            logger.error("Failed to load CNV dict: %s", str(e))
+            return
         
         # Load XY estimate if available
         if os.path.exists(os.path.join(self.output, "XYestimate.pkl")):
-            with open(os.path.join(self.output, "XYestimate.pkl"), "rb") as file:
-                XYestimate = pickle.load(file)
-        logger.info(f"Loaded XY estimate: {XYestimate}")
+            try:
+                with open(os.path.join(self.output, "XYestimate.pkl"), "rb") as file:
+                    XYestimate = pickle.load(file)
+                logger.debug("Loaded XY estimate: %s", XYestimate)
+            except Exception as e:
+                logger.error("Failed to load XY estimate: %s", str(e))
+                XYestimate = "Unknown"
 
         # Add genetic sex summary
         if XYestimate != "Unknown":
-            logger.info("Adding genetic sex analysis")
+            logger.debug("Adding genetic sex analysis")
             sex_color = (
                 self.COLORS["primary"]
                 if XYestimate == "XX"
@@ -675,7 +687,7 @@ class RobinReport:
             self.add_summary_card(card_content)
 
         # Add CNV section
-        logger.info("Adding CNV section")
+        logger.debug("Adding CNV section")
         
         # Load required resource files
         gene_bed_file = os.path.join(
@@ -686,125 +698,227 @@ class RobinReport:
             os.path.dirname(os.path.abspath(resources.__file__)), 
             "cytoBand.txt"
         )
+        logger.debug("Resource files: gene_bed=%s, cytoband=%s", gene_bed_file, cytoband_file)
         
         # Load gene and cytoband data
         gene_bed = None
         cytobands_bed = None
-        if os.path.exists(gene_bed_file):
-            logger.info(f"Loading gene bed data from {gene_bed_file}")
-            gene_bed = pd.read_csv(
-                gene_bed_file,
-                sep='\t',
-                names=['chrom', 'start_pos', 'end_pos', 'gene']
-            )
-        if os.path.exists(cytoband_file):
-            logger.info(f"Loading cytoband data from {cytoband_file}")
-            cytobands_bed = pd.read_csv(
-                cytoband_file,
-                sep='\t',
-                names=['chrom', 'start_pos', 'end_pos', 'name', 'stain']
-            )
+        try:
+            if os.path.exists(gene_bed_file):
+                logger.debug("Loading gene bed data")
+                gene_bed = pd.read_csv(
+                    gene_bed_file,
+                    sep='\t',
+                    names=['chrom', 'start_pos', 'end_pos', 'gene']
+                )
+                logger.debug("Gene bed data loaded with shape: %s", gene_bed.shape)
+            if os.path.exists(cytoband_file):
+                logger.debug("Loading cytoband data")
+                cytobands_bed = pd.read_csv(
+                    cytoband_file,
+                    sep='\t',
+                    names=['chrom', 'start_pos', 'end_pos', 'name', 'stain']
+                )
+                logger.debug("Cytoband data loaded with shape: %s", cytobands_bed.shape)
+        except Exception as e:
+            logger.error("Failed to load resource files: %s", str(e))
+            return
             
         # Create CNVAnalysis object with minimal required attributes
-        from robin.subpages.CNV_object import CNVAnalysis
-        cnv_analyzer = CNVAnalysis(target_panel="rCNS2")  # Default panel
-        # Skip BedTree initialization by setting the attributes directly
-        cnv_analyzer.gene_bed = gene_bed
-        cnv_analyzer.cytobands_bed = cytobands_bed
-        cnv_analyzer.cnv_dict = cnv_dict
-        cnv_analyzer.XYestimate = XYestimate
-        # Skip BedTree initialization
-        cnv_analyzer.NewBed = None
+        try:
+            logger.debug("Creating CNVAnalysis object")
+            from robin.subpages.CNV_object import CNVAnalysis
+            cnv_analyzer = CNVAnalysis(target_panel="rCNS2")  # Default panel
+            # Skip BedTree initialization by setting the attributes directly
+            cnv_analyzer.gene_bed = gene_bed
+            cnv_analyzer.cytobands_bed = cytobands_bed
+            cnv_analyzer.cnv_dict = cnv_dict
+            cnv_analyzer.XYestimate = XYestimate
+            # Skip BedTree initialization
+            cnv_analyzer.NewBed = None
+            logger.debug("CNVAnalysis object created")
+        except Exception as e:
+            logger.error("Failed to create CNVAnalysis object: %s", str(e))
+            return
         
         # Load reference CNV data
-        with open(
-            os.path.join(
+        try:
+            ref_file = os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)),
-                "HG01280_control_new.pkl",
-            ),
-            "rb",
-        ) as f:
-            ref_cnv_dict = pickle.load(f)
+                "HG01280_control_new.pkl"
+            )
+            logger.debug("Loading reference CNV data from %s", ref_file)
+            with open(ref_file, "rb") as f:
+                ref_cnv_dict = pickle.load(f)
+            logger.debug("Reference CNV data loaded")
+        except Exception as e:
+            logger.error("Failed to load reference CNV data: %s", str(e))
+            return
         
         # Calculate CNV differences
-        from robin.subpages.CNV_object import CNV_Difference, moving_average, iterate_bam_bin
-        result3 = CNV_Difference()
-        
-        # Get reference CNV data with matching bin width
-        r2_cnv, _, _, _ = iterate_bam_bin(
-            None,
-            1,
-            60,
-            ref_cnv_dict,
-            int(logging.ERROR),
-            bin_width=cnv_dict["bin_width"],
-        )
+        try:
+            logger.debug("Calculating CNV differences")
+            from robin.subpages.CNV_object import CNV_Difference, moving_average, iterate_bam_bin
+            result3 = CNV_Difference()
+            
+            # Get reference CNV data with matching bin width
+            logger.debug("Getting reference CNV data with bin width %s", cnv_dict["bin_width"])
+            r2_cnv, _, _, _ = iterate_bam_bin(
+                None,
+                1,
+                60,
+                ref_cnv_dict,
+                int(logging.ERROR),
+                bin_width=cnv_dict["bin_width"],
+            )
+            logger.debug("Reference CNV data processed")
+        except Exception as e:
+            logger.error("Failed to calculate CNV differences: %s", str(e))
+            return
         
         # Calculate normalized CNV values and chromosome-specific thresholds
-        chromosome_stats = {}  # Store stats for each chromosome
-        result3 = CNV_Difference()
-        chromosome_means = {}  # Store mean CNV value for each chromosome
-        
-        # First pass: calculate normalized values and chromosome means
-        for key in CNVresult.cnv.keys():
-            if key != "chrM" and re.match(r"^chr(\d+|X|Y)$", key):
-                if key in r2_cnv:
-                    moving_avg_data1 = moving_average(CNVresult.cnv[key])
-                    moving_avg_data2 = moving_average(r2_cnv[key])
-                    # Pad arrays to same length if needed
-                    if len(moving_avg_data1) != len(moving_avg_data2):
-                        max_len = max(len(moving_avg_data1), len(moving_avg_data2))
-                        if len(moving_avg_data1) < max_len:
-                            moving_avg_data1 = np.pad(moving_avg_data1, (0, max_len - len(moving_avg_data1)))
-                        if len(moving_avg_data2) < max_len:
-                            moving_avg_data2 = np.pad(moving_avg_data2, (0, max_len - len(moving_avg_data2)))
-                    # Calculate difference
-                    normalized_cnv = moving_avg_data1 - moving_avg_data2
-                    result3.cnv[key] = normalized_cnv
-                    # Calculate mean for this chromosome
-                    chromosome_means[key] = np.mean(normalized_cnv)
+        try:
+            logger.debug("Calculating chromosome statistics")
+            chromosome_stats = {}  # Store stats for each chromosome
+            result3 = CNV_Difference()
+            chromosome_means = {}  # Store mean CNV value for each chromosome
+            
+            # First pass: calculate normalized values and chromosome means
+            for key in CNVresult.cnv.keys():
+                if key != "chrM" and re.match(r"^chr(\d+|X|Y)$", key):
+                    if key in r2_cnv:
+                        moving_avg_data1 = moving_average(CNVresult.cnv[key])
+                        moving_avg_data2 = moving_average(r2_cnv[key])
+                        # Pad arrays to same length if needed
+                        if len(moving_avg_data1) != len(moving_avg_data2):
+                            max_len = max(len(moving_avg_data1), len(moving_avg_data2))
+                            if len(moving_avg_data1) < max_len:
+                                moving_avg_data1 = np.pad(moving_avg_data1, (0, max_len - len(moving_avg_data1)))
+                            if len(moving_avg_data2) < max_len:
+                                moving_avg_data2 = np.pad(moving_avg_data2, (0, max_len - len(moving_avg_data2)))
+                        # Calculate difference
+                        normalized_cnv = moving_avg_data1 - moving_avg_data2
+                        result3.cnv[key] = normalized_cnv
+                        # Calculate mean for this chromosome
+                        chromosome_means[key] = np.mean(normalized_cnv)
+            logger.debug("Chromosome means calculated")
+        except Exception as e:
+            logger.error("Failed to calculate chromosome statistics: %s", str(e))
+            return
         
         # Calculate genome-wide baseline from autosome means only
-        autosome_means = [v for k, v in chromosome_means.items() if k not in ["chrX", "chrY", "chrM"]]
-        genome_baseline = np.mean(autosome_means)
-        genome_std = np.std(autosome_means)
+        try:
+            logger.debug("Calculating genome-wide baseline")
+            autosome_means = [v for k, v in chromosome_means.items() if k not in ["chrX", "chrY", "chrM"]]
+            genome_baseline = np.mean(autosome_means)
+            genome_std = np.std(autosome_means)
+            logger.debug("Genome-wide baseline: mean=%.3f, std=%.3f", genome_baseline, genome_std)
+        except Exception as e:
+            logger.error("Failed to calculate genome-wide baseline: %s", str(e))
+            return
         
+        # Generate genome-wide CNV plot for summary
+        try:
+            logger.debug("Generating genome-wide CNV plot")
+            img_buf = create_CNV_plot(CNVresult, cnv_dict)
+            width, height = A4
+            img_width, img_height = calculate_plot_dimensions(width, is_genome_wide=True)
+            img = Image(img_buf, width=img_width, height=img_height)
+            self.elements_summary.append(img)
+            self.elements_summary.append(
+                Paragraph(
+                    "Copy number variation across chromosomes",
+                    self.styles["Caption"],
+                )
+            )
+            logger.debug("Added genome-wide CNV plot")
+        except Exception as e:
+            logger.error("Failed to generate genome-wide CNV plot: %s", str(e))
+            return
+
         # Second pass: analyze each chromosome
-        chromosome_wide_events = []  # Store chromosome-wide CNV events
-        for key in CNVresult.cnv.keys():
-            if key != "chrM" and re.match(r"^chr(\d+|X|Y)$", key):
-                if key in result3.cnv:
-                    normalized_cnv = result3.cnv[key]
-                    chr_mean = chromosome_means[key]
-                    chr_std = np.std(normalized_cnv)
-                    z_score = 0  # Default value
-                    
-                    # Different analysis based on chromosome type
-                    if key == "chrX":
-                        if XYestimate == "XY":  # Male
-                            # For males, X chromosome should be at half dosage
-                            if chr_mean > 0.1:  # Gain from male baseline
-                                chromosome_wide_events.append([
-                                    key,
-                                    "Whole chromosome (male X)",
-                                    chr_mean,
-                                    'GAIN',
-                                    len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
-                                ])
-                            elif chr_mean < -0.3:  # Loss from male baseline
-                                chromosome_wide_events.append([
-                                    key,
-                                    "Whole chromosome (male X)",
-                                    chr_mean,
-                                    'LOSS',
-                                    len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
-                                ])
-                        else:  # Female or Unknown
+        try:
+            logger.debug("Starting chromosome-wide analysis")
+            chromosome_wide_events = []  # Store chromosome-wide CNV events
+            for key in CNVresult.cnv.keys():
+                if key != "chrM" and re.match(r"^chr(\d+|X|Y)$", key):
+                    if key in result3.cnv:
+                        normalized_cnv = result3.cnv[key]
+                        chr_mean = chromosome_means[key]
+                        chr_std = np.std(normalized_cnv)
+                        z_score = 0  # Default value
+                        
+                        # Different analysis based on chromosome type
+                        if key == "chrX":
+                            if XYestimate == "XY":  # Male
+                                # For males, X chromosome should be at half dosage
+                                if chr_mean > 0.1:  # Gain from male baseline
+                                    chromosome_wide_events.append([
+                                        key,
+                                        "Whole chromosome (male X)",
+                                        chr_mean,
+                                        'GAIN',
+                                        len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
+                                    ])
+                                elif chr_mean < -0.3:  # Loss from male baseline
+                                    chromosome_wide_events.append([
+                                        key,
+                                        "Whole chromosome (male X)",
+                                        chr_mean,
+                                        'LOSS',
+                                        len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
+                                    ])
+                            else:  # Female or Unknown
+                                z_score = (chr_mean - genome_baseline) / genome_std if genome_std > 0 else 0
+                                if z_score > 1.5:
+                                    chromosome_wide_events.append([
+                                        key,
+                                        "Whole chromosome (female X)",
+                                        chr_mean,
+                                        'GAIN',
+                                        len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
+                                    ])
+                                elif z_score < -1.5:
+                                    chromosome_wide_events.append([
+                                        key,
+                                        "Whole chromosome (female X)",
+                                        chr_mean,
+                                        'LOSS',
+                                        len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
+                                    ])
+                        elif key == "chrY":
+                            if XYestimate == "XY":  # Male
+                                if chr_mean > 0.5:  # Significant gain from male baseline
+                                    chromosome_wide_events.append([
+                                        key,
+                                        "Whole chromosome (male Y)",
+                                        chr_mean,
+                                        'GAIN',
+                                        len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
+                                    ])
+                                elif chr_mean < -0.5:  # Significant loss from male baseline
+                                    chromosome_wide_events.append([
+                                        key,
+                                        "Whole chromosome (male Y)",
+                                        chr_mean,
+                                        'LOSS',
+                                        len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
+                                    ])
+                            else:  # Female or Unknown
+                                if chr_mean > -0.2:  # Presence of Y material in female
+                                    chromosome_wide_events.append([
+                                        key,
+                                        "Y chromosome material (female)",
+                                        chr_mean,
+                                        'GAIN',
+                                        len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
+                                    ])
+                        else:  # Autosomes
                             z_score = (chr_mean - genome_baseline) / genome_std if genome_std > 0 else 0
                             if z_score > 1.5:
                                 chromosome_wide_events.append([
                                     key,
-                                    "Whole chromosome (female X)",
+                                    "Whole chromosome",
                                     chr_mean,
                                     'GAIN',
                                     len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
@@ -812,274 +926,239 @@ class RobinReport:
                             elif z_score < -1.5:
                                 chromosome_wide_events.append([
                                     key,
-                                    "Whole chromosome (female X)",
+                                    "Whole chromosome",
                                     chr_mean,
                                     'LOSS',
                                     len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
                                 ])
-                    elif key == "chrY":
-                        if XYestimate == "XY":  # Male
-                            if chr_mean > 0.5:  # Significant gain from male baseline
-                                chromosome_wide_events.append([
-                                    key,
-                                    "Whole chromosome (male Y)",
-                                    chr_mean,
-                                    'GAIN',
-                                    len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
-                                ])
-                            elif chr_mean < -0.5:  # Significant loss from male baseline
-                                chromosome_wide_events.append([
-                                    key,
-                                    "Whole chromosome (male Y)",
-                                    chr_mean,
-                                    'LOSS',
-                                    len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
-                                ])
-                        else:  # Female or Unknown
-                            if chr_mean > -0.2:  # Presence of Y material in female
-                                chromosome_wide_events.append([
-                                    key,
-                                    "Y chromosome material (female)",
-                                    chr_mean,
-                                    'GAIN',
-                                    len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
-                                ])
-                    else:  # Autosomes
-                        z_score = (chr_mean - genome_baseline) / genome_std if genome_std > 0 else 0
-                        if z_score > 1.5:
-                            chromosome_wide_events.append([
-                                key,
-                                "Whole chromosome",
-                                chr_mean,
-                                'GAIN',
-                                len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
-                            ])
-                        elif z_score < -1.5:
-                            chromosome_wide_events.append([
-                                key,
-                                "Whole chromosome",
-                                chr_mean,
-                                'LOSS',
-                                len(normalized_cnv) * cnv_dict["bin_width"] / 1_000_000
-                            ])
-                    
-                    # Store chromosome-specific stats
-                    chromosome_stats[key] = {
-                        'mean': chr_mean,
-                        'std': chr_std,
-                        'z_score': z_score,
-                        'gain_threshold': chr_mean + (1.0 * chr_std),
-                        'loss_threshold': chr_mean - (1.0 * chr_std)
-                    }
-        
-        # Update CNVAnalysis object
-        cnv_analyzer.result3 = result3
-        cnv_analyzer.chromosome_stats = chromosome_stats
-        
-        # Add CNV summary header and threshold information
-        self.elements_summary.append(
-            Paragraph("Copy Number Variation", self.styles["Heading2"])
-        )
-
-        # Generate genome-wide CNV plot for summary
-        img_buf = create_CNV_plot(CNVresult, cnv_dict)
-        width, height = A4
-        img_width, img_height = calculate_plot_dimensions(width, is_genome_wide=True)
-        img = Image(img_buf, width=img_width, height=img_height)
-        self.elements_summary.append(img)
-        self.elements_summary.append(
-            Paragraph(
-                "Copy number variation across chromosomes",
-                self.styles["Caption"],
-            )
-        )
-        
-        # Create threshold summary table
-        threshold_data = [['Chromosome', 'Mean CNV', 'Z-score', 'Gain Threshold', 'Loss Threshold']]
-        for chrom in natsort.natsorted(chromosome_stats.keys()):
-            stats = chromosome_stats[chrom]
-            threshold_data.append([
-                chrom,
-                f"{stats['mean']:.3f}",
-                f"{stats['z_score']:.3f}",
-                f"{stats['gain_threshold']:.3f}",
-                f"{stats['loss_threshold']:.3f}"
-            ])
-        
-        # Add genome baseline to the table
-        threshold_data.append([
-            'Genome',
-            f"{genome_baseline:.3f}",
-            'baseline',
-            f"{genome_baseline + genome_std:.3f}",
-            f"{genome_baseline - genome_std:.3f}"
-        ])
-        
-        # Create and style the threshold table
-        threshold_table = Table(threshold_data, colWidths=[60, 70, 70, 70, 70])
-        threshold_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), self.COLORS["background"]),
-            ('TEXTCOLOR', (0, 0), (-1, 0), self.COLORS["primary"]),
-            ('FONTNAME', (0, 0), (-1, 0), 'FiraSans-Bold' if not self.use_default_font else 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 8),
-            ('FONTSIZE', (0, 1), (-1, -1), 7),
-            ('TOPPADDING', (0, 0), (-1, -1), 2),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
-            ('LEFTPADDING', (0, 0), (-1, -1), 4),
-            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
-            ('GRID', (0, 0), (-1, -1), 0.5, self.COLORS["border"]),
-            ('BACKGROUND', (-1, -1), (-1, -1), self.COLORS["background"]),  # Highlight global row
-        ]))
-        
-        self.elements_summary.append(Paragraph("CNV Analysis Thresholds:", self.styles["Normal"]))
-        self.elements_summary.append(Spacer(1, 4))
-        self.elements_summary.append(threshold_table)
-        self.elements_summary.append(Spacer(1, 8))
-        
-        # Combine chromosome-wide events with cytoband-level events
-        cnv_data = []
-        
-        # Add chromosome-wide events first
-        for chrom, region, mean_cnv, cnv_type, length_mb in chromosome_wide_events:
-            cnv_data.append([
-                chrom,
-                region,
-                f"{length_mb:.1f}Mb",
-                mean_cnv,
-                cnv_type
-            ])
-        
-        # Define list of chromosomes to analyze
-        chromosomes = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
-        
-        # Then add within-chromosome events
-        for chrom in chromosomes:
-            if chrom in CNVresult.cnv:
-                logger.info(f"Processing chromosome {chrom}")
-                try:
-                    # Skip within-chromosome analysis if the whole chromosome is altered
-                    if not any(event[0] == chrom for event in chromosome_wide_events):
-                        # Get chromosome-specific thresholds
-                        stats = chromosome_stats[chrom]
-                        gain_threshold = stats['gain_threshold']
-                        loss_threshold = stats['loss_threshold']
                         
-                        # Analyze CNV data with chromosome-specific thresholds
-                        cytoband_analysis = cnv_analyzer.analyze_cytoband_cnv(result3.cnv, chrom)
-                        if not cytoband_analysis.empty:
-                            for _, row in cytoband_analysis.iterrows():
-                                if row['mean_cnv'] > gain_threshold:
-                                    length_mb = (row['end_pos'] - row['start_pos']) / 1_000_000
-                                    cnv_data.append([
-                                        chrom,
-                                        row['name'],
-                                        f"{length_mb:.1f}Mb",
-                                        row['mean_cnv'],
-                                        'GAIN',
-                                    ])
-                                elif row['mean_cnv'] < loss_threshold:
-                                    length_mb = (row['end_pos'] - row['start_pos']) / 1_000_000
-                                    cnv_data.append([
-                                        chrom,
-                                        row['name'],
-                                        f"{length_mb:.1f}Mb",
-                                        row['mean_cnv'],
-                                        'LOSS',
-                                    ])
-                except Exception as e:
-                    logger.error(f"Error processing {chrom}: {str(e)}")
-        
-        if cnv_data:
-            logger.info(f"Found {len(cnv_data)} significant changes")
-            # Sort data by chromosome (natural sort) and mean CNV value
-            cnv_data.sort(key=lambda x: (natsort.natsort_key(x[0]), -abs(float(x[3]))))
-            
-            # Create table header
-            table_data = [['Chr', 'Region', 'Length', 'Mean CNV', 'Type']]
-            
-            # Add data rows with formatting
-            for row in cnv_data:
-                chrom, region, length_mb, mean_cnv, cnv_type = row
-                # Remove chromosome from region if it starts with it to avoid repetition
-                if region.startswith(chrom):
-                    region = region.replace(f"{chrom} ", "")
-                
-                # Add arrow icons for gains and losses
-                type_with_arrow = '↑ GAIN' if cnv_type == 'GAIN' else '↓ LOSS'
-                
-                table_data.append([
+                        # Store chromosome-specific stats
+                        chromosome_stats[key] = {
+                            'mean': chr_mean,
+                            'std': chr_std,
+                            'z_score': z_score,
+                            'gain_threshold': chr_mean + (1.0 * chr_std),
+                            'loss_threshold': chr_mean - (1.0 * chr_std)
+                        }
+            logger.debug("Found %d chromosome-wide events", len(chromosome_wide_events))
+        except Exception as e:
+            logger.error("Failed to analyze chromosomes: %s", str(e))
+            return
+
+        # Update CNVAnalysis object
+        try:
+            logger.debug("Updating CNVAnalysis object")
+            cnv_analyzer.result3 = result3
+            cnv_analyzer.chromosome_stats = chromosome_stats
+            logger.debug("CNVAnalysis object updated")
+        except Exception as e:
+            logger.error("Failed to update CNVAnalysis object: %s", str(e))
+            return
+
+        # Add CNV summary header and threshold information
+        try:
+            logger.debug("Adding CNV summary header")
+            self.elements_summary.append(
+                Paragraph("Copy Number Variation", self.styles["Heading2"])
+            )
+
+            # Create threshold summary table
+            threshold_data = [['Chromosome', 'Mean CNV', 'Z-score', 'Gain Threshold', 'Loss Threshold']]
+            for chrom in natsort.natsorted(chromosome_stats.keys()):
+                stats = chromosome_stats[chrom]
+                threshold_data.append([
                     chrom,
-                    region,
-                    length_mb,
-                    f"{float(mean_cnv):.2f}",
-                    type_with_arrow
+                    f"{stats['mean']:.3f}",
+                    f"{stats['z_score']:.3f}",
+                    f"{stats['gain_threshold']:.3f}",
+                    f"{stats['loss_threshold']:.3f}"
                 ])
-            
-            # Create table style with colors for gains and losses
-            cnv_table_style = TableStyle([
-                # Header styling
+
+            # Add genome baseline to the table
+            threshold_data.append([
+                'Genome',
+                f"{genome_baseline:.3f}",
+                'baseline',
+                f"{genome_baseline + genome_std:.3f}",
+                f"{genome_baseline - genome_std:.3f}"
+            ])
+
+            # Create and style the threshold table
+            threshold_table = Table(threshold_data, colWidths=[60, 70, 70, 70, 70])
+            threshold_table.setStyle(TableStyle([
                 ('BACKGROUND', (0, 0), (-1, 0), self.COLORS["background"]),
                 ('TEXTCOLOR', (0, 0), (-1, 0), self.COLORS["primary"]),
                 ('FONTNAME', (0, 0), (-1, 0), 'FiraSans-Bold' if not self.use_default_font else 'Helvetica-Bold'),
                 ('FONTSIZE', (0, 0), (-1, 0), 8),
-                ('TOPPADDING', (0, 0), (-1, 0), 4),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
-                # Body styling
-                ('FONTNAME', (0, 1), (-1, -1), 'FiraSans' if not self.use_default_font else 'Helvetica'),
                 ('FONTSIZE', (0, 1), (-1, -1), 7),
-                ('TOPPADDING', (0, 1), (-1, -1), 2),
-                ('BOTTOMPADDING', (0, 1), (-1, -1), 2),
+                ('TOPPADDING', (0, 0), (-1, -1), 2),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
                 ('LEFTPADDING', (0, 0), (-1, -1), 4),
                 ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('ALIGN', (2, 1), (3, -1), 'RIGHT'),
+                ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
                 ('GRID', (0, 0), (-1, -1), 0.5, self.COLORS["border"]),
-                # Add background shading for type column
-                ('BACKGROUND', (4, 1), (4, -1), self.COLORS["background"]),
-            ])
-            
-            # Add conditional formatting for GAIN/LOSS
-            for i in range(1, len(table_data)):
-                if '↑' in table_data[i][4]:  # GAIN
-                    cnv_table_style.add('TEXTCOLOR', (4, i), (4, i), self.COLORS["success"])
-                    cnv_table_style.add('BACKGROUND', (4, i), (4, i), HexColor('#e8f5e9'))  # Light green
-                    cnv_table_style.add('TEXTCOLOR', (3, i), (3, i), self.COLORS["success"])
-                else:  # LOSS
-                    cnv_table_style.add('TEXTCOLOR', (4, i), (4, i), self.COLORS["error"])
-                    cnv_table_style.add('BACKGROUND', (4, i), (4, i), HexColor('#ffebee'))  # Light red
-                    cnv_table_style.add('TEXTCOLOR', (3, i), (3, i), self.COLORS["error"])
-            
-            # Create and add the table with adjusted column widths
-            table = Table(table_data, colWidths=[45, 160, 50, 50, 45])  # Adjusted widths for new column
-            table.setStyle(cnv_table_style)
-            
-            # Add table to summary section with less spacing
-            self.elements_summary.append(
-                Paragraph("CNV Summary", self.styles["Heading3"])
-            )
-            self.elements_summary.append(Spacer(1, 4))  # Reduced from 12
-            self.elements_summary.append(table)
-            self.elements_summary.append(Spacer(1, 8))  # Reduced from 12
-        else:
-            logger.info("No significant changes found")
-            summary_color = self.COLORS["muted"]
-            card_content = (
-                f'<font color="{summary_color.hexval()}">'
-                "<b>CNV Summary</b><br/>"
-                "No significant CNV changes detected across any chromosome"
-                "</font>"
-            )
-            self.add_summary_card(card_content)
-        
-        # Add per-chromosome plots in main section
-        self.elements.append(PageBreak())
-        self.elements.append(Paragraph("Detailed CNV Analysis", self.styles["Heading2"]))
-        
+                ('BACKGROUND', (-1, -1), (-1, -1), self.COLORS["background"]),  # Highlight global row
+            ]))
+
+            self.elements_summary.append(Paragraph("CNV Analysis Thresholds:", self.styles["Normal"]))
+            self.elements_summary.append(Spacer(1, 4))
+            self.elements_summary.append(threshold_table)
+            self.elements_summary.append(Spacer(1, 8))
+            logger.debug("Added CNV summary header and threshold table")
+        except Exception as e:
+            logger.error("Failed to add CNV summary header: %s", str(e))
+            return
+
+        # Combine chromosome-wide events with cytoband-level events
         try:
-            logger.info("Generating CNV plots")
+            logger.debug("Processing CNV events")
+            cnv_data = []
+
+            # Add chromosome-wide events first
+            for chrom, region, mean_cnv, cnv_type, length_mb in chromosome_wide_events:
+                cnv_data.append([
+                    chrom,
+                    region,
+                    f"{length_mb:.1f}Mb",
+                    mean_cnv,
+                    cnv_type
+                ])
+
+            # Define list of chromosomes to analyze
+            chromosomes = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
+
+            # Then add within-chromosome events
+            for chrom in chromosomes:
+                if chrom in CNVresult.cnv:
+                    logger.debug("Processing chromosome %s", chrom)
+                    try:
+                        # Skip within-chromosome analysis if the whole chromosome is altered
+                        if not any(event[0] == chrom for event in chromosome_wide_events):
+                            # Get chromosome-specific thresholds
+                            stats = chromosome_stats[chrom]
+                            gain_threshold = stats['gain_threshold']
+                            loss_threshold = stats['loss_threshold']
+                            
+                            # Analyze CNV data with chromosome-specific thresholds
+                            cytoband_analysis = cnv_analyzer.analyze_cytoband_cnv(result3.cnv, chrom)
+                            if not cytoband_analysis.empty:
+                                for _, row in cytoband_analysis.iterrows():
+                                    if row['mean_cnv'] > gain_threshold:
+                                        length_mb = (row['end_pos'] - row['start_pos']) / 1_000_000
+                                        cnv_data.append([
+                                            chrom,
+                                            row['name'],
+                                            f"{length_mb:.1f}Mb",
+                                            row['mean_cnv'],
+                                            'GAIN',
+                                        ])
+                                    elif row['mean_cnv'] < loss_threshold:
+                                        length_mb = (row['end_pos'] - row['start_pos']) / 1_000_000
+                                        cnv_data.append([
+                                            chrom,
+                                            row['name'],
+                                            f"{length_mb:.1f}Mb",
+                                            row['mean_cnv'],
+                                            'LOSS',
+                                        ])
+                    except Exception as e:
+                        logger.error("Error processing %s: %s", chrom, str(e))
+                        continue
+
+            logger.debug("Found %d significant changes", len(cnv_data))
+            if cnv_data:
+                # Sort data by chromosome (natural sort) and mean CNV value
+                cnv_data.sort(key=lambda x: (natsort.natsort_key(x[0]), -abs(float(x[3]))))
+                
+                # Create table header
+                table_data = [['Chr', 'Region', 'Length', 'Mean CNV', 'Type']]
+                
+                # Add data rows with formatting
+                for row in cnv_data:
+                    chrom, region, length_mb, mean_cnv, cnv_type = row
+                    # Remove chromosome from region if it starts with it to avoid repetition
+                    if region.startswith(chrom):
+                        region = region.replace(f"{chrom} ", "")
+                    
+                    # Add arrow icons for gains and losses
+                    type_with_arrow = '↑ GAIN' if cnv_type == 'GAIN' else '↓ LOSS'
+                    
+                    table_data.append([
+                        chrom,
+                        region,
+                        length_mb,
+                        f"{float(mean_cnv):.2f}",
+                        type_with_arrow
+                    ])
+                
+                # Create table style with colors for gains and losses
+                cnv_table_style = TableStyle([
+                    # Header styling
+                    ('BACKGROUND', (0, 0), (-1, 0), self.COLORS["background"]),
+                    ('TEXTCOLOR', (0, 0), (-1, 0), self.COLORS["primary"]),
+                    ('FONTNAME', (0, 0), (-1, 0), 'FiraSans-Bold' if not self.use_default_font else 'Helvetica-Bold'),
+                    ('FONTSIZE', (0, 0), (-1, 0), 8),
+                    ('TOPPADDING', (0, 0), (-1, 0), 4),
+                    ('BOTTOMPADDING', (0, 0), (-1, 0), 4),
+                    # Body styling
+                    ('FONTNAME', (0, 1), (-1, -1), 'FiraSans' if not self.use_default_font else 'Helvetica'),
+                    ('FONTSIZE', (0, 1), (-1, -1), 7),
+                    ('TOPPADDING', (0, 1), (-1, -1), 2),
+                    ('BOTTOMPADDING', (0, 1), (-1, -1), 2),
+                    ('LEFTPADDING', (0, 0), (-1, -1), 4),
+                    ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+                    ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                    ('ALIGN', (2, 1), (3, -1), 'RIGHT'),
+                    ('GRID', (0, 0), (-1, -1), 0.5, self.COLORS["border"]),
+                    # Add background shading for type column
+                    ('BACKGROUND', (4, 1), (4, -1), self.COLORS["background"]),
+                ])
+                
+                # Add conditional formatting for GAIN/LOSS
+                for i in range(1, len(table_data)):
+                    if '↑' in table_data[i][4]:  # GAIN
+                        cnv_table_style.add('TEXTCOLOR', (4, i), (4, i), self.COLORS["success"])
+                        cnv_table_style.add('BACKGROUND', (4, i), (4, i), HexColor('#e8f5e9'))  # Light green
+                        cnv_table_style.add('TEXTCOLOR', (3, i), (3, i), self.COLORS["success"])
+                    else:  # LOSS
+                        cnv_table_style.add('TEXTCOLOR', (4, i), (4, i), self.COLORS["error"])
+                        cnv_table_style.add('BACKGROUND', (4, i), (4, i), HexColor('#ffebee'))  # Light red
+                        cnv_table_style.add('TEXTCOLOR', (3, i), (3, i), self.COLORS["error"])
+                
+                # Create and add the table with adjusted column widths
+                table = Table(table_data, colWidths=[45, 160, 50, 50, 45])  # Adjusted widths for new column
+                table.setStyle(cnv_table_style)
+                
+                # Add table to summary section with less spacing
+                self.elements_summary.append(
+                    Paragraph("CNV Summary", self.styles["Heading3"])
+                )
+                self.elements_summary.append(Spacer(1, 4))  # Reduced from 12
+                self.elements_summary.append(table)
+                self.elements_summary.append(Spacer(1, 8))  # Reduced from 12
+                logger.debug("Added CNV summary table")
+            else:
+                logger.debug("No significant changes found")
+                summary_color = self.COLORS["muted"]
+                card_content = (
+                    f'<font color="{summary_color.hexval()}">'
+                    "<b>CNV Summary</b><br/>"
+                    "No significant CNV changes detected across any chromosome"
+                    "</font>"
+                )
+                self.add_summary_card(card_content)
+        except Exception as e:
+            logger.error("Failed to process CNV events: %s", str(e))
+            return
+
+        # Add per-chromosome plots in main section
+        try:
+            logger.debug("Adding per-chromosome plots")
+            self.elements.append(PageBreak())
+            self.elements.append(Paragraph("Detailed CNV Analysis", self.styles["Heading2"]))
             
             # Generate per-chromosome plots
+            logger.debug("Generating CNV plots")
             chromosome_plots = create_CNV_plot_per_chromosome(CNVresult, cnv_dict)
             
             # Get list of chromosomes with significant changes
@@ -1089,6 +1168,7 @@ class RobinReport:
             filtered_plots = [(chrom, plot_buf) for chrom, plot_buf in chromosome_plots if chrom in significant_chromosomes]
             
             if filtered_plots:
+                logger.debug("Found %d chromosomes with significant changes", len(filtered_plots))
                 # Calculate dimensions for the grid
                 width, height = A4
                 num_plots = len(filtered_plots)
@@ -1170,7 +1250,9 @@ class RobinReport:
                         self.styles["Caption"],
                     )
                 )
+                logger.debug("Added per-chromosome plots")
             else:
+                logger.debug("No chromosomes with significant changes")
                 self.elements.append(
                     Paragraph(
                         "No chromosomes showed significant copy number changes",
@@ -1178,7 +1260,10 @@ class RobinReport:
                     )
                 )
         except Exception as e:
-            logger.error(f"Error generating CNV plots: {str(e)}", exc_info=True)
+            logger.error("Failed to add per-chromosome plots: %s", str(e))
+            return
+
+        logger.debug("CNV analysis section completed")
 
     def add_fusion_analysis(self):
         """Add fusion analysis section to the report."""
