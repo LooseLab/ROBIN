@@ -639,55 +639,55 @@ class BrainMeth:
                     ui.label("This tool enables classification of brain tumors in real time from Oxford Nanopore Data.").classes('text-gray-600')
                 logging.info("Title section rendered")
 
-                # Run Information - Compact display at the top
-                if self.sampleID and self.sampleID in app.storage.general[self.mainuuid]["samples"]:
-                    logging.info("Rendering run information display")
-                    with ui.card().classes('w-full p-3 sm:p-4 bg-gray-50 rounded-lg mb-4'):
-                        ui.label("Run Information").classes('font-medium text-gray-900 mb-3')
-                        with ui.grid().classes('grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3'):
-                            # Device and Model Info
-                            with ui.column().classes('space-y-2'):
-                                with ui.row().classes('items-center gap-2'):
-                                    ui.icon('devices').classes('text-gray-400')
-                                    ui.label().bind_text_from(
-                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                        "devices",
-                                        backward=lambda n: f"Device: {str(n[0])}" if n else "--"
-                                    )
-                                with ui.row().classes('items-center gap-2'):
-                                    ui.icon('memory').classes('text-gray-400')
-                                    ui.label().bind_text_from(
-                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                        "basecall_models",
-                                        backward=lambda n: f"Model: {str(n[0])}" if n else "--"
-                                    )
-                            
-                            # Flow Cell and Sample Info
-                            with ui.column().classes('space-y-2'):
-                                with ui.row().classes('items-center gap-2'):
-                                    ui.icon('view_module').classes('text-gray-400')
-                                    ui.label().bind_text_from(
-                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                        "flowcell_ids",
-                                        backward=lambda n: f"Flow Cell: {str(n[0])}" if n else "--"
-                                    )
-                                with ui.row().classes('items-center gap-2'):
-                                    ui.icon('label').classes('text-gray-400')
-                                    ui.label().bind_text_from(
-                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                        "sample_ids",
-                                        backward=lambda n: f"Sample: {str(n[0])}" if n else "--"
-                                    )
-                            
-                            # Run Time Info
-                            with ui.column().classes('space-y-2'):
-                                with ui.row().classes('items-center gap-2'):
-                                    ui.icon('schedule').classes('text-gray-400')
-                                    ui.label().bind_text_from(
-                                        app.storage.general[self.mainuuid]["samples"][self.sampleID],
-                                        "run_time",
-                                        backward=lambda n: f"Run: {parser.parse(n[0]).strftime('%Y-%m-%d %H:%M')}" if n else "--"
-                                    )
+                # Run Information Card
+                with ui.card().classes('w-full p-4 bg-white rounded-lg shadow-sm'):
+                    ui.label("Run Information").classes('text-lg font-medium text-gray-900 mb-4')
+                    with ui.row().classes('items-center gap-6'):
+                        # Run Time
+                        if app.storage.general[self.mainuuid]["samples"][self.sampleID]["run_time"]:
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('schedule').classes('text-gray-400')
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "run_time",
+                                    backward=lambda n: f"Run: {parser.parse(n[0]).strftime('%Y-%m-%d %H:%M')}" if n else None
+                                )
+
+                        # Model
+                        if app.storage.general[self.mainuuid]["samples"][self.sampleID]["basecall_models"]:
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('model_training').classes('text-gray-400')
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "basecall_models",
+                                    backward=lambda n: f"Model: {n[0]}" if n else None
+                                )
+
+                        # Device
+                        if app.storage.general[self.mainuuid]["samples"][self.sampleID]["devices"]:
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('memory').classes('text-gray-400')
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "devices",
+                                    backward=lambda n: f"Device: {n[0]}" if n else None
+                                )
+
+                        # Flow Cell
+                        if app.storage.general[self.mainuuid]["samples"][self.sampleID]["flowcell_ids"]:
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('grid_4x4').classes('text-gray-400')
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid]["samples"][self.sampleID],
+                                    "flowcell_ids",
+                                    backward=lambda n: f"Flow Cell: {n[0]}" if n else None
+                                )
+
+                        # Sample
+                        if self.sampleID:
+                            with ui.row().classes('items-center gap-2'):
+                                ui.icon('label').classes('text-gray-400')
+                                ui.label(f"Sample: {self.sampleID}").classes('text-gray-600')
 
                 # Results Summary Section
                 with ui.column().classes('space-y-4'):
