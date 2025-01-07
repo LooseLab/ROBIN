@@ -53,6 +53,20 @@ class ReadBam:
     unmapped_reads: int = 0
     yield_tracking: int = 0
     state: str = field(init=False)
+    # New counters for read numbers
+    mapped_reads_num: int = 0
+    unmapped_reads_num: int = 0
+    pass_mapped_reads_num: int = 0
+    fail_mapped_reads_num: int = 0
+    pass_unmapped_reads_num: int = 0
+    fail_unmapped_reads_num: int = 0
+    # New counters for bases
+    mapped_bases: int = 0
+    unmapped_bases: int = 0
+    pass_mapped_bases: int = 0
+    fail_mapped_bases: int = 0
+    pass_unmapped_bases: int = 0
+    fail_unmapped_bases: int = 0
 
     def __post_init__(self):
         self.state = "pass" if self.bam_file and "pass" in self.bam_file else "fail"
@@ -62,14 +76,42 @@ class ReadBam:
         Returns a summary of the BAM file.
 
         Returns:
-            dict: A dictionary containing the number of mapped and unmapped reads,
-                  yield tracking, and state.
+            dict: A dictionary containing read statistics including counts and mean lengths.
         """
+        # Calculate mean lengths
+        mean_mapped_length = self.mapped_bases / self.mapped_reads_num if self.mapped_reads_num > 0 else 0
+        mean_unmapped_length = self.unmapped_bases / self.unmapped_reads_num if self.unmapped_reads_num > 0 else 0
+        mean_pass_mapped_length = self.pass_mapped_bases / self.pass_mapped_reads_num if self.pass_mapped_reads_num > 0 else 0
+        mean_fail_mapped_length = self.fail_mapped_bases / self.fail_mapped_reads_num if self.fail_mapped_reads_num > 0 else 0
+        mean_pass_unmapped_length = self.pass_unmapped_bases / self.pass_unmapped_reads_num if self.pass_unmapped_reads_num > 0 else 0
+        mean_fail_unmapped_length = self.fail_unmapped_bases / self.fail_unmapped_reads_num if self.fail_unmapped_reads_num > 0 else 0
+
         return {
             "mapped_reads": self.mapped_reads,
             "unmapped_reads": self.unmapped_reads,
             "yield_tracking": self.yield_tracking,
             "state": self.state,
+            # Add read numbers
+            "mapped_reads_num": self.mapped_reads_num,
+            "unmapped_reads_num": self.unmapped_reads_num,
+            "pass_mapped_reads_num": self.pass_mapped_reads_num,
+            "fail_mapped_reads_num": self.fail_mapped_reads_num,
+            "pass_unmapped_reads_num": self.pass_unmapped_reads_num,
+            "fail_unmapped_reads_num": self.fail_unmapped_reads_num,
+            # Add bases
+            "mapped_bases": self.mapped_bases,
+            "unmapped_bases": self.unmapped_bases,
+            "pass_mapped_bases": self.pass_mapped_bases,
+            "fail_mapped_bases": self.fail_mapped_bases,
+            "pass_unmapped_bases": self.pass_unmapped_bases,
+            "fail_unmapped_bases": self.fail_unmapped_bases,
+            # Add mean lengths
+            "mean_mapped_length": mean_mapped_length,
+            "mean_unmapped_length": mean_unmapped_length,
+            "mean_pass_mapped_length": mean_pass_mapped_length,
+            "mean_fail_mapped_length": mean_fail_mapped_length,
+            "mean_pass_unmapped_length": mean_pass_unmapped_length,
+            "mean_fail_unmapped_length": mean_fail_unmapped_length
         }
 
     def get_rg_tags(self) -> Optional[Tuple[Optional[str], ...]]:
@@ -177,19 +219,47 @@ class ReadBam:
                 return None
 
             readset: Set[str] = set()
+            mapped_readset: Set[str] = set()
+            unmapped_readset: Set[str] = set()
+
             for read in self.sam_file.fetch(until_eof=True):
-                if not read.is_unmapped and not read.is_secondary:
+                read_length = read.query_length if read.query_length else 0
+                
+                if not read.is_secondary:  # Only process primary alignments
                     if read.query_name not in readset:
                         readset.add(read.query_name)
-                        if read.infer_query_length() and read.infer_query_length() > 0:
-                            self.yield_tracking += read.infer_query_length()
+                        
+                        if not read.is_unmapped:
+                            mapped_readset.add(read.query_name)
+                            self.mapped_bases += read_length
+                            if self.state == "pass":
+                                self.pass_mapped_bases += read_length
+                                self.pass_mapped_reads_num += 1
+                            else:
+                                self.fail_mapped_bases += read_length
+                                self.fail_mapped_reads_num += 1
+                        else:
+                            unmapped_readset.add(read.query_name)
+                            self.unmapped_bases += read_length
+                            if self.state == "pass":
+                                self.pass_unmapped_bases += read_length
+                                self.pass_unmapped_reads_num += 1
+                            else:
+                                self.fail_unmapped_bases += read_length
+                                self.fail_unmapped_reads_num += 1
+                        
+                        if read_length > 0:
+                            self.yield_tracking += read_length
+
                 if not bam_read.last_start:
                     bam_read.last_start = read.get_tag("st")
                 if read.get_tag("st") > bam_read.last_start:
                     bam_read.last_start = read.get_tag("st")
 
-            self.mapped_reads = len(readset)
-            self.unmapped_reads = self.sam_file.unmapped
+            self.mapped_reads = len(mapped_readset)
+            self.unmapped_reads = len(unmapped_readset)
+            self.mapped_reads_num = len(mapped_readset)
+            self.unmapped_reads_num = len(unmapped_readset)
 
             logger.info(f"Mapped reads: {self.mapped_reads}")
             logger.info(f"Total reads: {self.mapped_reads + self.unmapped_reads}")
