@@ -6,6 +6,7 @@ This module contains the run data summary section of the report.
 
 from .base import ReportSection
 
+
 class RunDataSection(ReportSection):
     """Section containing the run data summary."""
 

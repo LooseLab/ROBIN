@@ -256,52 +256,58 @@ def create_CNV_plot_per_chromosome(result, cnv_dict, significant_regions=None):
             values_array = np.array(values)
             mean_cnv = np.mean(values_array)
             std_cnv = np.std(values_array)
-            
+
             # Set y-axis limits based on mean and standard deviation
             y_min = 0
             y_max = mean_cnv + (2 * std_cnv)
-            
+
             # Calculate positions in megabases
-            positions = np.arange(len(values)) * cnv_dict["bin_width"] / 1_000_000  # Convert to Mb
-            
+            positions = (
+                np.arange(len(values)) * cnv_dict["bin_width"] / 1_000_000
+            )  # Convert to Mb
+
             plt.figure(figsize=(4, 2))
-            
+
             # If we have significant regions for this chromosome, highlight them
             if significant_regions and contig in significant_regions:
                 for region in significant_regions[contig]:
-                    start_mb = region['start_pos'] / 1_000_000  # Convert to Mb
-                    end_mb = region['end_pos'] / 1_000_000  # Convert to Mb
-                    
+                    start_mb = region["start_pos"] / 1_000_000  # Convert to Mb
+                    end_mb = region["end_pos"] / 1_000_000  # Convert to Mb
+
                     # Choose color based on type
-                    color = '#e8f5e9' if region['type'] == 'GAIN' else '#ffebee'  # Light green for gains, light red for losses
+                    color = (
+                        "#e8f5e9" if region["type"] == "GAIN" else "#ffebee"
+                    )  # Light green for gains, light red for losses
                     alpha = 0.3
-                    
+
                     # Add shaded region
                     plt.axvspan(start_mb, end_mb, color=color, alpha=alpha, zorder=1)
-                    
+
                     # Add cytoband label with background
                     mid_point = (start_mb + end_mb) / 2
                     y_pos = y_max - (0.1 * (y_max - y_min))  # Position near the top
-                    
+
                     # Create background box for text
                     bbox_props = dict(
                         boxstyle="round,pad=0.3",
-                        fc='white',
-                        ec=color.replace('e8', 'a5').replace('ff', 'ef'),  # Darker version of highlight color
-                        alpha=0.8
+                        fc="white",
+                        ec=color.replace("e8", "a5").replace(
+                            "ff", "ef"
+                        ),  # Darker version of highlight color
+                        alpha=0.8,
                     )
-                    
+
                     # Add text with background
                     plt.text(
-                        mid_point, 
+                        mid_point,
                         y_pos,
-                        region.get('name', ''),  # Add cytoband name if available
+                        region.get("name", ""),  # Add cytoband name if available
                         fontsize=8,
-                        fontweight='bold',
-                        ha='center',
-                        va='center',
+                        fontweight="bold",
+                        ha="center",
+                        va="center",
                         bbox=bbox_props,
-                        zorder=4
+                        zorder=4,
                     )
 
             # Plot CNV data points on top of highlighted regions
@@ -311,7 +317,7 @@ def create_CNV_plot_per_chromosome(result, cnv_dict, significant_regions=None):
                 s=2,
                 color=MODERN_COLORS["accent"],
                 alpha=0.6,
-                zorder=2
+                zorder=2,
             )
 
             plt.xlabel("Position (Mb)")
@@ -319,9 +325,17 @@ def create_CNV_plot_per_chromosome(result, cnv_dict, significant_regions=None):
             plt.ylim(y_min, y_max)
 
             # Add horizontal lines for mean and standard deviations
-            plt.axhline(y=mean_cnv, color='gray', linestyle='--', alpha=0.5, zorder=3)
-            plt.axhline(y=mean_cnv + std_cnv, color='gray', linestyle=':', alpha=0.3, zorder=3)
-            plt.axhline(y=mean_cnv + (2 * std_cnv), color='gray', linestyle=':', alpha=0.3, zorder=3)
+            plt.axhline(y=mean_cnv, color="gray", linestyle="--", alpha=0.5, zorder=3)
+            plt.axhline(
+                y=mean_cnv + std_cnv, color="gray", linestyle=":", alpha=0.3, zorder=3
+            )
+            plt.axhline(
+                y=mean_cnv + (2 * std_cnv),
+                color="gray",
+                linestyle=":",
+                alpha=0.3,
+                zorder=3,
+            )
 
             buf = io.BytesIO()
             plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")

@@ -7,6 +7,7 @@ This module contains the disclaimer section of the report.
 from reportlab.platypus import PageBreak, Paragraph
 from ..sections.base import ReportSection
 
+
 class DisclaimerSection(ReportSection):
     """Section containing the research use disclaimer."""
 
@@ -25,6 +26,4 @@ class DisclaimerSection(ReportSection):
             "based on all available information."
         )
 
-        self.elements.append(
-            Paragraph(disclaimer_text, self.styles.styles["Normal"])
-        ) 
+        self.elements.append(Paragraph(disclaimer_text, self.styles.styles["Normal"]))

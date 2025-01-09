@@ -6,6 +6,7 @@ This module contains the classification section of the report.
 
 from .base import ReportSection
 
+
 class ClassificationSection(ReportSection):
     """Section containing the classification results."""
 
@@ -13,4 +14,4 @@ class ClassificationSection(ReportSection):
         """Add the classification content to the report."""
         # Stub implementation
         self.add_section_header("Classification Results")
-        # TODO: Implement full classification section 
+        # TODO: Implement full classification section

@@ -12,8 +12,8 @@ from .formatting import (
 )
 
 __all__ = [
-    'format_number',
-    'format_timestamp',
-    'convert_to_space_separated_string',
-    'split_text',
-] 
+    "format_number",
+    "format_timestamp",
+    "convert_to_space_separated_string",
+    "split_text",
+]

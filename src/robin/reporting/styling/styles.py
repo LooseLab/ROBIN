@@ -15,15 +15,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class ReportStyles:
     """Encapsulates all styling-related functionality for the report."""
-    
+
     def __init__(self, fonts_dir):
         """Initialize styling with font directory path."""
         self.fonts_dir = fonts_dir
         self.use_default_font = True
         self.register_fonts()
-        
+
         # Initialize styles
         self.styles = getSampleStyleSheet()
         self._setup_colors()
@@ -60,8 +61,8 @@ class ReportStyles:
     def _setup_colors(self):
         """Set up color palette for consistent branding."""
         self.COLORS = {
-            "primary": HexColor("#4F9153"),      # ROBIN theme green
-            "secondary": HexColor("#367AB3"),    # Blue accent
+            "primary": HexColor("#4F9153"),  # ROBIN theme green
+            "secondary": HexColor("#367AB3"),  # Blue accent
             "text": HexColor("#37474f"),
             "success": HexColor("#2e7d32"),
             "warning": HexColor("#f57c00"),
@@ -124,7 +125,7 @@ class ReportStyles:
                 # Add support for HTML-like tags
                 self.styles[style_name].allowWidows = 0
                 self.styles[style_name].allowOrphans = 0
-                self.styles[style_name].wordWrap = 'CJK'
+                self.styles[style_name].wordWrap = "CJK"
 
         # Add custom styles
         custom_styles = {
@@ -204,24 +205,31 @@ class ReportStyles:
         base_font = "FiraSans" if not self.use_default_font else "Helvetica"
         bold_font = "FiraSans-Bold" if not self.use_default_font else "Helvetica-Bold"
 
-        self.MODERN_TABLE_STYLE = TableStyle([
-            ("BACKGROUND", (0, 0), (-1, 0), self.COLORS["background"]),
-            ("TEXTCOLOR", (0, 0), (-1, 0), self.COLORS["primary"]),
-            ("FONTNAME", (0, 0), (-1, 0), bold_font),  # Header uses bold
-            ("FONTNAME", (0, 1), (-1, -1), base_font),  # Body uses regular
-            ("FONTSIZE", (0, 0), (-1, 0), 10),
-            ("TOPPADDING", (0, 0), (-1, 0), 12),
-            ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
-            ("LINEBELOW", (0, 0), (-1, 0), 1, self.COLORS["border"]),
-            ("BACKGROUND", (0, 1), (-1, -1), white),
-            ("TEXTCOLOR", (0, 1), (-1, -1), self.COLORS["text"]),
-            ("FONTSIZE", (0, 1), (-1, -1), 9),
-            ("TOPPADDING", (0, 1), (-1, -1), 8),
-            ("BOTTOMPADDING", (0, 1), (-1, -1), 8),
-            ("LEFTPADDING", (0, 0), (-1, -1), 16),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 16),
-            ("GRID", (0, 0), (-1, -1), 0.5, self.COLORS["border"]),
-            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-            ("ROWBACKGROUNDS", (0, 1), (-1, -1), [white, self.COLORS["background"]]),
-        ]) 
+        self.MODERN_TABLE_STYLE = TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, 0), self.COLORS["background"]),
+                ("TEXTCOLOR", (0, 0), (-1, 0), self.COLORS["primary"]),
+                ("FONTNAME", (0, 0), (-1, 0), bold_font),  # Header uses bold
+                ("FONTNAME", (0, 1), (-1, -1), base_font),  # Body uses regular
+                ("FONTSIZE", (0, 0), (-1, 0), 10),
+                ("TOPPADDING", (0, 0), (-1, 0), 12),
+                ("BOTTOMPADDING", (0, 0), (-1, 0), 12),
+                ("LINEBELOW", (0, 0), (-1, 0), 1, self.COLORS["border"]),
+                ("BACKGROUND", (0, 1), (-1, -1), white),
+                ("TEXTCOLOR", (0, 1), (-1, -1), self.COLORS["text"]),
+                ("FONTSIZE", (0, 1), (-1, -1), 9),
+                ("TOPPADDING", (0, 1), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 1), (-1, -1), 8),
+                ("LEFTPADDING", (0, 0), (-1, -1), 16),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 16),
+                ("GRID", (0, 0), (-1, -1), 0.5, self.COLORS["border"]),
+                ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                (
+                    "ROWBACKGROUNDS",
+                    (0, 1),
+                    (-1, -1),
+                    [white, self.COLORS["background"]],
+                ),
+            ]
+        )

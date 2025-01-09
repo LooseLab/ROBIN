@@ -15,6 +15,7 @@ from robin import fonts
 
 logger = logging.getLogger(__name__)
 
+
 class RobinReport:
     """Main class for generating ROBIN PDF reports."""
 
@@ -28,7 +29,7 @@ class RobinReport:
         self.filename = filename
         self.output = output
         self.sample_id = os.path.basename(os.path.normpath(output))
-        
+
         # Handle filename with None prefix
         if filename.startswith("None"):
             final_folder = os.path.basename(os.path.normpath(output))
@@ -50,7 +51,7 @@ class RobinReport:
 
         # Create document
         self.doc = self._create_document()
-        
+
         # Initialize sections
         self.sections = []
         self._initialize_sections()
@@ -92,7 +93,7 @@ class RobinReport:
         from .sections.mgmt import MGMTSection
         from .sections.run_data import RunDataSection
         from .sections.disclaimer import DisclaimerSection
-        
+
         # Add sections in order
         self.sections = [
             ClassificationSection(self),
@@ -106,13 +107,13 @@ class RobinReport:
 
     def generate_report(self):
         """Generate the complete PDF report.
-        
+
         Returns:
             Path to the generated PDF file
         """
         try:
             logger.info("Starting report generation")
-            
+
             # Process each section
             for section in self.sections:
                 try:
@@ -121,33 +122,33 @@ class RobinReport:
                     self.elements_summary.extend(summary_elements)
                     self.elements.extend(main_elements)
                 except Exception as e:
-                    logger.error(f"Error processing section {section.__class__.__name__}: {e}", exc_info=True)
-            
+                    logger.error(
+                        f"Error processing section {section.__class__.__name__}: {e}",
+                        exc_info=True,
+                    )
+
             # Combine all elements
             logger.info("Combining elements for final PDF")
             final_elements = (
-                self.elements_summary + 
-                self.elements + 
-                self.end_of_report_elements
+                self.elements_summary + self.elements + self.end_of_report_elements
             )
-            
+
             # Build the PDF
             from .header_footer import header_footer_canvas_factory
+
             self.doc.multiBuild(
                 final_elements,
                 canvasmaker=header_footer_canvas_factory(
-                    self.sample_id,
-                    self.centreID,
-                    self.styles,
-                    self.fonts_dir
+                    self.sample_id, self.centreID, self.styles, self.fonts_dir
                 ),
             )
-            
+
             logger.info(f"PDF created: {self.filename}")
             return self.filename
         except Exception as e:
             logger.error(f"Error generating report: {e}", exc_info=True)
             raise
+
 
 def create_pdf(filename, output):
     """Create a PDF report from ROBIN analysis results.

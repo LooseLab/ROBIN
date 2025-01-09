@@ -14,12 +14,12 @@ from .run_data import RunDataSection
 from .disclaimer import DisclaimerSection
 
 __all__ = [
-    'ReportSection',
-    'ClassificationSection',
-    'CNVSection',
-    'FusionSection',
-    'CoverageSection',
-    'MGMTSection',
-    'RunDataSection',
-    'DisclaimerSection',
-] 
+    "ReportSection",
+    "ClassificationSection",
+    "CNVSection",
+    "FusionSection",
+    "CoverageSection",
+    "MGMTSection",
+    "RunDataSection",
+    "DisclaimerSection",
+]

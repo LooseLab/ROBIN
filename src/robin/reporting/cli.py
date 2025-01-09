@@ -12,6 +12,7 @@ from pathlib import Path
 
 from .report import create_pdf
 
+
 @click.command()
 @click.argument("filename", type=str)
 @click.argument("output", type=str)
@@ -26,8 +27,7 @@ def main(filename: str, output: str, debug: bool):
     # Configure logging
     log_level = logging.DEBUG if debug else logging.INFO
     logging.basicConfig(
-        level=log_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+        level=log_level, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     )
     logger = logging.getLogger(__name__)
 
@@ -50,5 +50,6 @@ def main(filename: str, output: str, debug: bool):
         logger.error(f"Error creating PDF report: {str(e)}", exc_info=debug)
         sys.exit(1)
 
+
 if __name__ == "__main__":
-    main() 
+    main()
