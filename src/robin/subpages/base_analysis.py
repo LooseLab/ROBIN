@@ -375,7 +375,7 @@ class BaseAnalysis:
         """
         Show a progress bar for the number of BAM files processed.
         """
-        self.progress_trackers = ui.card().classes("w-full")
+        self.progress_trackers = ui.card().classes("w-full p-2")
         logger.debug(f"Progress bars for {self.name} and {self.sampleID}")
         if self.sampleID not in app.storage.general[self.mainuuid]:
             app.storage.general[self.mainuuid][self.sampleID] = {}
@@ -386,73 +386,98 @@ class BaseAnalysis:
             ] = {
                 "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
             }
+            
         with self.progress_trackers:
-            with ui.row().classes("w-full"):
-                ui.label("File Tracker").tailwind("drop-shadow", "font-bold")
-                with ui.row().classes("w-full"):
-                    ui.label().bind_text_from(
-                        app.storage.general[self.mainuuid][self.sampleID][self.name][
-                            "counters"
-                        ],
-                        "bam_count",
-                        backward=lambda n: f"Bam files seen: {n}",
-                    )
-                    progressbar3 = (
-                        ui.linear_progress(
-                            size="10px",
-                            show_value=False,
-                            value=0,
-                            color="red",
-                        )
-                        .tooltip("Indicates read files not yet processed.")
-                        .props("instant-feedback")
-                    )
-                    ui.timer(
-                        1, callback=lambda: progressbar3.set_value(self._not_analysed)
-                    )
-
-                if self.batch:
-                    with ui.row().classes("w-full"):
-                        ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid][self.sampleID][
-                                self.name
-                            ]["counters"],
-                            "bams_in_processing",
-                            backward=lambda n: f"Bam files being processed: {n}",
-                        )
-                        progressbar2 = (
+            # Create expansion with custom header
+            with ui.expansion().classes('w-full') as expansion:
+                # Header slot with summary
+                with expansion.add_slot('header'):
+                    with ui.row().classes("w-full items-center justify-between gap-1"):
+                        with ui.column().classes("flex-grow gap-0"):
+                            ui.label("File Processing Status").classes("text-sm font-medium mb-0 pb-0")
+                            with ui.row().classes("w-full items-center gap-1"):
+                                progress_summary = ui.linear_progress(
+                                    size="4px",
+                                    show_value=False,
+                                    value=0,
+                                    color="primary",
+                                ).classes("flex-grow my-1").props("instant-feedback")
+                                ui.label().bind_text_from(
+                                    app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"],
+                                    "bam_processed",
+                                    backward=lambda n: f"{n}/{app.storage.general[self.mainuuid][self.sampleID][self.name]['counters']['bam_count']}"
+                                ).classes("text-xs min-w-fit")
+                
+                # Detailed content
+                with ui.column().classes("w-full gap-0 mt-1"):
+                    # Files not processed yet
+                    with ui.row().classes("w-full items-center gap-1 py-0"):
+                        ui.label("Not processed").classes("text-xs min-w-[80px]")
+                        progressbar3 = (
                             ui.linear_progress(
-                                size="10px",
+                                size="4px",
                                 show_value=False,
                                 value=0,
-                                color="amber",
+                                color="red",
                             )
-                            .tooltip("Indicates read files being processed.")
+                            .tooltip("Indicates read files not yet processed.")
                             .props("instant-feedback")
+                            .classes("flex-grow my-0")
                         )
-                        ui.timer(
-                            1, callback=lambda: progressbar2.set_value(self._progress2)
-                        )
+                        ui.label().bind_text_from(
+                            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"],
+                            "bam_count",
+                            backward=lambda n: str(n - app.storage.general[self.mainuuid][self.sampleID][self.name]['counters']['bam_processed'] - 
+                                               app.storage.general[self.mainuuid][self.sampleID][self.name]['counters']['bams_in_processing'])
+                        ).classes("text-xs min-w-[30px] text-right")
 
-                with ui.row().classes("w-full"):
-                    ui.label().bind_text_from(
-                        app.storage.general[self.mainuuid][self.sampleID][self.name][
-                            "counters"
-                        ],
-                        "bam_processed",
-                        backward=lambda n: f"Bam files processed: {n}",
-                    )
-                    progressbar = (
-                        ui.linear_progress(
-                            size="10px",
-                            show_value=False,
-                            value=0,
-                            color="green",
+                    # Files being processed (only shown in batch mode)
+                    if self.batch:
+                        with ui.row().classes("w-full items-center gap-1 py-0"):
+                            ui.label("Processing").classes("text-xs min-w-[80px]")
+                            progressbar2 = (
+                                ui.linear_progress(
+                                    size="4px",
+                                    show_value=False,
+                                    value=0,
+                                    color="amber",
+                                )
+                                .tooltip("Indicates read files being processed.")
+                                .props("instant-feedback")
+                                .classes("flex-grow my-0")
+                            )
+                            ui.label().bind_text_from(
+                                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"],
+                                "bams_in_processing",
+                                backward=lambda n: str(n)
+                            ).classes("text-xs min-w-[30px] text-right")
+
+                    # Files processed
+                    with ui.row().classes("w-full items-center gap-1 py-0"):
+                        ui.label("Completed").classes("text-xs min-w-[80px]")
+                        progressbar = (
+                            ui.linear_progress(
+                                size="4px",
+                                show_value=False,
+                                value=0,
+                                color="green",
+                            )
+                            .tooltip("Indicates read files processed.")
+                            .props("instant-feedback")
+                            .classes("flex-grow my-0")
                         )
-                        .tooltip("Indicates read files processed.")
-                        .props("instant-feedback")
-                    )
-                    ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
+                        ui.label().bind_text_from(
+                            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"],
+                            "bam_processed",
+                            backward=lambda n: str(n)
+                        ).classes("text-xs min-w-[30px] text-right")
+
+            # Update progress bars
+            ui.timer(1, callback=lambda: progress_summary.set_value(self._progress))
+            ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
+            if self.batch:
+                ui.timer(1, callback=lambda: progressbar2.set_value(self._progress2))
+            ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
 
     def playback(
         self, data: pd.DataFrame, step_size: int = 2, start_time: Optional[float] = None
