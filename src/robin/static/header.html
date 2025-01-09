@@ -18,7 +18,13 @@
   window.onscroll = () => {
     if (document.querySelector(".q-dialog__backdrop")) return;
     const header = document.querySelector(".q-header");
-    if (document.documentElement.scrollTop > 50) header.classList.add("fade");
-    else header.classList.remove("fade");
+    const footer = document.querySelector(".q-footer");
+    if (document.documentElement.scrollTop > 50) {
+      header.classList.add("fade");
+      footer.classList.add("fade");
+    } else {
+      header.classList.remove("fade");
+      footer.classList.remove("fade");
+    }
   };
 </script>

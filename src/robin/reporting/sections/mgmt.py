@@ -1,7 +1,7 @@
 """
-mgmt.py
+MGMT Analysis Section for ROBIN Reports.
 
-This module contains the MGMT methylation analysis section of the report.
+This module handles the MGMT (O6-methylguanine-DNA methyltransferase) promoter methylation analysis section of the report.
 """
 
 import os
@@ -9,10 +9,9 @@ import pandas as pd
 import natsort
 from reportlab.lib.units import inch
 from reportlab.platypus import PageBreak, Paragraph, Image, Spacer, Table, TableStyle
-from reportlab.lib.colors import white
-
+from reportlab.lib.colors import HexColor, white
+from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
-
 
 class MGMTSection(ReportSection):
     """Section containing the MGMT methylation analysis."""
@@ -38,12 +37,13 @@ class MGMTSection(ReportSection):
             return
 
         try:
-            # Add summary to elements_summary
-            self.summary_elements.append(
-                Paragraph("MGMT Promoter Methylation", self.styles.styles["Heading3"])
+            # Add MGMT section header
+            self.elements.append(
+                Paragraph("MGMT Promoter Methylation", self.styles.styles["Heading2"])
             )
+            self.elements.append(Spacer(1, 12))
 
-            # Extract key metrics for summary
+            # Extract key metrics
             methylation_status = (
                 mgmt_results["status"].iloc[0]
                 if "status" in mgmt_results.columns
@@ -54,85 +54,127 @@ class MGMTSection(ReportSection):
                 if "average" in mgmt_results.columns
                 else None
             )
+            prediction_score = (
+                mgmt_results["pred"].iloc[0]
+                if "pred" in mgmt_results.columns
+                else None
+            )
 
-            summary_text = f"Status: {methylation_status}"
+            # Create analysis summary table
+            summary_data = []
+            summary_data.append([
+                Paragraph("Methylation Status:", self.styles.styles["Normal"]),
+                Paragraph(methylation_status, 
+                         ParagraphStyle(
+                             'StatusStyle',
+                             parent=self.styles.styles["Normal"],
+                             textColor=HexColor("#2563eb") if methylation_status.lower() == "methylated" 
+                             else HexColor("#d97706"),
+                             fontName="Helvetica-Bold"
+                         ))
+            ])
+            
             if methylation_average is not None:
-                summary_text += (
-                    f" (Average methylation: {round(methylation_average, 3)}%)"
-                )
+                summary_data.append([
+                    Paragraph("Average Methylation:", self.styles.styles["Normal"]),
+                    Paragraph(f"{methylation_average:.1f}%", self.styles.styles["Normal"])
+                ])
+            
+            if prediction_score is not None:
+                summary_data.append([
+                    Paragraph("Prediction Score:", self.styles.styles["Normal"]),
+                    Paragraph(f"{prediction_score:.1f}%", self.styles.styles["Normal"])
+                ])
 
-            self.summary_elements.append(
-                Paragraph(summary_text, self.styles.styles["Normal"])
-            )
+            # Create summary table with styling
+            summary_table = Table(summary_data, colWidths=[2 * inch, 1.5 * inch])
+            summary_table.setStyle(TableStyle([
+                # Header styling
+                ('BACKGROUND', (0, 0), (-1, -1), HexColor("#F5F6FA")),
+                ('TEXTCOLOR', (0, 0), (-1, -1), HexColor("#2C3E50")),
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),  # Labels in first column
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('LEFTPADDING', (0, 0), (-1, -1), 3),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+                # Grid styling
+                ('GRID', (0, 0), (-1, -1), 0.5, HexColor("#E2E8F0")),
+                ('LINEBELOW', (0, 0), (-1, -1), 0.5, HexColor("#CBD5E1")),
+                # Alignment
+                ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Labels left-aligned
+                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),  # Values right-aligned
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                # Alternating row colors
+                ('ROWBACKGROUNDS', (0, 0), (-1, -1), [HexColor("#FFFFFF"), HexColor("#F8FAFC")]),
+            ]))
 
-            # Add detailed MGMT section to main report
-            self.elements.append(PageBreak())
-            self.add_section_header("MGMT Promoter Methylation Analysis", level=2)
-
-            # Add the plot if it exists
-            if os.path.exists(plot_out):
-                self.elements.append(Image(plot_out, width=6 * inch, height=4 * inch))
-                self.elements.append(Spacer(1, 12))
-
-            # Add detailed results table
-            data = [["Metric", "Value"]]
-            data.append(["Status", methylation_status])
-            data.append(["Average Methylation (%)", f"{round(methylation_average, 3)}"])
-
-            if "pred" in mgmt_results.columns:
-                data.append(
-                    ["Prediction Score", f"{round(mgmt_results['pred'].iloc[0], 3)}"]
-                )
-
-            # Create table style with compact formatting
-            style = TableStyle(
-                [
-                    ("BACKGROUND", (0, 0), (-1, 0), self.styles.COLORS["background"]),
-                    ("TEXTCOLOR", (0, 0), (-1, 0), self.styles.COLORS["primary"]),
-                    ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                    ("FONTSIZE", (0, 0), (-1, 0), 7),  # Smaller header font
-                    ("BOTTOMPADDING", (0, 0), (-1, 0), 6),  # Reduced padding
-                    ("TOPPADDING", (0, 0), (-1, 0), 6),  # Reduced padding
-                    ("BACKGROUND", (0, 1), (-1, -1), white),
-                    ("TEXTCOLOR", (0, 1), (-1, -1), self.styles.COLORS["text"]),
-                    ("FONTNAME", (0, 1), (-1, -1), "Helvetica"),
-                    ("FONTSIZE", (0, 1), (-1, -1), 7),  # Smaller body font
-                    (
-                        "GRID",
-                        (0, 0),
-                        (-1, -1),
-                        0.5,
-                        self.styles.COLORS["border"],
-                    ),  # Thinner grid lines
-                    # Align values to the right
-                    ("ALIGN", (1, 0), (1, -1), "RIGHT"),
-                    # Enable text wrapping for all cells
-                    ("LEFTPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
-                    ("RIGHTPADDING", (0, 0), (-1, -1), 4),  # Reduced padding
-                    ("TOPPADDING", (0, 1), (-1, -1), 4),  # Reduced padding
-                    ("BOTTOMPADDING", (0, 1), (-1, -1), 4),  # Reduced padding
-                ]
-            )
-
-            # Color code the methylation status
-            if methylation_status.lower() == "methylated":
-                style.add(
-                    "TEXTCOLOR", (1, 1), (1, 1), self.styles.COLORS["success"]
-                )  # Green for methylated
-            else:
-                style.add(
-                    "TEXTCOLOR", (1, 1), (1, 1), self.styles.COLORS["error"]
-                )  # Red for unmethylated
-
-            # Create and add the table with adjusted column widths
-            table = Table(
-                data,
-                colWidths=[inch * 2.5, inch * 2.0],  # Adjust column widths
-                style=style,
-            )
-            self.elements.append(table)
+            self.elements.append(summary_table)
             self.elements.append(Spacer(1, 12))
 
+            # Add explanation text
+            self.elements.append(
+                Paragraph(
+                    "MGMT promoter methylation status is assessed based on a logistic regression prediction model "
+                    "that considers 137 most predictive CpG sites in the MGMT promoter region. "
+                    "The methylation cutoff is assigned as 25%.",
+                    ParagraphStyle(
+                        'Explanation',
+                        parent=self.styles.styles["Normal"],
+                        fontSize=8,
+                        leading=10,
+                        textColor=HexColor("#4B5563")
+                    )
+                )
+            )
+            self.elements.append(Spacer(1, 12))
+
+            # Add the methylation plot if it exists
+            if plot_out and os.path.exists(plot_out):
+                self.elements.append(Image(plot_out, width=6 * inch, height=4 * inch))
+                self.elements.append(
+                    Paragraph(
+                        "MGMT promoter methylation plot showing methylation levels across CpG sites",
+                        self.styles.styles["Caption"]
+                    )
+                )
+            else:
+                self.elements.append(
+                    Paragraph(
+                        "MGMT promoter methylation plot is not available due to insufficient coverage.",
+                        ParagraphStyle(
+                            'Warning',
+                            parent=self.styles.styles["Normal"],
+                            textColor=HexColor("#DC2626"),
+                            fontSize=8,
+                            leading=10
+                        )
+                    )
+                )
+
+            # Add summary to summary section
+            self.summary_elements.append(
+                Paragraph("MGMT Promoter Methylation", self.styles.styles["Heading3"])
+            )
+            
+            summary_text = [f"Status: {methylation_status}"]
+            if methylation_average is not None:
+                summary_text.append(f"Average methylation: {methylation_average:.1f}%")
+            if prediction_score is not None:
+                summary_text.append(f"Prediction score: {prediction_score:.1f}%")
+            
+            self.summary_elements.append(
+                Paragraph(
+                    " | ".join(summary_text),
+                    self.styles.styles["Normal"]
+                )
+            )
+
         except Exception as e:
-            self.log_error("Error processing MGMT results", e)
+            logger.error("Error processing MGMT section: %s", str(e), exc_info=True)
+            self.elements.append(
+                Paragraph(
+                    "Error processing MGMT analysis data",
+                    self.styles.styles["Normal"]
+                )
+            )
