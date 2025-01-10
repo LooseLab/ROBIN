@@ -89,24 +89,12 @@ class MGMTSection(ReportSection):
             # Create summary table with styling
             summary_table = Table(summary_data, colWidths=[2 * inch, 1.5 * inch])
             summary_table.setStyle(TableStyle([
-                # Header styling
-                ('BACKGROUND', (0, 0), (-1, -1), HexColor("#F5F6FA")),
-                ('TEXTCOLOR', (0, 0), (-1, -1), HexColor("#2C3E50")),
-                ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),  # Labels in first column
-                ('FONTSIZE', (0, 0), (-1, -1), 8),
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                ('LEFTPADDING', (0, 0), (-1, -1), 3),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 3),
-                # Grid styling
-                ('GRID', (0, 0), (-1, -1), 0.5, HexColor("#E2E8F0")),
-                ('LINEBELOW', (0, 0), (-1, -1), 0.5, HexColor("#CBD5E1")),
-                # Alignment
+                # Inherit modern table style
+                *self.MODERN_TABLE_STYLE._cmds,
+                
+                # Preserve specific alignments
                 ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Labels left-aligned
                 ('ALIGN', (1, 0), (1, -1), 'RIGHT'),  # Values right-aligned
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                # Alternating row colors
-                ('ROWBACKGROUNDS', (0, 0), (-1, -1), [HexColor("#FFFFFF"), HexColor("#F8FAFC")]),
             ]))
 
             self.elements.append(summary_table)

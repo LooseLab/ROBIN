@@ -8,8 +8,7 @@ including results from Sturgeon, Random Forest, NanoDX, and PannanoDX classifier
 import os
 import pandas as pd
 import natsort
-from reportlab.lib.units import inch
-from reportlab.platypus import PageBreak, Paragraph, Image, Spacer, Table, TableStyle
+from reportlab.platypus import PageBreak, Paragraph, Image, Spacer
 from reportlab.lib.colors import HexColor
 from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
@@ -38,12 +37,7 @@ class ClassificationSection(ReportSection):
 
         # Add summary table of all classifications
         summary_data = [
-            [
-                Paragraph("Classifier", self.styles.styles["Normal"]),
-                Paragraph("Predicted Class", self.styles.styles["Normal"]),
-                Paragraph("Confidence", self.styles.styles["Normal"]),
-                Paragraph("Status", self.styles.styles["Normal"])
-            ]
+            ["Classifier", "Predicted Class", "Confidence", "Status"]
         ]
 
         # Process each classifier
@@ -72,26 +66,20 @@ class ClassificationSection(ReportSection):
                     # Determine confidence level
                     if confidence_value >= 0.75:
                         confidence_status = "High"
-                        status_color = HexColor("#059669")  # Green
+                        status_color = "#059669"  # Green
                     elif confidence_value >= 0.5:
                         confidence_status = "Medium"
-                        status_color = HexColor("#D97706")  # Amber
+                        status_color = "#D97706"  # Amber
                     else:
                         confidence_status = "Low"
-                        status_color = HexColor("#DC2626")  # Red
+                        status_color = "#DC2626"  # Red
 
-                    # Add to summary table
+                    # Add to summary table with HTML-like color formatting
                     summary_data.append([
-                        Paragraph(name, self.styles.styles["Normal"]),
-                        Paragraph(predicted_class, self.styles.styles["Normal"]),
-                        Paragraph(f"{confidence_value:.1%}", self.styles.styles["Normal"]),
-                        Paragraph(confidence_status, 
-                                ParagraphStyle(
-                                    'ConfidenceStatus',
-                                    parent=self.styles.styles["Normal"],
-                                    textColor=status_color,
-                                    fontName="Helvetica-Bold"
-                                ))
+                        name,
+                        predicted_class,
+                        f"{confidence_value:.1%}",
+                        f'<font color="{status_color}">{confidence_status}</font>'
                     ])
 
             except Exception as e:
@@ -100,28 +88,8 @@ class ClassificationSection(ReportSection):
 
         # Create and style the summary table
         if len(summary_data) > 1:  # If we have any results
-            summary_table = Table(summary_data, colWidths=[1.5*inch, 3*inch, inch, inch])
-            summary_table.setStyle(TableStyle([
-                # Header styling
-                ('BACKGROUND', (0, 0), (-1, 0), HexColor("#F5F6FA")),
-                ('TEXTCOLOR', (0, 0), (-1, 0), HexColor("#2C3E50")),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, -1), 8),
-                # Cell padding
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                ('LEFTPADDING', (0, 0), (-1, -1), 3),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 3),
-                # Grid styling
-                ('GRID', (0, 0), (-1, -1), 0.5, HexColor("#E2E8F0")),
-                ('LINEBELOW', (0, 0), (-1, -1), 0.5, HexColor("#CBD5E1")),
-                # Alignment
-                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                # Alternating row colors
-                ('ROWBACKGROUNDS', (0, 0), (-1, -1), [HexColor("#FFFFFF"), HexColor("#F8FAFC")])
-            ]))
-            
+            # Create table with automatic column width calculation
+            summary_table = self.create_table(summary_data, repeat_rows=1)
             self.elements.append(summary_table)
             self.elements.append(Spacer(1, 12))
 
@@ -156,42 +124,21 @@ class ClassificationSection(ReportSection):
                         self.elements.append(Spacer(1, 6))
 
                         # Create detailed table for top 10 predictions
-                        detailed_data = [
-                            [
-                                Paragraph("Predicted Class", self.styles.styles["Normal"]),
-                                Paragraph("Confidence Score", self.styles.styles["Normal"])
-                            ]
-                        ]
+                        detailed_data = [["Predicted Class", "Confidence Score"]]
 
                         for class_name, score in top_predictions.items():
                             confidence = score / 100.0 if name == "Random Forest" else score
                             detailed_data.append([
-                                Paragraph(class_name, self.styles.styles["Normal"]),
-                                Paragraph(f"{confidence:.1%}", self.styles.styles["Normal"])
+                                class_name,
+                                f"{confidence:.1%}"
                             ])
 
-                        detailed_table = Table(detailed_data, colWidths=[4*inch, 1.5*inch])
-                        detailed_table.setStyle(TableStyle([
-                            # Header styling
-                            ('BACKGROUND', (0, 0), (-1, 0), HexColor("#F5F6FA")),
-                            ('TEXTCOLOR', (0, 0), (-1, 0), HexColor("#2C3E50")),
-                            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                            ('FONTSIZE', (0, 0), (-1, -1), 8),
-                            # Cell padding
-                            ('TOPPADDING', (0, 0), (-1, -1), 6),
-                            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                            ('LEFTPADDING', (0, 0), (-1, -1), 3),
-                            ('RIGHTPADDING', (0, 0), (-1, -1), 3),
-                            # Grid styling
-                            ('GRID', (0, 0), (-1, -1), 0.5, HexColor("#E2E8F0")),
-                            # Alignment
-                            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-                            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-                            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                            # Alternating row colors
-                            ('ROWBACKGROUNDS', (0, 0), (-1, -1), [HexColor("#FFFFFF"), HexColor("#F8FAFC")])
-                        ]))
-
+                        # Create table with right-aligned confidence scores
+                        detailed_table = self.create_table(
+                            detailed_data,
+                            repeat_rows=1,
+                            auto_col_width=True
+                        )
                         self.elements.append(detailed_table)
                         self.elements.append(Spacer(1, 12))
 
@@ -230,9 +177,9 @@ class ClassificationSection(ReportSection):
         if len(summary_data) > 1:
             summary_text = []
             for row in summary_data[1:]:  # Skip header row
-                classifier = row[0].text
-                predicted = row[1].text
-                confidence = row[2].text
+                classifier = row[0]
+                predicted = row[1]
+                confidence = row[2]
                 summary_text.append(f"{classifier}: {predicted} ({confidence})")
             
             self.summary_elements.append(

@@ -303,23 +303,17 @@ class CoverageSection(ReportSection):
                 ['Enrichment Factor', 'N/A', '']
             ]
 
-        table_style = TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), self.styles.COLORS["primary"]),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.white),
-            ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 12),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-            ('TEXTCOLOR', (0, 1), (-1, -1), self.styles.COLORS["text"]),
-            ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-            ('FONTSIZE', (0, 1), (-1, -1), 10),
-            ('GRID', (0, 0), (-1, -1), 0.5, self.styles.COLORS["border"]),
-            ('ROWHEIGHTS', (0, 0), (-1, -1), 20),
-        ])
-
+        # Create and style the table
         table = Table(data, colWidths=[2*inch, 2*inch, 2*inch])
-        table.setStyle(table_style)
+        table.setStyle(TableStyle([
+            # Inherit modern table style
+            *self.MODERN_TABLE_STYLE._cmds,
+            
+            # Preserve specific alignments
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),    # Metric column left-aligned
+            ('ALIGN', (1, 0), (1, -1), 'RIGHT'),   # Value column right-aligned
+            ('ALIGN', (2, 0), (2, -1), 'CENTER'),  # Status column centered
+        ]))
         self.elements.append(table)
         self.elements.append(Spacer(1, 0.2 * inch))
 

@@ -280,8 +280,8 @@ class VariantsSection(ReportSection):
                 'HeaderStyle',
                 parent=self.styles.styles["Normal"],
                 fontName='Helvetica-Bold',
-                fontSize=9,
-                textColor=colors.whitesmoke,
+                fontSize=8,
+                textColor=self.styles.COLORS["primary"],
                 alignment=1  # Center alignment
             )
             
@@ -289,8 +289,8 @@ class VariantsSection(ReportSection):
             cell_style = ParagraphStyle(
                 'CellStyle',
                 parent=self.styles.styles["Normal"],
-                fontSize=9,
-                leading=12,  # Line spacing
+                fontSize=8,
+                leading=10,  # Line spacing
                 spaceBefore=2,
                 spaceAfter=2
             )
@@ -327,39 +327,16 @@ class VariantsSection(ReportSection):
             # Create and style the table
             table = Table(table_data, colWidths=col_widths, repeatRows=1)
             table.setStyle(TableStyle([
-                # Header styling
-                ('BACKGROUND', (0, 0), (-1, 0), HexColor("#2C3E50")),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 9),
+                # Inherit modern table style
+                *self.MODERN_TABLE_STYLE._cmds,
                 
-                # Cell styling
-                ('BACKGROUND', (0, 1), (-1, -1), colors.white),
-                ('TEXTCOLOR', (0, 1), (-1, -1), HexColor("#1F2937")),
-                ('FONTNAME', (0, 1), (-1, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 1), (-1, -1), 9),
-                
-                # Grid styling
-                ('GRID', (0, 0), (-1, -1), 0.5, HexColor("#E5E7EB")),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, HexColor("#F9FAFB")]),
-                
-                # Padding
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                ('LEFTPADDING', (0, 0), (-1, -1), 4),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 4),
-                
-                # Alignment
+                # Preserve specific alignments
                 ('ALIGN', (0, 0), (0, -1), 'CENTER'),  # Type column centered
                 ('ALIGN', (1, 0), (1, -1), 'CENTER'),  # Chr column centered
                 ('ALIGN', (2, 0), (2, -1), 'RIGHT'),   # Position column right-aligned
                 ('ALIGN', (3, 0), (3, -1), 'LEFT'),    # Gene column left-aligned
                 ('ALIGN', (4, 0), (4, -1), 'CENTER'),  # Change column centered
                 ('ALIGN', (5, 0), (5, -1), 'LEFT'),    # Disease column left-aligned
-                
-                # Valign
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ]))
             
             self.elements.append(table)

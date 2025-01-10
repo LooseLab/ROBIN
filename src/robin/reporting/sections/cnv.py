@@ -268,34 +268,25 @@ class CNVSection(ReportSection):
             )
 
             # Create summary table with styling
-            summary_table = Table(summary_data, colWidths=[2*inch, 1.5*inch])
-            summary_table.setStyle(TableStyle([
-                # Header styling
-                ('BACKGROUND', (0, 0), (-1, -1), HexColor("#F5F6FA")),
-                ('TEXTCOLOR', (0, 0), (-1, -1), HexColor("#2C3E50")),
-                ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),
-                ('FONTSIZE', (0, 0), (-1, -1), 8),
-                ('TOPPADDING', (0, 0), (-1, -1), 6),
-                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-                ('LEFTPADDING', (0, 0), (-1, -1), 3),
-                ('RIGHTPADDING', (0, 0), (-1, -1), 3),
-                # Grid styling
-                ('GRID', (0, 0), (-1, -1), 0.5, HexColor("#E2E8F0")),
-                ('LINEBELOW', (0, 0), (-1, -1), 0.5, HexColor("#CBD5E1")),
-                # Alignment
-                ('ALIGN', (0, 0), (0, -1), 'LEFT'),
-                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
-                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-                # Alternating row colors
-                ('ROWBACKGROUNDS', (0, 0), (-1, -1), [HexColor("#FFFFFF"), HexColor("#F8FAFC")])
-            ]))
+            if summary_data:
+                formatted_summary_data = []
+                for row in summary_data:
+                    formatted_row = [
+                        row[0].text if hasattr(row[0], 'text') else str(row[0]),
+                        row[1].text if hasattr(row[1], 'text') else str(row[1])
+                    ]
+                    formatted_summary_data.append(formatted_row)
 
-            # Add summary to summary section
-            self.summary_elements.append(
-                Paragraph("Copy Number Variation", self.styles.styles["Heading3"])
-            )
-            self.summary_elements.append(summary_table)
-            self.summary_elements.append(Spacer(1, 12))
+                summary_table = self.create_table(
+                    formatted_summary_data,
+                    auto_col_width=True
+                )
+                # Add specific styling while preserving modern table style
+                summary_table.setStyle(TableStyle([
+                    *self.MODERN_TABLE_STYLE._cmds,
+                    ('ALIGN', (1, 0), (1, -1), 'RIGHT'),  # Right-align the count column
+                ]))
+                self.elements.append(summary_table)
 
             # Add whole chromosome events summary if any exist
             whole_chr_events = []
@@ -451,60 +442,32 @@ class CNVSection(ReportSection):
                         ]
                     )
 
-                whole_chr_table = Table(
-                    [
-                        [
-                            Paragraph("Chr", header_style),
-                            Paragraph("State", header_style),
-                            Paragraph("Mean CNV", header_style),
-                            Paragraph("Affected Genes", header_style),
-                        ]
-                    ]
-                    + enhanced_whole_chr_events,
-                    colWidths=[inch * 0.4, inch * 0.8, inch * 0.8, inch * 4.5],
-                    rowHeights=None,
-                )  # Allow rows to expand based on content
+                # Format whole chromosome table data
+                whole_chr_data = [
+                    ["Chr", "State", "Mean CNV", "Affected Genes"]
+                ]
+                
+                for row in enhanced_whole_chr_events:
+                    whole_chr_data.append([
+                        row[0].text if hasattr(row[0], 'text') else str(row[0]),
+                        row[1].text if hasattr(row[1], 'text') else str(row[1]),
+                        row[2].text if hasattr(row[2], 'text') else str(row[2]),
+                        row[3].text if hasattr(row[3], 'text') else str(row[3])
+                    ])
 
-                whole_chr_table.setStyle(
-                    TableStyle(
-                        [
-                            (
-                                "BACKGROUND",
-                                (0, 0),
-                                (-1, 0),
-                                self.styles.COLORS["background"],
-                            ),
-                            (
-                                "TEXTCOLOR",
-                                (0, 0),
-                                (-1, 0),
-                                self.styles.COLORS["primary"],
-                            ),
-                            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                            ("FONTSIZE", (0, 0), (-1, -1), 8),
-                            ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
-                            ("TOPPADDING", (0, 0), (-1, -1), 3),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                            ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                            (
-                                "GRID",
-                                (0, 0),
-                                (-1, -1),
-                                0.5,
-                                self.styles.COLORS["border"],
-                            ),
-                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                            (
-                                "ALIGN",
-                                (2, 1),
-                                (2, -1),
-                                "RIGHT",
-                            ),  # Right align mean CNV values
-                        ]
-                    )
+                # Create whole chromosome table
+                whole_chr_table = self.create_table(
+                    whole_chr_data,
+                    repeat_rows=1,
+                    auto_col_width=False,
+                    col_widths=[inch * x for x in [0.4, 0.8, 0.8, 4.5]]
                 )
+                # Add specific styling while preserving modern table style
+                whole_chr_table.setStyle(TableStyle([
+                    *self.MODERN_TABLE_STYLE._cmds,
+                    ('ALIGN', (2, 1), (2, -1), 'RIGHT'),  # Right-align mean CNV values
+                    ('ALIGN', (1, 1), (1, -1), 'CENTER'),  # Center-align state column
+                ]))
                 self.elements.append(whole_chr_table)
 
             # Add gene-containing events if any exist
@@ -515,65 +478,33 @@ class CNVSection(ReportSection):
                         "CNV Events Containing Genes", self.styles.styles["Heading4"]
                     )
                 )
-                gene_events_table = Table(
-                    [
-                        [
-                            Paragraph("Chr", header_style),
-                            Paragraph("Region", header_style),
-                            Paragraph("State", header_style),
-                            Paragraph("Mean CNV", header_style),
-                            Paragraph("Genes", header_style),
-                        ]
-                    ]
-                    + gene_containing_events,
-                    colWidths=[
-                        inch * 0.4,  # Chr
-                        inch * 1.0,  # Region
-                        inch * 0.6,  # State
-                        inch * 0.6,  # Mean CNV
-                        inch * 4.0,  # Genes
-                    ],
-                    rowHeights=None,
-                )  # Allow rows to expand based on content
+                # Format gene events table data
+                gene_events_data = [
+                    ["Chr", "Region", "State", "Mean CNV", "Genes"]
+                ]
+                
+                for row in gene_containing_events:
+                    gene_events_data.append([
+                        row[0].text if hasattr(row[0], 'text') else str(row[0]),
+                        row[1].text if hasattr(row[1], 'text') else str(row[1]),
+                        row[2].text if hasattr(row[2], 'text') else str(row[2]),
+                        row[3].text if hasattr(row[3], 'text') else str(row[3]),
+                        row[4].text if hasattr(row[4], 'text') else str(row[4])
+                    ])
 
-                gene_events_table.setStyle(
-                    TableStyle(
-                        [
-                            (
-                                "BACKGROUND",
-                                (0, 0),
-                                (-1, 0),
-                                self.styles.COLORS["background"],
-                            ),
-                            (
-                                "TEXTCOLOR",
-                                (0, 0),
-                                (-1, 0),
-                                self.styles.COLORS["primary"],
-                            ),
-                            ("ALIGN", (0, 0), (-1, -1), "LEFT"),
-                            ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                            ("FONTSIZE", (0, 0), (-1, -1), 8),
-                            ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
-                            ("TOPPADDING", (0, 0), (-1, -1), 3),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                            ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                            ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                            (
-                                "GRID",
-                                (0, 0),
-                                (-1, -1),
-                                0.5,
-                                self.styles.COLORS["border"],
-                            ),
-                            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                            # Align numeric columns to the right
-                            ("ALIGN", (3, 1), (3, -1), "RIGHT"),
-                            # Center the state column
-                            ("ALIGN", (2, 1), (2, -1), "CENTER"),
-                        ]
-                    )
+                # Create gene events table
+                gene_events_table = self.create_table(
+                    gene_events_data,
+                    repeat_rows=1,
+                    auto_col_width=False,
+                    col_widths=[inch * x for x in [0.4, 1.0, 0.6, 0.6, 4.0]]
                 )
+                # Add specific styling while preserving modern table style
+                gene_events_table.setStyle(TableStyle([
+                    *self.MODERN_TABLE_STYLE._cmds,
+                    ('ALIGN', (3, 1), (3, -1), 'RIGHT'),  # Right-align mean CNV values
+                    ('ALIGN', (2, 1), (2, -1), 'CENTER'),  # Center-align state column
+                ]))
                 self.elements.append(gene_events_table)
 
             # Add note about detailed view
@@ -757,96 +688,43 @@ class CNVSection(ReportSection):
                             ]
                         )
 
-                    detailed_table = Table(
-                        [
-                            [
-                                Paragraph("Chr", header_style),
-                                Paragraph("Region", header_style),
-                                Paragraph("Start (Mb)", header_style),
-                                Paragraph("End (Mb)", header_style),
-                                Paragraph("Length (Mb)", header_style),
-                                Paragraph("Mean CNV", header_style),
-                                Paragraph("State", header_style),
-                                Paragraph("Genes", header_style),
-                            ]
-                        ]
-                        + formatted_events,
-                        colWidths=[
-                            inch * 0.4,  # Chr
-                            inch * 1.0,  # Region
-                            inch * 0.6,  # Start
-                            inch * 0.6,  # End
-                            inch * 0.6,  # Length
-                            inch * 0.6,  # Mean CNV
-                            inch * 0.6,  # State
-                            inch * 3.0,  # Genes
-                        ],
-                        rowHeights=None,  # Allow rows to expand based on content
-                        repeatRows=1,  # Repeat header row on new pages
-                    )
+                    # Format detailed CNV table data
+                    detailed_data = [
+                        ["Chr", "Region", "Start (Mb)", "End (Mb)", "Length (Mb)", "Mean CNV", "State", "Genes"]
+                    ]
+                    
+                    for row in formatted_events:
+                        detailed_data.append([
+                            row[0].text if hasattr(row[0], 'text') else str(row[0]),
+                            row[1].text if hasattr(row[1], 'text') else str(row[1]),
+                            row[2].text if hasattr(row[2], 'text') else str(row[2]),
+                            row[3].text if hasattr(row[3], 'text') else str(row[3]),
+                            row[4].text if hasattr(row[4], 'text') else str(row[4]),
+                            row[5].text if hasattr(row[5], 'text') else str(row[5]),
+                            row[6].text if hasattr(row[6], 'text') else str(row[6]),
+                            row[7].text if hasattr(row[7], 'text') else str(row[7])
+                        ])
 
-                    detailed_table.setStyle(
-                        TableStyle(
-                            [
-                                # Header styling
-                                (
-                                    "BACKGROUND",
-                                    (0, 0),
-                                    (-1, 0),
-                                    self.styles.COLORS["background"],
-                                ),
-                                (
-                                    "TEXTCOLOR",
-                                    (0, 0),
-                                    (-1, 0),
-                                    self.styles.COLORS["primary"],
-                                ),
-                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-                                ("FONTSIZE", (0, 0), (-1, -1), 8),
-                                # Cell padding
-                                ("TOPPADDING", (0, 0), (-1, -1), 3),
-                                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-                                ("LEFTPADDING", (0, 0), (-1, -1), 3),
-                                ("RIGHTPADDING", (0, 0), (-1, -1), 3),
-                                # Grid and alignment
-                                (
-                                    "GRID",
-                                    (0, 0),
-                                    (-1, -1),
-                                    0.5,
-                                    self.styles.COLORS["border"],
-                                ),
-                                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                                (
-                                    "ALIGN",
-                                    (0, 0),
-                                    (-1, -1),
-                                    "LEFT",
-                                ),  # Default left alignment
-                                # Specific column alignments
-                                (
-                                    "ALIGN",
-                                    (2, 1),
-                                    (5, -1),
-                                    "RIGHT",
-                                ),  # Numeric columns right-aligned
-                                (
-                                    "ALIGN",
-                                    (6, 1),
-                                    (6, -1),
-                                    "CENTER",
-                                ),  # State column centered
-                                # Alternating row colors for better readability
-                                (
-                                    "ROWBACKGROUNDS",
-                                    (0, 0),
-                                    (-1, -1),
-                                    [HexColor("#FFFFFF"), HexColor("#F8FAFC")],
-                                ),
-                            ]
-                        )
+                    # Create detailed table
+                    detailed_table = self.create_table(
+                        detailed_data,
+                        repeat_rows=1,
+                        auto_col_width=False,
+                        col_widths=[inch * x for x in [0.4, 1.0, 0.6, 0.6, 0.6, 0.6, 0.6, 3.0]]
                     )
-
+                    
+                    # Add specific styling while preserving modern table style
+                    detailed_table.setStyle(TableStyle([
+                        *self.MODERN_TABLE_STYLE._cmds,
+                        # Right-align numeric columns (Start, End, Length, Mean CNV)
+                        ('ALIGN', (2, 1), (5, -1), 'RIGHT'),
+                        # Center-align the state column
+                        ('ALIGN', (6, 1), (6, -1), 'CENTER'),
+                        # Left-align the remaining columns (Chr, Region, Genes)
+                        ('ALIGN', (0, 1), (1, -1), 'LEFT'),
+                        ('ALIGN', (7, 1), (7, -1), 'LEFT'),
+                    ]))
+                    
                     self.elements.append(detailed_table)
 
             except Exception as e:
