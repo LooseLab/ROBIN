@@ -12,6 +12,7 @@ from .coverage import CoverageSection
 from .mgmt import MGMTSection
 from .run_data import RunDataSection
 from .disclaimer import DisclaimerSection
+from .variants import VariantsSection
 
 __all__ = [
     "ReportSection",
@@ -22,4 +23,5 @@ __all__ = [
     "MGMTSection",
     "RunDataSection",
     "DisclaimerSection",
+    "VariantsSection"
 ]

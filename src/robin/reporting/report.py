@@ -7,7 +7,7 @@ This module contains the main report class that coordinates the generation of th
 import os
 import logging
 import pandas as pd
-from reportlab.platypus import SimpleDocTemplate
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, PageBreak
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from .styling.styles import ReportStyles
@@ -93,11 +93,13 @@ class RobinReport:
         from .sections.mgmt import MGMTSection
         from .sections.run_data import RunDataSection
         from .sections.disclaimer import DisclaimerSection
+        from .sections.variants import VariantsSection
 
         # Add sections in order
         self.sections = [
             ClassificationSection(self),
             CNVSection(self),
+            VariantsSection(self),
             FusionSection(self),
             CoverageSection(self),
             MGMTSection(self),
@@ -114,6 +116,10 @@ class RobinReport:
         try:
             logger.info("Starting report generation")
 
+            # Add summary section header
+            self.elements_summary.insert(0, Paragraph("Summary", self.styles.styles["Heading1"]))
+            self.elements_summary.insert(1, Spacer(1, 12))
+
             # Process each section
             for section in self.sections:
                 try:
@@ -126,6 +132,15 @@ class RobinReport:
                         f"Error processing section {section.__class__.__name__}: {e}",
                         exc_info=True,
                     )
+
+            # Add page break and detailed analysis header
+            self.elements.insert(0, PageBreak())
+            self.elements.insert(1, Paragraph("Detailed Analysis", self.styles.styles["Heading1"]))
+            self.elements.insert(2, Spacer(1, 12))
+
+            # Add page break before end of report elements
+            if self.end_of_report_elements:
+                self.end_of_report_elements.insert(0, PageBreak())
 
             # Combine all elements
             logger.info("Combining elements for final PDF")

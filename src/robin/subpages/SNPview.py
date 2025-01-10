@@ -24,6 +24,27 @@ class SNPview:
                 "Candidate SNPs will be displayed here. SNPs are called based on available data at that time."
             )
 
+    def is_pathogenic(self, info_str: str) -> bool:
+        """
+        Check if a variant is pathogenic based on CLNSIG field.
+        
+        Args:
+            info_str (str): The INFO field string from the VCF file
+            
+        Returns:
+            bool: True if the variant is pathogenic, False otherwise
+        """
+        if "CLNSIG=" not in info_str:
+            return False
+            
+        # Extract CLNSIG value
+        for field in info_str.split(";"):
+            if field.startswith("CLNSIG="):
+                clnsig_value = field.split("=")[1]
+                # Check for PATHOGENIC case-insensitive
+                return "PATHOGENIC" in clnsig_value.upper()
+        return False
+
     def process_annotations(self, record: dict) -> dict:
         """
         This function takes a dictionary record from a vcf file and explodes the record into multiple records based on the contents of the INFO field.
@@ -35,6 +56,16 @@ class SNPview:
         annotations = record["INFO"]
         # This dictionary holds the information for a single record
         rec_dict = {}
+
+        # Check for pathogenic variants in CLNSIG field
+        rec_dict["is_pathogenic"] = False
+        if "CLNSIG=" in annotations:
+            for field in annotations.split(";"):
+                if field.startswith("CLNSIG="):
+                    clnsig_value = field.split("=")[1]
+                    if "PATHOGENIC" in clnsig_value.upper():
+                        rec_dict["is_pathogenic"] = True
+                    break
 
         # This dictionary holds one or more records derived from the annotation field.
         ann_dict = {}
@@ -183,7 +214,10 @@ class SNPview:
                             self.snptable.update()
 
                         def set_pathogenic(value: bool) -> None:
-                            self.snptable.filter = "pathogenic" if value else None
+                            if value:
+                                self.snptable.filter = lambda row: row.get("is_pathogenic", False)
+                            else:
+                                self.snptable.filter = None
 
                         with self.snptable.add_slot("top-left"):
 

@@ -249,10 +249,10 @@ class CNVSection(ReportSection):
                             if row["genes"]:
                                 total_lost_genes.update(row["genes"])
 
-            # Add gene counts (simplified)
+            # Add gene counts to summary
             summary_data.append(
                 [
-                    Paragraph("Genes in gained regions:", self.styles.styles["Normal"]),
+                    Paragraph("Genes in Gained Regions:", self.styles.styles["Normal"]),
                     Paragraph(
                         str(len(total_gained_genes)), self.styles.styles["Normal"]
                     ),
@@ -260,51 +260,69 @@ class CNVSection(ReportSection):
             )
             summary_data.append(
                 [
-                    Paragraph("Genes in lost regions:", self.styles.styles["Normal"]),
-                    Paragraph(str(len(total_lost_genes)), self.styles.styles["Normal"]),
+                    Paragraph("Genes in Lost Regions:", self.styles.styles["Normal"]),
+                    Paragraph(
+                        str(len(total_lost_genes)), self.styles.styles["Normal"]
+                    ),
                 ]
             )
 
             # Create summary table with styling
-            summary_table = Table(summary_data, colWidths=[2 * inch, 1 * inch])
-            summary_table.setStyle(
-                TableStyle(
-                    [
-                        # Header styling
-                        ("BACKGROUND", (0, 0), (-1, -1), HexColor("#F5F6FA")),
-                        ("TEXTCOLOR", (0, 0), (-1, -1), HexColor("#2C3E50")),
-                        (
-                            "FONTNAME",
-                            (0, 0),
-                            (0, -1),
-                            "Helvetica",
-                        ),  # Labels in first column
-                        (
-                            "FONTNAME",
-                            (1, 0),
-                            (1, -1),
-                            "Helvetica-Bold",
-                        ),  # Values in second column
-                        ("FONTSIZE", (0, 0), (-1, -1), 8),
-                        ("TOPPADDING", (0, 0), (-1, -1), 6),
-                        ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-                        # Grid styling
-                        ("GRID", (0, 0), (-1, -1), 0.5, HexColor("#E2E8F0")),
-                        ("LINEBELOW", (0, 0), (-1, -1), 0.5, HexColor("#CBD5E1")),
-                        # Alignment
-                        ("ALIGN", (0, 0), (0, -1), "LEFT"),  # Labels left-aligned
-                        ("ALIGN", (1, 0), (1, -1), "RIGHT"),  # Values right-aligned
-                        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                        # Alternating row colors
-                        (
-                            "ROWBACKGROUNDS",
-                            (0, 0),
-                            (-1, -1),
-                            [HexColor("#FFFFFF"), HexColor("#F8FAFC")],
-                        ),
-                    ]
-                )
+            summary_table = Table(summary_data, colWidths=[2*inch, 1.5*inch])
+            summary_table.setStyle(TableStyle([
+                # Header styling
+                ('BACKGROUND', (0, 0), (-1, -1), HexColor("#F5F6FA")),
+                ('TEXTCOLOR', (0, 0), (-1, -1), HexColor("#2C3E50")),
+                ('FONTNAME', (0, 0), (0, -1), 'Helvetica'),
+                ('FONTSIZE', (0, 0), (-1, -1), 8),
+                ('TOPPADDING', (0, 0), (-1, -1), 6),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+                ('LEFTPADDING', (0, 0), (-1, -1), 3),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 3),
+                # Grid styling
+                ('GRID', (0, 0), (-1, -1), 0.5, HexColor("#E2E8F0")),
+                ('LINEBELOW', (0, 0), (-1, -1), 0.5, HexColor("#CBD5E1")),
+                # Alignment
+                ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),
+                ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+                # Alternating row colors
+                ('ROWBACKGROUNDS', (0, 0), (-1, -1), [HexColor("#FFFFFF"), HexColor("#F8FAFC")])
+            ]))
+
+            # Add summary to summary section
+            self.summary_elements.append(
+                Paragraph("Copy Number Variation", self.styles.styles["Heading3"])
             )
+            self.summary_elements.append(summary_table)
+            self.summary_elements.append(Spacer(1, 12))
+
+            # Add whole chromosome events summary if any exist
+            whole_chr_events = []
+            for chrom, stats in chromosome_stats.items():
+                if chrom != "global":
+                    mean_cnv = stats["mean"]
+                    if mean_cnv > stats["gain_threshold"]:
+                        whole_chr_events.append(f"Chromosome {chrom[3:]}: GAIN (mean={mean_cnv:.2f})")
+                    elif mean_cnv < stats["loss_threshold"]:
+                        whole_chr_events.append(f"Chromosome {chrom[3:]}: LOSS (mean={mean_cnv:.2f})")
+            
+            if whole_chr_events:
+                self.summary_elements.append(
+                    Paragraph(
+                        "Whole Chromosome Events: " + " | ".join(whole_chr_events),
+                        self.styles.styles["Normal"]
+                    )
+                )
+
+            # Start detailed analysis section
+            self.elements.append(PageBreak())
+            self.elements.append(
+                Paragraph("Copy Number Variation Analysis", self.styles.styles["Heading2"])
+            )
+            self.elements.append(Spacer(1, 12))
+
+            # Add detailed content below
 
             # Generate genome-wide CNV plot
             logger.debug("Generating genome-wide CNV plot")

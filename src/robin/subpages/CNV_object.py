@@ -2443,8 +2443,6 @@ class CNVAnalysis(BaseAnalysis):
         merged_df = pd.DataFrame(merged_cytobands)
         if not merged_df.empty:
             merged_df = merged_df.sort_values('start_pos')
-            
-        print(merged_df)
         
         return merged_df
 
