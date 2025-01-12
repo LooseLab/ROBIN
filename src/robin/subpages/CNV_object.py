@@ -442,10 +442,183 @@ class CNVAnalysis(BaseAnalysis):
             sep="\s+"
         )
         super().__init__(*args, **kwargs)
-        self.NewBed = BedTree(preserve_original_tree=True, reference_file=f"{self.reference_file}.fai", readfish_toml=self.readfish_toml)
-        self.NewBed.load_from_file(self.bed_file)
+        # Only initialize BedTree if reference file is provided
+        if self.reference_file:
+            self.NewBed = BedTree(preserve_original_tree=True, reference_file=f"{self.reference_file}.fai", readfish_toml=self.readfish_toml)
+            if self.bed_file:
+                self.NewBed.load_from_file(self.bed_file)
+        else:
+            self.NewBed = None
         self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
 
+    def calculate_chromosome_stats(self, result, ref_result):
+        """Calculate chromosome-wide statistics and baselines.
+        
+        Args:
+            result: CNV result object for sample
+            ref_result: CNV result object for reference
+        
+        Returns:
+            Dictionary of chromosome statistics including means, baselines, and thresholds
+        """
+        stats = {}
+        autosome_means = []
+        
+        # Calculate normalized values and stats for each chromosome
+        for chrom in result.cnv.keys():
+            if chrom != "chrM" and chrom in ref_result:
+                # Calculate normalized CNV values
+                sample_avg = moving_average(result.cnv[chrom])
+                ref_avg = moving_average(ref_result[chrom])
+                
+                # Pad arrays if needed
+                max_len = max(len(sample_avg), len(ref_avg))
+                if len(sample_avg) < max_len:
+                    sample_avg = np.pad(sample_avg, (0, max_len - len(sample_avg)))
+                if len(ref_avg) < max_len:
+                    ref_avg = np.pad(ref_avg, (0, max_len - len(ref_avg)))
+                
+                # Calculate normalized CNV
+                normalized_cnv = sample_avg - ref_avg
+                
+                # Calculate basic statistics
+                chr_mean = np.mean(normalized_cnv)
+                chr_std = np.std(normalized_cnv)
+                
+                # Store autosome means for global statistics
+                if chrom.startswith('chr') and chrom[3:].isdigit():
+                    autosome_means.append(chr_mean)
+                
+                # Set baseline and thresholds based on chromosome and sex
+                if chrom == "chrX":
+                    if self.XYestimate == "XX":  # Female
+                        baseline = 1.0  # Expected +1 relative to male control
+                    else:  # Male
+                        baseline = 0.0  # Expected same as male control
+                elif chrom == "chrY":
+                    if self.XYestimate == "XY":  # Male
+                        baseline = 0.0
+                    else:  # Female
+                        baseline = -1.0  # Expected absence
+                else:  # Autosomes
+                    baseline = 0.0
+                
+                stats[chrom] = {
+                    'mean': chr_mean,
+                    'std': chr_std,
+                    'baseline': baseline,
+                    'normalized_cnv': normalized_cnv
+                }
+        
+        # Calculate global autosome statistics
+        global_mean = np.mean(autosome_means)
+        global_std = np.std(autosome_means)
+        
+        # Store global stats
+        stats['global'] = {
+            'mean': global_mean,
+            'std': global_std
+        }
+        
+        self.chromosome_stats = stats
+        return stats
+
+    def detect_chromosome_events(self, z_score_threshold=3.0):
+        """Detect significant chromosome-wide CNV events.
+        
+        Args:
+            z_score_threshold: Number of standard deviations for significance
+        
+        Returns:
+            List of chromosome-wide CNV events
+        """
+        if not self.chromosome_stats:
+            raise ValueError("Must call calculate_chromosome_stats first")
+            
+        events = []
+        global_stats = self.chromosome_stats['global']
+        
+        for chrom, stats in self.chromosome_stats.items():
+            if chrom == 'global':
+                continue
+                
+            mean_cnv = stats['mean']
+            baseline = stats['baseline']
+            
+            if chrom == "chrX":
+                if self.XYestimate == "XY":  # Male
+                    if mean_cnv > 0.3:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'GAIN',
+                            'description': 'Potential XXY'
+                        })
+                    elif mean_cnv < -0.3:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'LOSS',
+                            'description': 'X chromosome loss'
+                        })
+                elif self.XYestimate == "XX":  # Female
+                    if mean_cnv >= 1.0:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'GAIN',
+                            'description': 'Potential trisomy X'
+                        })
+                    elif mean_cnv < -0.75:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'LOSS',
+                            'description': 'X chromosome loss'
+                        })
+            elif chrom == "chrY":
+                if self.XYestimate == "XY":  # Male
+                    if mean_cnv > 0.5:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'GAIN',
+                            'description': 'Y chromosome gain'
+                        })
+                    elif mean_cnv < -0.5:
+                        events.append({
+                            'chromosome': chrom,
+                            'mean_cnv': mean_cnv,
+                            'type': 'LOSS',
+                            'description': 'Y chromosome loss'
+                        })
+                elif mean_cnv > -0.2 and self.XYestimate == "XX":
+                    events.append({
+                        'chromosome': chrom,
+                        'mean_cnv': mean_cnv,
+                        'type': 'PRESENT',
+                        'description': 'Y chromosome material detected'
+                    })
+            else:  # Autosomes
+                adjusted_mean = mean_cnv - baseline
+                z_score = (adjusted_mean - global_stats['mean']) / global_stats['std']
+                
+                if z_score > z_score_threshold:
+                    events.append({
+                        'chromosome': chrom,
+                        'mean_cnv': mean_cnv,
+                        'type': 'GAIN',
+                        'description': f'Whole chromosome gain (z-score: {z_score:.2f})'
+                    })
+                elif z_score < -z_score_threshold:
+                    events.append({
+                        'chromosome': chrom,
+                        'mean_cnv': mean_cnv,
+                        'type': 'LOSS',
+                        'description': f'Whole chromosome loss (z-score: {z_score:.2f})'
+                    })
+        
+        return events
 
     def estimate_XY(self) -> None:
         """
@@ -2025,119 +2198,232 @@ class CNVAnalysis(BaseAnalysis):
     def analyze_cytoband_cnv(self, cnv_data: dict, chromosome: str) -> pd.DataFrame:
         """
         Analyze CNV values within each cytoband to detect duplications and deletions.
-        Merges adjacent cytobands with the same CNV state and identifies genes in affected regions.
-
+        Uses dynamic thresholds based on data variation for more robust detection.
+        
         Args:
             cnv_data (dict): Dictionary containing CNV values
             chromosome (str): Chromosome to analyze
-
+        
         Returns:
             pd.DataFrame: DataFrame containing merged cytoband CNV analysis results
-            or empty DataFrame if resolution is insufficient
         """
+        logger.debug(f"\n{'='*50}")
+        logger.debug(f"Starting CNV analysis for {chromosome}")
+        logger.debug(f"CNV data keys: {list(cnv_data.keys())}")
+        logger.debug(f"Bin width: {self.cnv_dict['bin_width']}")
+        
         # Check if bin width is small enough for accurate CNV calling
         if self.cnv_dict["bin_width"] > 10_000_000:
-            # Return empty DataFrame if resolution is insufficient
+            logger.debug("Resolution insufficient for CNV calling")
             return pd.DataFrame()
         
-        # Get the bin width for position calculations
         bin_width = self.cnv_dict["bin_width"]
-        
-        # Filter cytobands for the specified chromosome
         chromosome_cytobands = self.cytobands_bed[self.cytobands_bed["chrom"] == chromosome].copy()
+        logger.debug(f"Number of cytobands for {chromosome}: {len(chromosome_cytobands)}")
         
-        # Initialize lists to store results
-        cnv_means = []
-        cnv_states = []
+        # Initialize results storage
+        merged_cytobands = []
+        whole_chr_event = False
+        whole_chr_state = "NORMAL"
         
-        # Analyze each cytoband
-        for _, cytoband in chromosome_cytobands.iterrows():
-            # Calculate the bin indices for this cytoband
-            start_bin = int(cytoband["start_pos"] / bin_width)
-            end_bin = int(cytoband["end_pos"] / bin_width)
+        # First, analyze the whole chromosome for potential aneuploidy
+        if chromosome in cnv_data:
+            logger.debug(f"\nAnalyzing chromosome {chromosome} for whole chromosome events:")
             
-            # Get CNV values for this region
-            if chromosome in cnv_data and start_bin < len(cnv_data[chromosome]):
-                region_cnv = cnv_data[chromosome][start_bin:end_bin+1]
-                mean_cnv = np.mean(region_cnv) if len(region_cnv) > 0 else 0
+            # Calculate mean CNV for the entire chromosome, excluding centromeric regions
+            centromere = self.centromere_bed[self.centromere_bed["chrom"] == chromosome]
+            if not centromere.empty:
+                cent_start_bin = int(centromere["start_pos"].iloc[0] / bin_width)
+                cent_end_bin = int(centromere["end_pos"].iloc[0] / bin_width)
+                chr_cnv = np.concatenate([
+                    cnv_data[chromosome][:cent_start_bin],
+                    cnv_data[chromosome][cent_end_bin:]
+                ])
+                logger.debug(f"Excluded centromere region: {cent_start_bin}-{cent_end_bin}")
+            else:
+                chr_cnv = cnv_data[chromosome]
+            
+            # Calculate chromosome-wide statistics
+            chr_mean = np.mean(chr_cnv)
+            chr_std = np.std(chr_cnv)
+            logger.debug(f"Chromosome-wide mean: {chr_mean:.3f}, std: {chr_std:.3f}")
+            
+            # Calculate SD of chromosome means for whole chromosome event detection
+            chromosome_means = []
+            for chrom in cnv_data:
+                if chrom.startswith('chr') and chrom[3:].isdigit():  # Only autosomes
+                    chrom_data = cnv_data[chrom]
+                    # Exclude centromere regions if present
+                    cent = self.centromere_bed[self.centromere_bed["chrom"] == chrom]
+                    if not cent.empty:
+                        cent_start = int(cent["start_pos"].iloc[0] / bin_width)
+                        cent_end = int(cent["end_pos"].iloc[0] / bin_width)
+                        chrom_data = np.concatenate([
+                            chrom_data[:cent_start],
+                            chrom_data[cent_end:]
+                        ])
+                    chromosome_means.append(np.mean(chrom_data))
+            
+            means_std = np.std(chromosome_means)
+            means_mean = np.mean(chromosome_means)
+            logger.debug(f"Mean of chromosome means: {means_mean:.3f}, std of means: {means_std:.3f}")
+            
+            # Base thresholds on standard deviations from the mean
+            if chromosome.startswith('chr') and chromosome[3:].isdigit():  # Autosomes
+                # For whole chromosome events, use SD of means with 70% confidence
+                gain_threshold = means_mean + (1.0 * means_std)  # ~70% confidence
+                loss_threshold = means_mean - (1.0 * means_std)
+                # For focal events, use chromosome-specific SD
+                cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
+                cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
+            elif chromosome == "chrX":
+                if self.XYestimate == "XY":  # Male
+                    gain_threshold = means_mean + (1.0 * means_std)
+                    loss_threshold = means_mean - (1.0 * means_std)
+                    cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
+                    cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
+                else:  # Female
+                    gain_threshold = means_mean + (1.0 * means_std)
+                    loss_threshold = means_mean - (1.0 * means_std)
+                    cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
+                    cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
+            elif chromosome == "chrY":
+                if self.XYestimate == "XY":  # Male
+                    gain_threshold = means_mean + (1.0 * means_std)
+                    loss_threshold = means_mean - (1.0 * means_std)
+                    cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
+                    cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
+                else:  # Female
+                    # For Y in females, use slightly more extreme thresholds
+                    gain_threshold = means_mean + (1.2 * means_std)
+                    loss_threshold = means_mean - (1.2 * means_std)
+                    cytoband_gain_threshold = chr_mean + (1.2 * chr_std)
+                    cytoband_loss_threshold = chr_mean - (1.2 * chr_std)
+            
+            logger.debug(f"Thresholds - Whole chr gain: {gain_threshold:.3f}, loss: {loss_threshold:.3f}")
+            logger.debug(f"Thresholds - Cytoband gain: {cytoband_gain_threshold:.3f}, loss: {cytoband_loss_threshold:.3f}")
+            
+            # Calculate proportion of bins supporting gain/loss using thresholds
+            bins_above_gain = np.sum(chr_cnv > gain_threshold) / len(chr_cnv)
+            bins_below_loss = np.sum(chr_cnv < loss_threshold) / len(chr_cnv)
+            
+            logger.debug(f"Proportion of bins - Above gain: {bins_above_gain:.3f}, Below loss: {bins_below_loss:.3f}")
+            
+            # Detect whole chromosome events with proportion threshold
+            min_proportion = 0.7  # Require at least 50% of bins to support the event
+            if bins_above_gain > min_proportion:
+                whole_chr_event = True
+                whole_chr_state = "GAIN"
+                logger.debug(f"WHOLE CHROMOSOME EVENT DETECTED: {chromosome} GAIN")
+            elif bins_below_loss > min_proportion:
+                whole_chr_event = True
+                whole_chr_state = "LOSS"
+                logger.debug(f"WHOLE CHROMOSOME EVENT DETECTED: {chromosome} LOSS")
+            
+            # If whole chromosome event detected, add it to results
+            if whole_chr_event:
+                genes_in_chr = self.gene_bed[
+                    self.gene_bed['chrom'] == chromosome
+                ]['gene'].tolist()
                 
-                # Determine CNV state based on thresholds and chromosome type
-                if chromosome == "chrX":
-                    if self.XYestimate == "XY":  # Male
-                        # For males, X chromosome is normally at half dosage
-                        if mean_cnv > 0.1:  # Gain from male baseline
+                merged_cytobands.append({
+                    'chrom': chromosome,
+                    'start_pos': chromosome_cytobands['start_pos'].min(),
+                    'end_pos': chromosome_cytobands['end_pos'].max(),
+                    'name': f"{chromosome} WHOLE CHROMOSOME {whole_chr_state}",
+                    'mean_cnv': chr_mean,
+                    'cnv_state': whole_chr_state,
+                    'length': chromosome_cytobands['end_pos'].max() - chromosome_cytobands['start_pos'].min(),
+                    'genes': genes_in_chr
+                })
+            
+            # Now analyze individual cytobands regardless of whole chromosome event
+            current_group = None
+            
+            for _, cytoband in chromosome_cytobands.iterrows():
+                start_bin = int(cytoband["start_pos"] / bin_width)
+                end_bin = int(cytoband["end_pos"] / bin_width)
+                
+                if start_bin < len(cnv_data[chromosome]):
+                    region_cnv = cnv_data[chromosome][start_bin:end_bin+1]
+                    mean_cnv = np.mean(region_cnv) if len(region_cnv) > 0 else 0
+                    
+                    # Determine cytoband state relative to whole chromosome state
+                    if whole_chr_event:
+                        # For whole chromosome events, only report significant deviations in opposite direction
+                        if whole_chr_state == "GAIN":
+                            if mean_cnv < chr_mean - (2.0 * chr_std):  # More stringent threshold for opposite changes
+                                state = "LOSS"  # Only report significant losses within gained chromosomes
+                            else:
+                                state = "NORMAL"  # Don't duplicate gains
+                        elif whole_chr_state == "LOSS":
+                            if mean_cnv > chr_mean + (2.0 * chr_std):  # More stringent threshold for opposite changes
+                                state = "GAIN"  # Only report significant gains within lost chromosomes
+                            else:
+                                state = "NORMAL"  # Don't duplicate losses
+                    else:
+                        # Normal threshold-based state determination
+                        if mean_cnv > cytoband_gain_threshold:
                             state = "GAIN"
-                        elif mean_cnv < -0.3:  # Loss from male baseline
+                        elif mean_cnv < cytoband_loss_threshold:
                             state = "LOSS"
-                        else:
-                            state = "NORMAL"
-                    else:  # Female or Unknown
-                        # For females, use standard thresholds
-                        if mean_cnv > 0.5:
-                            state = "GAIN"
-                        elif mean_cnv < -0.5:
-                            state = "LOSS"
-                        else:
-                            state = "NORMAL"
-                elif chromosome == "chrY":
-                    if self.XYestimate == "XY":  # Male
-                        # For males, Y chromosome should be present
-                        if mean_cnv > 0.5:
-                            state = "GAIN"
-                        elif mean_cnv < -0.5:
-                            state = "LOSS"
-                        else:
-                            state = "NORMAL"
-                    else:  # Female or Unknown
-                        # For females, any Y material is abnormal
-                        if mean_cnv > -0.2:
-                            state = "GAIN"
                         else:
                             state = "NORMAL"
                 else:
-                    # Standard thresholds for autosomes
-                    if mean_cnv > 0.5:
-                        state = "GAIN"
-                    elif mean_cnv < -0.5:
-                        state = "LOSS"
-                    else:
-                        state = "NORMAL"
-            else:
-                mean_cnv = 0
-                state = "NO_DATA"
+                    mean_cnv = 0
+                    state = "NO_DATA"
+                
+                # Group cytobands with same state
+                if current_group is None:
+                    current_group = {
+                        'chrom': cytoband['chrom'],
+                        'start_pos': cytoband['start_pos'],
+                        'end_pos': cytoband['end_pos'],
+                        'name': cytoband['name'],
+                        'mean_cnv': [mean_cnv],
+                        'cnv_state': state,
+                        'bands': [cytoband['name']],
+                        'length': cytoband['end_pos'] - cytoband['start_pos'],
+                        'genes': []
+                    }
+                elif state == current_group['cnv_state']:
+                    current_group['end_pos'] = cytoband['end_pos']
+                    current_group['mean_cnv'].append(mean_cnv)
+                    current_group['bands'].append(cytoband['name'])
+                else:
+                    # Process current group
+                    if current_group['cnv_state'] in ['GAIN', 'LOSS', 'HIGH_GAIN', 'DEEP_LOSS']:
+                        genes_in_region = self.gene_bed[
+                            (self.gene_bed['chrom'] == current_group['chrom']) &
+                            (self.gene_bed['start_pos'] <= current_group['end_pos']) &
+                            (self.gene_bed['end_pos'] >= current_group['start_pos'])
+                        ]['gene'].tolist()
+                        current_group['genes'] = genes_in_region
+                    
+                    current_group['name'] = f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
+                    current_group['mean_cnv'] = np.mean(current_group['mean_cnv'])
+                    current_group['length'] = current_group['end_pos'] - current_group['start_pos']
+                    
+                    # Only add significant changes relative to whole chromosome state
+                    if (not whole_chr_event) or (current_group['cnv_state'] != whole_chr_state):
+                        merged_cytobands.append(current_group)
+                    
+                    # Start new group
+                    current_group = {
+                        'chrom': cytoband['chrom'],
+                        'start_pos': cytoband['start_pos'],
+                        'end_pos': cytoband['end_pos'],
+                        'name': cytoband['name'],
+                        'mean_cnv': [mean_cnv],
+                        'cnv_state': state,
+                        'bands': [cytoband['name']],
+                        'length': cytoband['end_pos'] - cytoband['start_pos'],
+                        'genes': []
+                    }
             
-            cnv_means.append(mean_cnv)
-            cnv_states.append(state)
-        
-        # Add results to the DataFrame
-        chromosome_cytobands["mean_cnv"] = cnv_means
-        chromosome_cytobands["cnv_state"] = cnv_states
-        
-        # Merge adjacent cytobands with the same state
-        merged_cytobands = []
-        current_group = None
-        
-        for idx, row in chromosome_cytobands.iterrows():
-            if current_group is None:
-                current_group = {
-                    'chrom': row['chrom'],
-                    'start_pos': row['start_pos'],
-                    'end_pos': row['end_pos'],
-                    'name': row['name'],
-                    'mean_cnv': [row['mean_cnv']],
-                    'cnv_state': row['cnv_state'],
-                    'bands': [row['name']],
-                    'length': row['end_pos'] - row['start_pos'],
-                    'genes': []
-                }
-            elif row['cnv_state'] == current_group['cnv_state']:
-                # Extend the current group
-                current_group['end_pos'] = row['end_pos']
-                current_group['mean_cnv'].append(row['mean_cnv'])
-                current_group['bands'].append(row['name'])
-            else:
-                # Find genes in the current group's region if it's a gain or loss
-                if current_group['cnv_state'] in ['GAIN', 'LOSS']:
+            # Process the last group
+            if current_group is not None:
+                if current_group['cnv_state'] in ['GAIN', 'LOSS', 'HIGH_GAIN', 'DEEP_LOSS']:
                     genes_in_region = self.gene_bed[
                         (self.gene_bed['chrom'] == current_group['chrom']) &
                         (self.gene_bed['start_pos'] <= current_group['end_pos']) &
@@ -2145,45 +2431,16 @@ class CNVAnalysis(BaseAnalysis):
                     ]['gene'].tolist()
                     current_group['genes'] = genes_in_region
                 
-                # Finalize current group
                 current_group['name'] = f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
                 current_group['mean_cnv'] = np.mean(current_group['mean_cnv'])
                 current_group['length'] = current_group['end_pos'] - current_group['start_pos']
-                merged_cytobands.append(current_group)
                 
-                # Start new group
-                current_group = {
-                    'chrom': row['chrom'],
-                    'start_pos': row['start_pos'],
-                    'end_pos': row['end_pos'],
-                    'name': row['name'],
-                    'mean_cnv': [row['mean_cnv']],
-                    'cnv_state': row['cnv_state'],
-                    'bands': [row['name']],
-                    'length': row['end_pos'] - row['start_pos'],
-                    'genes': []
-                }
+                # Only add significant changes relative to whole chromosome state
+                if (not whole_chr_event) or (current_group['cnv_state'] != whole_chr_state):
+                    merged_cytobands.append(current_group)
         
-        # Add the last group if it exists
-        if current_group is not None:
-            # Find genes in the last group's region if it's a gain or loss
-            if current_group['cnv_state'] in ['GAIN', 'LOSS']:
-                genes_in_region = self.gene_bed[
-                    (self.gene_bed['chrom'] == current_group['chrom']) &
-                    (self.gene_bed['start_pos'] <= current_group['end_pos']) &
-                    (self.gene_bed['end_pos'] >= current_group['start_pos'])
-                ]['gene'].tolist()
-                current_group['genes'] = genes_in_region
-            
-            current_group['name'] = f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
-            current_group['mean_cnv'] = np.mean(current_group['mean_cnv'])
-            current_group['length'] = current_group['end_pos'] - current_group['start_pos']
-            merged_cytobands.append(current_group)
-        
-        # Convert merged results to DataFrame
+        # Convert results to DataFrame and sort
         merged_df = pd.DataFrame(merged_cytobands)
-        
-        # Sort by start position to maintain chromosome order
         if not merged_df.empty:
             merged_df = merged_df.sort_values('start_pos')
         
