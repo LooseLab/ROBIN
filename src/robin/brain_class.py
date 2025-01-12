@@ -1127,10 +1127,53 @@ class BrainMeth:
                                     )
                                     await self.Fusion_panel.render_ui(sample_id=self.sampleID)
 
-                    async def download_report():
+                    async def confirm_report_generation():
+                        '''
+                        Show a confirmation dialog before generating the report.
+                        '''
+                        disclaimer_text = (
+                            "This report and the data contained within it are intended for research use only and "
+                            "should not be used for direct diagnostic purposes. The methylation-based classification "
+                            "and other analyses provided here may be considered by neuropathologists as supplementary "
+                            "information in the context of comprehensive diagnostic assessment, which should include "
+                            "clinical history, radiological findings, and complete histopathological and molecular evaluation. "
+                            "The final interpretation and diagnosis should always be made by qualified healthcare professionals "
+                            "based on all available information."
+                        )
+
+                        report_types = {'summary': 'Summary Only', 'detailed': 'Detailed'}
+                        state = {'type': 'detailed'}  # Store state in a dictionary
+
+                        with ui.dialog() as dialog, ui.card().classes('w-96 p-4'):
+                            ui.label('Generate Report').classes('text-h6 font-bold mb-4')
+                            
+                            # Report type selector
+                            with ui.column().classes('mb-4'):
+                                ui.label('Report Type').classes('font-bold mb-2')
+                                ui.toggle(report_types, value='detailed', 
+                                        on_change=lambda e: state.update({'type': e.value}))
+                            
+                            # Disclaimer section
+                            with ui.column().classes('mb-4'):
+                                ui.label('Disclaimer').classes('font-bold mb-2')
+                                ui.label(disclaimer_text).classes('text-sm text-gray-600 mb-4')
+                            
+                            ui.label('Are you sure you want to generate a report?').classes('mb-4')
+                            
+                            # Buttons in a row at the bottom
+                            with ui.row().classes('justify-end gap-2'):
+                                ui.button('No', on_click=lambda: dialog.submit(('No', None))).props('flat')
+                                ui.button('Yes', on_click=lambda: dialog.submit(('Yes', state['type']))).props('color=primary')
+
+                        result, report_type = await dialog
+                        if result == 'Yes':
+                            await download_report(report_type)
+
+                    async def download_report(report_type='detailed'):
                         '''
                         Generate and download the report.
 
+                        :param report_type: Type of report to generate ('summary' or 'detailed')
                         :return: None
                         '''
                         ui.notify("Generating Report")
@@ -1144,17 +1187,20 @@ class BrainMeth:
                                 create_pdf,
                                 f"{self.sampleID}_run_report.pdf",
                                 self.check_and_create_folder(self.output, self.sampleID),
+                                report_type
                             )
                         else:
                             myfile = await run.io_bound(
-                                create_pdf, f"{self.sampleID}_run_report.pdf", self.output
+                                create_pdf, 
+                                f"{self.sampleID}_run_report.pdf", 
+                                self.output,
+                                report_type
                             )
                         ui.download(myfile)
                         ui.notify("Report Downloaded")
-                        
-                
 
-                ui.button("Generate Report", on_click=download_report, icon="download")
+                    # Replace the direct download_report button with the confirmation dialog
+                    ui.button("Generate Report", on_click=confirm_report_generation, icon="download")
 
         except Exception as e:
             logging.error(f"Error rendering analysis UI: {str(e)}", exc_info=True)
