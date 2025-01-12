@@ -58,9 +58,9 @@ class ReportSection(ABC):
             'TableHeader',
             parent=self.styles.styles["Normal"],
             fontName='Helvetica-Bold',
-            fontSize=9,
+            fontSize=8,
             textColor=self.styles.COLORS["primary"],
-            leading=11,
+            leading=10,
             spaceBefore=0,
             spaceAfter=0
         )
@@ -69,8 +69,8 @@ class ReportSection(ABC):
         self.TABLE_CELL_STYLE = ParagraphStyle(
             'TableCell',
             parent=self.styles.styles["Normal"],
-            fontSize=9,
-            leading=11,
+            fontSize=8,
+            leading=10,
             spaceBefore=0,
             spaceAfter=0,
             wordWrap='LTR'  # Enable left-to-right word wrapping

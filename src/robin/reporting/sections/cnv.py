@@ -338,8 +338,9 @@ class CNVSection(ReportSection):
                 fontName="Helvetica-Bold",
                 textColor=self.styles.COLORS["primary"],
                 alignment=1,  # Center alignment
-                spaceAfter=6,
-                spaceBefore=6,
+                leading=10,
+                spaceAfter=4,
+                spaceBefore=4,
             )
 
             whole_chr_events = []

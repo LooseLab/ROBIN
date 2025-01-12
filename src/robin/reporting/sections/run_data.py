@@ -11,6 +11,7 @@ from datetime import datetime
 from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
 from reportlab.lib import colors
 from reportlab.lib.units import inch
+from reportlab.lib.styles import ParagraphStyle
 from .base import ReportSection
 
 logger = logging.getLogger(__name__)
@@ -134,6 +135,13 @@ class RunDataSection(ReportSection):
                 ("Reference", ' '.join(masterdf.loc[(masterdf.index == 'reference')][1].values))
             ]
             self.elements.append(self._create_info_table(file_info, "File Locations"))
+            self.elements.append(Spacer(1, 12))
+
+            # File Sources
+            file_sources = [
+                ("Master Data", os.path.join(self.report.output, "master.csv")),
+            ]
+            self.elements.append(self._create_info_table(file_sources, "File Sources"))
             self.elements.append(Spacer(1, 12))
 
             # Sequencing Statistics

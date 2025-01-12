@@ -70,7 +70,9 @@ class MGMTSection(ReportSection):
                              parent=self.styles.styles["Normal"],
                              textColor=HexColor("#2563eb") if methylation_status.lower() == "methylated" 
                              else HexColor("#d97706"),
-                             fontName="Helvetica-Bold"
+                             fontName="Helvetica-Bold",
+                             fontSize=8,
+                             leading=10
                          ))
             ])
             
@@ -98,6 +100,27 @@ class MGMTSection(ReportSection):
             ]))
 
             self.elements.append(summary_table)
+            self.elements.append(Spacer(1, 12))
+
+            # Add file sources information
+            file_sources = [
+                ["Data Source", "File Location"],
+                ["MGMT Results", os.path.join(self.report.output, f"{last_seen}_mgmt.csv")],
+                ["MGMT Plot", os.path.join(self.report.output, f"{last_seen}_mgmt.png")]
+            ]
+            
+            # Create file sources table
+            sources_table = Table(file_sources, colWidths=[2 * inch, 4 * inch])
+            sources_table.setStyle(TableStyle([
+                # Inherit modern table style
+                *self.MODERN_TABLE_STYLE._cmds,
+                
+                # Preserve specific alignments
+                ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Labels left-aligned
+                ('ALIGN', (1, 0), (1, -1), 'LEFT'),  # Values left-aligned
+            ]))
+            
+            self.elements.append(sources_table)
             self.elements.append(Spacer(1, 12))
 
             # Add explanation text
