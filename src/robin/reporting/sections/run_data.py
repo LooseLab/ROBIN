@@ -8,7 +8,7 @@ import os
 import logging
 import pickle
 from datetime import datetime
-from reportlab.platypus import Paragraph, Spacer, Table, TableStyle
+from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle
@@ -92,7 +92,8 @@ class RunDataSection(ReportSection):
         """Add the run data content to the report."""
         logger.debug("Starting run data section content generation")
         
-        # Add section header
+        # Add page break before detailed section
+        self.elements.append(PageBreak())# Add section header
         self.elements.append(Paragraph("Run Data Summary", self.styles.styles["Heading1"]))
         self.elements.append(Spacer(1, 12))
 
@@ -166,12 +167,12 @@ class RunDataSection(ReportSection):
             # Add summary to summary section
             summary_text = (
                 f"Sample {sample_id} was sequenced using {self._convert_to_space_separated_string(masterdf_dict['devices'])} "
-                f"with flowcell {self._convert_to_space_separated_string(masterdf_dict['flowcell_ids'])}. "
-                f"Run started {self._format_timestamp(masterdf_dict['run_time'])}."
+                f"with flowcell {self._convert_to_space_separated_string(masterdf_dict['flowcell_ids'])}.<br/> "
+                f"Run started {self._format_timestamp(masterdf_dict['run_time'])}.<br/>"
             )
             self.summary_elements.append(Paragraph("Run Information", self.styles.styles["Heading3"]))
             self.summary_elements.append(Paragraph(summary_text, self.styles.styles["Normal"]))
-            self.summary_elements.append(Spacer(1, 12))
+            
 
         except Exception as e:
             logger.error(f"Error generating run data section: {str(e)}")

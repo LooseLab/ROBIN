@@ -243,6 +243,8 @@ class CoverageSection(ReportSection):
 
     def add_content(self):
         """Add the coverage analysis content to the report."""
+        # Add page break before detailed section
+        self.elements.append(PageBreak())
         # Add Summary Section
         self.elements.append(
             Paragraph("Coverage Analysis", self.styles.styles["Heading2"])
@@ -250,8 +252,7 @@ class CoverageSection(ReportSection):
         self.elements.append(Spacer(1, 12))
         self.add_coverage_summary()
         
-        # Add page break before detailed section
-        self.elements.append(PageBreak())
+        
         
         
         self.add_detailed_coverage()
@@ -274,12 +275,12 @@ class CoverageSection(ReportSection):
             
             if hasattr(self, 'distribution_data') and self.distribution_data:
                 summary_text.append(
-                    f"Coverage ≥30x: {self.distribution_data.get('above_30x', 0):.1f}%"
+                    f"Coverage >=30x: {self.distribution_data.get('above_30x', 0):.1f}%"
                 )
             
             self.summary_elements.append(
                 Paragraph(
-                    " | ".join(summary_text),
+                    " <br/> ".join(summary_text),
                     self.styles.styles["Normal"]
                 )
             )

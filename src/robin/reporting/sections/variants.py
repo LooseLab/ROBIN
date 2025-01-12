@@ -246,6 +246,9 @@ class VariantsSection(ReportSection):
         """Add the pathogenic variants section to the report."""
         logger.debug("Starting variants section content generation")
         
+        # Add page break before detailed section
+        self.elements.append(PageBreak())
+        
         # Add section title
         self.elements.append(Paragraph("Candidate Pathogenic Variants", self.styles.styles["Heading1"]))
         

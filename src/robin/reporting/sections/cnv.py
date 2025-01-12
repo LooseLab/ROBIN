@@ -72,10 +72,12 @@ class CNVSection(ReportSection):
 
         # Add CNV section header
         logger.debug("Adding CNV section header")
+        
+        # Start detailed analysis section
+        self.elements.append(PageBreak())
         self.elements.append(
-            Paragraph("Copy Number Variation", self.styles.styles["Heading2"])
+            Paragraph("Copy Number Variation Detailed Analysis", self.styles.styles["Heading2"])
         )
-        self.elements.append(Spacer(1, 12))
 
         try:
             # Initialize CNVAnalysis object with the same settings as UI
@@ -313,13 +315,8 @@ class CNVSection(ReportSection):
                 )
             """
 
-            # Start detailed analysis section
-            self.elements.append(PageBreak())
-            self.elements.append(
-                Paragraph("Copy Number Variation Analysis", self.styles.styles["Heading2"])
-            )
-            self.elements.append(Spacer(1, 12))
-
+            
+            
             # Add detailed content below
 
             # Generate genome-wide CNV plot
@@ -531,21 +528,7 @@ class CNVSection(ReportSection):
                     ),
                 )
             )
-
-            # Add Detailed CNV Analysis Section
-            self.elements.append(PageBreak())
-            self.elements.append(
-                Paragraph("Detailed CNV Analysis", self.styles.styles["Heading2"])
-            )
-            self.elements.append(Spacer(1, 12))
-
-            # Add Analysis Summary table here
-            self.elements.append(
-                Paragraph("Analysis Parameters", self.styles.styles["Heading3"])
-            )
-            self.elements.append(Spacer(1, 6))
-            self.elements.append(summary_table)
-            self.elements.append(Spacer(1, 12))
+           
 
             # Initialize variables for plot layout
             self.current_row = []

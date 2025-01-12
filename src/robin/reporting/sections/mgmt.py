@@ -37,6 +37,7 @@ class MGMTSection(ReportSection):
             return
 
         try:
+            self.elements.append(PageBreak())
             # Add MGMT section header
             self.elements.append(
                 Paragraph("MGMT Promoter Methylation", self.styles.styles["Heading2"])
