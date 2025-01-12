@@ -117,8 +117,7 @@ class RobinReport:
             logger.info("Starting report generation")
 
             # Add summary section header
-            self.elements_summary.insert(0, Paragraph("Summary", self.styles.styles["Heading1"]))
-            self.elements_summary.insert(1, Spacer(1, 12))
+            self.elements_summary.insert(0, Paragraph(f"Summary - {self.sample_id}", self.styles.styles["Heading1"]))
 
             # Process each section
             for section in self.sections:

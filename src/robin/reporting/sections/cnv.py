@@ -298,13 +298,20 @@ class CNVSection(ReportSection):
                     elif mean_cnv < stats["loss_threshold"]:
                         whole_chr_events.append(f"Chromosome {chrom[3:]}: LOSS (mean={mean_cnv:.2f})")
             
+            self.summary_elements.append(
+                   Paragraph("Copy Number Variation Summary", self.styles.styles["Heading3"])
+                )
+            
+            """
             if whole_chr_events:
+                
                 self.summary_elements.append(
                     Paragraph(
-                        "Whole Chromosome Events: " + " | ".join(whole_chr_events),
+                        "Whole Chromosome Events:<br/> " + " <br/> ".join(whole_chr_events),
                         self.styles.styles["Normal"]
                     )
                 )
+            """
 
             # Start detailed analysis section
             self.elements.append(PageBreak())
@@ -318,9 +325,9 @@ class CNVSection(ReportSection):
             # Generate genome-wide CNV plot
             logger.debug("Generating genome-wide CNV plot")
             img_buf = create_CNV_plot(CNVresult, cnv_dict)
-            width, height = inch * 7.5, inch * 2.5  # A4 width minus margins
-            self.elements.append(Image(img_buf, width=width, height=height))
-            self.elements.append(
+            width, height = inch * 7.5, inch * 2  # A4 width minus margins
+            self.summary_elements.append(Image(img_buf, width=width, height=height))
+            self.summary_elements.append(
                 Paragraph(
                     "Copy number variation across chromosomes",
                     self.styles.styles["Caption"],
@@ -410,8 +417,8 @@ class CNVSection(ReportSection):
 
             # Add whole chromosome events summary if any exist
             if whole_chr_events:
-                self.elements.append(Spacer(1, 12))
-                self.elements.append(
+                #self.elements.append(Spacer(1, 12))
+                self.summary_elements.append(
                     Paragraph("Whole Chromosome Events", self.styles.styles["Heading4"])
                 )
 
@@ -469,12 +476,12 @@ class CNVSection(ReportSection):
                     ('ALIGN', (2, 1), (2, -1), 'RIGHT'),  # Right-align mean CNV values
                     ('ALIGN', (1, 1), (1, -1), 'CENTER'),  # Center-align state column
                 ]))
-                self.elements.append(whole_chr_table)
+                self.summary_elements.append(whole_chr_table)
 
             # Add gene-containing events if any exist
             if gene_containing_events:
-                self.elements.append(Spacer(1, 12))
-                self.elements.append(
+                #self.elements.append(Spacer(1, 12))
+                self.summary_elements.append(
                     Paragraph(
                         "CNV Events Containing Genes", self.styles.styles["Heading4"]
                     )
@@ -506,11 +513,11 @@ class CNVSection(ReportSection):
                     ('ALIGN', (3, 1), (3, -1), 'RIGHT'),  # Right-align mean CNV values
                     ('ALIGN', (2, 1), (2, -1), 'CENTER'),  # Center-align state column
                 ]))
-                self.elements.append(gene_events_table)
+                self.summary_elements.append(gene_events_table)
 
             # Add note about detailed view
-            self.elements.append(Spacer(1, 12))
-            self.elements.append(
+            #self.elements.append(Spacer(1, 12))
+            self.summary_elements.append(
                 Paragraph(
                     "Note: Full CNV details are available in the detailed view.",
                     ParagraphStyle(

@@ -225,29 +225,24 @@ class FusionSection(ReportSection):
         master_networks = self._get_gene_networks(master_pairs)
         all_networks = self._get_gene_networks(all_pairs)
         
-        # Add summary section
-        self.elements.append(Paragraph("Summary", self.styles.styles["Heading2"]))
         
         # Create summary text
         summary_text = []
         if master_networks:
-            summary_text.append(f"Found {len(master_networks)} fusion networks within the target panel:")
+            summary_text.append(f"Found {len(master_networks)} fusion networks within the target panel:<br/>")
             for network in master_networks:
                 summary_text.append(f"• {' - '.join(network)}")
         else:
             summary_text.append("No fusion networks identified within the target panel.")
             
         if all_networks and len(all_networks) > len(master_networks):
-            summary_text.append(f"\nAdditional {len(all_networks) - len(master_networks)} genome-wide fusion networks identified.")
+            summary_text.append(f"<br/>Additional {len(all_networks) - len(master_networks)} genome-wide fusion networks identified.")
         
         summary_paragraph = '\n'.join(summary_text)
-        self.elements.append(Paragraph(summary_paragraph, self.styles.styles["Normal"]))
-        self.elements.append(Spacer(1, 12))
         
         # Add summary to summary section of report
         self.summary_elements.append(Paragraph("Gene Fusions", self.styles.styles["Heading3"]))
         self.summary_elements.append(Paragraph(summary_paragraph, self.styles.styles["Normal"]))
-        self.summary_elements.append(Spacer(1, 12))
         
         # Add detailed analysis section if there are any candidates
         if master_pairs or all_pairs:

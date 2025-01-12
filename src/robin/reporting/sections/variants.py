@@ -247,23 +247,23 @@ class VariantsSection(ReportSection):
         logger.debug("Starting variants section content generation")
         
         # Add section title
-        self.elements.append(Paragraph("Pathogenic Variants", self.styles.styles["Heading1"]))
-        self.elements.append(Spacer(1, 12))
+        self.elements.append(Paragraph("Candidate Pathogenic Variants", self.styles.styles["Heading1"]))
         
         # Add summary section
         self.elements.append(Paragraph("Summary", self.styles.styles["Heading2"]))
         summary_text = (
-            f"Found {len(self.variant_result.snp_data)} pathogenic SNPs and "
-            f"{len(self.variant_result.indel_data)} pathogenic indels affecting "
-            f"{len(self.variant_result.affected_genes)} genes."
+            f"Found {len(self.variant_result.snp_data)} candidate pathogenic SNPs and "
+            f"{len(self.variant_result.indel_data)} candidate pathogenic indels affecting "
+            f"{len(self.variant_result.affected_genes)} genes.<br/>"
+            f"Genes with candidate pathogenic variants: {', '.join(sorted(self.variant_result.affected_genes))}"
         )
         self.elements.append(Paragraph(summary_text, self.styles.styles["Normal"]))
         self.elements.append(Spacer(1, 12))
         
         # Add summary to summary section
-        self.summary_elements.append(Paragraph("Pathogenic Variants", self.styles.styles["Heading3"]))
+        self.summary_elements.append(Paragraph("Candidate Pathogenic Variants", self.styles.styles["Heading3"]))
         self.summary_elements.append(Paragraph(summary_text, self.styles.styles["Normal"]))
-        self.summary_elements.append(Spacer(1, 12))
+        
         
         if not self.variant_result.snp_data and not self.variant_result.indel_data:
             self.elements.append(Paragraph("No pathogenic variants were identified.", self.styles.styles["Normal"]))

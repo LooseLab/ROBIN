@@ -140,11 +140,16 @@ class ClassificationSection(ReportSection):
 
     def add_content(self):
         """Add the classification content to the report."""
+        # Add summary to summary section
+        self.summary_elements.append(
+            Paragraph("Methylation Classification", self.styles.styles["Heading3"])
+        )
+        
         # Add section header
         self.elements.append(
             Paragraph("Methylation Classification", self.styles.styles["Heading2"])
         )
-        self.elements.append(Spacer(1, 12))
+        self.elements.append(Spacer(1, 6))
 
         # Dictionary of classifiers and their corresponding files
         classifiers = {
@@ -226,7 +231,7 @@ class ClassificationSection(ReportSection):
         if len(summary_data) > 1:  # If we have any results
             # Create table with automatic column width calculation
             summary_table = self.create_table(summary_data, repeat_rows=1)
-            self.elements.append(summary_table)
+            self.summary_elements.append(summary_table)
             self.elements.append(Spacer(1, 12))
 
             # Add detailed results for each classifier
@@ -282,11 +287,9 @@ class ClassificationSection(ReportSection):
                     logger.error(f"Error processing detailed {name} classification: {str(e)}")
                     continue
 
-            # Add explanation text
-            self.elements.append(
-                Paragraph(
-                    "Note: Classification confidence levels are defined as High (≥75%), "
-                    "Medium (≥50%), and Low (<50%). Multiple classifiers may provide different "
+            Explanation_text = Paragraph(
+                    "Note: Classification confidence levels are defined as High (>75%), "
+                    "Medium (>50%), and Low (<50%). Multiple classifiers may provide different "
                     "results based on their training data and methodology.",
                     ParagraphStyle(
                         'Explanation',
@@ -296,6 +299,10 @@ class ClassificationSection(ReportSection):
                         textColor=HexColor("#4B5563")
                     )
                 )
+
+            # Add explanation text
+            self.elements.append(
+                Explanation_text
             )
 
         else:
@@ -306,21 +313,9 @@ class ClassificationSection(ReportSection):
                 )
             )
 
-        # Add summary to summary section
+        
+    
+        # Add explanation text
         self.summary_elements.append(
-            Paragraph("Methylation Classification", self.styles.styles["Heading3"])
+            Explanation_text
         )
-        if len(summary_data) > 1:
-            summary_text = []
-            for row in summary_data[1:]:  # Skip header row
-                classifier = row[0]
-                predicted = row[1]
-                confidence = row[2]
-                summary_text.append(f"{classifier}: {predicted} ({confidence})")
-            
-            self.summary_elements.append(
-                Paragraph(
-                    " | ".join(summary_text),
-                    self.styles.styles["Normal"]
-                )
-            )
