@@ -969,11 +969,16 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["bam_count"]["file"].pop(k),
                 )
                 baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
-                sample_id = baminfo["sample_id"]
+                # Get the effective sample ID based on force_sampleid setting
+                sample_id = self.force_sampleid if self.force_sampleid else baminfo["sample_id"]
+                
+                # Initialize storage using sample_id
                 if sample_id not in app.storage.general[self.mainuuid]["samples"]:
                     app.storage.general[self.mainuuid]["samples"][sample_id] = {}
                     self.configure_storage(sample_id)
                     app.storage.general[self.mainuuid]["sample_list"].append(sample_id)
+                
+                # Use sample_id for all storage operations
                 if baminfo["state"] == "pass":
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "file_counters"
@@ -1000,6 +1005,8 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "file_counters"
                     ]["fail_bases_count"] += bamdata["yield_tracking"]
+                
+                # Update device information
                 if (
                     baminfo["device_position"]
                     not in app.storage.general[self.mainuuid]["samples"][sample_id][
@@ -1009,6 +1016,8 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "devices"
                     ].append(baminfo["device_position"])
+                
+                # Update basecall model information
                 if (
                     baminfo["basecall_model"]
                     not in app.storage.general[self.mainuuid]["samples"][sample_id][
@@ -1018,26 +1027,19 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "basecall_models"
                     ].append(baminfo["basecall_model"])
-                if not self.force_sampleid:
-                    if (
-                        baminfo["sample_id"]
-                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
-                            "sample_ids"
-                        ]
-                    ):
-                        app.storage.general[self.mainuuid]["samples"][sample_id][
-                            "sample_ids"
-                        ].append(baminfo["sample_id"])
-                else:
-                    if (
-                        self.force_sampleid
-                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
-                            "sample_ids"
-                        ]
-                    ):
-                        app.storage.general[self.mainuuid]["samples"][sample_id][
-                            "sample_ids"
-                        ].append(self.force_sampleid)
+                
+                # Always store the actual sample ID from BAM, regardless of force_sampleid
+                if (
+                    baminfo["sample_id"]
+                    not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "sample_ids"
+                    ]
+                ):
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "sample_ids"
+                    ].append(baminfo["sample_id"])
+                
+                # Update flowcell information
                 if (
                     baminfo["flow_cell_id"]
                     not in app.storage.general[self.mainuuid]["samples"][sample_id][
@@ -1047,6 +1049,8 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "flowcell_ids"
                     ].append(baminfo["flow_cell_id"])
+                
+                # Update run time information
                 if (
                     baminfo["time_of_run"]
                     not in app.storage.general[self.mainuuid]["samples"][sample_id][
@@ -1056,6 +1060,8 @@ class BrainMeth:
                     app.storage.general[self.mainuuid]["samples"][sample_id][
                         "run_time"
                     ].append(baminfo["time_of_run"])
+                
+                # Update counters
                 app.storage.general[self.mainuuid]["samples"][sample_id][
                     "file_counters"
                 ]["mapped_count"] += bamdata["mapped_reads"]
@@ -1066,11 +1072,8 @@ class BrainMeth:
                     "file_counters"
                 ]["bases_count"] += bamdata["yield_tracking"]
 
+                # Save to CSV using sample_id
                 mydf = pd.DataFrame.from_dict(app.storage.general)
-                if not self.force_sampleid:
-                    sample_id = baminfo["sample_id"]
-                else:
-                    sample_id = self.force_sampleid
                 mydf.to_csv(
                     os.path.join(
                         self.check_and_create_folder(self.output, sample_id),
@@ -1079,6 +1082,7 @@ class BrainMeth:
                 )
 
                 counter += 1
+                # Use sample_id for all analysis queues
                 if "forest" not in self.exclude:
                     self.bamforcns.put([file[0], file[1], sample_id])
                 if "sturgeon" not in self.exclude:
