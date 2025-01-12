@@ -107,8 +107,11 @@ class RobinReport:
             DisclaimerSection(self),
         ]
 
-    def generate_report(self):
+    def generate_report(self, report_type='detailed'):
         """Generate the complete PDF report.
+
+        Args:
+            report_type: Type of report to generate ('summary' or 'detailed')
 
         Returns:
             Path to the generated PDF file
@@ -124,18 +127,24 @@ class RobinReport:
                 try:
                     section.add_content()
                     summary_elements, main_elements = section.get_elements()
+                    
+                    # Always include summary elements
                     self.elements_summary.extend(summary_elements)
-                    self.elements.extend(main_elements)
+                    
+                    # For detailed report or if it's the disclaimer section, include main elements
+                    if report_type == 'detailed' or section.__class__.__name__ == 'DisclaimerSection':
+                        self.elements.extend(main_elements)
                 except Exception as e:
                     logger.error(
                         f"Error processing section {section.__class__.__name__}: {e}",
                         exc_info=True,
                     )
 
-            # Add page break and detailed analysis header
-            self.elements.insert(0, PageBreak())
-            self.elements.insert(1, Paragraph("Detailed Analysis", self.styles.styles["Heading1"]))
-            self.elements.insert(2, Spacer(1, 12))
+            # Add detailed analysis header and elements only for detailed reports
+            if report_type == 'detailed':
+                self.elements.insert(0, PageBreak())
+                self.elements.insert(1, Paragraph("Detailed Analysis", self.styles.styles["Heading1"]))
+                self.elements.insert(2, Spacer(1, 12))
 
             # Add page break before end of report elements
             if self.end_of_report_elements:
@@ -143,9 +152,10 @@ class RobinReport:
 
             # Combine all elements
             logger.info("Combining elements for final PDF")
-            final_elements = (
-                self.elements_summary + self.elements + self.end_of_report_elements
-            )
+            if report_type == 'detailed':
+                final_elements = self.elements_summary + self.elements + self.end_of_report_elements
+            else:
+                final_elements = self.elements_summary + self.elements + self.end_of_report_elements
 
             # Build the PDF
             from .header_footer import header_footer_canvas_factory
@@ -164,15 +174,16 @@ class RobinReport:
             raise
 
 
-def create_pdf(filename, output):
+def create_pdf(filename, output, report_type='detailed'):
     """Create a PDF report from ROBIN analysis results.
 
     Args:
         filename: Output PDF filename
         output: Directory containing analysis output files
+        report_type: Type of report to generate ('summary' or 'detailed')
 
     Returns:
         Path to the generated PDF file
     """
     report = RobinReport(filename, output)
-    return report.generate_report()
+    return report.generate_report(report_type=report_type)
