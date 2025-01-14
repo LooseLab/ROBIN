@@ -4,8 +4,9 @@ disclaimer.py
 This module contains the disclaimer section of the report.
 """
 
-from reportlab.platypus import PageBreak, Paragraph
+from reportlab.platypus import PageBreak, Paragraph, Spacer
 from ..sections.base import ReportSection
+from .disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
 
 class DisclaimerSection(ReportSection):
@@ -16,14 +17,8 @@ class DisclaimerSection(ReportSection):
         self.elements.append(PageBreak())
         self.add_section_header("Disclaimer")
 
-        disclaimer_text = (
-            "This report and the data contained within it are intended for research use only and "
-            "should not be used for direct diagnostic purposes. The methylation-based classification "
-            "and other analyses provided here may be considered by neuropathologists as supplementary "
-            "information in the context of comprehensive diagnostic assessment, which should include "
-            "clinical history, radiological findings, and complete histopathological and molecular evaluation. "
-            "The final interpretation and diagnosis should always be made by qualified healthcare professionals "
-            "based on all available information."
-        )
-
-        self.elements.append(Paragraph(disclaimer_text, self.styles.styles["Normal"]))
+        # Split the text into paragraphs and create separate Paragraph objects
+        paragraphs = EXTENDED_DISCLAIMER_TEXT.split('\n\n')
+        for p in paragraphs:
+            self.elements.append(Paragraph(p, self.styles.styles["Normal"]))
+            self.elements.append(Spacer(1, 12))  # Add some space between paragraphs

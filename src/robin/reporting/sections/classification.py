@@ -227,7 +227,20 @@ class ClassificationSection(ReportSection):
                 logger.error(f"Error processing {name} classification: {str(e)}")
                 continue
 
-        # Create and style the summary table
+        # Add explanation text
+        Explanation_text = Paragraph(
+            "Note: Classification confidence levels are defined as High (>75%), "
+            "Medium (>50%), and Low (<50%). Multiple classifiers may provide different "
+            "results based on their training data and methodology.",
+            ParagraphStyle(
+                'Explanation',
+                parent=self.styles.styles["Normal"],
+                fontSize=8,
+                leading=10,
+                textColor=HexColor("#4B5563")
+            )
+        )
+
         if len(summary_data) > 1:  # If we have any results
             # Create table with automatic column width calculation
             summary_table = self.create_table(summary_data, repeat_rows=1)
@@ -287,19 +300,6 @@ class ClassificationSection(ReportSection):
                     logger.error(f"Error processing detailed {name} classification: {str(e)}")
                     continue
 
-            Explanation_text = Paragraph(
-                    "Note: Classification confidence levels are defined as High (>75%), "
-                    "Medium (>50%), and Low (<50%). Multiple classifiers may provide different "
-                    "results based on their training data and methodology.",
-                    ParagraphStyle(
-                        'Explanation',
-                        parent=self.styles.styles["Normal"],
-                        fontSize=8,
-                        leading=10,
-                        textColor=HexColor("#4B5563")
-                    )
-                )
-
             # Add explanation text
             self.elements.append(
                 Explanation_text
@@ -313,9 +313,7 @@ class ClassificationSection(ReportSection):
                 )
             )
 
-        
-    
-        # Add explanation text
+        # Add explanation text to summary
         self.summary_elements.append(
             Explanation_text
         )

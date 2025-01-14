@@ -92,6 +92,7 @@ from robin.subpages.Fusion_object import FusionObject
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.ReadBam import ReadBam
 from robin.reporting.report import create_pdf
+from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
 from watchdog.observers import Observer
 
@@ -1131,16 +1132,6 @@ class BrainMeth:
                         '''
                         Show a confirmation dialog before generating the report.
                         '''
-                        disclaimer_text = (
-                            "This report and the data contained within it are intended for research use only and "
-                            "should not be used for direct diagnostic purposes. The methylation-based classification "
-                            "and other analyses provided here may be considered by neuropathologists as supplementary "
-                            "information in the context of comprehensive diagnostic assessment, which should include "
-                            "clinical history, radiological findings, and complete histopathological and molecular evaluation. "
-                            "The final interpretation and diagnosis should always be made by qualified healthcare professionals "
-                            "based on all available information."
-                        )
-
                         report_types = {'summary': 'Summary Only', 'detailed': 'Detailed'}
                         state = {'type': 'detailed'}  # Store state in a dictionary
 
@@ -1156,7 +1147,9 @@ class BrainMeth:
                             # Disclaimer section
                             with ui.column().classes('mb-4'):
                                 ui.label('Disclaimer').classes('font-bold mb-2')
-                                ui.label(disclaimer_text).classes('text-sm text-gray-600 mb-4')
+                                # Split into paragraphs and join with double breaks for better spacing
+                                formatted_text = EXTENDED_DISCLAIMER_TEXT.replace('\n\n', '<br><br>').replace('\n', ' ')
+                                ui.label(formatted_text).classes('text-sm text-gray-600 mb-4')
                             
                             ui.label('Are you sure you want to generate a report?').classes('mb-4')
                             
