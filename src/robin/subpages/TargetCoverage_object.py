@@ -733,7 +733,8 @@ class TargetCoverage(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {
                             "color": "#1D1D1F"
-                        }
+                        },
+                        ":formatter": "params => params.map(param => { const val = Array.isArray(param.value) ? param.value[1] : param.value; return `${param.seriesName}: ${!isNaN(val) ? Number(val).toFixed(2) : 0}x`; }).join('<br/>')"
                     },
                     "xAxis": {
                         "type": "category",
@@ -758,7 +759,7 @@ class TargetCoverage(BaseAnalysis):
                         },
                         "axisLabel": {
                             "color": "#86868B",
-                            "formatter": "{value}x"
+                            ":formatter": "value => `${value.toFixed(2)}x`"
                         },
                         "splitLine": {
                             "show": True,
@@ -847,7 +848,8 @@ class TargetCoverage(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {
                             "color": "#1D1D1F"
-                        }
+                        },
+                        ":formatter": "params => params.map(param => { const val = Array.isArray(param.value) ? param.value[1] : param.value; return `${param.seriesName}: ${!isNaN(val) ? Number(val).toFixed(2) : 0}x`; }).join('<br/>')"
                     },
                     "legend": {
                         "data": ["Off Target", "On Target"],
@@ -879,7 +881,7 @@ class TargetCoverage(BaseAnalysis):
                         },
                         "axisLabel": {
                             "color": "#86868B",
-                            "formatter": "{value}x"
+                            ":formatter": "value => `${value.toFixed(2)}x`"
                         },
                         "splitLine": {
                             "show": True,
@@ -964,7 +966,8 @@ class TargetCoverage(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {
                             "color": "#1D1D1F"
-                        }
+                        },
+                        ":formatter": "params => params.map(param => { const val = Array.isArray(param.value) ? param.value[1] : param.value; return `${param.seriesName}: ${!isNaN(val) ? Number(val).toFixed(2) : 0}x`; }).join('<br/>')"
                     },
                     "xAxis": {
                         "type": "time",
@@ -984,7 +987,7 @@ class TargetCoverage(BaseAnalysis):
                         },
                         "axisLabel": {
                             "color": "#86868B",
-                            "formatter": "{value}x"
+                            ":formatter": "value => `${value.toFixed(2)}x`"
                         },
                         "splitLine": {
                             "show": True,
@@ -1122,7 +1125,8 @@ class TargetCoverage(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {
                             "color": "#1D1D1F"
-                        }
+                        },
+                        ":formatter": "params => { const value = params.value; if (params.seriesName === 'box plot') { return `${params.name}<br/>Min: ${!isNaN(value[1]) ? Number(value[1]).toFixed(2) : 0}x<br/>Q1: ${!isNaN(value[2]) ? Number(value[2]).toFixed(2) : 0}x<br/>Median: ${!isNaN(value[3]) ? Number(value[3]).toFixed(2) : 0}x<br/>Q3: ${!isNaN(value[4]) ? Number(value[4]).toFixed(2) : 0}x<br/>Max: ${!isNaN(value[5]) ? Number(value[5]).toFixed(2) : 0}x`; } else { return `${params.seriesName}<br/>${params.name}: ${!isNaN(params.value[1]) ? Number(params.value[1]).toFixed(2) : 0}x`; } }"
                     },
                     "dataZoom": [
                         {
@@ -1164,7 +1168,7 @@ class TargetCoverage(BaseAnalysis):
                         },
                         "axisLabel": {
                             "color": "#86868B",
-                            "formatter": "{value}x"
+                            ":formatter": "value => `${value.toFixed(2)}x`"
                         },
                         "splitArea": {
                             "show": True
