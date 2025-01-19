@@ -390,8 +390,16 @@ class Sturgeon_object(BaseAnalysis):
                 dir=self.check_and_create_folder(self.output, sampleID)
             ) as temp2:
                 await run.cpu_bound(run_modkit, file, temp.name, self.threads)
+                # Write the modkit output to the output folder
+                shutil.copyfile(temp.name, os.path.join(self.check_and_create_folder(self.output, sampleID), "modkit_sturgeon_out"))
+                
+                
 
                 await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
+
+                # Write the contents of the temporary directory to the output folder
+                sturgeon_bed_output = self.check_and_create_folder(self.output, sampleID)
+                shutil.copytree(temp2, os.path.join(sturgeon_bed_output, "SturgeonIntermediateBed"), dirs_exist_ok=True)
 
                 calls_per_probe_file = os.path.join(
                     temp2, "merged_probes_methyl_calls.txt"
@@ -410,6 +418,10 @@ class Sturgeon_object(BaseAnalysis):
                         calls_per_probe_file,
                         merged_output_file,
                     )
+                # Write the merged output file to the output folder
+                shutil.copyfile(merged_output_file, os.path.join(self.check_and_create_folder(self.output, sampleID), "merged_probes_methyl_calls.txt"))
+                    
+                
 
                 bed_output_file = os.path.join(
                     self.bedDir[sampleID].name, "final_merged_probes_methyl_calls.bed"
@@ -418,7 +430,11 @@ class Sturgeon_object(BaseAnalysis):
                 await run.cpu_bound(
                     run_probes_methyl_calls, merged_output_file, bed_output_file
                 )
-
+                
+                # Write the BED file to the output folder as "SturgeonBed.bed"
+                sturgeon_bed_output = os.path.join(self.check_and_create_folder(self.output, sampleID), "SturgeonBed.bed")
+                shutil.copyfile(bed_output_file, sturgeon_bed_output)
+                
                 await run.cpu_bound(
                     run_sturgeon_predict,
                     self.bedDir[sampleID].name,

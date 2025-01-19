@@ -478,6 +478,11 @@ class NanoDX_object(BaseAnalysis):
             )
             test_df.loc[test_df["methylation_call"] < 60, "methylation_call"] = -1
             test_df.loc[test_df["methylation_call"] >= 60, "methylation_call"] = 1
+            
+            # Write the test_df to the output folder as "NanoDXBed.bed"
+            nanodx_bed_output = os.path.join(self.check_and_create_folder(self.output, sampleID), "NanoDXBed.bed")
+            test_df.to_csv(nanodx_bed_output, sep="\t", index=False, header=True)
+            
             predictions, class_labels, n_features = await run.cpu_bound(
                 classification, self.modelfile, test_df
             )

@@ -43,6 +43,7 @@ from sturgeon.callmapping import (
 
 import yappi
 import tabulate
+import shutil
 
 from robin import submodules
 from robin.utilities.merge_bedmethyl import (
@@ -82,7 +83,7 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
     if not showerrors:
         command += ">/dev/null 2>&1"
     logger.debug(command)
-    # print(command)
+    print(command)
 
     os.system(command)
 
@@ -457,6 +458,10 @@ class RandomForest_object(BaseAnalysis):
             tempDir = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
+            
+            # Write the BED file to the output folder as "RandomForestBed.bed"
+            randomforest_bed_output = os.path.join(self.check_and_create_folder(self.output, sampleID), "RandomForestBed.bed")
+            shutil.copyfile(tempbed.name, randomforest_bed_output)
 
             await run.cpu_bound(
                 run_rcns2,

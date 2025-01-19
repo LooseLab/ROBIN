@@ -77,13 +77,16 @@ from datetime import datetime
 from dateutil import parser
 import pytz
 import os
+import shutil
+import tempfile
 from alive_progress import alive_bar
 from nicegui import ui, app, run
+import subprocess
 
 
 from robin.utilities.bam_handler import BamEventHandler
 from robin.subpages.MGMT_object import MGMT_Object
-from robin.subpages.Sturgeon_object import Sturgeon_object
+from robin.subpages.Sturgeon_object import Sturgeon_object, run_sturgeon_inputtobed, pysam_cat, run_sturgeon_merge_probes, run_probes_methyl_calls
 from robin.subpages.NanoDX_object import NanoDX_object
 from robin.subpages.RandomForest_object import RandomForest_object
 from robin.subpages.CNV_object import CNVAnalysis
@@ -94,8 +97,152 @@ from robin.utilities.ReadBam import ReadBam
 from robin.reporting.report import create_pdf
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
-from watchdog.observers import Observer
+from sturgeon.callmapping import (
+    merge_probes_methyl_calls,
+    probes_methyl_calls_to_bed,
+)
 
+from watchdog.observers import Observer
+from typing import List, Tuple, Optional, Dict, Any
+
+
+def merge_modkit_files(new_files: List[str], existing_file: str, output_file: str):
+    """
+    Efficiently merges new modkit pileup files with an existing dataset using incremental updates.
+
+    Parameters:
+        new_files (List[str]): List of new input files (modkit format).
+        existing_file (str): Path to the previously merged dataset (Parquet format).
+        output_file (str): Path to save the updated merged dataset.
+
+    Returns:
+        None (Saves the merged DataFrame to `output_file`).
+    """
+    column_names = [
+        "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
+        "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
+        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail",
+        "n_diff", "n_nocall"
+    ]
+
+    numeric_cols = [
+        "chromStart", "chromEnd", "score_bed", "valid_cov", "percent_modified",
+        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
+    ]
+
+    # Load existing dataset if it exists
+    if os.path.exists(existing_file):
+        print(f"🔹 Loading existing dataset: {existing_file}")
+        existing_df = pd.read_parquet(existing_file)
+    else:
+        print("🔹 No existing dataset found. Creating a new dataset.")
+        existing_df = pd.DataFrame(columns=column_names)
+
+    # Read and merge only new files
+    new_data = []
+    for file in new_files:
+        print(f"📂 Processing file: {file}")
+
+        # Read file efficiently
+        #modkit_df = pd.read_csv(file, delim_whitespace=True, header=None, names=column_names, dtype=str)
+        modkit_df = pd.read_csv(file, sep='\s+', header=None, names=column_names, dtype=str)
+        # Convert numeric columns properly
+        modkit_df[numeric_cols] = modkit_df[numeric_cols].apply(pd.to_numeric, errors='coerce')
+
+        # Append to list (avoids multiple DataFrame copies)
+        new_data.append(modkit_df)
+
+    if not new_data:
+        print("⚠️ No new data to merge. Exiting.")
+        return
+
+    # Combine new data into a single DataFrame
+    new_df = pd.concat(new_data, ignore_index=True)
+
+    # If existing dataset is empty, save new data and exit
+    if existing_df.empty:
+        print("✅ No previous data found. Saving only new data.")
+        new_df.to_parquet(output_file, index=False)
+        return new_df
+
+    # Identify unique positions for faster merging
+    existing_positions = set(zip(existing_df["chrom"], existing_df["chromStart"], existing_df["chromEnd"]))
+    new_positions = set(zip(new_df["chrom"], new_df["chromStart"], new_df["chromEnd"]))
+
+    # Find new data that isn't already in the existing dataset
+    unique_positions = new_positions - existing_positions
+    if not unique_positions:
+        print("⚠️ All new data already exists. No updates needed.")
+        return existing_df
+
+    # Filter only truly new data
+    new_df = new_df[new_df.set_index(["chrom", "chromStart", "chromEnd"]).index.isin(unique_positions)]
+
+    # Merge new data with existing data
+    merged_df = pd.concat([existing_df, new_df], ignore_index=True)
+
+    # Aggregate count-based columns only when necessary
+    sum_columns = ["n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"]
+    merged_df = merged_df.groupby(["chrom", "chromStart", "chromEnd"], as_index=False).agg({
+        "mod_code": "first",
+        "score_bed": "mean",
+        "strand": "first",
+        "thickStart": "first",
+        "thickEnd": "first",
+        "color": "first",
+        "valid_cov": "sum",
+        "percent_modified": "mean",
+        **{col: "sum" for col in sum_columns}  # Sum count-based columns
+    })
+
+    # Save updated dataset
+    merged_df.to_parquet(output_file, index=False)
+    print(f"✅ Incremental update saved to: {output_file}")
+    return merged_df
+
+
+def run_modkit(sortfile: str, temp: str, threads: int) -> None:
+    """
+    Executes modkit on a bam file and extracts the methylation data.
+
+    Args:
+        sortfile (str): Path to the sorted BAM file.
+        temp (str): Path to the temporary output file.
+        threads (int): Number of threads to use.
+    """
+    cmd = [
+        "modkit", "pileup",
+        "-t", str(threads),  # Ensure threads is a string
+        "--filter-threshold", "0.73",
+        "--combine-mods",
+        sortfile, temp,
+        #"--suppress-progress"
+    ]
+    
+    # Run the command
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    print("STDOUT:", result.stdout)
+    print("STDERR:", result.stderr)
+    
+    
+def run_samtools_sort(
+    file: str, tomerge: List[str], sortfile: str, threads: int
+) -> None:
+    """
+    Sorts BAM files using Samtools.
+
+    Args:
+        file (str): Path to the output BAM file.
+        tomerge (List[str]): List of BAM files to merge.
+        sortfile (str): Path to the sorted BAM file.
+        threads (int): Number of threads to use.
+    """
+    #logger.debug(
+    #    f"Running samtools sort with the following parameters: file={file}, tomerge={tomerge}, sortfile={sortfile}, threads={threads}"
+    #)
+    pysam.cat("-o", file, *tomerge)
+    pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
+    #logger.debug("samtools sort command executed successfully.")
 
 def check_bam(bamfile):
     """
@@ -217,6 +364,9 @@ class BrainMeth:
         self.sampleID = None
         self.readfish_toml = readfish_toml
         self.watchdogbamqueue = Queue()
+        self.dataDir = {}
+        self.bedDir = {}
+        self.first_run = {}
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
 
@@ -291,7 +441,8 @@ class BrainMeth:
         self.bamfortargetcoverage = Queue()
         self.bamformgmt = Queue()
         self.bamforfusions = Queue()
-
+        self.bamforbigbadmerge = Queue()
+        self.mergecounter = 0# This is the queue for the big bad merge
         if self.watchfolder:
             logging.info(f"Adding a watchfolder: {self.watchfolder}")
             await self.add_watchfolder(self.watchfolder)
@@ -1207,6 +1358,7 @@ class BrainMeth:
         """
         logging.info("Starting background BAM processing")
         self.process_bams_tracker = ui.timer(10, self.process_bams)
+        self.process_bigbadmerge_tracker = ui.timer(10, self.process_bigbadmerge)
 
     def check_and_create_folder(self, path, folder_name=None):
         """
@@ -1233,6 +1385,110 @@ class BrainMeth:
             return full_path
         else:
             return path
+        
+    async def process_bigbadmerge(self):
+        # Dictionary to store files by sample ID
+        files_by_sample = {}
+        latest_files = {}  # Track latest file time per sample
+
+        # Process queue and organize files by sample ID
+        while self.bamforbigbadmerge.qsize() > 0:
+            file, filetime, sampleID = self.bamforbigbadmerge.get()
+            
+            # Initialize containers for new sample IDs
+            if sampleID not in files_by_sample:
+                files_by_sample[sampleID] = []
+                latest_files[sampleID] = 0
+                
+                # Create temporary directories if needed
+                if sampleID not in self.dataDir:
+                    self.dataDir[sampleID] = tempfile.TemporaryDirectory(
+                        dir=self.check_and_create_folder(self.output, sampleID)
+                    )
+                    self.bedDir[sampleID] = tempfile.TemporaryDirectory(
+                        dir=self.check_and_create_folder(self.output, sampleID)
+                    )
+            
+            # Update latest file time for this sample
+            if filetime > latest_files[sampleID]:
+                latest_files[sampleID] = filetime
+                
+            files_by_sample[sampleID].append(file)
+            
+            # Process if we have enough files for any sample
+            for sample_id in list(files_by_sample.keys()):
+                if len(files_by_sample[sample_id]) >= 100:
+                    await self.process_sample_files(
+                        sample_id, files_by_sample[sample_id], latest_files[sample_id]
+                    )
+                    # Clear processed files
+                    files_by_sample[sample_id] = []
+                    latest_files[sample_id] = 0
+        
+        # Process remaining files for each sample
+        for sample_id, files in files_by_sample.items():
+            if files:  # Only process if there are files
+                await self.process_sample_files(
+                    sample_id, files, latest_files[sample_id]
+                )
+
+    async def process_sample_files(self, sampleID, tomerge, latest_file):
+        """
+        Process a batch of BAM files for a specific sample.
+        
+        Args:
+            sampleID (str): The sample ID being processed
+            tomerge (list): List of BAM files to merge
+            latest_file (float): Timestamp of the latest file
+        """
+        if not tomerge:  # Skip if no files to process
+            return
+
+        # Track the number of BAM files seen and merged
+        num_bam_files_seen = len(tomerge)
+        logging.info(f"Processing {num_bam_files_seen} BAM files for sample ID: {sampleID}")
+
+        tempbam = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, sampleID),
+            suffix=".bam",
+        )
+        sorttempbam = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, sampleID),
+            suffix=".bam",
+        )
+        file = tempbam.name
+        temp = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, sampleID)
+        )
+        sortfile = sorttempbam.name
+
+        # Sort and merge BAM files
+        await run.cpu_bound(
+            run_samtools_sort, file, tomerge, sortfile, self.threads
+        )
+
+        with tempfile.TemporaryDirectory(
+            dir=self.check_and_create_folder(self.output, sampleID)
+        ) as temp2:
+            await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
+
+            # Create output path specific to this sample
+            parquet_path = os.path.join(
+                self.check_and_create_folder(self.output, sampleID),
+                f"{sampleID}.parquet"  # Use sampleID for the output filename
+            )
+
+            # Merge modkit files for this sample
+            merged_df = await run.cpu_bound(
+                merge_modkit_files,
+                [temp.name],
+                parquet_path,  # Use the parquet_path for the existing file
+                parquet_path   # Use the parquet_path for the output file
+            )
+
+        # Log the number of BAM files processed
+        logging.info(f"Merged {num_bam_files_seen} BAM files into {parquet_path}")
+        self.mergecounter += len(tomerge)
 
     async def process_bams(self) -> None:
         """
@@ -1382,6 +1638,10 @@ class BrainMeth:
                 )
 
                 counter += 1
+                analyses = ["forest", "sturgeon", "nanodx", "pannanodx"]
+                if any(analysis not in self.exclude for analysis in analyses):
+                    self.bamforbigbadmerge.put([file[0], file[1], sample_id])
+                
                 if "forest" not in self.exclude:
                     self.bamforcns.put([file[0], file[1], sample_id])
                 if "sturgeon" not in self.exclude:
