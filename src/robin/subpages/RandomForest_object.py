@@ -46,10 +46,13 @@ import tabulate
 import shutil
 
 from robin import submodules
+
 from robin.utilities.merge_bedmethyl import (
     merge_bedmethyl,
     save_bedmethyl,
+    collapse_bedmethyl,
 )
+
 from typing import List, Tuple
 
 # Use the main logger configured in the main application
@@ -72,20 +75,134 @@ def run_sturgeon_merge_probes(calls_per_probe_file, merged_output_file):
 
 
 def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
-    command = (
-        f"Rscript {HVPATH}/bin/methylation_classification_nanodx_v0.1.R -s "
-        + f"live_{batch} -o {rcns2folder} -i {bed} "
-        + f"-p {HVPATH}/bin/top_probes_hm450.Rdata "
-        + f"--training_data {HVPATH}/bin/capper_top_100k_betas_binarised.Rdata "
-        + f"--array_file {HVPATH}/bin/HM450.hg38.manifest.gencode.v22.Rdata "
-        + f"-t {threads} "
-    )
-    if not showerrors:
-        command += ">/dev/null 2>&1"
-    logger.debug(command)
-    print(command)
+    """
+    Run the Random Forest R script on the methylation data.
 
-    os.system(command)
+    Parameters
+    ----------
+    rcns2folder : str
+        Directory for R script output
+    batch : int
+        Batch number for output file naming
+    bed : str
+        Path to input BED file
+    threads : int
+        Number of threads to use
+    showerrors : bool
+        Whether to show error messages
+    """
+    try:
+        logger.info(f"Starting run_rcns2 with bed file: {bed}")
+        logger.info(f"Output directory: {rcns2folder}")
+        logger.info(f"Batch number: {batch}")
+        
+        """
+        # Check if input file exists
+        if not os.path.exists(bed):
+            logger.error(f"Input BED file does not exist: {bed}")
+            raise FileNotFoundError(f"BED file not found: {bed}")
+            
+        # Read the bed file
+        logger.debug("Reading BED file...")
+        bed_df = pd.read_csv(bed, sep="\t")
+        logger.info(f"Read BED file with shape: {bed_df.shape}")
+        logger.debug(f"BED file columns: {bed_df.columns.tolist()}")
+        
+        # Ensure numeric types for position columns
+        logger.debug("Converting position columns to numeric...")
+        bed_df["chromStart"] = pd.to_numeric(bed_df["chromStart"], errors="coerce")
+        bed_df["chromEnd"] = pd.to_numeric(bed_df["chromEnd"], errors="coerce")
+        
+        # Drop any rows with NaN values after conversion
+        bed_df = bed_df.dropna(subset=["chromStart", "chromEnd"])
+        
+        # Rename columns to match expected format
+        logger.debug("Renaming columns...")
+        bed_df = bed_df.rename(columns={
+            "chromStart": "start",  # Changed from start_pos to start
+            "chromEnd": "end",      # Changed from end_pos to end
+            "percent_modified": "methylation_call"
+        })
+        
+        
+        # Convert methylation calls to binary format (0/1)
+        logger.debug("Converting methylation calls to binary format...")
+        bed_df["methylation_call"] = (bed_df["methylation_call"] >= 60).astype(int)
+        
+        # Ensure all required columns are present
+        required_columns = ["chrom", "start", "end", "methylation_call"]
+        missing_columns = [col for col in required_columns if col not in bed_df.columns]
+        if missing_columns:
+            logger.error(f"Missing required columns: {missing_columns}")
+            raise ValueError(f"Missing required columns: {missing_columns}")
+        
+        # Save in format expected by R script
+        converted_bed = os.path.join(os.path.dirname(bed), "converted_for_r.bed")
+        logger.info(f"Saving converted BED file to: {converted_bed}")
+        # Save only required columns in correct order
+        bed_df.to_csv(converted_bed, sep="\t", index=False, header=False)
+        """
+        
+        # Check if R script exists
+        r_script_path = f"{HVPATH}/bin/methylation_classification_nanodx_v0.1.R"
+        if not os.path.exists(r_script_path):
+            logger.error(f"R script not found at: {r_script_path}")
+            raise FileNotFoundError(f"R script not found: {r_script_path}")
+            
+        # Check if other required files exist
+        required_files = {
+            "probes": f"{HVPATH}/bin/top_probes_hm450.Rdata",
+            "training_data": f"{HVPATH}/bin/capper_top_100k_betas_binarised.Rdata",
+            "array_file": f"{HVPATH}/bin/HM450.hg38.manifest.gencode.v22.Rdata"
+        }
+        
+        for file_type, file_path in required_files.items():
+            if not os.path.exists(file_path):
+                logger.error(f"{file_type} file not found at: {file_path}")
+                raise FileNotFoundError(f"{file_type} file not found: {file_path}")
+        
+        # Run the R script
+        command = (
+            f"Rscript {r_script_path} -s "
+            + f"live_{batch} -o {rcns2folder} -i {bed} "
+            + f"-p {HVPATH}/bin/top_probes_hm450.Rdata "
+            + f"--training_data {HVPATH}/bin/capper_top_100k_betas_binarised.Rdata "
+            + f"--array_file {HVPATH}/bin/HM450.hg38.manifest.gencode.v22.Rdata "
+            + f"-t {threads} "
+        )
+        
+        logger.info(f"Executing R command: {command}")
+        
+        # Execute command and capture output
+        import subprocess
+        try:
+            result = subprocess.run(
+                command.split(),
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            logger.info("R script executed successfully")
+            logger.debug(f"R script stdout: {result.stdout}")
+            if result.stderr:
+                logger.warning(f"R script stderr: {result.stderr}")
+        except subprocess.CalledProcessError as e:
+            logger.error(f"R script failed with return code {e.returncode}")
+            logger.error(f"stdout: {e.stdout}")
+            logger.error(f"stderr: {e.stderr}")
+            raise
+        
+        # Check if output file was created
+        expected_output = f"{rcns2folder}/live_{batch}_votes.tsv"
+        if os.path.exists(expected_output):
+            logger.info(f"Output file created successfully: {expected_output}")
+        else:
+            logger.error(f"Expected output file not found: {expected_output}")
+            raise FileNotFoundError(f"R script did not create expected output file: {expected_output}")
+        
+    except Exception as e:
+        logger.error(f"Error in run_rcns2: {str(e)}", exc_info=True)
+        raise
 
 
 def run_samtools_sort(file, tomerge, sortfile, threads, regions):
@@ -117,9 +234,34 @@ def run_modkit(bamfile, outbed, cpgs, threads, showerrors):
         os.system(command)
         # self.log("Done processing bam file")
     except Exception as e:
-        print(e)
+        logger.error(e)
         # self.log(e)
         pass
+
+
+def load_modkit_data(parquet_path):
+    for attempt in range(5):  # Retry up to 5 times
+        try:
+            merged_modkit_df = pd.read_parquet(parquet_path)
+            logger.debug("Successfully read the Parquet file.")
+            break
+        except Exception as e:
+            logger.debug(f"Attempt {attempt+1}: File not ready ({e}). Retrying...")
+            time.sleep(10)
+    else:
+        logger.debug("Failed to read Parquet file after multiple attempts.")
+        return None
+     
+                   
+    column_names = [
+        "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
+        "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
+        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail",
+        "n_diff", "n_nocall"
+    ]
+
+    # Keep only the original 18 columns
+    return merged_modkit_df[column_names]
 
 
 class RandomForest_object(BaseAnalysis):
@@ -287,224 +429,130 @@ class RandomForest_object(BaseAnalysis):
 
     async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
         """
-        Processes the BAM files and performs the NanoDX analysis.
+        Process BAM files and perform Random Forest analysis.
 
-        Args:
-            bamfile (List[Tuple[str, float]]): List of BAM files with their timestamps.
+        Parameters
+        ----------
+        bamfile : List[Tuple[str, float]]
+            List of tuples containing BAM file paths and their timestamps
         """
         sampleID = self.sampleID
+        # Initialize directories for each sampleID if not already present
         if sampleID not in self.dataDir.keys():
             self.dataDir[sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
-        if sampleID not in self.bedDir.keys():
             self.bedDir[sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
         tomerge = []
         latest_file = 0
-        while len(bamfile) > 0:
-            self.running = True
-            (file, filetime) = bamfile.pop(0)
-            if filetime > latest_file:
-                latest_file = filetime
-            tomerge.append(file)
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bams_in_processing"
-            ] += 1
-            if len(tomerge) > 100:
-                break
-        if latest_file:
-            currenttime = latest_file * 1000
-        else:
-            currenttime = time.time() * 1000
-        if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bam",
-            )
-            sortbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bam",
-            )
-            tempbed = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bed",
-            )
-            self.bambatch[sampleID] = self.bambatch.get(sampleID, 0) + 1
-
-            await run.cpu_bound(
-                run_samtools_sort,
-                tempbam.name,
-                tomerge,
-                sortbam.name,
-                self.threads,
-                self.cpgs_file,
-            )
-
-            await run.cpu_bound(
-                run_modkit,
-                sortbam.name,
-                tempbed.name,
-                self.cpgs_file,
-                self.threads,
-                self.showerrors,
-            )
-
-            try:
-                os.remove(f"{sortbam.name}.csi")
-            except FileNotFoundError:
-                pass
-
-            if sampleID in self.first_run.keys() and not self.first_run[sampleID]:
-                bed_a = pd.read_table(
-                    f"{tempbed.name}",
-                    names=[
-                        "chrom",
-                        "start_pos",
-                        "end_pos",
-                        "mod",
-                        "score",
-                        "strand",
-                        "start_pos2",
-                        "end_pos2",
-                        "colour",
-                        "Nvalid",
-                        "fraction",
-                        "Nmod",
-                        "Ncanon",
-                        "Nother",
-                        "Ndel",
-                        "Nfail",
-                        "Ndiff",
-                        "Nnocall",
-                    ],
-                    dtype={
-                        "chrom": "category",
-                        "start_pos": "int32",
-                        "end_pos": "int32",
-                        "mod": "category",
-                        "score": "int16",
-                        "strand": "category",
-                        "start_pos2": "int32",
-                        "end_pos2": "int32",
-                        "colour": "category",
-                        "Nvalid": "int16",
-                        "fraction": "float16",
-                        "Nmod": "int16",
-                        "Ncanon": "int16",
-                        "Nother": "int16",
-                        "Ndel": "int16",
-                        "Nfail": "int16",
-                        "Ndiff": "int16",
-                        "Nnocall": "int16",
-                    },
-                    header=None,
-                    sep="\s+",
-                )
-
-                self.merged_bed_file[sampleID] = await run.cpu_bound(
-                    merge_bedmethyl, bed_a, self.merged_bed_file.get(sampleID)
-                )
-                save_bedmethyl(self.merged_bed_file[sampleID], f"{tempbed.name}")
+        if app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bam_count"
+                ] > 0:
+            if latest_file:
+                currenttime = latest_file * 1000
             else:
-                self.merged_bed_file[sampleID] = pd.read_table(
-                    f"{tempbed.name}",
-                    names=[
-                        "chrom",
-                        "start_pos",
-                        "end_pos",
-                        "mod",
-                        "score",
-                        "strand",
-                        "start_pos2",
-                        "end_pos2",
-                        "colour",
-                        "Nvalid",
-                        "fraction",
-                        "Nmod",
-                        "Ncanon",
-                        "Nother",
-                        "Ndel",
-                        "Nfail",
-                        "Ndiff",
-                        "Nnocall",
-                    ],
-                    dtype={
-                        "chrom": "category",
-                        "start_pos": "int32",
-                        "end_pos": "int32",
-                        "mod": "category",
-                        "score": "int16",
-                        "strand": "category",
-                        "start_pos2": "int32",
-                        "end_pos2": "int32",
-                        "colour": "category",
-                        "Nvalid": "int16",
-                        "fraction": "float16",
-                        "Nmod": "int16",
-                        "Ncanon": "int16",
-                        "Nother": "int16",
-                        "Ndel": "int16",
-                        "Nfail": "int16",
-                        "Ndiff": "int16",
-                        "Nnocall": "int16",
-                    },
-                    header=None,
-                    sep="\s+",
-                )
-                self.first_run[sampleID] = False
-
-            tempDir = tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
+                currenttime = time.time() * 1000
             
-            # Write the BED file to the output folder as "RandomForestBed.bed"
-            randomforest_bed_output = os.path.join(self.check_and_create_folder(self.output, sampleID), "RandomForestBed.bed")
-            shutil.copyfile(tempbed.name, randomforest_bed_output)
+            parquet_path = os.path.join(self.check_and_create_folder(self.output, sampleID), f"{sampleID}.parquet")
+            logger.info(f"Processing parquet file: {parquet_path}")
+            
+            try:
+                if self.check_file_time(parquet_path):
+                    logger.debug("Parquet file exists and is ready for processing")
+                    tomerge_length_file = os.path.join(self.check_and_create_folder(self.output, sampleID), "tomerge_length.txt")
+                    try:
+                        with open(tomerge_length_file, "r") as f:
+                            tomerge_length = int(f.readline().strip().split(": ")[1])
+                        logger.info(f"Number of files to merge: {tomerge_length}")
+                    except FileNotFoundError:
+                        logger.warning("tomerge_length.txt not found yet, waiting for file creation")
+                        return
+                    except Exception as e:
+                        logger.error(f"Error reading tomerge_length.txt: {str(e)}")
+                        return
+                    
+                    logger.debug("Loading modkit data from parquet file...")
+                    merged_modkit_df = await run.cpu_bound(load_modkit_data, parquet_path)
+                    print (merged_modkit_df.columns)
+                    merged_modkit_df.rename(columns={"chromStart":"start_pos", "chromEnd":"end_pos", "mod_code":"mod", "thickStart":"start_pos2", "thickEnd":"end_pos2", "color":"colour"}, inplace=True)
+                    merged_modkit_df.rename(columns={'n_canonical':'Ncanon', 'n_delete':'Ndel', 'n_diff':'Ndiff', 'n_fail':'Nfail', 'n_mod':'Nmod', 'n_nocall':'Nnocall', 'n_othermod':'Nother', 'valid_cov':'Nvalid', 'percent_modified':'score'}, inplace=True)
+                   
+                    forest_dx = await run.cpu_bound(collapse_bedmethyl, merged_modkit_df)
+                    merged_modkit_df = forest_dx
+                    if merged_modkit_df is None:
+                        logger.error("Failed to load modkit data from parquet file")
+                        return
+                    logger.info(f"Loaded modkit data with shape: {merged_modkit_df.shape}")
+                    
+                    # Create a temporary directory for R script output
+                    rcns2folder = tempfile.mkdtemp(dir=self.check_and_create_folder(self.output, sampleID))
+                    logger.info(f"Created temporary directory for R output: {rcns2folder}")
+                    
+                    # Write the BED file to the output folder as "RandomForestBed.bed"
+                    randomforest_bed_output = os.path.join(self.check_and_create_folder(self.output, sampleID), "RandomForestBed.bed")
+                    logger.info(f"Writing BED file to: {randomforest_bed_output}")
+                    
+                    
+                    
+                    merged_modkit_df.to_csv(randomforest_bed_output, sep="\t", index=False, header=False)
 
-            await run.cpu_bound(
-                run_rcns2,
-                tempDir.name,
-                self.bambatch[sampleID],
-                tempbed.name,
-                self.threads,
-                self.showerrors,
-            )
+                    # Initialize batch number if not exists
+                    if sampleID not in self.bambatch:
+                        self.bambatch[sampleID] = 1
+                    logger.info(f"Using batch number: {self.bambatch[sampleID]}")
 
-            if os.path.isfile(
-                f"{tempDir.name}/live_{self.bambatch[sampleID]}_votes.tsv"
-            ):
-                scores = pd.read_table(
-                    f"{tempDir.name}/live_{self.bambatch[sampleID]}_votes.tsv",
-                    sep="\s+",
-                )
-                scores_to_save = scores.drop(columns=["Freq"]).T
-                scores_to_save["timestamp"] = currenttime
+                    # Run the R script
+                    logger.info("Attempting to run R script...")
+                    try:
+                        await run.cpu_bound(
+                            run_rcns2,
+                            rcns2folder,
+                            self.bambatch[sampleID],
+                            randomforest_bed_output,
+                            self.threads,
+                            self.showerrors,
+                        )
+                        logger.info("R script completed successfully")
+                    except Exception as e:
+                        logger.error(f"Error running R script: {str(e)}", exc_info=True)
+                        raise
 
-                if sampleID not in self.rcns2_df_store:
-                    self.rcns2_df_store[sampleID] = pd.DataFrame()
+                    votes_file = f"{rcns2folder}/live_{self.bambatch[sampleID]}_votes.tsv"
+                    if os.path.isfile(votes_file):
+                        logger.info(f"Found votes file: {votes_file}")
+                        scores = pd.read_table(votes_file, sep="\s+")
+                        scores_to_save = scores.drop(columns=["Freq"]).T
+                        scores_to_save["timestamp"] = currenttime
 
-                self.rcns2_df_store[sampleID] = pd.concat(
-                    [
-                        self.rcns2_df_store[sampleID],
-                        scores_to_save.set_index("timestamp"),
-                    ]
-                )
+                        if sampleID not in self.rcns2_df_store:
+                            self.rcns2_df_store[sampleID] = pd.DataFrame()
 
-                self.rcns2_df_store[sampleID].to_csv(
-                    os.path.join(
-                        self.check_and_create_folder(self.output, sampleID),
-                        "random_forest_scores.csv",
-                    )
-                )
+                        self.rcns2_df_store[sampleID] = pd.concat(
+                            [
+                                self.rcns2_df_store[sampleID],
+                                scores_to_save.set_index("timestamp"),
+                            ]
+                        )
 
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bam_processed"
-            ] += len(tomerge)
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bams_in_processing"
-            ] -= len(tomerge)
+                        # Save results
+                        output_file = os.path.join(
+                            self.check_and_create_folder(self.output, sampleID),
+                            "random_forest_scores.csv",
+                        )
+                        logger.info(f"Saving results to: {output_file}")
+                        self.rcns2_df_store[sampleID].to_csv(output_file)
+                    else:
+                        logger.error(f"Votes file not found: {votes_file}")
+
+                    app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                        "bam_processed"
+                    ] = tomerge_length
+
+            except Exception as e:
+                logger.error(f"Error in process_bam: {str(e)}", exc_info=True)
+                
 
         self.running = False
 

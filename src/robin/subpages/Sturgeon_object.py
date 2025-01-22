@@ -43,11 +43,301 @@ from sturgeon.callmapping import (
 )
 import click
 from pathlib import Path
-from typing import List, Tuple
+from typing import Optional,List, Tuple
 import logging
+
+import json
+import zipfile
+from copy import deepcopy
+
+
+import numpy as np
+
+
+
+import sturgeon 
+# Sturgeon-related imports (must be installed)
+from sturgeon.utils import validate_model_file, get_model_path, read_probes_file
+from sturgeon.prediction import load_model, predict_sample
+from sturgeon.plot import plot_prediction
+
+from robin import models
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
+
+def load_modkit_data(parquet_path):
+    for attempt in range(5):  # Retry up to 5 times
+        try:
+            merged_modkit_df = pd.read_parquet(parquet_path)
+            logger.debug("Successfully read the Parquet file.")
+            break
+        except Exception as e:
+            logger.debug(f"Attempt {attempt+1}: File not ready ({e}). Retrying...")
+            time.sleep(10)
+    else:
+        logger.debug("Failed to read Parquet file after multiple attempts.")
+        return None
+     
+                   
+    column_names = [
+        "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
+        "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
+        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail",
+        "n_diff", "n_nocall"
+    ]
+
+    # Keep only the original 18 columns
+    return merged_modkit_df[column_names]
+
+def modkit_pileup_file_to_bed(
+    input_data,  # Accepts either a DataFrame or file path
+    output_file: str,
+    probes_file: str,
+    margin: Optional[int] = 25,
+    neg_threshold: Optional[float] = 0.3,
+    pos_threshold: Optional[float] = 0.7,
+    fivemc_code: str = 'C',
+) -> pd.DataFrame:
+    """Processes a modkit pileup file or DataFrame and maps methylation data to probes."""
+
+    # Check if input_data is a file path or a DataFrame
+    if isinstance(input_data, str):
+        # Read from file
+        modkit_df = pd.read_csv(input_data, delim_whitespace=True, header=None)
+    elif isinstance(input_data, pd.DataFrame):
+        # Use DataFrame directly
+        modkit_df = input_data.copy()
+    else:
+        raise ValueError("input_data must be either a file path (str) or a DataFrame")
+        
+    # Define column names
+    column_names = [
+        "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
+        "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
+        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail",
+        "n_diff", "n_nocall"
+    ]
+    
+    # Validate number of columns
+    if modkit_df.shape[1] != len(column_names):
+        raise AssertionError(f"Invalid modkit pileup file. Expected {len(column_names)} columns, got {modkit_df.shape[1]}.")
+
+    # Assign column names
+    modkit_df.columns = column_names
+
+    # Filter by modification code
+    modkit_df = modkit_df[modkit_df['mod_code'] == fivemc_code]
+
+    # Rename and normalize score column
+    modkit_df = modkit_df.rename(columns={'chrom': 'chr', 'chromStart': 'reference_pos', 'percent_modified': 'score'})
+    modkit_df['score'] /= 100  # Convert from percentage to decimal fraction
+
+    # Drop unnecessary columns
+    modkit_df.drop(columns=['mod_code', 'thickStart', 'thickEnd', 'color', 'valid_cov', 'n_mod', "n_canonical",
+                            "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"], inplace=True)
+
+    # Remove invalid positions
+    modkit_df = modkit_df[(modkit_df['reference_pos'] != -1) & (modkit_df['chr'] != '.')]
+
+    # Load probes file
+    probes_df = read_probes_file(probes_file)
+
+    # Ensure chromosome names match
+    probes_df['chr'] = probes_df['chr'].astype(str)  # Make sure probes are strings
+    modkit_df['chr'] = modkit_df['chr'].astype(str).str.replace('^chr', '', regex=True)  # Remove "chr" prefix
+    
+    # Print to verify
+    #print("Normalized Chromosomes in probes:", np.unique(probes_df['chr']))
+    #print("Normalized Chromosomes in modkit:", np.unique(modkit_df['chr']))
+
+    
+    # Copy probes data for methylation processing
+    probes_methyl_df = deepcopy(probes_df)
+    
+
+    # Get unique chromosomes
+    chromosomes = np.unique(probes_df['chr'].astype(str))
+
+    # Initialize methylation count columns
+    probes_methyl_df['methylation_calls'] = 0
+    probes_methyl_df['unmethylation_calls'] = 0
+    probes_methyl_df['total_calls'] = 0
+
+    # Process each chromosome
+    calls_per_probe = []
+    for chrom in chromosomes:
+        chrom_str = str(chrom)  # Ensure correct format
+
+        # Efficient filtering
+        probe_mask = probes_methyl_df['chr'] == chrom_str
+        methyl_mask = modkit_df['chr'] == chrom_str
+
+        if probe_mask.sum() == 0 or methyl_mask.sum() == 0:
+            continue  # Skip if no relevant data
+
+        calls_per_probe_chr = map_methyl_calls_to_probes_chr(
+            probes_df=probes_methyl_df.loc[probe_mask].copy(),
+            methyl_calls_per_read=modkit_df.loc[methyl_mask].copy(),
+            margin=margin,
+            neg_threshold=neg_threshold,
+            pos_threshold=pos_threshold,
+        )
+
+        calls_per_probe.append(calls_per_probe_chr)
+
+        calls = calls_per_probe_chr['total_calls'].sum()
+        logging.debug(f"Found {calls} methylation array sites on chromosome {chrom_str}")
+
+    # Ensure we have data before concatenation
+    if not calls_per_probe:
+        logging.warning("No methylation data found matching the probes.")
+        return pd.DataFrame()
+
+    # Merge all results efficiently
+    calls_per_probe = pd.concat(calls_per_probe, ignore_index=True)
+
+    # Save intermediate output
+    calls_per_probe.to_csv(output_file + '.tmp', header=True, index=False, sep='\t')
+
+    # Rename columns for the final output format
+    calls_per_probe.rename(columns={
+        'chr': 'chrom', 'start': 'chromStart', 'end': 'chromEnd',
+        'ID_REF': 'probe_id', 'methylation_calls': 'methylation_call'
+    }, inplace=True)
+
+    # Filter out rows with zero total_calls
+    calls_per_probe = calls_per_probe[calls_per_probe['total_calls'] > 0]
+
+    # Select final output columns
+    calls_per_probe = calls_per_probe[['chrom', 'chromStart', 'chromEnd', 'methylation_call', 'probe_id']]
+
+    # Save final processed file
+    calls_per_probe.to_csv(output_file, header=True, index=False, sep='\t')
+
+    return calls_per_probe
+
+def predict_sample_from_dataframe(
+    bed_df: pd.DataFrame,
+    #model_file: str,
+    #output_dir: str,
+    sample_name: str = "sample",
+    plot_results: bool = False,
+):
+    """
+    Runs `predict_sample` using a DataFrame instead of a BED file.
+
+    Parameters:
+        bed_df (pd.DataFrame): The BED file data as a DataFrame.
+        model_file (str): Path to the trained model file.
+        #output_dir (str): Directory to save results.
+        #sample_name (str): Name identifier for output files.
+        plot_results (bool): Whether to generate a plot.
+    
+    Returns:
+        pd.DataFrame: The prediction results.
+    """
+    # Ensure output directory exists
+    #os.makedirs(output_dir, exist_ok=True)
+    modelfile = os.path.join(
+            os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
+        )
+    
+    # Validate and load model
+    model_path = get_model_path(modelfile)
+    if not validate_model_file(modelfile):
+        raise ValueError(f"Invalid model file: {modelfile}")
+
+    logging.info(f"Loading model from {modelfile}...")
+    inference_session, probes_df, decoding_dict, temperatures, merge_dict = load_model(model_path)
+
+    # Save DataFrame as a temporary BED file
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".bed") as tmp_bed:
+        temp_bed_file = tmp_bed.name
+        bed_df.to_csv(temp_bed_file, sep="\t", index=False, header=True)
+
+    # Run prediction directly on the DataFrame
+    logging.info("Running prediction on the provided DataFrame...")
+    prediction_df = predict_sample(
+        inference_session=inference_session,
+        bed_file=temp_bed_file,  
+        decoding_dict=deepcopy(decoding_dict),
+        probes_df=probes_df,
+        temperatures=temperatures,
+        merge_dict=merge_dict,
+    )
+
+    # Save results as CSV
+    #output_csv = os.path.join(output_dir, f"{sample_name}_prediction.csv")
+    #logging.info(f"Saving predictions to {output_csv}")
+    #prediction_df.to_csv(output_csv, index=False)
+    """
+    # Plot results if requested
+    if plot_results:
+        output_pdf = os.path.join(output_dir, f"{sample_name}_prediction.pdf")
+        logging.info(f"Plotting results to {output_pdf}")
+
+        with zipfile.ZipFile(model_path, 'r') as zipf:
+            try:
+                color_dict = json.load(zipf.open('colors.json'))
+            except FileNotFoundError:
+                color_dict = None  # No color dictionary in model
+
+        plot_prediction(prediction_df=prediction_df, color_dict=color_dict, output_file=output_pdf)
+    """
+    return prediction_df
+
+
+def map_methyl_calls_to_probes_chr(
+    probes_df: pd.DataFrame,
+    methyl_calls_per_read: pd.DataFrame,
+    margin: int,
+    neg_threshold: float,
+    pos_threshold: float,
+) -> pd.DataFrame:
+    """Maps calls per read to probe locations in a chromosome using NumPy for performance."""
+
+    # Convert Pandas DataFrames to NumPy arrays for performance
+    probes_start = probes_df['start'].to_numpy()
+    methyl_pos = methyl_calls_per_read['reference_pos'].to_numpy()
+    scores = methyl_calls_per_read['score'].to_numpy()
+
+    # Define search ranges
+    starts = probes_start - margin
+    ends = starts + 2 * margin + 1
+
+    # Vectorized binary search
+    s = np.searchsorted(methyl_pos, starts, side='left')
+    n = np.searchsorted(methyl_pos, ends, side='right')
+
+    # Filter where matches exist
+    valid_idx = s != n
+    s, n, valid_idx = s[valid_idx], n[valid_idx], np.nonzero(valid_idx)[0]
+
+    # Initialize call counters
+    methylation_calls = np.zeros(len(probes_df), dtype=int)
+    unmethylation_calls = np.zeros(len(probes_df), dtype=int)
+
+    # Vectorized processing
+    for idx, (ss, nn) in enumerate(zip(s, n)):
+        current_scores = scores[ss:nn]
+        bin_scores = np.zeros_like(current_scores)
+        bin_scores[current_scores > pos_threshold] = 1
+        bin_scores[current_scores < neg_threshold] = -1
+
+        if len(bin_scores[bin_scores != 0]) > 0:
+            final_score = int(np.median(bin_scores[bin_scores != 0]))
+            if final_score == 1:
+                methylation_calls[valid_idx[idx]] += 1
+            elif final_score == -1:
+                unmethylation_calls[valid_idx[idx]] += 1
+
+    # Assign back to DataFrame
+    probes_df['methylation_calls'] = methylation_calls
+    probes_df['unmethylation_calls'] = unmethylation_calls
+    probes_df['total_calls'] = methylation_calls + unmethylation_calls
+
+    return probes_df
 
 
 def run_probes_methyl_calls(merged_output_file, bed_output_file):
@@ -241,6 +531,12 @@ class Sturgeon_object(BaseAnalysis):
         self.dataDir = {}
         self.bedDir = {}
         self.st_num_probes = {}
+        reference_genome="hg38"
+        self.probes_file = os.path.join(
+            os.path.dirname(sturgeon.__file__), 
+            'include/static', 
+            'probes_{}.bed'.format(reference_genome)
+        )
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
@@ -325,6 +621,7 @@ class Sturgeon_object(BaseAnalysis):
                 "All",
                 self.sturgeon_df_store.iloc[-1]["number_probes"],
             )
+            
 
     async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
         """
@@ -358,134 +655,72 @@ class Sturgeon_object(BaseAnalysis):
             )
         tomerge = []
         latest_file = 0
-        while len(bamfile) > 0:
-            self.running = True
-            (file, filetime) = bamfile.pop(0)
-            if filetime > latest_file:
-                latest_file = filetime
-            tomerge.append(file)
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bams_in_processing"
-            ] += 1
-            if len(tomerge) > 100:
-                break
-
-        if latest_file:
-            currenttime = latest_file * 1000
-        else:
-            currenttime = time.time() * 1000
-
-        if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
-
-            await run.cpu_bound(pysam_cat, tempbam.name, tomerge)
-
-            file = tempbam.name
-            temp = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
-            with tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            ) as temp2:
-                await run.cpu_bound(run_modkit, file, temp.name, self.threads)
-                # Write the modkit output to the output folder
-                shutil.copyfile(temp.name, os.path.join(self.check_and_create_folder(self.output, sampleID), "modkit_sturgeon_out"))
+        if app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bam_count"
+                ] > 0:
+            if latest_file:
+                currenttime = latest_file * 1000
+            else:
+                currenttime = time.time() * 1000
                 
-                
-
-                await run.cpu_bound(run_sturgeon_inputtobed, temp.name, temp2)
-
-                # Write the contents of the temporary directory to the output folder
-                sturgeon_bed_output = self.check_and_create_folder(self.output, sampleID)
-                shutil.copytree(temp2, os.path.join(sturgeon_bed_output, "SturgeonIntermediateBed"), dirs_exist_ok=True)
-
-                calls_per_probe_file = os.path.join(
-                    temp2, "merged_probes_methyl_calls.txt"
-                )
-                merged_output_file = os.path.join(
-                    self.dataDir[sampleID].name,
-                    "_merged_probes_methyl_calls.txt",
-                )
-
-                if sampleID not in self.first_run.keys():
-                    self.first_run[sampleID] = True
-                    shutil.copyfile(calls_per_probe_file, merged_output_file)
-                else:
-                    await run.cpu_bound(
-                        run_sturgeon_merge_probes,
-                        calls_per_probe_file,
-                        merged_output_file,
-                    )
-                # Write the merged output file to the output folder
-                shutil.copyfile(merged_output_file, os.path.join(self.check_and_create_folder(self.output, sampleID), "merged_probes_methyl_calls.txt"))
+            parquet_path = os.path.join(self.check_and_create_folder(self.output, sampleID), f"{sampleID}.parquet")
+            
+            try:
+                if self.check_file_time(parquet_path):
+                    tomerge_length_file = os.path.join(self.check_and_create_folder(self.output, sampleID), "tomerge_length.txt")
+                    with open(tomerge_length_file, "r") as f:
+                        tomerge_length = int(f.readline().strip().split(": ")[1])
                     
-                
-
-                bed_output_file = os.path.join(
-                    self.bedDir[sampleID].name, "final_merged_probes_methyl_calls.bed"
-                )
-
-                await run.cpu_bound(
-                    run_probes_methyl_calls, merged_output_file, bed_output_file
-                )
-                
-                # Write the BED file to the output folder as "SturgeonBed.bed"
-                sturgeon_bed_output = os.path.join(self.check_and_create_folder(self.output, sampleID), "SturgeonBed.bed")
-                shutil.copyfile(bed_output_file, sturgeon_bed_output)
-                
-                await run.cpu_bound(
-                    run_sturgeon_predict,
-                    self.bedDir[sampleID].name,
-                    self.dataDir[sampleID].name,
-                    self.modelfile,
-                )
-                if os.path.exists(
-                    os.path.join(
-                        self.dataDir[sampleID].name,
-                        "final_merged_probes_methyl_calls_general.csv",
+                    merged_modkit_df = await run.cpu_bound(load_modkit_data, parquet_path)
+                    
+                   
+                    temp_pileup = tempfile.NamedTemporaryFile(
+                        dir=self.check_and_create_folder(self.output, sampleID)
                     )
-                ):
-                    mydf = pd.read_csv(
-                        os.path.join(
-                            self.dataDir[sampleID].name,
-                            "final_merged_probes_methyl_calls_general.csv",
+
+                    # Pass the cleaned data
+                    result_df = await run.cpu_bound(modkit_pileup_file_to_bed,
+                        merged_modkit_df,
+                        temp_pileup.name,
+                        self.probes_file
+                    )
+                    
+                    diagnosis = predict_sample_from_dataframe(result_df)
+                    self.st_num_probes[sampleID] = diagnosis.iloc[-1]["number_probes"]
+                    # lastrow = mydf.iloc[-1].drop("number_probes")
+                    mydf_to_save = diagnosis
+                    mydf_to_save["timestamp"] = currenttime
+
+                    if sampleID not in self.sturgeon_df_store:
+                        self.sturgeon_df_store[sampleID] = pd.DataFrame()
+
+                    # Exclude empty or all-NA entries before concatenation
+                    if not mydf_to_save.dropna(how="all").empty:
+                        self.sturgeon_df_store[sampleID] = pd.concat(
+                            [
+                                self.sturgeon_df_store[sampleID],
+                                mydf_to_save.set_index("timestamp"),
+                            ]
                         )
-                    )
-                else:
-                    self.running = False
-                    return
-
-                self.st_num_probes[sampleID] = mydf.iloc[-1]["number_probes"]
-                # lastrow = mydf.iloc[-1].drop("number_probes")
-                mydf_to_save = mydf
-                mydf_to_save["timestamp"] = currenttime
-
-                if sampleID not in self.sturgeon_df_store:
-                    self.sturgeon_df_store[sampleID] = pd.DataFrame()
-
-                # Exclude empty or all-NA entries before concatenation
-                if not mydf_to_save.dropna(how="all").empty:
-                    self.sturgeon_df_store[sampleID] = pd.concat(
-                        [
-                            self.sturgeon_df_store[sampleID],
-                            mydf_to_save.set_index("timestamp"),
-                        ]
-                    )
-                    self.sturgeon_df_store[sampleID].to_csv(
-                        os.path.join(
-                            self.check_and_create_folder(self.output, sampleID),
-                            "sturgeon_scores.csv",
+                        self.sturgeon_df_store[sampleID].to_csv(
+                            os.path.join(
+                                self.check_and_create_folder(self.output, sampleID),
+                                "sturgeon_scores.csv",
+                            )
                         )
-                    )
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bam_processed"
-            ] += len(tomerge)
+                    app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                        "bam_processed"
+                    ] = tomerge_length
 
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bams_in_processing"
-            ] -= len(tomerge)
+                    #app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    #    "bams_in_processing"
+                   # ] = 0
+                    #app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    #    "bam_count"
+                    #] -= tomerge_length
+                    #print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
+            except Exception as e:
+                print(e)
 
         self.running = False
 

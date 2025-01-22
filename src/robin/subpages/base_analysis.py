@@ -157,8 +157,9 @@ class BaseAnalysis:
 
         if self.file_mod_times[file_path] == current_mod_time:
             return False
-
+        
         self.file_mod_times[file_path] = current_mod_time
+        
         return True
 
     def check_and_create_folder(self, path, folder_name=None):
@@ -275,10 +276,13 @@ class BaseAnalysis:
 
         while self.bamqueue.qsize() > 0:
             bamfile, timestamp, sampleID = self.bamqueue.get()
+            
             if sampleID not in self.bams:
                 self.bams[sampleID] = []
+            
             self.bams[sampleID].append((bamfile, timestamp))
             count += 1
+            
             if sampleID not in app.storage.general[self.mainuuid]:
                 app.storage.general[self.mainuuid][sampleID] = {}
 
@@ -290,6 +294,7 @@ class BaseAnalysis:
                         bam_count=0, bam_processed=0, bams_in_processing=0
                     )
                 }
+            
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bam_count"
             ] += 1

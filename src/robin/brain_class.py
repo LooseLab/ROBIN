@@ -1189,7 +1189,7 @@ class BrainMeth:
                             "sample_id": self.sampleID,
                         }
                         if not (
-                            set(["sturgeon", "nanodx", "forest"]).issubset(set(self.exclude))
+                            set(["sturgeon", "nanodx", "pannanodx", "forest"]).issubset(set(self.exclude))
                         ):
                             with ui.tab_panel(methylationtab).classes("w-full"):
                                 with ui.card().classes("rounded w-full"):
@@ -1357,8 +1357,8 @@ class BrainMeth:
         :return: None
         """
         logging.info("Starting background BAM processing")
-        self.process_bams_tracker = ui.timer(10, self.process_bams)
-        self.process_bigbadmerge_tracker = ui.timer(10, self.process_bigbadmerge)
+        self.process_bams_tracker = app.timer(10, self.process_bams)
+        self.process_bigbadmerge_tracker = app.timer(10, self.process_bigbadmerge)
 
     def check_and_create_folder(self, path, folder_name=None):
         """
@@ -1417,21 +1417,34 @@ class BrainMeth:
             
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
-                if len(files_by_sample[sample_id]) >= 100:
+                if len(files_by_sample[sample_id]) >=5:
+                    for analysis in ["STURGEON", "NANODX", "PANNANODX", "FOREST"]:
+                        if analysis.lower() not in self.exclude:
+                            app.storage.general[self.mainuuid][sampleID][analysis]["counters"][
+                                "bams_in_processing"
+                            ] += len(files_by_sample[sample_id])
+                        
                     await self.process_sample_files(
                         sample_id, files_by_sample[sample_id], latest_files[sample_id]
                     )
+                    
                     # Clear processed files
                     files_by_sample[sample_id] = []
                     latest_files[sample_id] = 0
+                    
         
         # Process remaining files for each sample
         for sample_id, files in files_by_sample.items():
             if files:  # Only process if there are files
+                for analysis in ["STURGEON", "NANODX", "PANNANODX", "FOREST"]:
+                    if analysis.lower() not in self.exclude:
+                        app.storage.general[self.mainuuid][sampleID][analysis]["counters"][
+                            "bams_in_processing"
+                        ] += len(files_by_sample[sample_id])
+
                 await self.process_sample_files(
                     sample_id, files, latest_files[sample_id]
                 )
-
     async def process_sample_files(self, sampleID, tomerge, latest_file):
         """
         Process a batch of BAM files for a specific sample.
@@ -1447,6 +1460,23 @@ class BrainMeth:
         # Track the number of BAM files seen and merged
         num_bam_files_seen = len(tomerge)
         logging.info(f"Processing {num_bam_files_seen} BAM files for sample ID: {sampleID}")
+
+        # Write the length of the tomerge list to the output file FIRST
+        tomerge_length_file = os.path.join(self.check_and_create_folder(self.output, sampleID), "tomerge_length.txt")
+        
+        # Initialize the count
+        if os.path.exists(tomerge_length_file):
+            with open(tomerge_length_file, "r") as f:
+                current_count = int(f.readline().strip().split(": ")[1])  # Read the current count
+        else:
+            current_count = 0  # If the file doesn't exist, start from 0
+
+        # Update the count
+        new_count = current_count + len(tomerge)
+
+        # Write the updated length of the tomerge list to the output file
+        with open(tomerge_length_file, "w") as f:
+            f.write(f"Length of tomerge list: {new_count}\n")
 
         tempbam = tempfile.NamedTemporaryFile(
             dir=self.check_and_create_folder(self.output, sampleID),
@@ -1486,8 +1516,8 @@ class BrainMeth:
                 parquet_path   # Use the parquet_path for the output file
             )
 
-        # Log the number of BAM files processed
-        logging.info(f"Merged {num_bam_files_seen} BAM files into {parquet_path}")
+            # Log the number of BAM files processed
+        logging.info(f"Merged {num_bam_files_seen} BAM files into {parquet_path} for sample ID: {sampleID}")
         self.mergecounter += len(tomerge)
 
     async def process_bams(self) -> None:
@@ -1639,7 +1669,7 @@ class BrainMeth:
 
                 counter += 1
                 analyses = ["forest", "sturgeon", "nanodx", "pannanodx"]
-                if any(analysis not in self.exclude for analysis in analyses):
+                if any(analysis.lower() not in self.exclude for analysis in analyses):
                     self.bamforbigbadmerge.put([file[0], file[1], sample_id])
                 
                 if "forest" not in self.exclude:
