@@ -26,28 +26,31 @@ UNIQUE_ID: str = str(uuid.uuid4())
 
 DISCLAIMER = EXTENDED_DISCLAIMER_TEXT
 
+
 def get_user_acknowledgment():
     """
     Display the disclaimer and get user acknowledgment.
-    
+
     Returns:
         bool: True if user acknowledges, False otherwise
     """
     print("\nDISCLAIMER:", DISCLAIMER)
     print("\nTo proceed, please type 'I agree' (exactly as shown):")
-    
+
     try:
         response = input().strip()
         acknowledgment = response == "I agree"
-        
+
         if acknowledgment:
             logging.info("User acknowledged disclaimer")
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             logging.info(f"Disclaimer acknowledged at: {timestamp}")
         else:
             logging.warning("User did not properly acknowledge disclaimer")
-            print("Incorrect acknowledgment. Please run the program again and type 'I agree' to acknowledge.")
-            
+            print(
+                "Incorrect acknowledgment. Please run the program again and type 'I agree' to acknowledge."
+            )
+
         return acknowledgment
     except KeyboardInterrupt:
         print("\nAcknowledgment interrupted. Exiting.")
@@ -441,7 +444,7 @@ class Methnice:
                 minknow_connection=self.minknow_connection,
                 reference=self.reference,
                 bed_file=self.bed_file,
-                readfish_toml=self.readfish_toml
+                readfish_toml=self.readfish_toml,
             )
 
             with self.analysis_tab_pane:
@@ -451,18 +454,22 @@ class Methnice:
         """
         Async method for rendering the splash screen.
         """
-        with ((((theme.frame(
+        with theme.frame(
             "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
             smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
-        ))))):
+        ):
             self.frontpage = ui.card().classes("w-full")
             with self.frontpage:
-                ui.label("Welcome to R.O.B.I.N").classes('text-sky-600 dark:text-white').style(
-                    "font-size: 150%; font-weight: 300"
-                ).tailwind("drop-shadow", "font-bold")
+                ui.label("Welcome to R.O.B.I.N").classes(
+                    "text-sky-600 dark:text-white"
+                ).style("font-size: 150%; font-weight: 300").tailwind(
+                    "drop-shadow", "font-bold"
+                )
                 ui.label(
                     "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
-                ).classes('text-black-600 dark:text-white').style("font-size: 100%; font-weight: 300").tailwind(
+                ).classes("text-black-600 dark:text-white").style(
+                    "font-size: 100%; font-weight: 300"
+                ).tailwind(
                     "drop-shadow", "font-bold"
                 )
                 with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
@@ -485,7 +492,6 @@ class Methnice:
                             "ROBIN_logo_small.png",
                         )
                     ).classes("rounded-full w-16 h-16 ml-4")
-            
 
     async def index_page(self) -> None:
         """
@@ -837,7 +843,7 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     ),
     help="Path to the TOML file used to control readfish.",
     required=False,
-    default=None  # <-- This ensures no error when the argument is not provided
+    default=None,  # <-- This ensures no error when the argument is not provided
 )
 @click.option(
     "--experiment_duration",
@@ -912,7 +918,7 @@ def package_run(
     Entrypoint for when GUI is launched directly.
     """
     setup_logging(log_level, log_file)
-    
+
     # Get user acknowledgment before proceeding
     if not get_user_acknowledgment():
         logging.error("User did not acknowledge disclaimer. Exiting.")

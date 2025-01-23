@@ -43,7 +43,7 @@ from sturgeon.callmapping import (
 )
 import click
 from pathlib import Path
-from typing import Optional,List, Tuple
+from typing import Optional, List, Tuple
 import logging
 
 import json
@@ -54,8 +54,8 @@ from copy import deepcopy
 import numpy as np
 
 
+import sturgeon
 
-import sturgeon 
 # Sturgeon-related imports (must be installed)
 from sturgeon.utils import validate_model_file, get_model_path, read_probes_file
 from sturgeon.prediction import load_model, predict_sample
@@ -65,6 +65,7 @@ from robin import models
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
+
 
 def load_modkit_data(parquet_path):
     for attempt in range(5):  # Retry up to 5 times
@@ -78,17 +79,31 @@ def load_modkit_data(parquet_path):
     else:
         logger.debug("Failed to read Parquet file after multiple attempts.")
         return None
-     
-                   
+
     column_names = [
-        "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
-        "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
-        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail",
-        "n_diff", "n_nocall"
+        "chrom",
+        "chromStart",
+        "chromEnd",
+        "mod_code",
+        "score_bed",
+        "strand",
+        "thickStart",
+        "thickEnd",
+        "color",
+        "valid_cov",
+        "percent_modified",
+        "n_mod",
+        "n_canonical",
+        "n_othermod",
+        "n_delete",
+        "n_fail",
+        "n_diff",
+        "n_nocall",
     ]
 
     # Keep only the original 18 columns
     return merged_modkit_df[column_names]
+
 
 def modkit_pileup_file_to_bed(
     input_data,  # Accepts either a DataFrame or file path
@@ -97,7 +112,7 @@ def modkit_pileup_file_to_bed(
     margin: Optional[int] = 25,
     neg_threshold: Optional[float] = 0.3,
     pos_threshold: Optional[float] = 0.7,
-    fivemc_code: str = 'C',
+    fivemc_code: str = "C",
 ) -> pd.DataFrame:
     """Processes a modkit pileup file or DataFrame and maps methylation data to probes."""
 
@@ -110,59 +125,98 @@ def modkit_pileup_file_to_bed(
         modkit_df = input_data.copy()
     else:
         raise ValueError("input_data must be either a file path (str) or a DataFrame")
-        
+
     # Define column names
     column_names = [
-        "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
-        "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
-        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail",
-        "n_diff", "n_nocall"
+        "chrom",
+        "chromStart",
+        "chromEnd",
+        "mod_code",
+        "score_bed",
+        "strand",
+        "thickStart",
+        "thickEnd",
+        "color",
+        "valid_cov",
+        "percent_modified",
+        "n_mod",
+        "n_canonical",
+        "n_othermod",
+        "n_delete",
+        "n_fail",
+        "n_diff",
+        "n_nocall",
     ]
-    
+
     # Validate number of columns
     if modkit_df.shape[1] != len(column_names):
-        raise AssertionError(f"Invalid modkit pileup file. Expected {len(column_names)} columns, got {modkit_df.shape[1]}.")
+        raise AssertionError(
+            f"Invalid modkit pileup file. Expected {len(column_names)} columns, got {modkit_df.shape[1]}."
+        )
 
     # Assign column names
     modkit_df.columns = column_names
 
     # Filter by modification code
-    modkit_df = modkit_df[modkit_df['mod_code'] == fivemc_code]
+    modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
 
     # Rename and normalize score column
-    modkit_df = modkit_df.rename(columns={'chrom': 'chr', 'chromStart': 'reference_pos', 'percent_modified': 'score'})
-    modkit_df['score'] /= 100  # Convert from percentage to decimal fraction
+    modkit_df = modkit_df.rename(
+        columns={
+            "chrom": "chr",
+            "chromStart": "reference_pos",
+            "percent_modified": "score",
+        }
+    )
+    modkit_df["score"] /= 100  # Convert from percentage to decimal fraction
 
     # Drop unnecessary columns
-    modkit_df.drop(columns=['mod_code', 'thickStart', 'thickEnd', 'color', 'valid_cov', 'n_mod', "n_canonical",
-                            "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"], inplace=True)
+    modkit_df.drop(
+        columns=[
+            "mod_code",
+            "thickStart",
+            "thickEnd",
+            "color",
+            "valid_cov",
+            "n_mod",
+            "n_canonical",
+            "n_othermod",
+            "n_delete",
+            "n_fail",
+            "n_diff",
+            "n_nocall",
+        ],
+        inplace=True,
+    )
 
     # Remove invalid positions
-    modkit_df = modkit_df[(modkit_df['reference_pos'] != -1) & (modkit_df['chr'] != '.')]
+    modkit_df = modkit_df[
+        (modkit_df["reference_pos"] != -1) & (modkit_df["chr"] != ".")
+    ]
 
     # Load probes file
     probes_df = read_probes_file(probes_file)
 
     # Ensure chromosome names match
-    probes_df['chr'] = probes_df['chr'].astype(str)  # Make sure probes are strings
-    modkit_df['chr'] = modkit_df['chr'].astype(str).str.replace('^chr', '', regex=True)  # Remove "chr" prefix
-    
-    # Print to verify
-    #print("Normalized Chromosomes in probes:", np.unique(probes_df['chr']))
-    #print("Normalized Chromosomes in modkit:", np.unique(modkit_df['chr']))
+    probes_df["chr"] = probes_df["chr"].astype(str)  # Make sure probes are strings
+    modkit_df["chr"] = (
+        modkit_df["chr"].astype(str).str.replace("^chr", "", regex=True)
+    )  # Remove "chr" prefix
 
-    
+    # Print to verify
+    # print("Normalized Chromosomes in probes:", np.unique(probes_df['chr']))
+    # print("Normalized Chromosomes in modkit:", np.unique(modkit_df['chr']))
+
     # Copy probes data for methylation processing
     probes_methyl_df = deepcopy(probes_df)
-    
 
     # Get unique chromosomes
-    chromosomes = np.unique(probes_df['chr'].astype(str))
+    chromosomes = np.unique(probes_df["chr"].astype(str))
 
     # Initialize methylation count columns
-    probes_methyl_df['methylation_calls'] = 0
-    probes_methyl_df['unmethylation_calls'] = 0
-    probes_methyl_df['total_calls'] = 0
+    probes_methyl_df["methylation_calls"] = 0
+    probes_methyl_df["unmethylation_calls"] = 0
+    probes_methyl_df["total_calls"] = 0
 
     # Process each chromosome
     calls_per_probe = []
@@ -170,8 +224,8 @@ def modkit_pileup_file_to_bed(
         chrom_str = str(chrom)  # Ensure correct format
 
         # Efficient filtering
-        probe_mask = probes_methyl_df['chr'] == chrom_str
-        methyl_mask = modkit_df['chr'] == chrom_str
+        probe_mask = probes_methyl_df["chr"] == chrom_str
+        methyl_mask = modkit_df["chr"] == chrom_str
 
         if probe_mask.sum() == 0 or methyl_mask.sum() == 0:
             continue  # Skip if no relevant data
@@ -186,8 +240,10 @@ def modkit_pileup_file_to_bed(
 
         calls_per_probe.append(calls_per_probe_chr)
 
-        calls = calls_per_probe_chr['total_calls'].sum()
-        logging.debug(f"Found {calls} methylation array sites on chromosome {chrom_str}")
+        calls = calls_per_probe_chr["total_calls"].sum()
+        logging.debug(
+            f"Found {calls} methylation array sites on chromosome {chrom_str}"
+        )
 
     # Ensure we have data before concatenation
     if not calls_per_probe:
@@ -198,29 +254,38 @@ def modkit_pileup_file_to_bed(
     calls_per_probe = pd.concat(calls_per_probe, ignore_index=True)
 
     # Save intermediate output
-    calls_per_probe.to_csv(output_file + '.tmp', header=True, index=False, sep='\t')
+    calls_per_probe.to_csv(output_file + ".tmp", header=True, index=False, sep="\t")
 
     # Rename columns for the final output format
-    calls_per_probe.rename(columns={
-        'chr': 'chrom', 'start': 'chromStart', 'end': 'chromEnd',
-        'ID_REF': 'probe_id', 'methylation_calls': 'methylation_call'
-    }, inplace=True)
+    calls_per_probe.rename(
+        columns={
+            "chr": "chrom",
+            "start": "chromStart",
+            "end": "chromEnd",
+            "ID_REF": "probe_id",
+            "methylation_calls": "methylation_call",
+        },
+        inplace=True,
+    )
 
     # Filter out rows with zero total_calls
-    calls_per_probe = calls_per_probe[calls_per_probe['total_calls'] > 0]
+    calls_per_probe = calls_per_probe[calls_per_probe["total_calls"] > 0]
 
     # Select final output columns
-    calls_per_probe = calls_per_probe[['chrom', 'chromStart', 'chromEnd', 'methylation_call', 'probe_id']]
+    calls_per_probe = calls_per_probe[
+        ["chrom", "chromStart", "chromEnd", "methylation_call", "probe_id"]
+    ]
 
     # Save final processed file
-    calls_per_probe.to_csv(output_file, header=True, index=False, sep='\t')
+    calls_per_probe.to_csv(output_file, header=True, index=False, sep="\t")
 
     return calls_per_probe
 
+
 def predict_sample_from_dataframe(
     bed_df: pd.DataFrame,
-    #model_file: str,
-    #output_dir: str,
+    # model_file: str,
+    # output_dir: str,
     sample_name: str = "sample",
     plot_results: bool = False,
 ):
@@ -233,23 +298,25 @@ def predict_sample_from_dataframe(
         #output_dir (str): Directory to save results.
         #sample_name (str): Name identifier for output files.
         plot_results (bool): Whether to generate a plot.
-    
+
     Returns:
         pd.DataFrame: The prediction results.
     """
     # Ensure output directory exists
-    #os.makedirs(output_dir, exist_ok=True)
+    # os.makedirs(output_dir, exist_ok=True)
     modelfile = os.path.join(
-            os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
-        )
-    
+        os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
+    )
+
     # Validate and load model
     model_path = get_model_path(modelfile)
     if not validate_model_file(modelfile):
         raise ValueError(f"Invalid model file: {modelfile}")
 
     logging.info(f"Loading model from {modelfile}...")
-    inference_session, probes_df, decoding_dict, temperatures, merge_dict = load_model(model_path)
+    inference_session, probes_df, decoding_dict, temperatures, merge_dict = load_model(
+        model_path
+    )
 
     # Save DataFrame as a temporary BED file
     with tempfile.NamedTemporaryFile(delete=False, suffix=".bed") as tmp_bed:
@@ -260,7 +327,7 @@ def predict_sample_from_dataframe(
     logging.info("Running prediction on the provided DataFrame...")
     prediction_df = predict_sample(
         inference_session=inference_session,
-        bed_file=temp_bed_file,  
+        bed_file=temp_bed_file,
         decoding_dict=deepcopy(decoding_dict),
         probes_df=probes_df,
         temperatures=temperatures,
@@ -268,9 +335,9 @@ def predict_sample_from_dataframe(
     )
 
     # Save results as CSV
-    #output_csv = os.path.join(output_dir, f"{sample_name}_prediction.csv")
-    #logging.info(f"Saving predictions to {output_csv}")
-    #prediction_df.to_csv(output_csv, index=False)
+    # output_csv = os.path.join(output_dir, f"{sample_name}_prediction.csv")
+    # logging.info(f"Saving predictions to {output_csv}")
+    # prediction_df.to_csv(output_csv, index=False)
     """
     # Plot results if requested
     if plot_results:
@@ -298,17 +365,17 @@ def map_methyl_calls_to_probes_chr(
     """Maps calls per read to probe locations in a chromosome using NumPy for performance."""
 
     # Convert Pandas DataFrames to NumPy arrays for performance
-    probes_start = probes_df['start'].to_numpy()
-    methyl_pos = methyl_calls_per_read['reference_pos'].to_numpy()
-    scores = methyl_calls_per_read['score'].to_numpy()
+    probes_start = probes_df["start"].to_numpy()
+    methyl_pos = methyl_calls_per_read["reference_pos"].to_numpy()
+    scores = methyl_calls_per_read["score"].to_numpy()
 
     # Define search ranges
     starts = probes_start - margin
     ends = starts + 2 * margin + 1
 
     # Vectorized binary search
-    s = np.searchsorted(methyl_pos, starts, side='left')
-    n = np.searchsorted(methyl_pos, ends, side='right')
+    s = np.searchsorted(methyl_pos, starts, side="left")
+    n = np.searchsorted(methyl_pos, ends, side="right")
 
     # Filter where matches exist
     valid_idx = s != n
@@ -333,9 +400,9 @@ def map_methyl_calls_to_probes_chr(
                 unmethylation_calls[valid_idx[idx]] += 1
 
     # Assign back to DataFrame
-    probes_df['methylation_calls'] = methylation_calls
-    probes_df['unmethylation_calls'] = unmethylation_calls
-    probes_df['total_calls'] = methylation_calls + unmethylation_calls
+    probes_df["methylation_calls"] = methylation_calls
+    probes_df["unmethylation_calls"] = unmethylation_calls
+    probes_df["total_calls"] = methylation_calls + unmethylation_calls
 
     return probes_df
 
@@ -420,16 +487,19 @@ def run_modkit(file, temp, threads):
     try:
         # Get modkit version
         import subprocess
-        version_output = subprocess.check_output(['modkit', '--version'], text=True).strip()
+
+        version_output = subprocess.check_output(
+            ["modkit", "--version"], text=True
+        ).strip()
         version = version_output.split()[-1]  # Gets '0.4.1' from 'mod_kit 0.4.1'
-        
+
         # Parse version number
-        major, minor, *_ = version.split('.')
+        major, minor, *_ = version.split(".")
         version_num = float(f"{major}.{minor}")
-        
+
         # Choose appropriate command based on version
         extract_cmd = "extract full" if version_num >= 0.4 else "extract"
-        
+
         os.system(
             f"modkit {extract_cmd} --ignore h -t {threads} {file} {temp} "
             f"--force --suppress-progress >/dev/null 2>&1"
@@ -521,6 +591,7 @@ class Sturgeon_object(BaseAnalysis):
     st_num_probes : dict
         Dictionary tracking number of probes per sample
     """
+
     def __init__(self, *args, **kwargs):
         self.sturgeon_df_store = {}
         self.threshold = 0.05
@@ -531,11 +602,11 @@ class Sturgeon_object(BaseAnalysis):
         self.dataDir = {}
         self.bedDir = {}
         self.st_num_probes = {}
-        reference_genome="hg38"
+        reference_genome = "hg38"
         self.probes_file = os.path.join(
-            os.path.dirname(sturgeon.__file__), 
-            'include/static', 
-            'probes_{}.bed'.format(reference_genome)
+            os.path.dirname(sturgeon.__file__),
+            "include/static",
+            "probes_{}.bed".format(reference_genome),
         )
         super().__init__(*args, **kwargs)
 
@@ -555,7 +626,7 @@ class Sturgeon_object(BaseAnalysis):
         -----
         The layout is responsive and adjusts based on the MENU_BREAKPOINT value.
         """
-        self.card = ui.card().classes('dark:bg-black w-full p-2')
+        self.card = ui.card().classes("dark:bg-black w-full p-2")
         with self.card:
             with ui.grid(columns=8).classes("w-full h-auto gap-2"):
                 with ui.card().classes(
@@ -603,25 +674,28 @@ class Sturgeon_object(BaseAnalysis):
             lastrow = self.sturgeon_df_store.iloc[-1].drop("number_probes")
             lastrow_plot = lastrow.sort_values(ascending=False).head(10)
             lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-            
+
             # Update summary with new card
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    classification_text = f"Sturgeon classification: {lastrow_plot_top.index[0]}"
+                    classification_text = (
+                        f"Sturgeon classification: {lastrow_plot_top.index[0]}"
+                    )
                     self.create_summary_card(
                         classification_text=classification_text,
                         confidence_value=lastrow_plot_top.values[0],
-                        features_found=int(self.sturgeon_df_store.iloc[-1]["number_probes"])
+                        features_found=int(
+                            self.sturgeon_df_store.iloc[-1]["number_probes"]
+                        ),
                     )
-            
+
             self.update_sturgeon_plot(
                 lastrow_plot.index.to_list(),
                 list(lastrow_plot.values),
                 "All",
                 self.sturgeon_df_store.iloc[-1]["number_probes"],
             )
-            
 
     async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
         """
@@ -655,36 +729,47 @@ class Sturgeon_object(BaseAnalysis):
             )
         tomerge = []
         latest_file = 0
-        if app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bam_count"
-                ] > 0:
+        if (
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_count"
+            ]
+            > 0
+        ):
             if latest_file:
                 currenttime = latest_file * 1000
             else:
                 currenttime = time.time() * 1000
-                
-            parquet_path = os.path.join(self.check_and_create_folder(self.output, sampleID), f"{sampleID}.parquet")
-            
+
+            parquet_path = os.path.join(
+                self.check_and_create_folder(self.output, sampleID),
+                f"{sampleID}.parquet",
+            )
+
             try:
                 if self.check_file_time(parquet_path):
-                    tomerge_length_file = os.path.join(self.check_and_create_folder(self.output, sampleID), "tomerge_length.txt")
+                    tomerge_length_file = os.path.join(
+                        self.check_and_create_folder(self.output, sampleID),
+                        "tomerge_length.txt",
+                    )
                     with open(tomerge_length_file, "r") as f:
                         tomerge_length = int(f.readline().strip().split(": ")[1])
-                    
-                    merged_modkit_df = await run.cpu_bound(load_modkit_data, parquet_path)
-                    
-                   
+
+                    merged_modkit_df = await run.cpu_bound(
+                        load_modkit_data, parquet_path
+                    )
+
                     temp_pileup = tempfile.NamedTemporaryFile(
                         dir=self.check_and_create_folder(self.output, sampleID)
                     )
 
                     # Pass the cleaned data
-                    result_df = await run.cpu_bound(modkit_pileup_file_to_bed,
+                    result_df = await run.cpu_bound(
+                        modkit_pileup_file_to_bed,
                         merged_modkit_df,
                         temp_pileup.name,
-                        self.probes_file
+                        self.probes_file,
                     )
-                    
+
                     diagnosis = predict_sample_from_dataframe(result_df)
                     self.st_num_probes[sampleID] = diagnosis.iloc[-1]["number_probes"]
                     # lastrow = mydf.iloc[-1].drop("number_probes")
@@ -712,13 +797,13 @@ class Sturgeon_object(BaseAnalysis):
                         "bam_processed"
                     ] = tomerge_length
 
-                    #app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                     #    "bams_in_processing"
-                   # ] = 0
-                    #app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    #    "bam_count"
-                    #] -= tomerge_length
-                    #print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
+                # ] = 0
+                # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                #    "bam_count"
+                # ] -= tomerge_length
+                # print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
             except Exception as e:
                 print(e)
 
@@ -729,169 +814,158 @@ class Sturgeon_object(BaseAnalysis):
         Create a bar chart for displaying Sturgeon classification results.
         """
         self.echart2 = self.create_chart(title)
-        self.echart2.options.update({
-            "backgroundColor": "transparent",
-            "title": {
-                "text": title,
-                "left": "center",
-                "top": 10,
-                "textStyle": {
-                    "fontSize": 16,
-                    "fontWeight": "normal",
-                    "color": "#000000"
-                }
-            },
-            "tooltip": {
-                "trigger": "axis",
-                "axisPointer": {"type": "shadow"},
-                "formatter": "{b}: {c}%",
-                "textStyle": {"fontSize": 14}
-            },
-            "grid": {
-                "left": "5%",
-                "right": "5%",
-                "bottom": "5%",
-                "top": "25%",
-                "containLabel": True
-            },
-            "xAxis": {
-                "type": "value",
-                "min": 0,
-                "max": 100,
-                "interval": 20,
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{value}%",
-                    "color": "#666666"
+        self.echart2.options.update(
+            {
+                "backgroundColor": "transparent",
+                "title": {
+                    "text": title,
+                    "left": "center",
+                    "top": 10,
+                    "textStyle": {
+                        "fontSize": 16,
+                        "fontWeight": "normal",
+                        "color": "#000000",
+                    },
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {
-                        "color": "#E0E0E0",
-                        "type": "dashed"
+                "tooltip": {
+                    "trigger": "axis",
+                    "axisPointer": {"type": "shadow"},
+                    "formatter": "{b}: {c}%",
+                    "textStyle": {"fontSize": 14},
+                },
+                "grid": {
+                    "left": "5%",
+                    "right": "5%",
+                    "bottom": "5%",
+                    "top": "25%",
+                    "containLabel": True,
+                },
+                "xAxis": {
+                    "type": "value",
+                    "min": 0,
+                    "max": 100,
+                    "interval": 20,
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{value}%",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
+                },
+                "yAxis": {
+                    "type": "category",
+                    "inverse": True,
+                    "data": [],
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "width": 250,
+                        "overflow": "break",
+                        "interval": 0,
+                        "align": "right",
+                        "color": "#666666",
+                    },
+                },
+                "series": [
+                    {
+                        "type": "bar",
+                        "name": "Confidence",
+                        "barMaxWidth": "60%",
+                        "itemStyle": {"color": "#007AFF", "borderRadius": [0, 4, 4, 0]},
+                        "label": {
+                            "show": True,
+                            "position": "right",
+                            "formatter": "{c}%",
+                            "fontSize": 12,
+                            "color": "#666666",
+                        },
+                        "data": [],
                     }
-                }
-            },
-            "yAxis": {
-                "type": "category",
-                "inverse": True,
-                "data": [],
-                "axisLabel": {
-                    "fontSize": 12,
-                    "width": 250,
-                    "overflow": "break",
-                    "interval": 0,
-                    "align": "right",
-                    "color": "#666666"
-                }
-            },
-            "series": [{
-                "type": "bar",
-                "name": "Confidence",
-                "barMaxWidth": "60%",
-                "itemStyle": {
-                    "color": "#007AFF",
-                    "borderRadius": [0, 4, 4, 0]
-                },
-                "label": {
-                    "show": True,
-                    "position": "right",
-                    "formatter": "{c}%",
-                    "fontSize": 12,
-                    "color": "#666666"
-                },
-                "data": []
-            }]
-        })
+                ],
+            }
+        )
 
     def create_sturgeon_time_chart(self, title):
         """
         Create a time series chart for Sturgeon results.
         """
         self.sturgeon_time_chart = self.create_time_chart(title)
-        self.sturgeon_time_chart.options.update({
-            "backgroundColor": "transparent",
-            "title": {
-                "text": title,
-                "left": "center",
-                "top": 5,
-                "textStyle": {
-                    "fontSize": 16,
-                    "fontWeight": "normal",
-                    "color": "#000000"
+        self.sturgeon_time_chart.options.update(
+            {
+                "backgroundColor": "transparent",
+                "title": {
+                    "text": title,
+                    "left": "center",
+                    "top": 5,
+                    "textStyle": {
+                        "fontSize": 16,
+                        "fontWeight": "normal",
+                        "color": "#000000",
+                    },
+                    "padding": [0, 0, 20, 0],
                 },
-                "padding": [0, 0, 20, 0]
-            },
-            "tooltip": {
-                "trigger": "axis",
-                "axisPointer": {"type": "line"},
-                "textStyle": {"fontSize": 14}
-            },
-            "grid": {
-                "left": "5%",
-                "right": "5%",
-                "bottom": "5%",
-                "top": "25%",
-                "containLabel": True
-            },
-            "legend": {
-                "type": "scroll",
-                "orient": "horizontal",
-                "top": 45,
-                "width": "90%",
-                "left": "center",
-                "textStyle": {
-                    "fontSize": 12,
-                    "color": "#666666"
+                "tooltip": {
+                    "trigger": "axis",
+                    "axisPointer": {"type": "line"},
+                    "textStyle": {"fontSize": 14},
                 },
-                "pageButtonPosition": "end",
-                "pageButtonGap": 5,
-                "pageButtonItemGap": 5,
-                "pageIconColor": "#666666",
-                "pageIconInactiveColor": "#aaa",
-                "pageIconSize": 12,
-                "pageTextStyle": {
-                    "color": "#666666"
+                "grid": {
+                    "left": "5%",
+                    "right": "5%",
+                    "bottom": "5%",
+                    "top": "25%",
+                    "containLabel": True,
                 },
-                "itemGap": 25,
-                "itemWidth": 14,
-                "itemHeight": 14,
-                "selectedMode": True
-            },
-            "xAxis": {
-                "type": "time",
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{HH}:{mm}",
-                    "color": "#666666"
+                "legend": {
+                    "type": "scroll",
+                    "orient": "horizontal",
+                    "top": 45,
+                    "width": "90%",
+                    "left": "center",
+                    "textStyle": {"fontSize": 12, "color": "#666666"},
+                    "pageButtonPosition": "end",
+                    "pageButtonGap": 5,
+                    "pageButtonItemGap": 5,
+                    "pageIconColor": "#666666",
+                    "pageIconInactiveColor": "#aaa",
+                    "pageIconSize": 12,
+                    "pageTextStyle": {"color": "#666666"},
+                    "itemGap": 25,
+                    "itemWidth": 14,
+                    "itemHeight": 14,
+                    "selectedMode": True,
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {
-                        "color": "#E0E0E0",
-                        "type": "dashed"
-                    }
-                }
-            },
-            "yAxis": {
-                "type": "value",
-                "min": 0,
-                "max": 100,
-                "interval": 20,
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{value}%",
-                    "color": "#666666"
+                "xAxis": {
+                    "type": "time",
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{HH}:{mm}",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {
-                        "color": "#E0E0E0",
-                        "type": "dashed"
-                    }
-                }
+                "yAxis": {
+                    "type": "value",
+                    "min": 0,
+                    "max": 100,
+                    "interval": 20,
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{value}%",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
+                },
             }
-        })
+        )
 
     def update_sturgeon_plot(self, x, y, count, st_num_probes):
         """
@@ -910,27 +984,30 @@ class Sturgeon_object(BaseAnalysis):
         """
         # Convert values to percentages and format
         formatted_values = [float(f"{val * 100:.1f}") for val in y]
-        
+
         # Sort the data in descending order
-        sorted_indices = sorted(range(len(formatted_values)), key=lambda k: formatted_values[k], reverse=True)
+        sorted_indices = sorted(
+            range(len(formatted_values)),
+            key=lambda k: formatted_values[k],
+            reverse=True,
+        )
         sorted_values = [formatted_values[i] for i in sorted_indices]
         sorted_labels = [x[i] for i in sorted_indices]
-        
+
         # Create descriptive title with key information
         title_text = (
             f"Sturgeon Analysis Results\n"
             f"{count} samples processed • {int(st_num_probes)} probes found"
         )
-        
+
         self.echart2.options["title"]["text"] = title_text
         self.echart2.options["yAxis"]["data"] = sorted_labels
-        self.echart2.options["series"][0].update({
-            "data": sorted_values,
-            "itemStyle": {
-                "color": "#007AFF",
-                "borderRadius": [0, 4, 4, 0]
+        self.echart2.options["series"][0].update(
+            {
+                "data": sorted_values,
+                "itemStyle": {"color": "#007AFF", "borderRadius": [0, 4, 4, 0]},
             }
-        })
+        )
         self.echart2.update()
 
     def update_sturgeon_time_chart(self, datadf):
@@ -943,7 +1020,7 @@ class Sturgeon_object(BaseAnalysis):
             DataFrame containing time series data for visualization
         """
         self.sturgeon_time_chart.options["series"] = []
-        
+
         # iOS color palette for multiple series
         colors = [
             "#007AFF",  # Blue
@@ -955,48 +1032,47 @@ class Sturgeon_object(BaseAnalysis):
             "#5AC8FA",  # Light Blue
             "#4CD964",  # Light Green
         ]
-        
+
         for idx, (series, data) in enumerate(datadf.to_dict().items()):
             if series != "number_probes":
                 # Convert values to percentages
-                data_list = [[key, float(f"{value * 100:.1f}")] for key, value in data.items()]
-                self.sturgeon_time_chart.options["series"].append({
-                    "name": series,
-                    "type": "line",
-                    "smooth": True,
-                    "animation": False,
-                    "symbolSize": 6,
-                    "emphasis": {
-                        "focus": "series",
-                        "itemStyle": {
-                            "borderWidth": 2
-                        }
-                    },
-                    "endLabel": {
-                        "show": True,
-                        "formatter": "{a}: {c}%",
-                        "distance": 10,
-                        "fontSize": 12
-                    },
-                    "lineStyle": {
-                        "width": 2,
-                        "color": colors[idx % len(colors)]
-                    },
-                    "itemStyle": {
-                        "color": colors[idx % len(colors)]
-                    },
-                    "data": data_list
-                })
-        
+                data_list = [
+                    [key, float(f"{value * 100:.1f}")] for key, value in data.items()
+                ]
+                self.sturgeon_time_chart.options["series"].append(
+                    {
+                        "name": series,
+                        "type": "line",
+                        "smooth": True,
+                        "animation": False,
+                        "symbolSize": 6,
+                        "emphasis": {
+                            "focus": "series",
+                            "itemStyle": {"borderWidth": 2},
+                        },
+                        "endLabel": {
+                            "show": True,
+                            "formatter": "{a}: {c}%",
+                            "distance": 10,
+                            "fontSize": 12,
+                        },
+                        "lineStyle": {"width": 2, "color": colors[idx % len(colors)]},
+                        "itemStyle": {"color": colors[idx % len(colors)]},
+                        "data": data_list,
+                    }
+                )
+
         # Update chart title with summary
-        latest_data = datadf.iloc[-1].drop("number_probes")  # Remove number_probes from latest data
+        latest_data = datadf.iloc[-1].drop(
+            "number_probes"
+        )  # Remove number_probes from latest data
         max_confidence = latest_data.max() * 100  # Convert to percentage
         max_type = latest_data.idxmax()
         self.sturgeon_time_chart.options["title"]["text"] = (
             f"Classification Confidence Over Time\n"
             f"Current highest confidence: {max_type} ({max_confidence:.1f}%)"
         )
-        
+
         self.sturgeon_time_chart.update()
 
 

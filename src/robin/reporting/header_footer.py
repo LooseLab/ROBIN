@@ -88,29 +88,36 @@ def header_footer_canvas_factory(sample_id, centreID, styles, fonts_dir):
             # Add sample ID and centre ID with black text
             self.setFont("FiraSans", 10)
             self.setFillColor(colors.black)
-            
+
             # Calculate text widths
             sample_id_text = f"Sample ID: {sample_id}"
             centre_id_text = f"Centre ID: {centreID}" if centreID else ""
-            
+
             # Get text widths in points
             sample_id_width = self.stringWidth(sample_id_text, "FiraSans", 10)
-            
+
             # Draw Sample ID
             self.drawString(0.5 * inch, self.height - 0.9 * inch, sample_id_text)
-            
+
             # Draw Centre ID only if it exists and ensure it doesn't overlap
             if centreID:
                 # Calculate minimum spacing between IDs (0.25 inch)
                 min_spacing = 0.25 * inch
                 # Calculate x position for Centre ID
                 centre_id_x = max(
-                    0.5 * inch + sample_id_width + min_spacing,  # Right after Sample ID with minimum spacing
-                    2.75 * inch  # Original position if there's enough space
+                    0.5 * inch
+                    + sample_id_width
+                    + min_spacing,  # Right after Sample ID with minimum spacing
+                    2.75 * inch,  # Original position if there's enough space
                 )
                 # Only draw if it fits on the page (leaving 1.75 inch from right edge for logo)
-                if centre_id_x + self.stringWidth(centre_id_text, "FiraSans", 10) < self.width - 1.75 * inch:
-                    self.drawString(centre_id_x, self.height - 0.9 * inch, centre_id_text)
+                if (
+                    centre_id_x + self.stringWidth(centre_id_text, "FiraSans", 10)
+                    < self.width - 1.75 * inch
+                ):
+                    self.drawString(
+                        centre_id_x, self.height - 0.9 * inch, centre_id_text
+                    )
 
             # Footer divider line
             self.setStrokeColor(colors.HexColor("#4F9153"))  # ROBIN theme green

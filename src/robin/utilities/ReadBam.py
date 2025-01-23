@@ -20,7 +20,7 @@ def configure_logging(level=None):
     # If no level specified, use the root logger's level
     if level is None:
         level = logging.getLogger().getEffectiveLevel()
-    
+
     logger.setLevel(level)
 
     # Create a console handler if no handlers are set
@@ -84,12 +84,36 @@ class ReadBam:
             dict: A dictionary containing read statistics including counts and mean lengths.
         """
         # Calculate mean lengths
-        mean_mapped_length = self.mapped_bases / self.mapped_reads_num if self.mapped_reads_num > 0 else 0
-        mean_unmapped_length = self.unmapped_bases / self.unmapped_reads_num if self.unmapped_reads_num > 0 else 0
-        mean_pass_mapped_length = self.pass_mapped_bases / self.pass_mapped_reads_num if self.pass_mapped_reads_num > 0 else 0
-        mean_fail_mapped_length = self.fail_mapped_bases / self.fail_mapped_reads_num if self.fail_mapped_reads_num > 0 else 0
-        mean_pass_unmapped_length = self.pass_unmapped_bases / self.pass_unmapped_reads_num if self.pass_unmapped_reads_num > 0 else 0
-        mean_fail_unmapped_length = self.fail_unmapped_bases / self.fail_unmapped_reads_num if self.fail_unmapped_reads_num > 0 else 0
+        mean_mapped_length = (
+            self.mapped_bases / self.mapped_reads_num
+            if self.mapped_reads_num > 0
+            else 0
+        )
+        mean_unmapped_length = (
+            self.unmapped_bases / self.unmapped_reads_num
+            if self.unmapped_reads_num > 0
+            else 0
+        )
+        mean_pass_mapped_length = (
+            self.pass_mapped_bases / self.pass_mapped_reads_num
+            if self.pass_mapped_reads_num > 0
+            else 0
+        )
+        mean_fail_mapped_length = (
+            self.fail_mapped_bases / self.fail_mapped_reads_num
+            if self.fail_mapped_reads_num > 0
+            else 0
+        )
+        mean_pass_unmapped_length = (
+            self.pass_unmapped_bases / self.pass_unmapped_reads_num
+            if self.pass_unmapped_reads_num > 0
+            else 0
+        )
+        mean_fail_unmapped_length = (
+            self.fail_unmapped_bases / self.fail_unmapped_reads_num
+            if self.fail_unmapped_reads_num > 0
+            else 0
+        )
 
         return {
             "mapped_reads": self.mapped_reads,
@@ -116,7 +140,7 @@ class ReadBam:
             "mean_pass_mapped_length": mean_pass_mapped_length,
             "mean_fail_mapped_length": mean_fail_mapped_length,
             "mean_pass_unmapped_length": mean_pass_unmapped_length,
-            "mean_fail_unmapped_length": mean_fail_unmapped_length
+            "mean_fail_unmapped_length": mean_fail_unmapped_length,
         }
 
     def get_rg_tags(self) -> Optional[Tuple[Optional[str], ...]]:
@@ -231,25 +255,29 @@ class ReadBam:
 
             for read in self.sam_file.fetch(until_eof=True):
                 # Extract RG tag and check for barcode
-                if read.has_tag('RG') and not barcode_found:
-                    rg_tag = read.get_tag('RG')
+                if read.has_tag("RG") and not barcode_found:
+                    rg_tag = read.get_tag("RG")
                     # Check if RG tag ends with _barcodeNN where NN is 01-96
-                    barcode_match = re.search(r'_barcode(\d{1,2})$', rg_tag)
+                    barcode_match = re.search(r"_barcode(\d{1,2})$", rg_tag)
                     if barcode_match and bam_read.sample_id:
                         barcode_num = int(barcode_match.group(1))
                         if 1 <= barcode_num <= 96:
                             barcode_str = f"_barcode{barcode_num:02d}"
                             if not bam_read.sample_id.endswith(barcode_str):
-                                bam_read.sample_id = f"{bam_read.sample_id}{barcode_str}"
+                                bam_read.sample_id = (
+                                    f"{bam_read.sample_id}{barcode_str}"
+                                )
                                 barcode_found = True
-                                logger.info(f"Updated sample_id to: {bam_read.sample_id}")
+                                logger.info(
+                                    f"Updated sample_id to: {bam_read.sample_id}"
+                                )
 
                 read_length = read.query_length if read.query_length else 0
-                
+
                 if not read.is_secondary:  # Only process primary alignments
                     if read.query_name not in readset:
                         readset.add(read.query_name)
-                        
+
                         if not read.is_unmapped:
                             mapped_readset.add(read.query_name)
                             self.mapped_bases += read_length
@@ -268,7 +296,7 @@ class ReadBam:
                             else:
                                 self.fail_unmapped_bases += read_length
                                 self.fail_unmapped_reads_num += 1
-                        
+
                         if read_length > 0:
                             self.yield_tracking += read_length
 

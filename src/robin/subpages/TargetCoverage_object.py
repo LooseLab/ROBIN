@@ -67,6 +67,7 @@ decompress_gzip_file(
     os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), "clinvar.vcf.gz")
 )
 
+
 def process_annotations(record: dict) -> dict:
     """
     Process VCF record annotations into structured data.
@@ -161,6 +162,7 @@ def process_annotations(record: dict) -> dict:
                 rec_dict[mykey] = myvalue
     return ann_dict, rec_dict
 
+
 def parse_vcf(vcf_file):
     """
     Parse and process a VCF file into a pandas DataFrame.
@@ -241,6 +243,7 @@ def parse_vcf(vcf_file):
             except Exception as e:
                 print(e)
                 sys.exit(1)
+
 
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, showerrors):
     """
@@ -324,6 +327,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
         parse_vcf(f"{workdirout}/snpsift_output.vcf")
         parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
 
+
 def get_covdfs(bamfile):
     """
     Extract coverage information from a BAM file.
@@ -375,13 +379,16 @@ def get_covdfs(bamfile):
         return None
     return newcovdf, bedcovdf
 
+
 def subset_bam(bamfile, targets, output):
     pysam.view("-L", f"{targets}", "-o", f"{output}", f"{bamfile}")
+
 
 def sort_bam(bamfile, output, threads):
     pysam.sort(f"-@{threads}", "-o", output, bamfile)
     pysam.index(f"{output}", f"{output}.bai")
     print(f"Sorted bam file saved as {output}")
+
 
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
     merged_df = pd.merge(
@@ -416,6 +423,7 @@ def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
     merged_bed_df.drop(columns=["bases_df1", "bases_df2"], inplace=True)
     return merged_df, merged_bed_df
 
+
 def run_bedtools(bamfile, bedfile, tempbamfile):
     """
     This function extracts the target sites from the bamfile.
@@ -425,6 +433,7 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
         pysam.index(tempbamfile)
     except Exception as e:
         print(e)
+
 
 class TargetCoverage(BaseAnalysis):
     """
@@ -575,29 +584,35 @@ class TargetCoverage(BaseAnalysis):
     def setup_ui(self):
         if self.summary:
             with self.summary:
-                with ui.card().classes('w-full p-4 mb-4'):
-                    with ui.row().classes('w-full items-center justify-between'):
+                with ui.card().classes("w-full p-4 mb-4"):
+                    with ui.row().classes("w-full items-center justify-between"):
                         # Left side - Coverage Status
-                        with ui.column().classes('gap-2'):
-                            ui.label("Target Coverage Analysis").classes('text-lg font-medium')
-                            with ui.row().classes('items-center gap-2'):
-                                ui.label("Status: Awaiting Data").classes('text-gray-600')
-                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+                        with ui.column().classes("gap-2"):
+                            ui.label("Target Coverage Analysis").classes(
+                                "text-lg font-medium"
+                            )
+                            with ui.row().classes("items-center gap-2"):
+                                ui.label("Status: Awaiting Data").classes(
+                                    "text-gray-600"
+                                )
+                                ui.label("--").classes(
+                                    "px-2 py-1 rounded bg-gray-100 text-gray-600"
+                                )
 
                         # Right side - Coverage metrics
-                        with ui.column().classes('gap-2 text-right'):
-                            ui.label("Coverage Details").classes('font-medium')
-                            ui.label("Targets Analyzed: --").classes('text-gray-600')
-                            ui.label("Average Coverage: --").classes('text-gray-600')
+                        with ui.column().classes("gap-2 text-right"):
+                            ui.label("Coverage Details").classes("font-medium")
+                            ui.label("Targets Analyzed: --").classes("text-gray-600")
+                            ui.label("Average Coverage: --").classes("text-gray-600")
 
                     # Bottom row - Information
-                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                    with ui.row().classes(
+                        "w-full mt-4 text-sm text-gray-500 justify-center"
+                    ):
                         ui.label("Coverage analysis of target regions")
 
-        with ui.card().classes("w-full"):
-            ui.label("Current coverage estimates: Unknown")
         with ui.card().classes("w-full p-2"):
-            ui.label("Coverage Data").classes('text-sky-600 dark:text-white').style(
+            ui.label("Coverage Data").classes("text-sky-600 dark:text-white").style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.grid(columns=2).classes("w-full h-auto gap-2"):
@@ -611,25 +626,29 @@ class TargetCoverage(BaseAnalysis):
                 ):
                     self.create_coverage_plot_targets("Target Coverage")
         with ui.card().classes("w-full p-2"):
-            ui.label("Target Outliers").classes('text-sky-600 dark:text-white').style(
+            ui.label("Target Outliers").classes("text-sky-600 dark:text-white").style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.column().classes("w-full"):
                 with ui.card().classes("w-full p-2"):
                     self.create_target_boxplot()
         with ui.card().classes("w-full p-2"):
-            ui.label("Coverage over time").classes('text-sky-600 dark:text-white').style(
-                "font-size: 150%; font-weight: 300"
-            ).tailwind("drop-shadow", "font-bold")
+            ui.label("Coverage over time").classes(
+                "text-sky-600 dark:text-white"
+            ).style("font-size: 150%; font-weight: 300").tailwind(
+                "drop-shadow", "font-bold"
+            )
             with ui.column().classes("w-full"):
                 with ui.card().classes("w-full p-2"):
                     self.create_coverage_time_chart()
         with ui.card().classes("w-full"):
-            ui.label("Coverage over targets").classes('text-sky-600 dark:text-white').style(
-                "font-size: 150%; font-weight: 300"
-            ).tailwind("drop-shadow", "font-bold")
+            ui.label("Coverage over targets").classes(
+                "text-sky-600 dark:text-white"
+            ).style("font-size: 150%; font-weight: 300").tailwind(
+                "drop-shadow", "font-bold"
+            )
             self.targ_df = ui.row().classes("w-full").style("height: 900px")
-        ui.label("IGV visualisations").classes('text-sky-600 dark:text-white').style(
+        ui.label("IGV visualisations").classes("text-sky-600 dark:text-white").style(
             "font-size: 150%; font-weight: 300"
         ).tailwind("drop-shadow", "font-bold")
         self.igvvizcard = (
@@ -644,7 +663,7 @@ class TargetCoverage(BaseAnalysis):
                     self.igvelem = ui.element("div").classes("w-full")
 
         with ui.card().classes("w-full"):
-            ui.label("Candidate SNPs").classes('text-sky-600 dark:text-white').style(
+            ui.label("Candidate SNPs").classes("text-sky-600 dark:text-white").style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
@@ -652,12 +671,14 @@ class TargetCoverage(BaseAnalysis):
                     ui.card().tight().classes("w-full overflow-x-auto")
                 )
                 with self.SNPplaceholder:
-                    with ui.column().classes('gap-2'):
-                        ui.label("Awaiting SNP Data").classes('text-lg font-medium')
-                        ui.label("Candidate SNPs will be displayed here when available. SNPs are called based on available data at that time.").classes('text-gray-600')
+                    with ui.column().classes("gap-2"):
+                        ui.label("Awaiting SNP Data").classes("text-lg font-medium")
+                        ui.label(
+                            "Candidate SNPs will be displayed here when available. SNPs are called based on available data at that time."
+                        ).classes("text-gray-600")
                 # self.SNPview = SNPview(self.SNPplaceholder)
                 # ui.timer(0.1,lambda: self.SNPview.renderme(), once=True)
-            ui.label("Candidate IN/DELs").classes('text-sky-600 dark:text-white').style(
+            ui.label("Candidate IN/DELs").classes("text-sky-600 dark:text-white").style(
                 "font-size: 150%; font-weight: 300"
             ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("w-full"):
@@ -666,9 +687,11 @@ class TargetCoverage(BaseAnalysis):
                 )
 
                 with self.INDELplaceholder:
-                    with ui.column().classes('gap-2'):
-                        ui.label("Awaiting INDEL Data").classes('text-lg font-medium')
-                        ui.label("Candidate IN/DELs will be displayed here when available. IN/DELs are called based on available data at that time.").classes('text-gray-600')
+                    with ui.column().classes("gap-2"):
+                        ui.label("Awaiting INDEL Data").classes("text-lg font-medium")
+                        ui.label(
+                            "Candidate IN/DELs will be displayed here when available. IN/DELs are called based on available data at that time."
+                        ).classes("text-gray-600")
                 # self.INDELview = SNPview(self.INDELplaceholder)
                 # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
 
@@ -704,14 +727,14 @@ class TargetCoverage(BaseAnalysis):
                     "backgroundColor": "transparent",
                     "textStyle": {
                         "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
-                        "fontSize": 12
+                        "fontSize": 12,
                     },
                     "grid": {
                         "left": "5%",
                         "right": "5%",
                         "bottom": "5%",
                         "top": "15%",
-                        "containLabel": True
+                        "containLabel": True,
                     },
                     "title": {
                         "text": title,
@@ -720,8 +743,8 @@ class TargetCoverage(BaseAnalysis):
                         "textStyle": {
                             "fontSize": 16,
                             "fontWeight": "500",
-                            "color": "#1D1D1F"
-                        }
+                            "color": "#1D1D1F",
+                        },
                     },
                     "toolbox": {
                         "show": True,
@@ -729,30 +752,22 @@ class TargetCoverage(BaseAnalysis):
                         "feature": {
                             "dataZoom": {
                                 "show": True,
-                                "title": {
-                                    "zoom": "Zoom",
-                                    "back": "Reset Zoom"
-                                }
+                                "title": {"zoom": "Zoom", "back": "Reset Zoom"},
                             },
-                            "restore": {
-                                "show": True,
-                                "title": "Reset"
-                            },
+                            "restore": {"show": True, "title": "Reset"},
                             "saveAsImage": {
                                 "show": True,
                                 "title": "Save Image",
-                                "pixelRatio": 2
-                            }
-                        }
+                                "pixelRatio": 2,
+                            },
+                        },
                     },
                     "tooltip": {
                         "trigger": "axis",
                         "backgroundColor": "rgba(255, 255, 255, 0.9)",
                         "borderColor": "#E5E5EA",
-                        "textStyle": {
-                            "color": "#1D1D1F"
-                        },
-                        ":formatter": "params => params.map(param => { const val = Array.isArray(param.value) ? param.value[1] : param.value; return `${param.seriesName}: ${!isNaN(val) ? Number(val).toFixed(2) : 0}x`; }).join('<br/>')"
+                        "textStyle": {"color": "#1D1D1F"},
+                        ":formatter": "params => params.map(param => { const val = Array.isArray(param.value) ? param.value[1] : param.value; return `${param.seriesName}: ${!isNaN(val) ? Number(val).toFixed(2) : 0}x`; }).join('<br/>')",
                     },
                     "xAxis": {
                         "type": "category",
@@ -761,11 +776,9 @@ class TargetCoverage(BaseAnalysis):
                             "interval": 0,
                             "rotate": 45,
                             "color": "#86868B",
-                            "fontSize": 12
+                            "fontSize": 12,
                         },
-                        "axisTick": {
-                            "alignWithLabel": True
-                        }
+                        "axisTick": {"alignWithLabel": True},
                     },
                     "yAxis": {
                         "type": "value",
@@ -773,21 +786,18 @@ class TargetCoverage(BaseAnalysis):
                         "nameTextStyle": {
                             "color": "#86868B",
                             "fontSize": 12,
-                            "padding": [0, 30, 0, 0]
+                            "padding": [0, 30, 0, 0],
                         },
                         "axisLabel": {
                             "color": "#86868B",
-                            ":formatter": "value => `${value.toFixed(2)}x`"
+                            ":formatter": "value => `${value.toFixed(2)}x`",
                         },
                         "splitLine": {
                             "show": True,
-                            "lineStyle": {
-                                "type": "dashed",
-                                "color": "#E5E5EA"
-                            }
-                        }
+                            "lineStyle": {"type": "dashed", "color": "#E5E5EA"},
+                        },
                     },
-                    "series": []
+                    "series": [],
                 }
             )
             .style("height: 350px")
@@ -819,14 +829,14 @@ class TargetCoverage(BaseAnalysis):
                     "backgroundColor": "transparent",
                     "textStyle": {
                         "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
-                        "fontSize": 12
+                        "fontSize": 12,
                     },
                     "grid": {
                         "left": "5%",
                         "right": "5%",
                         "bottom": "5%",
                         "top": "15%",
-                        "containLabel": True
+                        "containLabel": True,
                     },
                     "title": {
                         "text": title,
@@ -835,8 +845,8 @@ class TargetCoverage(BaseAnalysis):
                         "textStyle": {
                             "fontSize": 16,
                             "fontWeight": "500",
-                            "color": "#1D1D1F"
-                        }
+                            "color": "#1D1D1F",
+                        },
                     },
                     "toolbox": {
                         "show": True,
@@ -844,37 +854,27 @@ class TargetCoverage(BaseAnalysis):
                         "feature": {
                             "dataZoom": {
                                 "show": True,
-                                "title": {
-                                    "zoom": "Zoom",
-                                    "back": "Reset Zoom"
-                                }
+                                "title": {"zoom": "Zoom", "back": "Reset Zoom"},
                             },
-                            "restore": {
-                                "show": True,
-                                "title": "Reset"
-                            },
+                            "restore": {"show": True, "title": "Reset"},
                             "saveAsImage": {
                                 "show": True,
                                 "title": "Save Image",
-                                "pixelRatio": 2
-                            }
-                        }
+                                "pixelRatio": 2,
+                            },
+                        },
                     },
                     "tooltip": {
                         "trigger": "axis",
                         "backgroundColor": "rgba(255, 255, 255, 0.9)",
                         "borderColor": "#E5E5EA",
-                        "textStyle": {
-                            "color": "#1D1D1F"
-                        },
-                        ":formatter": "params => params.map(param => { const val = Array.isArray(param.value) ? param.value[1] : param.value; return `${param.seriesName}: ${!isNaN(val) ? Number(val).toFixed(2) : 0}x`; }).join('<br/>')"
+                        "textStyle": {"color": "#1D1D1F"},
+                        ":formatter": "params => params.map(param => { const val = Array.isArray(param.value) ? param.value[1] : param.value; return `${param.seriesName}: ${!isNaN(val) ? Number(val).toFixed(2) : 0}x`; }).join('<br/>')",
                     },
                     "legend": {
                         "data": ["Off Target", "On Target"],
                         "top": 50,
-                        "textStyle": {
-                            "color": "#86868B"
-                        }
+                        "textStyle": {"color": "#86868B"},
                     },
                     "xAxis": {
                         "type": "category",
@@ -883,11 +883,9 @@ class TargetCoverage(BaseAnalysis):
                             "interval": 0,
                             "rotate": 45,
                             "color": "#86868B",
-                            "fontSize": 12
+                            "fontSize": 12,
                         },
-                        "axisTick": {
-                            "alignWithLabel": True
-                        }
+                        "axisTick": {"alignWithLabel": True},
                     },
                     "yAxis": {
                         "type": "value",
@@ -895,21 +893,18 @@ class TargetCoverage(BaseAnalysis):
                         "nameTextStyle": {
                             "color": "#86868B",
                             "fontSize": 12,
-                            "padding": [0, 30, 0, 0]
+                            "padding": [0, 30, 0, 0],
                         },
                         "axisLabel": {
                             "color": "#86868B",
-                            ":formatter": "value => `${value.toFixed(2)}x`"
+                            ":formatter": "value => `${value.toFixed(2)}x`",
                         },
                         "splitLine": {
                             "show": True,
-                            "lineStyle": {
-                                "type": "dashed",
-                                "color": "#E5E5EA"
-                            }
-                        }
+                            "lineStyle": {"type": "dashed", "color": "#E5E5EA"},
+                        },
                     },
-                    "series": []
+                    "series": [],
                 }
             )
             .style("height: 350px")
@@ -937,14 +932,14 @@ class TargetCoverage(BaseAnalysis):
                     "backgroundColor": "transparent",
                     "textStyle": {
                         "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
-                        "fontSize": 12
+                        "fontSize": 12,
                     },
                     "grid": {
                         "left": "5%",
                         "right": "5%",
                         "bottom": "5%",
                         "top": "15%",
-                        "containLabel": True
+                        "containLabel": True,
                     },
                     "title": {
                         "text": "Coverage Over Time",
@@ -953,8 +948,8 @@ class TargetCoverage(BaseAnalysis):
                         "textStyle": {
                             "fontSize": 16,
                             "fontWeight": "500",
-                            "color": "#1D1D1F"
-                        }
+                            "color": "#1D1D1F",
+                        },
                     },
                     "toolbox": {
                         "show": True,
@@ -962,38 +957,30 @@ class TargetCoverage(BaseAnalysis):
                         "feature": {
                             "dataZoom": {
                                 "show": True,
-                                "title": {
-                                    "zoom": "Zoom",
-                                    "back": "Reset Zoom"
-                                }
+                                "title": {"zoom": "Zoom", "back": "Reset Zoom"},
                             },
-                            "restore": {
-                                "show": True,
-                                "title": "Reset"
-                            },
+                            "restore": {"show": True, "title": "Reset"},
                             "saveAsImage": {
                                 "show": True,
                                 "title": "Save Image",
-                                "pixelRatio": 2
-                            }
-                        }
+                                "pixelRatio": 2,
+                            },
+                        },
                     },
                     "tooltip": {
                         "trigger": "axis",
                         "backgroundColor": "rgba(255, 255, 255, 0.9)",
                         "borderColor": "#E5E5EA",
-                        "textStyle": {
-                            "color": "#1D1D1F"
-                        },
-                        ":formatter": "params => params.map(param => { const val = Array.isArray(param.value) ? param.value[1] : param.value; return `${param.seriesName}: ${!isNaN(val) ? Number(val).toFixed(2) : 0}x`; }).join('<br/>')"
+                        "textStyle": {"color": "#1D1D1F"},
+                        ":formatter": "params => params.map(param => { const val = Array.isArray(param.value) ? param.value[1] : param.value; return `${param.seriesName}: ${!isNaN(val) ? Number(val).toFixed(2) : 0}x`; }).join('<br/>')",
                     },
                     "xAxis": {
                         "type": "time",
                         "axisLabel": {
                             "color": "#86868B",
                             "fontSize": 12,
-                            "formatter": "{HH}:{mm}:{ss}"
-                        }
+                            "formatter": "{HH}:{mm}:{ss}",
+                        },
                     },
                     "yAxis": {
                         "type": "value",
@@ -1001,19 +988,16 @@ class TargetCoverage(BaseAnalysis):
                         "nameTextStyle": {
                             "color": "#86868B",
                             "fontSize": 12,
-                            "padding": [0, 30, 0, 0]
+                            "padding": [0, 30, 0, 0],
                         },
                         "axisLabel": {
                             "color": "#86868B",
-                            ":formatter": "value => `${value.toFixed(2)}x`"
+                            ":formatter": "value => `${value.toFixed(2)}x`",
                         },
                         "splitLine": {
                             "show": True,
-                            "lineStyle": {
-                                "type": "dashed",
-                                "color": "#E5E5EA"
-                            }
-                        }
+                            "lineStyle": {"type": "dashed", "color": "#E5E5EA"},
+                        },
                     },
                     "series": [
                         {
@@ -1024,20 +1008,15 @@ class TargetCoverage(BaseAnalysis):
                                 "focus": "series",
                                 "itemStyle": {
                                     "color": "#0A84FF"  # iOS blue (highlighted)
-                                }
+                                },
                             },
-                            "lineStyle": {
-                                "width": 2,
-                                "color": "#007AFF"  # iOS blue
-                            },
-                            "itemStyle": {
-                                "color": "#007AFF"  # iOS blue
-                            },
+                            "lineStyle": {"width": 2, "color": "#007AFF"},  # iOS blue
+                            "itemStyle": {"color": "#007AFF"},  # iOS blue
                             "symbol": "circle",
                             "symbolSize": 6,
-                            "data": []
+                            "data": [],
                         }
-                    ]
+                    ],
                 }
             )
             .style("height: 350px")
@@ -1065,14 +1044,14 @@ class TargetCoverage(BaseAnalysis):
                     "backgroundColor": "transparent",
                     "textStyle": {
                         "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
-                        "fontSize": 12
+                        "fontSize": 12,
                     },
                     "grid": {
                         "left": "5%",
                         "right": "5%",
                         "bottom": "5%",
                         "top": "15%",
-                        "containLabel": True
+                        "containLabel": True,
                     },
                     "title": {
                         "text": "Target Coverage",
@@ -1081,8 +1060,8 @@ class TargetCoverage(BaseAnalysis):
                         "textStyle": {
                             "fontSize": 16,
                             "fontWeight": "500",
-                            "color": "#1D1D1F"
-                        }
+                            "color": "#1D1D1F",
+                        },
                     },
                     "toolbox": {
                         "show": True,
@@ -1090,21 +1069,15 @@ class TargetCoverage(BaseAnalysis):
                         "feature": {
                             "dataZoom": {
                                 "show": True,
-                                "title": {
-                                    "zoom": "Zoom",
-                                    "back": "Reset Zoom"
-                                }
+                                "title": {"zoom": "Zoom", "back": "Reset Zoom"},
                             },
-                            "restore": {
-                                "show": True,
-                                "title": "Reset"
-                            },
+                            "restore": {"show": True, "title": "Reset"},
                             "saveAsImage": {
                                 "show": True,
                                 "title": "Save Image",
-                                "pixelRatio": 2
-                            }
-                        }
+                                "pixelRatio": 2,
+                            },
+                        },
                     },
                     "dataset": [
                         {
@@ -1141,10 +1114,8 @@ class TargetCoverage(BaseAnalysis):
                         "axisPointer": {"type": "shadow"},
                         "backgroundColor": "rgba(255, 255, 255, 0.9)",
                         "borderColor": "#E5E5EA",
-                        "textStyle": {
-                            "color": "#1D1D1F"
-                        },
-                        ":formatter": "params => { const value = params.value; if (params.seriesName === 'box plot') { return `${params.name}<br/>Min: ${!isNaN(value[1]) ? Number(value[1]).toFixed(2) : 0}x<br/>Q1: ${!isNaN(value[2]) ? Number(value[2]).toFixed(2) : 0}x<br/>Median: ${!isNaN(value[3]) ? Number(value[3]).toFixed(2) : 0}x<br/>Q3: ${!isNaN(value[4]) ? Number(value[4]).toFixed(2) : 0}x<br/>Max: ${!isNaN(value[5]) ? Number(value[5]).toFixed(2) : 0}x`; } else { return `${params.seriesName}<br/>${params.name}: ${!isNaN(params.value[1]) ? Number(params.value[1]).toFixed(2) : 0}x`; } }"
+                        "textStyle": {"color": "#1D1D1F"},
+                        ":formatter": "params => { const value = params.value; if (params.seriesName === 'box plot') { return `${params.name}<br/>Min: ${!isNaN(value[1]) ? Number(value[1]).toFixed(2) : 0}x<br/>Q1: ${!isNaN(value[2]) ? Number(value[2]).toFixed(2) : 0}x<br/>Median: ${!isNaN(value[3]) ? Number(value[3]).toFixed(2) : 0}x<br/>Q3: ${!isNaN(value[4]) ? Number(value[4]).toFixed(2) : 0}x<br/>Max: ${!isNaN(value[5]) ? Number(value[5]).toFixed(2) : 0}x`; } else { return `${params.seriesName}<br/>${params.name}: ${!isNaN(params.value[1]) ? Number(params.value[1]).toFixed(2) : 0}x`; } }",
                     },
                     "dataZoom": [
                         {
@@ -1154,27 +1125,22 @@ class TargetCoverage(BaseAnalysis):
                             "start": 0,
                             "end": 100,
                             "borderColor": "#E5E5EA",
-                            "textStyle": {
-                                "color": "#86868B"
-                            }
+                            "textStyle": {"color": "#86868B"},
                         }
                     ],
                     "xAxis": {
                         "type": "category",
                         "name": "Chromosome",
                         "nameGap": 30,
-                        "nameTextStyle": {
-                            "color": "#86868B",
-                            "fontSize": 12
-                        },
+                        "nameTextStyle": {"color": "#86868B", "fontSize": 12},
                         "axisLabel": {
                             "interval": 0,
                             "rotate": 45,
                             "color": "#86868B",
-                            "fontSize": 12
+                            "fontSize": 12,
                         },
                         "splitArea": {"show": False},
-                        "splitLine": {"show": False}
+                        "splitLine": {"show": False},
                     },
                     "yAxis": {
                         "type": "value",
@@ -1182,26 +1148,22 @@ class TargetCoverage(BaseAnalysis):
                         "nameTextStyle": {
                             "color": "#86868B",
                             "fontSize": 12,
-                            "padding": [0, 30, 0, 0]
+                            "padding": [0, 30, 0, 0],
                         },
                         "axisLabel": {
                             "color": "#86868B",
-                            ":formatter": "value => `${value.toFixed(2)}x`"
+                            ":formatter": "value => `${value.toFixed(2)}x`",
                         },
-                        "splitArea": {
-                            "show": True
-                        }
+                        "splitArea": {"show": True},
                     },
                     "legend": {
                         "top": 50,
-                        "textStyle": {
-                            "color": "#86868B"
-                        },
+                        "textStyle": {"color": "#86868B"},
                         "selected": {
                             "box plot": True,
                             "outliers": True,
                             "global outliers": True,
-                            "raw data": False
+                            "raw data": False,
                         },
                     },
                     "series": [
@@ -1211,7 +1173,7 @@ class TargetCoverage(BaseAnalysis):
                             "datasetId": "raw",
                             "itemStyle": {
                                 "color": "#007AFF",  # iOS blue
-                                "borderColor": "#0A84FF"  # iOS blue (highlighted)
+                                "borderColor": "#0A84FF",  # iOS blue (highlighted)
                             },
                             "encode": {
                                 "x": "chrom",
@@ -1225,46 +1187,42 @@ class TargetCoverage(BaseAnalysis):
                             "type": "scatter",
                             "datasetId": "outliers",
                             "symbolSize": 6,
-                            "itemStyle": {
-                                "color": "#FF9F0A"  # iOS orange
-                            },
+                            "itemStyle": {"color": "#FF9F0A"},  # iOS orange
                             "label": {
                                 "show": True,
                                 "position": "right",
                                 "formatter": "{@name}",
                                 "color": "#1D1D1F",
-                                "fontSize": 12
+                                "fontSize": 12,
                             },
                             "encode": {
                                 "x": "chrom",
                                 "y": "coverage",
                                 "label": ["name"],
-                                "tooltip": ["name", "coverage"]
-                            }
+                                "tooltip": ["name", "coverage"],
+                            },
                         },
                         {
                             "name": "global outliers",
                             "type": "scatter",
                             "datasetId": "globaloutliers",
                             "symbolSize": 6,
-                            "itemStyle": {
-                                "color": "#FF453A"  # iOS red
-                            },
+                            "itemStyle": {"color": "#FF453A"},  # iOS red
                             "label": {
                                 "show": True,
                                 "position": "right",
                                 "formatter": "{@name}",
                                 "color": "#1D1D1F",
-                                "fontSize": 12
+                                "fontSize": 12,
                             },
                             "encode": {
                                 "x": "chrom",
                                 "y": "coverage",
                                 "label": ["name"],
-                                "tooltip": ["name", "coverage"]
-                            }
-                        }
-                    ]
+                                "tooltip": ["name", "coverage"],
+                            },
+                        },
+                    ],
                 }
             )
             .style("height: 500px")
@@ -1770,13 +1728,19 @@ class TargetCoverage(BaseAnalysis):
             if self.summary:
                 with self.summary:
                     self.summary.clear()
-                    with ui.card().classes('w-full p-4 mb-4'):
-                        with ui.row().classes('w-full items-center justify-between'):
+                    with ui.card().classes("w-full p-4 mb-4"):
+                        with ui.row().classes("w-full items-center justify-between"):
                             # Left side - Coverage quality assessment
-                            with ui.column().classes('gap-2'):
-                                if len(self.cov_df_main) > 0 and len(self.bedcov_df_main) > 0:
-                                    target_coverage = self.bedcov_df_main['bases'].sum() / self.bedcov_df_main['length'].sum()
-                                    
+                            with ui.column().classes("gap-2"):
+                                if (
+                                    len(self.cov_df_main) > 0
+                                    and len(self.bedcov_df_main) > 0
+                                ):
+                                    target_coverage = (
+                                        self.bedcov_df_main["bases"].sum()
+                                        / self.bedcov_df_main["length"].sum()
+                                    )
+
                                     # Determine quality level and styling
                                     if target_coverage >= 30:
                                         quality = "Excellent"
@@ -1795,33 +1759,57 @@ class TargetCoverage(BaseAnalysis):
                                         quality_color = "text-red-600"
                                         quality_bg = "bg-red-100"
 
-                                    ui.label("Coverage Analysis").classes('text-lg font-medium')
-                                    with ui.row().classes('items-center gap-2'):
-                                        ui.label(f"Quality: {quality}").classes(f'{quality_color} font-medium')
-                                        ui.label(f"{target_coverage:.2f}x").classes(f'px-2 py-1 rounded {quality_bg} {quality_color}')
+                                    ui.label("Coverage Analysis").classes(
+                                        "text-lg font-medium"
+                                    )
+                                    with ui.row().classes("items-center gap-2"):
+                                        ui.label(f"Quality: {quality}").classes(
+                                            f"{quality_color} font-medium"
+                                        )
+                                        ui.label(f"{target_coverage:.2f}x").classes(
+                                            f"px-2 py-1 rounded {quality_bg} {quality_color}"
+                                        )
 
                             # Right side - Coverage metrics
-                            with ui.column().classes('gap-2 text-right'):
+                            with ui.column().classes("gap-2 text-right"):
                                 if len(self.cov_df_main) > 0:
-                                    global_coverage = self.cov_df_main['covbases'].sum() / self.cov_df_main['endpos'].sum()
-                                    ui.label("Coverage Depths").classes('font-medium')
-                                    ui.label(f"Global Estimated Coverage: {global_coverage:.2f}x").classes('text-gray-600')
+                                    global_coverage = (
+                                        self.cov_df_main["covbases"].sum()
+                                        / self.cov_df_main["endpos"].sum()
+                                    )
+                                    ui.label("Coverage Depths").classes("font-medium")
+                                    ui.label(
+                                        f"Global Estimated Coverage: {global_coverage:.2f}x"
+                                    ).classes("text-gray-600")
                                     if len(self.bedcov_df_main) > 0:
-                                        target_coverage = self.bedcov_df_main['bases'].sum() / self.bedcov_df_main['length'].sum()
+                                        target_coverage = (
+                                            self.bedcov_df_main["bases"].sum()
+                                            / self.bedcov_df_main["length"].sum()
+                                        )
                                         enrichment = target_coverage / global_coverage
-                                        ui.label(f"Targets Estimated Coverage: {target_coverage:.2f}x").classes('text-gray-600')
-                                        ui.label(f"Estimated enrichment: {enrichment:.2f}x").classes('text-gray-600')
+                                        ui.label(
+                                            f"Targets Estimated Coverage: {target_coverage:.2f}x"
+                                        ).classes("text-gray-600")
+                                        ui.label(
+                                            f"Estimated enrichment: {enrichment:.2f}x"
+                                        ).classes("text-gray-600")
                                     else:
-                                        ui.label("Targets Estimated Coverage: Calculating....").classes('text-gray-600')
+                                        ui.label(
+                                            "Targets Estimated Coverage: Calculating...."
+                                        ).classes("text-gray-600")
                                 else:
-                                    ui.label("No data available").classes('text-gray-600')
+                                    ui.label("No data available").classes(
+                                        "text-gray-600"
+                                    )
 
                         # Bottom row - Quality thresholds legend
-                        with ui.row().classes('w-full mt-4 gap-4 text-sm justify-center'):
-                            ui.label("≥30x Excellent").classes('text-green-600')
-                            ui.label("≥20x Good").classes('text-blue-600')
-                            ui.label("≥10x Moderate").classes('text-yellow-600')
-                            ui.label("<10x Insufficient").classes('text-red-600')
+                        with ui.row().classes(
+                            "w-full mt-4 gap-4 text-sm justify-center"
+                        ):
+                            ui.label("≥30x Excellent").classes("text-green-600")
+                            ui.label("≥20x Good").classes("text-blue-600")
+                            ui.label("≥10x Moderate").classes("text-yellow-600")
+                            ui.label("<10x Insufficient").classes("text-red-600")
 
         if self.check_file_time(f"{output}/clair3/snpsift_output.vcf.csv"):
             df = pd.read_csv(

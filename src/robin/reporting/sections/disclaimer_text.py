@@ -15,8 +15,7 @@ DISCLAIMER_TEXT = (
 )
 
 EXTENDED_DISCLAIMER_TEXT = (
-    DISCLAIMER_TEXT +
-    "\n\nThe authors of this software note that:\n"
+    DISCLAIMER_TEXT + "\n\nThe authors of this software note that:\n"
     "Oxford Nanopore Technologies products are not intended for use for health assessment "
     "or to diagnose, treat, mitigate, cure, or prevent any disease or condition."
-) 
+)

@@ -13,6 +13,7 @@ from reportlab.lib.colors import HexColor, white
 from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
 
+
 class MGMTSection(ReportSection):
     """Section containing the MGMT methylation analysis."""
 
@@ -56,49 +57,65 @@ class MGMTSection(ReportSection):
                 else None
             )
             prediction_score = (
-                mgmt_results["pred"].iloc[0]
-                if "pred" in mgmt_results.columns
-                else None
+                mgmt_results["pred"].iloc[0] if "pred" in mgmt_results.columns else None
             )
 
             # Create analysis summary table
             summary_data = []
-            summary_data.append([
-                Paragraph("Methylation Status:", self.styles.styles["Normal"]),
-                Paragraph(methylation_status, 
-                         ParagraphStyle(
-                             'StatusStyle',
-                             parent=self.styles.styles["Normal"],
-                             textColor=HexColor("#2563eb") if methylation_status.lower() == "methylated" 
-                             else HexColor("#d97706"),
-                             fontName="Helvetica-Bold",
-                             fontSize=8,
-                             leading=10
-                         ))
-            ])
-            
+            summary_data.append(
+                [
+                    Paragraph("Methylation Status:", self.styles.styles["Normal"]),
+                    Paragraph(
+                        methylation_status,
+                        ParagraphStyle(
+                            "StatusStyle",
+                            parent=self.styles.styles["Normal"],
+                            textColor=(
+                                HexColor("#2563eb")
+                                if methylation_status.lower() == "methylated"
+                                else HexColor("#d97706")
+                            ),
+                            fontName="Helvetica-Bold",
+                            fontSize=8,
+                            leading=10,
+                        ),
+                    ),
+                ]
+            )
+
             if methylation_average is not None:
-                summary_data.append([
-                    Paragraph("Average Methylation:", self.styles.styles["Normal"]),
-                    Paragraph(f"{methylation_average:.1f}%", self.styles.styles["Normal"])
-                ])
-            
+                summary_data.append(
+                    [
+                        Paragraph("Average Methylation:", self.styles.styles["Normal"]),
+                        Paragraph(
+                            f"{methylation_average:.1f}%", self.styles.styles["Normal"]
+                        ),
+                    ]
+                )
+
             if prediction_score is not None:
-                summary_data.append([
-                    Paragraph("Prediction Score:", self.styles.styles["Normal"]),
-                    Paragraph(f"{prediction_score:.1f}%", self.styles.styles["Normal"])
-                ])
+                summary_data.append(
+                    [
+                        Paragraph("Prediction Score:", self.styles.styles["Normal"]),
+                        Paragraph(
+                            f"{prediction_score:.1f}%", self.styles.styles["Normal"]
+                        ),
+                    ]
+                )
 
             # Create summary table with styling
             summary_table = Table(summary_data, colWidths=[2 * inch, 1.5 * inch])
-            summary_table.setStyle(TableStyle([
-                # Inherit modern table style
-                *self.MODERN_TABLE_STYLE._cmds,
-                
-                # Preserve specific alignments
-                ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Labels left-aligned
-                ('ALIGN', (1, 0), (1, -1), 'RIGHT'),  # Values right-aligned
-            ]))
+            summary_table.setStyle(
+                TableStyle(
+                    [
+                        # Inherit modern table style
+                        *self.MODERN_TABLE_STYLE._cmds,
+                        # Preserve specific alignments
+                        ("ALIGN", (0, 0), (0, -1), "LEFT"),  # Labels left-aligned
+                        ("ALIGN", (1, 0), (1, -1), "RIGHT"),  # Values right-aligned
+                    ]
+                )
+            )
 
             self.elements.append(summary_table)
             self.elements.append(Spacer(1, 12))
@@ -106,21 +123,30 @@ class MGMTSection(ReportSection):
             # Add file sources information
             file_sources = [
                 ["Data Source", "File Location"],
-                ["MGMT Results", os.path.join(self.report.output, f"{last_seen}_mgmt.csv")],
-                ["MGMT Plot", os.path.join(self.report.output, f"{last_seen}_mgmt.png")]
+                [
+                    "MGMT Results",
+                    os.path.join(self.report.output, f"{last_seen}_mgmt.csv"),
+                ],
+                [
+                    "MGMT Plot",
+                    os.path.join(self.report.output, f"{last_seen}_mgmt.png"),
+                ],
             ]
-            
+
             # Create file sources table
             sources_table = Table(file_sources, colWidths=[2 * inch, 4 * inch])
-            sources_table.setStyle(TableStyle([
-                # Inherit modern table style
-                *self.MODERN_TABLE_STYLE._cmds,
-                
-                # Preserve specific alignments
-                ('ALIGN', (0, 0), (0, -1), 'LEFT'),  # Labels left-aligned
-                ('ALIGN', (1, 0), (1, -1), 'LEFT'),  # Values left-aligned
-            ]))
-            
+            sources_table.setStyle(
+                TableStyle(
+                    [
+                        # Inherit modern table style
+                        *self.MODERN_TABLE_STYLE._cmds,
+                        # Preserve specific alignments
+                        ("ALIGN", (0, 0), (0, -1), "LEFT"),  # Labels left-aligned
+                        ("ALIGN", (1, 0), (1, -1), "LEFT"),  # Values left-aligned
+                    ]
+                )
+            )
+
             self.elements.append(sources_table)
             self.elements.append(Spacer(1, 12))
 
@@ -131,12 +157,12 @@ class MGMTSection(ReportSection):
                     "that considers 137 most predictive CpG sites in the MGMT promoter region. "
                     "The methylation cutoff is assigned as 25%.",
                     ParagraphStyle(
-                        'Explanation',
+                        "Explanation",
                         parent=self.styles.styles["Normal"],
                         fontSize=8,
                         leading=10,
-                        textColor=HexColor("#4B5563")
-                    )
+                        textColor=HexColor("#4B5563"),
+                    ),
                 )
             )
             self.elements.append(Spacer(1, 12))
@@ -147,7 +173,7 @@ class MGMTSection(ReportSection):
                 self.elements.append(
                     Paragraph(
                         "MGMT promoter methylation plot showing methylation levels across CpG sites",
-                        self.styles.styles["Caption"]
+                        self.styles.styles["Caption"],
                     )
                 )
             else:
@@ -155,12 +181,12 @@ class MGMTSection(ReportSection):
                     Paragraph(
                         "MGMT promoter methylation plot is not available due to insufficient coverage.",
                         ParagraphStyle(
-                            'Warning',
+                            "Warning",
                             parent=self.styles.styles["Normal"],
                             textColor=HexColor("#DC2626"),
                             fontSize=8,
-                            leading=10
-                        )
+                            leading=10,
+                        ),
                     )
                 )
 
@@ -168,25 +194,21 @@ class MGMTSection(ReportSection):
             self.summary_elements.append(
                 Paragraph("MGMT Promoter Methylation", self.styles.styles["Heading3"])
             )
-            
+
             summary_text = [f"Status: {methylation_status}"]
             if methylation_average is not None:
                 summary_text.append(f"Average methylation: {methylation_average:.1f}%")
             if prediction_score is not None:
                 summary_text.append(f"Prediction score: {prediction_score:.1f}%")
-            
+
             self.summary_elements.append(
-                Paragraph(
-                    " | ".join(summary_text),
-                    self.styles.styles["Normal"]
-                )
+                Paragraph(" | ".join(summary_text), self.styles.styles["Normal"])
             )
 
         except Exception as e:
             logger.error("Error processing MGMT section: %s", str(e), exc_info=True)
             self.elements.append(
                 Paragraph(
-                    "Error processing MGMT analysis data",
-                    self.styles.styles["Normal"]
+                    "Error processing MGMT analysis data", self.styles.styles["Normal"]
                 )
             )

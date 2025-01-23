@@ -37,10 +37,6 @@ class CNVChangeDetectorTracker:
         )  # Stores CNV data per chromosome
         self.ruptures_breakpoints = {}
 
-
-
-
-
     def _calculate_scaled_proportion(self, length: int) -> int:
         """
         Calculates a scaled proportion of the genome based on the current bin width.
@@ -90,7 +86,7 @@ class CNVChangeDetectorTracker:
         for entry in local_breakpoints:
             breakpointlist.append((entry["start"], entry["end"]))
 
-        self.ruptures_breakpoints[entry['name']]=breakpointlist
+        self.ruptures_breakpoints[entry["name"]] = breakpointlist
 
         # Convert the increments dictionary to NumPy arrays for efficient processing
         positions_array = np.array(list(increments.keys()))
@@ -115,7 +111,9 @@ class CNVChangeDetectorTracker:
         # Recalculate the threshold and update BED data
         self._calculate_threshold(chromosome)
         self.coordinates[chromosome]["bed_data"] = self.get_bed_targets(chromosome)
-        self.coordinates[chromosome]["bed_data_breakpoints"] = self.get_bed_targets_breakpoints(chromosome)
+        self.coordinates[chromosome]["bed_data_breakpoints"] = (
+            self.get_bed_targets_breakpoints(chromosome)
+        )
 
     def _initialize_chromosome(self, chromosome: str, length: int) -> None:
         """
@@ -313,10 +311,7 @@ class CNVChangeDetectorTracker:
         """
         if chromosome in self.ruptures_breakpoints:
             data = self.ruptures_breakpoints[chromosome]
-            bedlist = [
-                (chromosome, start, end)
-                for start, end in data
-            ]
+            bedlist = [(chromosome, start, end) for start, end in data]
             bed_lines = [
                 f"{chrom}\t{start - self.bin_width}\t{end}\t.\t.\t+"
                 f"\n{chrom}\t{start}\t{end + self.bin_width}\t.\t.\t-"
