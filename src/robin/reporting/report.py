@@ -107,7 +107,7 @@ class RobinReport:
             DisclaimerSection(self),
         ]
 
-    def generate_report(self, report_type='detailed'):
+    def generate_report(self, report_type="detailed"):
         """Generate the complete PDF report.
 
         Args:
@@ -120,19 +120,27 @@ class RobinReport:
             logger.info("Starting report generation")
 
             # Add summary section header
-            self.elements_summary.insert(0, Paragraph(f"Summary - {self.sample_id}", self.styles.styles["Heading1"]))
+            self.elements_summary.insert(
+                0,
+                Paragraph(
+                    f"Summary - {self.sample_id}", self.styles.styles["Heading1"]
+                ),
+            )
 
             # Process each section
             for section in self.sections:
                 try:
                     section.add_content()
                     summary_elements, main_elements = section.get_elements()
-                    
+
                     # Always include summary elements
                     self.elements_summary.extend(summary_elements)
-                    
+
                     # For detailed report or if it's the disclaimer section, include main elements
-                    if report_type == 'detailed' or section.__class__.__name__ == 'DisclaimerSection':
+                    if (
+                        report_type == "detailed"
+                        or section.__class__.__name__ == "DisclaimerSection"
+                    ):
                         self.elements.extend(main_elements)
                 except Exception as e:
                     logger.error(
@@ -141,9 +149,11 @@ class RobinReport:
                     )
 
             # Add detailed analysis header and elements only for detailed reports
-            if report_type == 'detailed':
+            if report_type == "detailed":
                 self.elements.insert(0, PageBreak())
-                self.elements.insert(1, Paragraph("Detailed Analysis", self.styles.styles["Heading1"]))
+                self.elements.insert(
+                    1, Paragraph("Detailed Analysis", self.styles.styles["Heading1"])
+                )
                 self.elements.insert(2, Spacer(1, 12))
 
             # Add page break before end of report elements
@@ -152,10 +162,14 @@ class RobinReport:
 
             # Combine all elements
             logger.info("Combining elements for final PDF")
-            if report_type == 'detailed':
-                final_elements = self.elements_summary + self.elements + self.end_of_report_elements
+            if report_type == "detailed":
+                final_elements = (
+                    self.elements_summary + self.elements + self.end_of_report_elements
+                )
             else:
-                final_elements = self.elements_summary + self.elements + self.end_of_report_elements
+                final_elements = (
+                    self.elements_summary + self.elements + self.end_of_report_elements
+                )
 
             # Build the PDF
             from .header_footer import header_footer_canvas_factory
@@ -174,7 +188,7 @@ class RobinReport:
             raise
 
 
-def create_pdf(filename, output, report_type='detailed'):
+def create_pdf(filename, output, report_type="detailed"):
     """Create a PDF report from ROBIN analysis results.
 
     Args:

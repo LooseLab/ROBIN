@@ -75,12 +75,19 @@ from matplotlib import pyplot as plt
 logger = logging.getLogger(__name__)
 
 # Configure matplotlib font settings
-plt.rcParams['font.family'] = ['sans-serif']
-plt.rcParams['font.sans-serif'] = ['SF Pro Text', '-apple-system', 'BlinkMacSystemFont', 'Helvetica', 'Arial', 'sans-serif']
+plt.rcParams["font.family"] = ["sans-serif"]
+plt.rcParams["font.sans-serif"] = [
+    "SF Pro Text",
+    "-apple-system",
+    "BlinkMacSystemFont",
+    "Helvetica",
+    "Arial",
+    "sans-serif",
+]
 
 # Override DNA Features Viewer default font settings
-#GraphicRecord.default_font_family = "sans-serif"
-#GraphicFeature.default_font_family = "sans-serif"
+# GraphicRecord.default_font_family = "sans-serif"
+# GraphicFeature.default_font_family = "sans-serif"
 
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
@@ -541,35 +548,45 @@ class FusionObject(BaseAnalysis):
         """
         if self.summary:
             with self.summary:
-                with ui.card().classes('w-full p-4 mb-4'):
-                    with ui.row().classes('w-full items-center justify-between'):
+                with ui.card().classes("w-full p-4 mb-4"):
+                    with ui.row().classes("w-full items-center justify-between"):
                         # Left side - Fusion Status
-                        with ui.column().classes('gap-2'):
-                            ui.label("Gene Fusion Analysis").classes('text-lg font-medium')
-                            with ui.row().classes('items-center gap-2'):
-                                ui.label(f"Panel: {self.target_panel}").classes('text-gray-600 font-medium')
+                        with ui.column().classes("gap-2"):
+                            ui.label("Gene Fusion Analysis").classes(
+                                "text-lg font-medium"
+                            )
+                            with ui.row().classes("items-center gap-2"):
+                                ui.label(f"Panel: {self.target_panel}").classes(
+                                    "text-gray-600 font-medium"
+                                )
                                 ui.label("0").bind_text_from(
                                     self,
                                     "candidates",
-                                    backward=lambda n: f"{n} high confidence"
-                                ).classes('px-2 py-1 rounded bg-blue-100 text-blue-600')
+                                    backward=lambda n: f"{n} high confidence",
+                                ).classes("px-2 py-1 rounded bg-blue-100 text-blue-600")
 
                         # Right side - Additional metrics
-                        with ui.column().classes('gap-2 text-right'):
-                            ui.label("Analysis Details").classes('font-medium')
+                        with ui.column().classes("gap-2 text-right"):
+                            ui.label("Analysis Details").classes("font-medium")
                             ui.label("0").bind_text_from(
                                 self,
                                 "all_candidates",
-                                backward=lambda n: f"{n} low confidence fusions"
-                            ).classes('text-gray-600')
+                                backward=lambda n: f"{n} low confidence fusions",
+                            ).classes("text-gray-600")
 
                     # Bottom row - Information
-                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
-                        ui.label("Fusion candidates identified from reads with supplementary alignments")
+                    with ui.row().classes(
+                        "w-full mt-4 text-sm text-gray-500 justify-center"
+                    ):
+                        ui.label(
+                            "Fusion candidates identified from reads with supplementary alignments"
+                        )
         with ui.card().style("width: 100%"):
-            ui.label("Gene Fusion Candidates").classes('text-sky-600 dark:text-white').style(
-                "font-size: 150%; font-weight: 300"
-            ).tailwind("drop-shadow", "font-bold")
+            ui.label("Gene Fusion Candidates").classes(
+                "text-sky-600 dark:text-white"
+            ).style("font-size: 150%; font-weight: 300").tailwind(
+                "drop-shadow", "font-bold"
+            )
             ui.label(
                 "This panel identifies gene fusion candidates from the input bam files. "
                 "The panel is split into two tabs, one for gene fusions between genes within the target panel and one for genome wide fusions. "
@@ -612,14 +629,22 @@ class FusionObject(BaseAnalysis):
                         ).style("font-size: 125%; font-weight: 300")
                         self.fusionplot = ui.row()
                         with self.fusionplot.classes("w-full"):
-                            with ui.column().classes('gap-2'):
-                                ui.label("Awaiting Fusion Plot").classes('text-lg font-medium')
-                                ui.label("Plot will be displayed here when fusion data is available").classes('text-gray-600')
+                            with ui.column().classes("gap-2"):
+                                ui.label("Awaiting Fusion Plot").classes(
+                                    "text-lg font-medium"
+                                )
+                                ui.label(
+                                    "Plot will be displayed here when fusion data is available"
+                                ).classes("text-gray-600")
                         self.fusiontable = ui.row().classes("w-full")
                         with self.fusiontable:
-                            with ui.column().classes('gap-2'):
-                                ui.label("Awaiting Fusion Data").classes('text-lg font-medium')
-                                ui.label("Table will be displayed here when fusion data is available").classes('text-gray-600')
+                            with ui.column().classes("gap-2"):
+                                ui.label("Awaiting Fusion Data").classes(
+                                    "text-lg font-medium"
+                                )
+                                ui.label(
+                                    "Table will be displayed here when fusion data is available"
+                                ).classes("text-gray-600")
 
                 with ui.tab_panel(two):
                     with ui.card().style("width: 100%"):
@@ -634,14 +659,22 @@ class FusionObject(BaseAnalysis):
                         ).style("font-size: 125%; font-weight: 300")
                         self.fusionplot_all = ui.row()
                         with self.fusionplot_all.classes("w-full"):
-                            with ui.column().classes('gap-2'):
-                                ui.label("Awaiting Genome-wide Fusion Plot").classes('text-lg font-medium')
-                                ui.label("Plot will be displayed here when genome-wide fusion data is available").classes('text-gray-600')
+                            with ui.column().classes("gap-2"):
+                                ui.label("Awaiting Genome-wide Fusion Plot").classes(
+                                    "text-lg font-medium"
+                                )
+                                ui.label(
+                                    "Plot will be displayed here when genome-wide fusion data is available"
+                                ).classes("text-gray-600")
                         self.fusiontable_all = ui.row().classes("w-full")
                         with self.fusiontable_all:
-                            with ui.column().classes('gap-2'):
-                                ui.label("Awaiting Genome-wide Fusion Data").classes('text-lg font-medium')
-                                ui.label("Table will be displayed here when genome-wide fusion data is available").classes('text-gray-600')
+                            with ui.column().classes("gap-2"):
+                                ui.label("Awaiting Genome-wide Fusion Data").classes(
+                                    "text-lg font-medium"
+                                )
+                                ui.label(
+                                    "Table will be displayed here when genome-wide fusion data is available"
+                                ).classes("text-gray-600")
 
         if self.browse:
             self.show_previous_data()
@@ -1081,10 +1114,10 @@ class FusionObject(BaseAnalysis):
                 gene_table = self.gene_table
                 with ui.pyplot(figsize=(19, 5)).classes("w-full"):
                     # Create figure with tight layout
-                    plt.rcParams['figure.constrained_layout.use'] = True
-                    plt.rcParams['figure.constrained_layout.h_pad'] = 0.05
-                    plt.rcParams['figure.constrained_layout.w_pad'] = 0.05
-                    
+                    plt.rcParams["figure.constrained_layout.use"] = True
+                    plt.rcParams["figure.constrained_layout.h_pad"] = 0.05
+                    plt.rcParams["figure.constrained_layout.w_pad"] = 0.05
+
                     num_plots = 2 * len(result)
                     num_cols = len(result)
                     num_rows = (num_plots + num_cols - 1) // num_cols
@@ -1092,11 +1125,15 @@ class FusionObject(BaseAnalysis):
                     for i, ax in enumerate(range(num_plots), start=1):
                         ax = plt.subplot(num_rows, num_cols, i)
                         # Remove extra padding around subplot
-                        ax.set_position([ax.get_position().x0, 
-                                       ax.get_position().y0, 
-                                       ax.get_position().width * 1.1,
-                                       ax.get_position().height * 1.1])
-                        
+                        ax.set_position(
+                            [
+                                ax.get_position().x0,
+                                ax.get_position().y0,
+                                ax.get_position().width * 1.1,
+                                ax.get_position().height * 1.1,
+                            ]
+                        )
+
                         row, col = divmod(i - 1, num_cols)
                         data = result.iloc[col]
 
@@ -1161,7 +1198,7 @@ class FusionObject(BaseAnalysis):
                                 ax=ax,
                                 with_ruler=False,
                                 draw_line=True,
-                                strand_in_label_threshold=4
+                                strand_in_label_threshold=4,
                             )
                             # Adjust subplot spacing
                             ax.margins(x=0.02, y=0.1)

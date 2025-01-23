@@ -16,52 +16,58 @@ from ..sections.base import ReportSection
 import logging
 import matplotlib.pyplot as plt
 import matplotlib
-matplotlib.use('Agg')
+
+matplotlib.use("Agg")
 import io
 
 logger = logging.getLogger(__name__)
+
 
 class ClassificationSection(ReportSection):
     """Section containing the methylation classification results."""
 
     def _create_time_plot(self, df, classifier_name):
         """Create a time series plot for classifier predictions.
-        
+
         Args:
             df: DataFrame containing classification data
             classifier_name: Name of the classifier
-            
+
         Returns:
             BytesIO object containing the plot image
         """
         # Drop non-classification columns
         df = df.drop(columns=["number_probes"]) if "number_probes" in df.columns else df
-        
+
         # Convert confidence values to percentages if not already
-        if classifier_name != "Random Forest":  # Random Forest is already in percentages
+        if (
+            classifier_name != "Random Forest"
+        ):  # Random Forest is already in percentages
             df = df * 100
-        
+
         # Get top classifications (those that exceed 5% at any point)
         threshold = 5
         top_classes = df.columns[df.max() > threshold]
-        
+
         # Get current highest confidence for subtitle
         last_row = df.iloc[-1]
         top_prediction = last_row.sort_values(ascending=False).head(1)
         predicted_class = top_prediction.index[0]
         confidence_value = float(top_prediction.values[0])
-        
+
         # Create the plot with white background and adjusted figure size for better spacing
-        plt.figure(figsize=(8, 5), facecolor='white')  # Increased height for better spacing
+        plt.figure(
+            figsize=(8, 5), facecolor="white"
+        )  # Increased height for better spacing
         ax = plt.gca()
-        ax.set_facecolor('white')
-        
+        ax.set_facecolor("white")
+
         # Website-like colors - extended for more classes
         colors = {
             # Sturgeon colors
             "Embryonal - HGNET - BCOR": "#34C759",  # Green
-            "Ependymal - EPN - PF B": "#FF9500",    # Orange
-            "Ependymal - EPN - RELA": "#FF2D55",    # Red
+            "Ependymal - EPN - PF B": "#FF9500",  # Orange
+            "Ependymal - EPN - RELA": "#FF2D55",  # Red
             # Additional colors for other classifications
             "color4": "#007AFF",  # Blue
             "color5": "#5856D6",  # Purple
@@ -69,71 +75,84 @@ class ClassificationSection(ReportSection):
             "color7": "#5AC8FA",  # Light Blue
             "color8": "#4CD964",  # Light Green
         }
-        
+
         # Convert index to datetime
-        df.index = pd.to_datetime(df.index, unit='ms')
-        
+        df.index = pd.to_datetime(df.index, unit="ms")
+
         # Plot each classification
         for idx, column in enumerate(top_classes):
             # Get color from map or use from additional colors
             if column in colors:
                 color = colors[column]
             else:
-                color = colors[f"color{(idx % 5) + 4}"]  # Cycle through additional colors
-                
-            plt.plot(df.index, df[column], 
-                    'o-',  # Line with circles
-                    label=column, 
-                    color=color,
-                    linewidth=1,
-                    markersize=3,
-                    markeredgewidth=0)
-        
+                color = colors[
+                    f"color{(idx % 5) + 4}"
+                ]  # Cycle through additional colors
+
+            plt.plot(
+                df.index,
+                df[column],
+                "o-",  # Line with circles
+                label=column,
+                color=color,
+                linewidth=1,
+                markersize=3,
+                markeredgewidth=0,
+            )
+
         # Add title and subtitle with better spacing
-        plt.suptitle(f'{classifier_name} Classification Confidence Over Time', 
-                    y=0.95, fontsize=10)
-        plt.title(f'Current highest confidence: {predicted_class} ({confidence_value:.1f}%)',
-                 pad=10, fontsize=9)
-        
+        plt.suptitle(
+            f"{classifier_name} Classification Confidence Over Time",
+            y=0.95,
+            fontsize=10,
+        )
+        plt.title(
+            f"Current highest confidence: {predicted_class} ({confidence_value:.1f}%)",
+            pad=10,
+            fontsize=9,
+        )
+
         # Format x-axis to show HH:MM
-        ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter('%H:%M'))
-        plt.xlabel('Time', fontsize=9, labelpad=5)
-        
+        ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%H:%M"))
+        plt.xlabel("Time", fontsize=9, labelpad=5)
+
         # Format y-axis with better spacing
-        plt.ylabel('Confidence (%)', fontsize=9, labelpad=10)
+        plt.ylabel("Confidence (%)", fontsize=9, labelpad=10)
         ax.yaxis.set_major_formatter(matplotlib.ticker.PercentFormatter(decimals=0))
-        
+
         # Customize grid
-        plt.grid(True, linestyle='--', alpha=0.2)
-        
+        plt.grid(True, linestyle="--", alpha=0.2)
+
         # Set axis ranges
         plt.ylim(0, 100)
-        
+
         # Customize legend with better positioning
-        plt.legend(bbox_to_anchor=(0, 1.15, 1, 0),
-                  loc='lower left',
-                  mode='expand',
-                  ncol=3,
-                  fontsize=8,
-                  frameon=False,
-                  markerscale=2)
-        
+        plt.legend(
+            bbox_to_anchor=(0, 1.15, 1, 0),
+            loc="lower left",
+            mode="expand",
+            ncol=3,
+            fontsize=8,
+            frameon=False,
+            markerscale=2,
+        )
+
         # Remove spines
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['left'].set_alpha(0.2)
-        ax.spines['bottom'].set_alpha(0.2)
-        
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["left"].set_alpha(0.2)
+        ax.spines["bottom"].set_alpha(0.2)
+
         # Adjust tick parameters
-        ax.tick_params(axis='both', labelsize=8)
+        ax.tick_params(axis="both", labelsize=8)
         plt.xticks(rotation=0)
-        
+
         # Adjust layout to prevent label cutoff
         plt.subplots_adjust(top=0.85, bottom=0.15, left=0.1, right=0.95)
-        
+
         # Save plot to bytes buffer with high DPI for crisp rendering
         buf = io.BytesIO()
-        plt.savefig(buf, format='png', dpi=300, bbox_inches='tight', facecolor='white')
+        plt.savefig(buf, format="png", dpi=300, bbox_inches="tight", facecolor="white")
         plt.close()
         buf.seek(0)
         return buf
@@ -144,7 +163,7 @@ class ClassificationSection(ReportSection):
         self.summary_elements.append(
             Paragraph("Methylation Classification", self.styles.styles["Heading3"])
         )
-        
+
         # Add section header
         self.elements.append(
             Paragraph("Methylation Classification", self.styles.styles["Heading2"])
@@ -156,13 +175,11 @@ class ClassificationSection(ReportSection):
             "Sturgeon": "sturgeon_scores.csv",
             "NanoDX": "nanodx_scores.csv",
             "PanNanoDX": "pannanodx_scores.csv",
-            "Random Forest": "random_forest_scores.csv"
+            "Random Forest": "random_forest_scores.csv",
         }
 
         # Add summary table of all classifications
-        summary_data = [
-            ["Classifier", "Predicted Class", "Confidence", "Status"]
-        ]
+        summary_data = [["Classifier", "Predicted Class", "Confidence", "Status"]]
 
         # Process each classifier
         for name, filename in classifiers.items():
@@ -175,7 +192,7 @@ class ClassificationSection(ReportSection):
 
                 if file_path and os.path.exists(file_path):
                     df = pd.read_csv(file_path)
-                    
+
                     # Create and add time series plot for each classifier
                     try:
                         # Set timestamp as index for the plot
@@ -184,26 +201,40 @@ class ClassificationSection(ReportSection):
                         self.add_figure(
                             plot_buf,
                             caption=f"{name} Classification Confidence Over Time",
-                            width=6*inch,
-                            height=3*inch
+                            width=6 * inch,
+                            height=3 * inch,
                         )
                         self.elements.append(Spacer(1, 12))
                     except Exception as e:
-                        logger.error(f"Error creating {name} time series plot: {str(e)}")
-                    
+                        logger.error(
+                            f"Error creating {name} time series plot: {str(e)}"
+                        )
+
                     # Continue with existing classification processing
-                    df = df.drop(columns=["timestamp"]) if "timestamp" in df.columns else df
-                    df = df.drop(columns=["number_probes"]) if "number_probes" in df.columns else df
-                    
+                    df = (
+                        df.drop(columns=["timestamp"])
+                        if "timestamp" in df.columns
+                        else df
+                    )
+                    df = (
+                        df.drop(columns=["number_probes"])
+                        if "number_probes" in df.columns
+                        else df
+                    )
+
                     # Get the last row and find top prediction
                     last_row = df.iloc[-1]
                     top_prediction = last_row.sort_values(ascending=False).head(1)
                     predicted_class = top_prediction.index[0]
                     raw_confidence = float(top_prediction.values[0])
-                    
+
                     # Normalize confidence value
-                    confidence_value = raw_confidence / 100.0 if name == "Random Forest" else raw_confidence
-                    
+                    confidence_value = (
+                        raw_confidence / 100.0
+                        if name == "Random Forest"
+                        else raw_confidence
+                    )
+
                     # Determine confidence level
                     if confidence_value >= 0.75:
                         confidence_status = "High"
@@ -216,12 +247,14 @@ class ClassificationSection(ReportSection):
                         status_color = "#DC2626"  # Red
 
                     # Add to summary table with HTML-like color formatting
-                    summary_data.append([
-                        name,
-                        predicted_class,
-                        f"{confidence_value:.1%}",
-                        f'<font color="{status_color}">{confidence_status}</font>'
-                    ])
+                    summary_data.append(
+                        [
+                            name,
+                            predicted_class,
+                            f"{confidence_value:.1%}",
+                            f'<font color="{status_color}">{confidence_status}</font>',
+                        ]
+                    )
 
             except Exception as e:
                 logger.error(f"Error processing {name} classification: {str(e)}")
@@ -233,12 +266,12 @@ class ClassificationSection(ReportSection):
             "Medium (>50%), and Low (<50%). Multiple classifiers may provide different "
             "results based on their training data and methodology.",
             ParagraphStyle(
-                'Explanation',
+                "Explanation",
                 parent=self.styles.styles["Normal"],
                 fontSize=8,
                 leading=10,
-                textColor=HexColor("#4B5563")
-            )
+                textColor=HexColor("#4B5563"),
+            ),
         )
 
         if len(summary_data) > 1:  # If we have any results
@@ -250,7 +283,9 @@ class ClassificationSection(ReportSection):
             # Add detailed results for each classifier
             self.elements.append(PageBreak())
             self.elements.append(
-                Paragraph("Detailed Classification Results", self.styles.styles["Heading2"])
+                Paragraph(
+                    "Detailed Classification Results", self.styles.styles["Heading2"]
+                )
             )
             self.elements.append(Spacer(1, 12))
 
@@ -265,15 +300,25 @@ class ClassificationSection(ReportSection):
 
                     if file_path and os.path.exists(file_path):
                         df = pd.read_csv(file_path)
-                        df = df.drop(columns=["timestamp"]) if "timestamp" in df.columns else df
-                        df = df.drop(columns=["number_probes"]) if "number_probes" in df.columns else df
-                        
+                        df = (
+                            df.drop(columns=["timestamp"])
+                            if "timestamp" in df.columns
+                            else df
+                        )
+                        df = (
+                            df.drop(columns=["number_probes"])
+                            if "number_probes" in df.columns
+                            else df
+                        )
+
                         last_row = df.iloc[-1]
                         top_predictions = last_row.sort_values(ascending=False).head(10)
-                        
+
                         # Add classifier header
                         self.elements.append(
-                            Paragraph(f"{name} Classification", self.styles.styles["Heading3"])
+                            Paragraph(
+                                f"{name} Classification", self.styles.styles["Heading3"]
+                            )
                         )
                         self.elements.append(Spacer(1, 6))
 
@@ -281,39 +326,33 @@ class ClassificationSection(ReportSection):
                         detailed_data = [["Predicted Class", "Confidence Score"]]
 
                         for class_name, score in top_predictions.items():
-                            confidence = score / 100.0 if name == "Random Forest" else score
-                            detailed_data.append([
-                                class_name,
-                                f"{confidence:.1%}"
-                            ])
+                            confidence = (
+                                score / 100.0 if name == "Random Forest" else score
+                            )
+                            detailed_data.append([class_name, f"{confidence:.1%}"])
 
                         # Create table with right-aligned confidence scores
                         detailed_table = self.create_table(
-                            detailed_data,
-                            repeat_rows=1,
-                            auto_col_width=True
+                            detailed_data, repeat_rows=1, auto_col_width=True
                         )
                         self.elements.append(detailed_table)
                         self.elements.append(Spacer(1, 12))
 
                 except Exception as e:
-                    logger.error(f"Error processing detailed {name} classification: {str(e)}")
+                    logger.error(
+                        f"Error processing detailed {name} classification: {str(e)}"
+                    )
                     continue
 
             # Add explanation text
-            self.elements.append(
-                Explanation_text
-            )
+            self.elements.append(Explanation_text)
 
         else:
             self.elements.append(
                 Paragraph(
-                    "No classification results available.",
-                    self.styles.styles["Normal"]
+                    "No classification results available.", self.styles.styles["Normal"]
                 )
             )
 
         # Add explanation text to summary
-        self.summary_elements.append(
-            Explanation_text
-        )
+        self.summary_elements.append(Explanation_text)

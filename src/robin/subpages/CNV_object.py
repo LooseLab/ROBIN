@@ -160,6 +160,7 @@ def filter_and_find_max(data, window_size=50, z_threshold=2):
     # Step 6: Calculate and return the maximum value from the filtered data
     return np.max(filtered_data) if filtered_data.size > 0 else None
 
+
 class Result:
     """
     A class to store CNV results.
@@ -194,7 +195,7 @@ def run_ruptures(
 
     # Compute the ranges around each change point
     return [
-        (cp  * bin_width - (bin_width), cp * bin_width + (bin_width))
+        (cp * bin_width - (bin_width), cp * bin_width + (bin_width))
         for cp in ruptures_result
     ]
 
@@ -376,7 +377,15 @@ class CNVAnalysis(BaseAnalysis):
     Inherits from `BaseAnalysis` and provides specific methods for CNV analysis.
     """
 
-    def __init__(self, *args, target_panel: Optional[str] = None, reference_file: Optional[str] = None, bed_file: Optional[str] = None, readfish_toml: Optional[Path] = None, **kwargs) -> None:
+    def __init__(
+        self,
+        *args,
+        target_panel: Optional[str] = None,
+        reference_file: Optional[str] = None,
+        bed_file: Optional[str] = None,
+        readfish_toml: Optional[Path] = None,
+        **kwargs,
+    ) -> None:
         # self.file_list = []
         self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.update_cnv_dict = {}
@@ -429,7 +438,7 @@ class CNVAnalysis(BaseAnalysis):
             header=None,
             sep="\s+",
         )
-        
+
         # Add cytobands file loading
         self.cytobands_file = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
@@ -439,12 +448,16 @@ class CNVAnalysis(BaseAnalysis):
             self.cytobands_file,
             names=["chrom", "start_pos", "end_pos", "name", "gieStain"],
             header=None,
-            sep="\s+"
+            sep="\s+",
         )
         super().__init__(*args, **kwargs)
         # Only initialize BedTree if reference file is provided
         if self.reference_file:
-            self.NewBed = BedTree(preserve_original_tree=True, reference_file=f"{self.reference_file}.fai", readfish_toml=self.readfish_toml)
+            self.NewBed = BedTree(
+                preserve_original_tree=True,
+                reference_file=f"{self.reference_file}.fai",
+                readfish_toml=self.readfish_toml,
+            )
             if self.bed_file:
                 self.NewBed.load_from_file(self.bed_file)
         else:
@@ -453,42 +466,42 @@ class CNVAnalysis(BaseAnalysis):
 
     def calculate_chromosome_stats(self, result, ref_result):
         """Calculate chromosome-wide statistics and baselines.
-        
+
         Args:
             result: CNV result object for sample
             ref_result: CNV result object for reference
-        
+
         Returns:
             Dictionary of chromosome statistics including means, baselines, and thresholds
         """
         stats = {}
         autosome_means = []
-        
+
         # Calculate normalized values and stats for each chromosome
         for chrom in result.cnv.keys():
             if chrom != "chrM" and chrom in ref_result:
                 # Calculate normalized CNV values
                 sample_avg = moving_average(result.cnv[chrom])
                 ref_avg = moving_average(ref_result[chrom])
-                
+
                 # Pad arrays if needed
                 max_len = max(len(sample_avg), len(ref_avg))
                 if len(sample_avg) < max_len:
                     sample_avg = np.pad(sample_avg, (0, max_len - len(sample_avg)))
                 if len(ref_avg) < max_len:
                     ref_avg = np.pad(ref_avg, (0, max_len - len(ref_avg)))
-                
+
                 # Calculate normalized CNV
                 normalized_cnv = sample_avg - ref_avg
-                
+
                 # Calculate basic statistics
                 chr_mean = np.mean(normalized_cnv)
                 chr_std = np.std(normalized_cnv)
-                
+
                 # Store autosome means for global statistics
-                if chrom.startswith('chr') and chrom[3:].isdigit():
+                if chrom.startswith("chr") and chrom[3:].isdigit():
                     autosome_means.append(chr_mean)
-                
+
                 # Set baseline and thresholds based on chromosome and sex
                 if chrom == "chrX":
                     if self.XYestimate == "XX":  # Female
@@ -502,122 +515,137 @@ class CNVAnalysis(BaseAnalysis):
                         baseline = -1.0  # Expected absence
                 else:  # Autosomes
                     baseline = 0.0
-                
+
                 stats[chrom] = {
-                    'mean': chr_mean,
-                    'std': chr_std,
-                    'baseline': baseline,
-                    'normalized_cnv': normalized_cnv
+                    "mean": chr_mean,
+                    "std": chr_std,
+                    "baseline": baseline,
+                    "normalized_cnv": normalized_cnv,
                 }
-        
+
         # Calculate global autosome statistics
         global_mean = np.mean(autosome_means)
         global_std = np.std(autosome_means)
-        
+
         # Store global stats
-        stats['global'] = {
-            'mean': global_mean,
-            'std': global_std
-        }
-        
+        stats["global"] = {"mean": global_mean, "std": global_std}
+
         self.chromosome_stats = stats
         return stats
 
     def detect_chromosome_events(self, z_score_threshold=3.0):
         """Detect significant chromosome-wide CNV events.
-        
+
         Args:
             z_score_threshold: Number of standard deviations for significance
-        
+
         Returns:
             List of chromosome-wide CNV events
         """
         if not self.chromosome_stats:
             raise ValueError("Must call calculate_chromosome_stats first")
-            
+
         events = []
-        global_stats = self.chromosome_stats['global']
-        
+        global_stats = self.chromosome_stats["global"]
+
         for chrom, stats in self.chromosome_stats.items():
-            if chrom == 'global':
+            if chrom == "global":
                 continue
-                
-            mean_cnv = stats['mean']
-            baseline = stats['baseline']
-            
+
+            mean_cnv = stats["mean"]
+            baseline = stats["baseline"]
+
             if chrom == "chrX":
                 if self.XYestimate == "XY":  # Male
                     if mean_cnv > 0.3:
-                        events.append({
-                            'chromosome': chrom,
-                            'mean_cnv': mean_cnv,
-                            'type': 'GAIN',
-                            'description': 'Potential XXY'
-                        })
+                        events.append(
+                            {
+                                "chromosome": chrom,
+                                "mean_cnv": mean_cnv,
+                                "type": "GAIN",
+                                "description": "Potential XXY",
+                            }
+                        )
                     elif mean_cnv < -0.3:
-                        events.append({
-                            'chromosome': chrom,
-                            'mean_cnv': mean_cnv,
-                            'type': 'LOSS',
-                            'description': 'X chromosome loss'
-                        })
+                        events.append(
+                            {
+                                "chromosome": chrom,
+                                "mean_cnv": mean_cnv,
+                                "type": "LOSS",
+                                "description": "X chromosome loss",
+                            }
+                        )
                 elif self.XYestimate == "XX":  # Female
                     if mean_cnv >= 1.0:
-                        events.append({
-                            'chromosome': chrom,
-                            'mean_cnv': mean_cnv,
-                            'type': 'GAIN',
-                            'description': 'Potential trisomy X'
-                        })
+                        events.append(
+                            {
+                                "chromosome": chrom,
+                                "mean_cnv": mean_cnv,
+                                "type": "GAIN",
+                                "description": "Potential trisomy X",
+                            }
+                        )
                     elif mean_cnv < -0.75:
-                        events.append({
-                            'chromosome': chrom,
-                            'mean_cnv': mean_cnv,
-                            'type': 'LOSS',
-                            'description': 'X chromosome loss'
-                        })
+                        events.append(
+                            {
+                                "chromosome": chrom,
+                                "mean_cnv": mean_cnv,
+                                "type": "LOSS",
+                                "description": "X chromosome loss",
+                            }
+                        )
             elif chrom == "chrY":
                 if self.XYestimate == "XY":  # Male
                     if mean_cnv > 0.5:
-                        events.append({
-                            'chromosome': chrom,
-                            'mean_cnv': mean_cnv,
-                            'type': 'GAIN',
-                            'description': 'Y chromosome gain'
-                        })
+                        events.append(
+                            {
+                                "chromosome": chrom,
+                                "mean_cnv": mean_cnv,
+                                "type": "GAIN",
+                                "description": "Y chromosome gain",
+                            }
+                        )
                     elif mean_cnv < -0.5:
-                        events.append({
-                            'chromosome': chrom,
-                            'mean_cnv': mean_cnv,
-                            'type': 'LOSS',
-                            'description': 'Y chromosome loss'
-                        })
+                        events.append(
+                            {
+                                "chromosome": chrom,
+                                "mean_cnv": mean_cnv,
+                                "type": "LOSS",
+                                "description": "Y chromosome loss",
+                            }
+                        )
                 elif mean_cnv > -0.2 and self.XYestimate == "XX":
-                    events.append({
-                        'chromosome': chrom,
-                        'mean_cnv': mean_cnv,
-                        'type': 'PRESENT',
-                        'description': 'Y chromosome material detected'
-                    })
+                    events.append(
+                        {
+                            "chromosome": chrom,
+                            "mean_cnv": mean_cnv,
+                            "type": "PRESENT",
+                            "description": "Y chromosome material detected",
+                        }
+                    )
             else:  # Autosomes
                 adjusted_mean = mean_cnv - baseline
-                z_score = (adjusted_mean - global_stats['mean']) / global_stats['std']
-                
+                z_score = (adjusted_mean - global_stats["mean"]) / global_stats["std"]
+
                 if z_score > z_score_threshold:
-                    events.append({
-                        'chromosome': chrom,
-                        'mean_cnv': mean_cnv,
-                        'type': 'GAIN',
-                        'description': f'Whole chromosome gain (z-score: {z_score:.2f})'
-                    })
+                    events.append(
+                        {
+                            "chromosome": chrom,
+                            "mean_cnv": mean_cnv,
+                            "type": "GAIN",
+                            "description": f"Whole chromosome gain (z-score: {z_score:.2f})",
+                        }
+                    )
                 elif z_score < -z_score_threshold:
-                    events.append({
-                        'chromosome': chrom,
-                        'mean_cnv': mean_cnv,
-                        'type': 'LOSS',
-                        'description': f'Whole chromosome loss (z-score: {z_score:.2f})'
-                    })
-        
+                    events.append(
+                        {
+                            "chromosome": chrom,
+                            "mean_cnv": mean_cnv,
+                            "type": "LOSS",
+                            "description": f"Whole chromosome loss (z-score: {z_score:.2f})",
+                        }
+                    )
+
         return events
 
     def estimate_XY(self) -> None:
@@ -667,8 +695,6 @@ class CNVAnalysis(BaseAnalysis):
         if self.sampleID not in self.update_cnv_dict.keys():
             self.update_cnv_dict[self.sampleID] = {}
 
-
-
         bamdata = pysam.AlignmentFile(bamfile, "rb")
 
         self.map_tracker.update(
@@ -700,7 +726,6 @@ class CNVAnalysis(BaseAnalysis):
             int(logging.ERROR),
             bin_width=self.cnv_dict["bin_width"],
         )
-
 
         if self.load_data:
             if os.path.exists(os.path.join(self.output, self.sampleID, "ruptures.npy")):
@@ -759,16 +784,24 @@ class CNVAnalysis(BaseAnalysis):
                                     item = np.array(
                                         [(key, start, end)], dtype=self.dtype
                                     )
-                                    self.local_data_array = np.append(self.local_data_array, item)
+                                    self.local_data_array = np.append(
+                                        self.local_data_array, item
+                                    )
                                     self.DATA_ARRAY = np.append(self.DATA_ARRAY, item)
                         self.map_tracker[key] = 0
                         cnvupdate = True
                         breakpoints = self.DATA_ARRAY[self.DATA_ARRAY["name"] == key]
-                        local_breakpoints = self.local_data_array[self.local_data_array["name"] == key]
+                        local_breakpoints = self.local_data_array[
+                            self.local_data_array["name"] == key
+                        ]
                         if len(breakpoints) > 0:
                             try:
                                 self.CNVchangedetector.add_breakpoints(
-                                    key, breakpoints, local_breakpoints, approx_chrom_length, r_bin
+                                    key,
+                                    breakpoints,
+                                    local_breakpoints,
+                                    approx_chrom_length,
+                                    r_bin,
                                 )
                             except Exception as e:
                                 raise (e)
@@ -781,26 +814,33 @@ class CNVAnalysis(BaseAnalysis):
             self.load_data = True
             for chrom in r_cnv.keys():
                 tempbedcontent = self.CNVchangedetector.get_bed_targets(chrom)
-                if len(tempbedcontent)>0:
+                if len(tempbedcontent) > 0:
                     bedcontent += tempbedcontent
                     bedcontent += "\n"
 
-                tempbedcontent2 = self.CNVchangedetector.get_bed_targets_breakpoints(chrom)
-                if len(tempbedcontent2)>0:
+                tempbedcontent2 = self.CNVchangedetector.get_bed_targets_breakpoints(
+                    chrom
+                )
+                if len(tempbedcontent2) > 0:
                     bedcontent2 += tempbedcontent2
                     bedcontent2 += "\n"
 
-            #if len(bedcontent)>0:
+            # if len(bedcontent)>0:
             #    print ("bedcontent")
             #    print(f"{bedcontent}")
-            #if len(bedcontent2)>0:
+            # if len(bedcontent2)>0:
             #    print ("bedcontent2")
             #    print(f"{bedcontent2}")
-            if len(bedcontent2)>0:
-                #print(bedcontent2)
-                self.NewBed.load_from_string(bedcontent2, merge=False, write_files=True, output_location=os.path.join(
-                    self.check_and_create_folder(self.output, self.sampleID)
-                ))
+            if len(bedcontent2) > 0:
+                # print(bedcontent2)
+                self.NewBed.load_from_string(
+                    bedcontent2,
+                    merge=False,
+                    write_files=True,
+                    output_location=os.path.join(
+                        self.check_and_create_folder(self.output, self.sampleID)
+                    ),
+                )
 
             np.save(
                 os.path.join(
@@ -830,15 +870,13 @@ class CNVAnalysis(BaseAnalysis):
         if not gene_target:
             # Reset zoom when switching to "All" chromosomes view
             if self.chrom_select.value == "All":
-                self.scatter_echart.options["dataZoom"][0].update({
-                    "startValue": None,
-                    "endValue": None
-                })
-                self.difference_scatter_echart.options["dataZoom"][0].update({
-                    "startValue": None,
-                    "endValue": None
-                })
-            
+                self.scatter_echart.options["dataZoom"][0].update(
+                    {"startValue": None, "endValue": None}
+                )
+                self.difference_scatter_echart.options["dataZoom"][0].update(
+                    {"startValue": None, "endValue": None}
+                )
+
             self._update_cnv_plot(
                 plot_to_update=self.scatter_echart, result=self.result, title="CNV"
             )
@@ -879,31 +917,29 @@ class CNVAnalysis(BaseAnalysis):
         # Only handle clicks when in single chromosome view
         if self.chrom_filter == "All":
             return
-            
-        row = e.args['row']
-        start_pos = row['start_pos']
-        end_pos = row['end_pos']
-        
+
+        row = e.args["row"]
+        start_pos = row["start_pos"]
+        end_pos = row["end_pos"]
+
         # Calculate padding (10% of the region width)
         padding = (end_pos - start_pos) * 0.1
-        
+
         # Update the plot's x-axis zoom to focus on the selected region
-        plot_to_update.options["dataZoom"][0].update({
-            "startValue": max(0, start_pos - padding),
-            "endValue": end_pos + padding
-        })
-        
+        plot_to_update.options["dataZoom"][0].update(
+            {"startValue": max(0, start_pos - padding), "endValue": end_pos + padding}
+        )
+
         # Highlight the selected region more prominently
         for series in plot_to_update.options["series"]:
             if series.get("name") == "cytobands_highlight":
                 for area in series["markArea"]["data"]:
-                    if (area[0]["xAxis"] == start_pos and 
-                        area[1]["xAxis"] == end_pos):
+                    if area[0]["xAxis"] == start_pos and area[1]["xAxis"] == end_pos:
                         # Temporarily increase opacity for the selected region
                         area[0]["itemStyle"]["opacity"] = 0.5
                     else:
                         area[0]["itemStyle"]["opacity"] = 0.15
-        
+
         ui.update(plot_to_update)
 
     def setup_ui(self) -> None:
@@ -914,28 +950,40 @@ class CNVAnalysis(BaseAnalysis):
         self.display_row = ui.row().style("width: 100")
         if self.summary:
             with self.summary:
-                with ui.card().classes('w-full p-4 mb-4'):
-                    with ui.row().classes('w-full items-center justify-between'):
+                with ui.card().classes("w-full p-4 mb-4"):
+                    with ui.row().classes("w-full items-center justify-between"):
                         # Left side - CNV Status
-                        with ui.column().classes('gap-2'):
-                            ui.label("Copy Number Variation Analysis").classes('text-lg font-medium')
-                            with ui.row().classes('items-center gap-2'):
-                                ui.label("Status: Awaiting Data").classes('text-gray-600')
-                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+                        with ui.column().classes("gap-2"):
+                            ui.label("Copy Number Variation Analysis").classes(
+                                "text-lg font-medium"
+                            )
+                            with ui.row().classes("items-center gap-2"):
+                                ui.label("Status: Awaiting Data").classes(
+                                    "text-gray-600"
+                                )
+                                ui.label("--").classes(
+                                    "px-2 py-1 rounded bg-gray-100 text-gray-600"
+                                )
 
                         # Right side - Analysis metrics
-                        with ui.column().classes('gap-2 text-right'):
-                            ui.label("Analysis Details").classes('font-medium')
-                            ui.label("Genetic Sex: --").classes('text-gray-600')
-                            ui.label("CNV Events: --").classes('text-gray-600')
+                        with ui.column().classes("gap-2 text-right"):
+                            ui.label("Analysis Details").classes("font-medium")
+                            ui.label("Genetic Sex: --").classes("text-gray-600")
+                            ui.label("CNV Events: --").classes("text-gray-600")
 
                     # Bottom row - Information
-                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
-                        ui.label("Copy number analysis across genome with breakpoint detection")
+                    with ui.row().classes(
+                        "w-full mt-4 text-sm text-gray-500 justify-center"
+                    ):
+                        ui.label(
+                            "Copy number analysis across genome with breakpoint detection"
+                        )
         with self.display_row:
-            ui.label("Copy Number Variation").classes('text-sky-600 dark:text-white').style(
-                "font-size: 150%; font-weight: 300"
-            ).tailwind("drop-shadow", "font-bold")
+            ui.label("Copy Number Variation").classes(
+                "text-sky-600 dark:text-white"
+            ).style("font-size: 150%; font-weight: 300").tailwind(
+                "drop-shadow", "font-bold"
+            )
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
@@ -966,29 +1014,92 @@ class CNVAnalysis(BaseAnalysis):
         )
 
         # Add CNV Analysis Results Table
-        with ui.card().classes('w-full p-4'):
-            ui.label('CNV Analysis Results').classes('text-lg font-medium mb-4')
-            self.cnv_table = ui.table(
-                columns=[
-                    {'name': 'chromosome', 'label': 'Chromosome', 'field': 'chrom', 'align': 'left', 'sortable': True},
-                    {'name': 'start', 'label': 'Start', 'field': 'start_pos', 'align': 'right', 
-                     ':format': 'val => Number(val).toLocaleString()', 'sortable': True},
-                    {'name': 'end', 'label': 'End', 'field': 'end_pos', 'align': 'right', 
-                     ':format': 'val => Number(val).toLocaleString()', 'sortable': True},
-                    {'name': 'length', 'label': 'Length', 'field': 'length', 'align': 'right',
-                     ':format': 'val => Number(val).toLocaleString()', 'sortable': True},
-                    {'name': 'cytoband', 'label': 'Cytoband', 'field': 'name', 'align': 'left', 'sortable': True},
-                    {'name': 'mean_cnv', 'label': 'Mean CNV', 'field': 'mean_cnv', 'align': 'right',
-                     ':format': 'val => Number(val).toFixed(3)', 'sortable': True},
-                    {'name': 'state', 'label': 'State', 'field': 'cnv_state', 'align': 'center', 'sortable': True},
-                    {'name': 'genes', 'label': 'Genes', 'field': 'genes', 'align': 'left', 'sortable': True}
-                ],
-                rows=[],
-                row_key='name',
-            ).classes('w-full').props('dense')
-            
+        with ui.card().classes("w-full p-4"):
+            with ui.row().classes("w-full items-center justify-between mb-4"):
+                ui.label("CNV Analysis Results").classes("text-lg font-medium")
+
+            # Create the table first
+            self.cnv_table = (
+                ui.table(
+                    columns=[
+                        {
+                            "name": "chromosome",
+                            "label": "Chromosome",
+                            "field": "chrom",
+                            "align": "left",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "start",
+                            "label": "Start",
+                            "field": "start_pos",
+                            "align": "right",
+                            ":format": "val => Number(val).toLocaleString()",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "end",
+                            "label": "End",
+                            "field": "end_pos",
+                            "align": "right",
+                            ":format": "val => Number(val).toLocaleString()",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "length",
+                            "label": "Length",
+                            "field": "length",
+                            "align": "right",
+                            ":format": "val => Number(val).toLocaleString()",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "cytoband",
+                            "label": "Cytoband",
+                            "field": "name",
+                            "align": "left",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "mean_cnv",
+                            "label": "Mean CNV",
+                            "field": "mean_cnv",
+                            "align": "right",
+                            ":format": "val => Number(val).toFixed(3)",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "state",
+                            "label": "State",
+                            "field": "cnv_state",
+                            "align": "center",
+                            "sortable": True,
+                        },
+                        {
+                            "name": "genes",
+                            "label": "Genes",
+                            "field": "genes",
+                            "align": "left",
+                            "sortable": True,
+                        },
+                    ],
+                    rows=[],
+                    row_key="name",
+                    pagination=25,
+                )
+                .classes("w-full")
+                .props("dense")
+            )
+
+            # Now add the search input after the table is created
+            ui.input("Search by chromosome, cytoband or genes...").bind_value(
+                self.cnv_table, "filter"
+            ).classes("w-64")
+
             # Add slot for conditional formatting of the CNV state and row styling
-            self.cnv_table.add_slot('body', '''
+            self.cnv_table.add_slot(
+                "body",
+                """
                 <q-tr :props="props" @click="$parent.$emit('row-click', props)">
                     <q-td key="chromosome" :props="props">
                         {{ props.row.chrom }}
@@ -1016,29 +1127,31 @@ class CNVAnalysis(BaseAnalysis):
                         {{ props.row.genes ? props.row.genes.join(', ') : '' }}
                     </q-td>
                 </q-tr>
-            ''')
-            
+            """,
+            )
+
             # Add event handler for row clicks
-            self.cnv_table.on('row-click', lambda e: self._handle_table_row_click(e, self.scatter_echart))
+            self.cnv_table.on(
+                "row-click",
+                lambda e: self._handle_table_row_click(e, self.scatter_echart),
+            )
 
         with ui.expansion("See Reference DataSet", icon="loupe").classes("w-full"):
             self.reference_scatter_echart = self.generate_chart(
                 title="Reference CNV Scatter Plot"
             )
 
-
-
         with ui.card().classes("w-full"):
-            with ui.column().classes('gap-2'):
-                ui.label("New Target Information").classes('text-lg font-medium')
-                ui.label("Target information will be displayed here when available").classes('text-gray-600')
-
+            with ui.column().classes("gap-2"):
+                ui.label("New Target Information").classes("text-lg font-medium")
+                ui.label(
+                    "Target information will be displayed here when available"
+                ).classes("text-gray-600")
 
         with ui.card().classes("w-full"):
             ui.label("Proportion Over Time Information")
             self.create_proportion_time_chart2("Proportions over time - Genome Wide.")
             self.create_proportion_time_chart("Proportions over time.")
-
 
         if self.browse:
             ui.timer(0.1, lambda: self.show_previous_data(), once=True)
@@ -1071,13 +1184,15 @@ class CNVAnalysis(BaseAnalysis):
         try:
             if datadf.empty:
                 logger.warning("No data available for time series chart")
-                self.proportion_time_chart.options["title"]["text"] = "No Data Available"
+                self.proportion_time_chart.options["title"][
+                    "text"
+                ] = "No Data Available"
                 self.proportion_time_chart.options["series"] = []
                 self.proportion_time_chart.update()
                 return
 
             self.proportion_time_chart.options["series"] = []
-            
+
             # iOS color palette for consistent styling
             colors = [
                 "#007AFF",  # Blue
@@ -1092,34 +1207,34 @@ class CNVAnalysis(BaseAnalysis):
 
             for idx, (series, data) in enumerate(datadf.to_dict().items()):
                 if series != "number_probes":
-                    data_list = [[key, value] for key, value in data.items() if pd.notnull(value)]
+                    data_list = [
+                        [key, value] for key, value in data.items() if pd.notnull(value)
+                    ]
                     if data_list:  # Only add series if it has valid data points
-                        self.proportion_time_chart.options["series"].append({
-                            "animation": False,
-                            "type": "line",
-                            "smooth": True,
-                            "name": series,
-                            "emphasis": {
-                                "focus": "series",
-                                "itemStyle": {
-                                    "borderWidth": 2
-                                }
-                            },
-                            "endLabel": {
-                                "show": True,
-                                "formatter": "{a}: {c}%",
-                                "distance": 10,
-                                "fontSize": 12
-                            },
-                            "lineStyle": {
-                                "width": 2,
-                                "color": colors[idx % len(colors)]
-                            },
-                            "itemStyle": {
-                                "color": colors[idx % len(colors)]
-                            },
-                            "data": data_list
-                        })
+                        self.proportion_time_chart.options["series"].append(
+                            {
+                                "animation": False,
+                                "type": "line",
+                                "smooth": True,
+                                "name": series,
+                                "emphasis": {
+                                    "focus": "series",
+                                    "itemStyle": {"borderWidth": 2},
+                                },
+                                "endLabel": {
+                                    "show": True,
+                                    "formatter": "{a}: {c}%",
+                                    "distance": 10,
+                                    "fontSize": 12,
+                                },
+                                "lineStyle": {
+                                    "width": 2,
+                                    "color": colors[idx % len(colors)],
+                                },
+                                "itemStyle": {"color": colors[idx % len(colors)]},
+                                "data": data_list,
+                            }
+                        )
 
             # Update title with latest data summary if available
             if not datadf.empty:
@@ -1133,7 +1248,7 @@ class CNVAnalysis(BaseAnalysis):
                     )
 
             self.proportion_time_chart.update()
-            
+
         except Exception as e:
             logger.error(f"Error updating time chart: {str(e)}", exc_info=True)
             self.proportion_time_chart.options["title"]["text"] = "Error Updating Chart"
@@ -1173,13 +1288,15 @@ class CNVAnalysis(BaseAnalysis):
         try:
             if datadf.empty:
                 logger.warning("No genome-wide data available for time series chart")
-                self.proportion_time_chart2.options["title"]["text"] = "No Data Available"
+                self.proportion_time_chart2.options["title"][
+                    "text"
+                ] = "No Data Available"
                 self.proportion_time_chart2.options["series"] = []
                 self.proportion_time_chart2.update()
                 return
 
             self.proportion_time_chart2.options["series"] = []
-            
+
             # iOS color palette for consistent styling
             colors = [
                 "#007AFF",  # Blue
@@ -1194,34 +1311,34 @@ class CNVAnalysis(BaseAnalysis):
 
             for idx, (series, data) in enumerate(datadf.to_dict().items()):
                 if series != "number_probes":
-                    data_list = [[key, value] for key, value in data.items() if pd.notnull(value)]
+                    data_list = [
+                        [key, value] for key, value in data.items() if pd.notnull(value)
+                    ]
                     if data_list:  # Only add series if it has valid data points
-                        self.proportion_time_chart2.options["series"].append({
-                            "animation": False,
-                            "type": "line",
-                            "smooth": True,
-                            "name": series,
-                            "emphasis": {
-                                "focus": "series",
-                                "itemStyle": {
-                                    "borderWidth": 2
-                                }
-                            },
-                            "endLabel": {
-                                "show": True,
-                                "formatter": "{a}: {c}%",
-                                "distance": 10,
-                                "fontSize": 12
-                            },
-                            "lineStyle": {
-                                "width": 2,
-                                "color": colors[idx % len(colors)]
-                            },
-                            "itemStyle": {
-                                "color": colors[idx % len(colors)]
-                            },
-                            "data": data_list
-                        })
+                        self.proportion_time_chart2.options["series"].append(
+                            {
+                                "animation": False,
+                                "type": "line",
+                                "smooth": True,
+                                "name": series,
+                                "emphasis": {
+                                    "focus": "series",
+                                    "itemStyle": {"borderWidth": 2},
+                                },
+                                "endLabel": {
+                                    "show": True,
+                                    "formatter": "{a}: {c}%",
+                                    "distance": 10,
+                                    "fontSize": 12,
+                                },
+                                "lineStyle": {
+                                    "width": 2,
+                                    "color": colors[idx % len(colors)],
+                                },
+                                "itemStyle": {"color": colors[idx % len(colors)]},
+                                "data": data_list,
+                            }
+                        )
 
             # Update title with latest data summary if available
             if not datadf.empty:
@@ -1235,10 +1352,14 @@ class CNVAnalysis(BaseAnalysis):
                     )
 
             self.proportion_time_chart2.update()
-            
+
         except Exception as e:
-            logger.error(f"Error updating genome-wide time chart: {str(e)}", exc_info=True)
-            self.proportion_time_chart2.options["title"]["text"] = "Error Updating Chart"
+            logger.error(
+                f"Error updating genome-wide time chart: {str(e)}", exc_info=True
+            )
+            self.proportion_time_chart2.options["title"][
+                "text"
+            ] = "Error Updating Chart"
             self.proportion_time_chart2.options["series"] = []
             self.proportion_time_chart2.update()
 
@@ -1258,7 +1379,7 @@ class CNVAnalysis(BaseAnalysis):
                     "backgroundColor": "transparent",
                     "textStyle": {
                         "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
-                        "fontSize": 12
+                        "fontSize": 12,
                     },
                     "animation": False,
                     "grid": {
@@ -1266,7 +1387,7 @@ class CNVAnalysis(BaseAnalysis):
                         "bottom": "20%",
                         "left": "5%",
                         "right": "10%",
-                        "containLabel": True
+                        "containLabel": True,
                     },
                     "title": {
                         "text": f"{title}",
@@ -1275,39 +1396,28 @@ class CNVAnalysis(BaseAnalysis):
                         "textStyle": {
                             "fontSize": 16,
                             "fontWeight": "500",
-                            "color": "#1D1D1F"
-                        }
+                            "color": "#1D1D1F",
+                        },
                     },
                     "toolbox": {
                         "show": True,
                         "right": 20,
-                        "feature": {
-                            "saveAsImage": {
-                                "title": "Save Chart"
-                            }
-                        }
+                        "feature": {"saveAsImage": {"title": "Save Chart"}},
                     },
                     "tooltip": {
                         "trigger": "axis",
                         "backgroundColor": "rgba(255, 255, 255, 0.9)",
                         "borderColor": "#E5E5EA",
-                        "textStyle": {
-                            "color": "#1D1D1F"
-                        }
+                        "textStyle": {"color": "#1D1D1F"},
                     },
                     "xAxis": {
                         "type": f"{type}",
                         "max": "dataMax",
                         "splitLine": {
                             "show": True,
-                            "lineStyle": {
-                                "type": "dashed",
-                                "color": "#E5E5EA"
-                            }
+                            "lineStyle": {"type": "dashed", "color": "#E5E5EA"},
                         },
-                        "axisLabel": {
-                            "color": "#86868B"
-                        }
+                        "axisLabel": {"color": "#86868B"},
                     },
                     "yAxis": [
                         {
@@ -1318,18 +1428,13 @@ class CNVAnalysis(BaseAnalysis):
                             "nameTextStyle": {
                                 "color": "#86868B",
                                 "fontSize": 12,
-                                "padding": [0, 30, 0, 0]
+                                "padding": [0, 30, 0, 0],
                             },
-                            "axisLabel": {
-                                "color": "#86868B"
-                            },
+                            "axisLabel": {"color": "#86868B"},
                             "splitLine": {
                                 "show": True,
-                                "lineStyle": {
-                                    "type": "dashed",
-                                    "color": "#E5E5EA"
-                                }
-                            }
+                                "lineStyle": {"type": "dashed", "color": "#E5E5EA"},
+                            },
                         },
                         {
                             "type": "value",
@@ -1338,20 +1443,12 @@ class CNVAnalysis(BaseAnalysis):
                             "nameTextStyle": {
                                 "color": "#007AFF",
                                 "fontSize": 12,
-                                "padding": [0, 0, 0, 30]
+                                "padding": [0, 0, 0, 30],
                             },
-                            "axisLine": {
-                                "lineStyle": {
-                                    "color": "#007AFF"
-                                }
-                            },
-                            "axisLabel": {
-                                "color": "#007AFF"
-                            },
-                            "splitLine": {
-                                "show": False
-                            }
-                        }
+                            "axisLine": {"lineStyle": {"color": "#007AFF"}},
+                            "axisLabel": {"color": "#007AFF"},
+                            "splitLine": {"show": False},
+                        },
                     ],
                     "dataZoom": [
                         {
@@ -1364,9 +1461,7 @@ class CNVAnalysis(BaseAnalysis):
                             "borderColor": "#E5E5EA",
                             "backgroundColor": "#F5F5F7",
                             "fillerColor": "rgba(0, 122, 255, 0.2)",
-                            "handleStyle": {
-                                "color": "#007AFF"
-                            }
+                            "handleStyle": {"color": "#007AFF"},
                         },
                         {
                             "type": "slider",
@@ -1380,28 +1475,23 @@ class CNVAnalysis(BaseAnalysis):
                             "borderColor": "#E5E5EA",
                             "backgroundColor": "#F5F5F7",
                             "fillerColor": "rgba(0, 122, 255, 0.2)",
-                            "handleStyle": {
-                                "color": "#007AFF"
-                            }
-                        }
+                            "handleStyle": {"color": "#007AFF"},
+                        },
                     ],
                     "series": [
                         {
                             "type": "scatter",
                             "symbolSize": 4,
-                            "itemStyle": {
-                                "color": "#007AFF",
-                                "opacity": 0.7
-                            },
+                            "itemStyle": {"color": "#007AFF", "opacity": 0.7},
                             "emphasis": {
                                 "itemStyle": {
                                     "color": "#007AFF",
                                     "opacity": 1,
                                     "borderColor": "#FFFFFF",
-                                    "borderWidth": 2
+                                    "borderWidth": 2,
                                 }
                             },
-                            "data": []
+                            "data": [],
                         },
                         {
                             "type": "scatter",
@@ -1426,12 +1516,9 @@ class CNVAnalysis(BaseAnalysis):
                                 },
                                 "data": [],
                             },
-                            "markLine": {
-                                "symbol": "none",
-                                "data": []
-                            }
-                        }
-                    ]
+                            "markLine": {"symbol": "none", "data": []},
+                        },
+                    ],
                 }
             )
             .style("height: 450px; margin: 20px 0;")
@@ -1525,29 +1612,42 @@ class CNVAnalysis(BaseAnalysis):
                     # Skip non-standard chromosomes
                     if contig == "chrM" or not re.match(r"^chr(\d+|X|Y)$", contig):
                         continue
-                    
+
                     # Get CNV analysis for this chromosome
-                    chromosome_analysis = self.analyze_cytoband_cnv(self.result3.cnv, contig)
+                    chromosome_analysis = self.analyze_cytoband_cnv(
+                        self.result3.cnv, contig
+                    )
                     if not chromosome_analysis.empty:
                         all_cytoband_analysis.append(chromosome_analysis)
 
                 # Update the table with combined analysis results
                 try:
-                    combined_analysis = pd.concat(all_cytoband_analysis) if all_cytoband_analysis else pd.DataFrame()
-                    if combined_analysis.empty and self.cnv_dict["bin_width"] > 10_000_000:
+                    combined_analysis = (
+                        pd.concat(all_cytoband_analysis)
+                        if all_cytoband_analysis
+                        else pd.DataFrame()
+                    )
+                    if (
+                        combined_analysis.empty
+                        and self.cnv_dict["bin_width"] > 10_000_000
+                    ):
                         # Create a single row DataFrame with a message
-                        message_df = pd.DataFrame([{
-                            'chrom': '',
-                            'start_pos': 0,
-                            'end_pos': 0,
-                            'name': 'More data needed for CNV analysis',
-                            'mean_cnv': 0,
-                            'cnv_state': f'Current bin width: {self.cnv_dict["bin_width"]:,}bp (need ≤ 10,000,000bp)',
-                            'length': 0
-                        }])
-                        self.cnv_table.rows = message_df.to_dict('records')
+                        message_df = pd.DataFrame(
+                            [
+                                {
+                                    "chrom": "",
+                                    "start_pos": 0,
+                                    "end_pos": 0,
+                                    "name": "More data needed for CNV analysis",
+                                    "mean_cnv": 0,
+                                    "cnv_state": f'Current bin width: {self.cnv_dict["bin_width"]:,}bp (need ≤ 10,000,000bp)',
+                                    "length": 0,
+                                }
+                            ]
+                        )
+                        self.cnv_table.rows = message_df.to_dict("records")
                     else:
-                        self.cnv_table.rows = combined_analysis.to_dict('records')
+                        self.cnv_table.rows = combined_analysis.to_dict("records")
                     ui.update(self.cnv_table)
                 except AttributeError:
                     pass  # Ignore if the table component is not available
@@ -1565,7 +1665,7 @@ class CNVAnalysis(BaseAnalysis):
                     data = list(
                         zip(
                             (np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"],
-                            cnv
+                            cnv,
                         )
                     )
 
@@ -1625,9 +1725,30 @@ class CNVAnalysis(BaseAnalysis):
 
                 # Define the main chromosomes to be included in the plot
                 main_chromosomes = [
-                    "chr1", "chr2", "chr3", "chr4", "chr5", "chr6", "chr7", "chr8", "chr9",
-                    "chr10", "chr11", "chr12", "chr13", "chr14", "chr15", "chr16", "chr17",
-                    "chr18", "chr19", "chr20", "chr21", "chr22", "chrX", "chrY",
+                    "chr1",
+                    "chr2",
+                    "chr3",
+                    "chr4",
+                    "chr5",
+                    "chr6",
+                    "chr7",
+                    "chr8",
+                    "chr9",
+                    "chr10",
+                    "chr11",
+                    "chr12",
+                    "chr13",
+                    "chr14",
+                    "chr15",
+                    "chr16",
+                    "chr17",
+                    "chr18",
+                    "chr19",
+                    "chr20",
+                    "chr21",
+                    "chr22",
+                    "chrX",
+                    "chrY",
                 ]
 
                 # Filter CNV data to include only the main chromosomes
@@ -1642,10 +1763,7 @@ class CNVAnalysis(BaseAnalysis):
 
                 # Prepare the data for plotting
                 data = list(
-                    zip(
-                        (np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"],
-                        cnv
-                    )
+                    zip((np.arange(len(cnv)) + total) * self.cnv_dict["bin_width"], cnv)
                 )
 
                 ymax = math.ceil(filter_and_find_max(np.array(cnv)))
@@ -1717,9 +1835,7 @@ class CNVAnalysis(BaseAnalysis):
                         "data": [],
                         "symbolSize": 3,
                         "markArea": {
-                            "itemStyle": {
-                                "color": "rgba(135, 206, 250, 0.4)"
-                            },
+                            "itemStyle": {"color": "rgba(135, 206, 250, 0.4)"},
                             "data": [],
                         },
                     },
@@ -1729,16 +1845,11 @@ class CNVAnalysis(BaseAnalysis):
                         "data": [],
                         "symbolSize": 3,
                         "markArea": {
-                            "itemStyle": {
-                                "color": "rgba(200, 200, 200, 0.4)"
-                            },
+                            "itemStyle": {"color": "rgba(200, 200, 200, 0.4)"},
                             "data": [],
                         },
-                        "markLine": {
-                            "symbol": "none",
-                            "data": []
-                        }
-                    }
+                        "markLine": {"symbol": "none", "data": []},
+                    },
                 ]
 
                 # Add gene information to the dropdown options and highlight gene regions in the plot
@@ -1764,9 +1875,9 @@ class CNVAnalysis(BaseAnalysis):
                                     "show": True,
                                     "emphasis": {
                                         "show": True,
-                                        "distance": 0  # Reduced from 40 to 25
-                                    }
-                                }
+                                        "distance": 0,  # Reduced from 40 to 25
+                                    },
+                                },
                             },
                             {
                                 "xAxis": row["end_pos"],
@@ -1783,10 +1894,7 @@ class CNVAnalysis(BaseAnalysis):
                             {
                                 "name": row["name"],
                                 "xAxis": row["start_pos"],
-                                "label": {
-                                    "position": "insideBottom",
-                                    "distance": 10
-                                }
+                                "label": {"position": "insideBottom", "distance": 10},
                             },
                             {
                                 "xAxis": row["end_pos"],
@@ -1799,15 +1907,17 @@ class CNVAnalysis(BaseAnalysis):
                     self.cytobands_bed["chrom"] == contig
                 ].iterrows():
                     # Get CNV state for this region from analysis
-                    region_analysis = self.analyze_cytoband_cnv(self.result3.cnv, contig)
+                    region_analysis = self.analyze_cytoband_cnv(
+                        self.result3.cnv, contig
+                    )
                     matching_region = region_analysis[
-                        (region_analysis['start_pos'] <= row['start_pos']) & 
-                        (region_analysis['end_pos'] >= row['end_pos'])
+                        (region_analysis["start_pos"] <= row["start_pos"])
+                        & (region_analysis["end_pos"] >= row["end_pos"])
                     ]
-                    
+
                     # Set color based on CNV state
                     if not matching_region.empty:
-                        cnv_state = matching_region.iloc[0]['cnv_state']
+                        cnv_state = matching_region.iloc[0]["cnv_state"]
                         if cnv_state == "GAIN":
                             color = "rgba(52, 199, 89, 0.15)"  # Green for gains
                         elif cnv_state == "LOSS":
@@ -1821,18 +1931,24 @@ class CNVAnalysis(BaseAnalysis):
                     plot_to_update.options["series"][2]["markArea"]["data"].append(
                         [
                             {
-                                "name": row['name'],  # Just the cytoband name without state
+                                "name": row[
+                                    "name"
+                                ],  # Just the cytoband name without state
                                 "xAxis": row["start_pos"],
                                 "itemStyle": {"color": color},
                                 "label": {
                                     "position": "insideTop",
                                     "distance": 25,
-                                    "color": cnv_state == "GAIN" and "#34C759" or  # Green for gains
-                                            cnv_state == "LOSS" and "#E0162B" or  # Brighter, more saturated red for losses
-                                            "#000000",  # Black for normal
-                                    "fontWeight": cnv_state in ["GAIN", "LOSS"] and "bold" or "normal",
-                                    "show": True
-                                }
+                                    "color": cnv_state == "GAIN"
+                                    and "#34C759"  # Green for gains
+                                    or cnv_state == "LOSS"
+                                    and "#E0162B"  # Brighter, more saturated red for losses
+                                    or "#000000",  # Black for normal
+                                    "fontWeight": cnv_state in ["GAIN", "LOSS"]
+                                    and "bold"
+                                    or "normal",
+                                    "show": True,
+                                },
                             },
                             {
                                 "xAxis": row["end_pos"],
@@ -1842,34 +1958,36 @@ class CNVAnalysis(BaseAnalysis):
 
                     # Add horizontal reference lines for CNV thresholds only on the difference plot
                     if "Difference" in plot_to_update.options["title"]["text"]:
-                        plot_to_update.options["series"][2]["markLine"]["data"].extend([
-                            {
-                                "name": "Gain Threshold",
-                                "yAxis": 0.5,
-                                "lineStyle": {
-                                    "color": "rgba(52, 199, 89, 0.5)",
-                                    "type": "dashed"
+                        plot_to_update.options["series"][2]["markLine"]["data"].extend(
+                            [
+                                {
+                                    "name": "Gain Threshold",
+                                    "yAxis": 0.5,
+                                    "lineStyle": {
+                                        "color": "rgba(52, 199, 89, 0.5)",
+                                        "type": "dashed",
+                                    },
+                                    "label": {
+                                        "show": True,
+                                        "formatter": "Gain Threshold",
+                                        "position": "insideEndTop",
+                                    },
                                 },
-                                "label": {
-                                    "show": True,
-                                    "formatter": "Gain Threshold",
-                                    "position": "insideEndTop"
-                                }
-                            },
-                            {
-                                "name": "Loss Threshold",
-                                "yAxis": -0.5,
-                                "lineStyle": {
-                                    "color": "rgba(255, 45, 85, 0.5)",
-                                    "type": "dashed"
+                                {
+                                    "name": "Loss Threshold",
+                                    "yAxis": -0.5,
+                                    "lineStyle": {
+                                        "color": "rgba(255, 45, 85, 0.5)",
+                                        "type": "dashed",
+                                    },
+                                    "label": {
+                                        "show": True,
+                                        "formatter": "Loss Threshold",
+                                        "position": "insideEndBottom",
+                                    },
                                 },
-                                "label": {
-                                    "show": True,
-                                    "formatter": "Loss Threshold",
-                                    "position": "insideEndBottom"
-                                }
-                            }
-                        ])
+                            ]
+                        )
 
             # Update the chromosome dropdown options in the UI
             try:
@@ -1898,28 +2016,39 @@ class CNVAnalysis(BaseAnalysis):
                 cytoband_analysis = self.analyze_cytoband_cnv(self.result3.cnv, contig)
                 # Update the table with the analysis results
                 try:
-                    if cytoband_analysis.empty and self.cnv_dict["bin_width"] > 10_000_000:
+                    if (
+                        cytoband_analysis.empty
+                        and self.cnv_dict["bin_width"] > 10_000_000
+                    ):
                         # Create a single row DataFrame with a message
-                        message_df = pd.DataFrame([{
-                            'chrom': contig,
-                            'start_pos': 0,
-                            'end_pos': 0,
-                            'name': 'More data needed for CNV analysis',
-                            'mean_cnv': 0,
-                            'cnv_state': f'Current bin width: {self.cnv_dict["bin_width"]:,}bp (need ≤ 10,000,000bp)',
-                            'length': 0
-                        }])
-                        self.cnv_table.rows = message_df.to_dict('records')
+                        message_df = pd.DataFrame(
+                            [
+                                {
+                                    "chrom": contig,
+                                    "start_pos": 0,
+                                    "end_pos": 0,
+                                    "name": "More data needed for CNV analysis",
+                                    "mean_cnv": 0,
+                                    "cnv_state": f'Current bin width: {self.cnv_dict["bin_width"]:,}bp (need ≤ 10,000,000bp)',
+                                    "length": 0,
+                                }
+                            ]
+                        )
+                        self.cnv_table.rows = message_df.to_dict("records")
                     else:
-                        self.cnv_table.rows = cytoband_analysis.to_dict('records')
+                        self.cnv_table.rows = cytoband_analysis.to_dict("records")
                     ui.update(self.cnv_table)
                 except AttributeError:
                     pass  # Ignore if the table component is not available
 
             # Add click event handler for the table rows
-            self.cnv_table.on('row-click', lambda e: self._handle_table_row_click(e, plot_to_update))
+            self.cnv_table.on(
+                "row-click", lambda e: self._handle_table_row_click(e, plot_to_update)
+            )
 
-    def create_summary_card(self, xy_estimate: str, bin_width: int, variance: float) -> None:
+    def create_summary_card(
+        self, xy_estimate: str, bin_width: int, variance: float
+    ) -> None:
         """
         Create a summary card displaying key CNV analysis information.
 
@@ -1937,62 +2066,93 @@ class CNVAnalysis(BaseAnalysis):
         """
         with self.summary:
             self.summary.clear()
-            with ui.card().classes('w-full p-4 mb-4'):
-                with ui.row().classes('w-full items-center justify-between'):
+            with ui.card().classes("w-full p-4 mb-4"):
+                with ui.row().classes("w-full items-center justify-between"):
                     # Left side - CNV Status
-                    with ui.column().classes('gap-2'):
-                        ui.label("Copy Number Variation Analysis").classes('text-lg font-medium')
-                        with ui.row().classes('items-center gap-2'):
+                    with ui.column().classes("gap-2"):
+                        ui.label("Copy Number Variation Analysis").classes(
+                            "text-lg font-medium"
+                        )
+                        with ui.row().classes("items-center gap-2"):
                             if xy_estimate != "Unknown":
-                                status_color = "text-blue-600" if xy_estimate == "XY" else "text-pink-600"
-                                status_bg = "bg-blue-100" if xy_estimate == "XY" else "bg-pink-100"
+                                status_color = (
+                                    "text-blue-600"
+                                    if xy_estimate == "XY"
+                                    else "text-pink-600"
+                                )
+                                status_bg = (
+                                    "bg-blue-100"
+                                    if xy_estimate == "XY"
+                                    else "bg-pink-100"
+                                )
                                 if xy_estimate == "XY":
                                     ui.icon("man").classes("text-4xl text-blue-500")
                                 else:
                                     ui.icon("woman").classes("text-4xl text-pink-500")
-                                ui.label(f"Genetic Sex: {xy_estimate}").classes(f'{status_color} font-medium')
+                                ui.label(f"Genetic Sex: {xy_estimate}").classes(
+                                    f"{status_color} font-medium"
+                                )
                             else:
-                                ui.label("Status: Awaiting Data").classes('text-gray-600')
-                                ui.label("--").classes('px-2 py-1 rounded bg-gray-100 text-gray-600')
+                                ui.label("Status: Awaiting Data").classes(
+                                    "text-gray-600"
+                                )
+                                ui.label("--").classes(
+                                    "px-2 py-1 rounded bg-gray-100 text-gray-600"
+                                )
 
                     # Right side - Analysis metrics
-                    with ui.column().classes('gap-2 text-right'):
-                        ui.label("Analysis Details").classes('font-medium')
-                        ui.label(f"Bin Width: {bin_width:,}").classes('text-gray-600')
-                        ui.label(f"Variance: {variance:.3f}").classes('text-gray-600')
+                    with ui.column().classes("gap-2 text-right"):
+                        ui.label("Analysis Details").classes("font-medium")
+                        ui.label(f"Bin Width: {bin_width:,}").classes("text-gray-600")
+                        ui.label(f"Variance: {variance:.3f}").classes("text-gray-600")
 
                         # Calculate gene counts for gains and losses
                         total_gained_genes = set()
                         total_lost_genes = set()
-                        
+
                         if hasattr(self, "result3") and self.result3.cnv:
-                            main_chromosomes = [f"chr{i}" for i in range(1, 23)] + ["chrX", "chrY"]
+                            main_chromosomes = [f"chr{i}" for i in range(1, 23)] + [
+                                "chrX",
+                                "chrY",
+                            ]
                             for chrom in main_chromosomes:
                                 if chrom in self.result3.cnv:
-                                    analysis = self.analyze_cytoband_cnv(self.result3.cnv, chrom)
+                                    analysis = self.analyze_cytoband_cnv(
+                                        self.result3.cnv, chrom
+                                    )
                                     if not analysis.empty:
                                         # Get genes in gained regions
-                                        gained = analysis[analysis['cnv_state'] == 'GAIN']
+                                        gained = analysis[
+                                            analysis["cnv_state"] == "GAIN"
+                                        ]
                                         for _, row in gained.iterrows():
-                                            if row['genes']:
-                                                total_gained_genes.update(row['genes'])
-                                        
+                                            if row["genes"]:
+                                                total_gained_genes.update(row["genes"])
+
                                         # Get genes in lost regions
-                                        lost = analysis[analysis['cnv_state'] == 'LOSS']
+                                        lost = analysis[analysis["cnv_state"] == "LOSS"]
                                         for _, row in lost.iterrows():
-                                            if row['genes']:
-                                                total_lost_genes.update(row['genes'])
+                                            if row["genes"]:
+                                                total_lost_genes.update(row["genes"])
 
                         # Display gene counts in the right column
-                        with ui.row().classes('gap-2 justify-end mt-2'):
-                            with ui.card().classes('py-1 px-2 bg-green-50 rounded'):
-                                ui.label(f"Gained: {len(total_gained_genes)}").classes('text-sm text-green-800')
-                            with ui.card().classes('py-1 px-2 bg-red-50 rounded'):
-                                ui.label(f"Lost: {len(total_lost_genes)}").classes('text-sm text-red-800')
+                        with ui.row().classes("gap-2 justify-end mt-2"):
+                            with ui.card().classes("py-1 px-2 bg-green-50 rounded"):
+                                ui.label(f"Gained: {len(total_gained_genes)}").classes(
+                                    "text-sm text-green-800"
+                                )
+                            with ui.card().classes("py-1 px-2 bg-red-50 rounded"):
+                                ui.label(f"Lost: {len(total_lost_genes)}").classes(
+                                    "text-sm text-red-800"
+                                )
 
                 # Bottom row - Information
-                with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
-                    ui.label("Copy number analysis across genome with breakpoint detection")
+                with ui.row().classes(
+                    "w-full mt-4 text-sm text-gray-500 justify-center"
+                ):
+                    ui.label(
+                        "Copy number analysis across genome with breakpoint detection"
+                    )
 
     async def show_previous_data(self) -> None:
         """
@@ -2073,11 +2233,19 @@ class CNVAnalysis(BaseAnalysis):
                     index_col=0,
                 )
 
-                df_filtered = self.proportions_df_store[self.proportions_df_store['chromosome'] != 'Genome-wide']
-                pivot_df = df_filtered.pivot(index='timestamp', columns='chromosome', values='proportion')
+                df_filtered = self.proportions_df_store[
+                    self.proportions_df_store["chromosome"] != "Genome-wide"
+                ]
+                pivot_df = df_filtered.pivot(
+                    index="timestamp", columns="chromosome", values="proportion"
+                )
 
-                df_filtered2 = self.proportions_df_store[self.proportions_df_store['chromosome'] == 'Genome-wide']
-                pivot_df2 = df_filtered2.pivot(index='timestamp', columns='chromosome', values='proportion')
+                df_filtered2 = self.proportions_df_store[
+                    self.proportions_df_store["chromosome"] == "Genome-wide"
+                ]
+                pivot_df2 = df_filtered2.pivot(
+                    index="timestamp", columns="chromosome", values="proportion"
+                )
 
                 self.update_proportion_time_chart(pivot_df)
                 self.update_proportion_time_chart2(pivot_df2)
@@ -2090,9 +2258,8 @@ class CNVAnalysis(BaseAnalysis):
                         self.create_summary_card(
                             xy_estimate=xy_estimate,
                             bin_width=self.cnv_dict["bin_width"],
-                            variance=self.cnv_dict["variance"]
+                            variance=self.cnv_dict["variance"],
                         )
-
 
     def create_time_chart(self, title: str) -> ui.echart:
         """
@@ -2110,100 +2277,87 @@ class CNVAnalysis(BaseAnalysis):
             "#4CD964",  # Light Green
         ]
 
-        return ui.echart({
-            "backgroundColor": "transparent",
-            "textStyle": {
-                "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
-                "fontSize": 12
-            },
-            "animation": False,
-            "grid": {
-                "top": "25%",
-                "bottom": "20%",
-                "left": "5%",
-                "right": "10%",
-                "containLabel": True
-            },
-            "title": {
-                "text": title,
-                "left": "center",
-                "top": 20,
-                "textStyle": {
-                    "fontSize": 16,
-                    "fontWeight": "500",
-                    "color": "#1D1D1F"
+        return (
+            ui.echart(
+                {
+                    "backgroundColor": "transparent",
+                    "textStyle": {
+                        "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                        "fontSize": 12,
+                    },
+                    "animation": False,
+                    "grid": {
+                        "top": "25%",
+                        "bottom": "20%",
+                        "left": "5%",
+                        "right": "10%",
+                        "containLabel": True,
+                    },
+                    "title": {
+                        "text": title,
+                        "left": "center",
+                        "top": 20,
+                        "textStyle": {
+                            "fontSize": 16,
+                            "fontWeight": "500",
+                            "color": "#1D1D1F",
+                        },
+                    },
+                    "tooltip": {
+                        "trigger": "axis",
+                        "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                        "borderColor": "#E5E5EA",
+                        "textStyle": {"color": "#1D1D1F"},
+                    },
+                    "legend": {
+                        "type": "scroll",
+                        "top": 50,
+                        "textStyle": {"color": "#86868B"},
+                    },
+                    "toolbox": {
+                        "show": True,
+                        "right": 20,
+                        "feature": {"saveAsImage": {"title": "Save Chart"}},
+                    },
+                    "xAxis": {
+                        "type": "time",
+                        "splitLine": {
+                            "show": True,
+                            "lineStyle": {"type": "dashed", "color": "#E5E5EA"},
+                        },
+                        "axisLabel": {"color": "#86868B"},
+                    },
+                    "yAxis": {
+                        "type": "value",
+                        "name": "Proportion",
+                        "nameTextStyle": {
+                            "color": "#86868B",
+                            "fontSize": 12,
+                            "padding": [0, 30, 0, 0],
+                        },
+                        "axisLabel": {"color": "#86868B", "formatter": "{value}%"},
+                        "splitLine": {
+                            "show": True,
+                            "lineStyle": {"type": "dashed", "color": "#E5E5EA"},
+                        },
+                    },
+                    "color": colors,
+                    "series": [],
                 }
-            },
-            "tooltip": {
-                "trigger": "axis",
-                "backgroundColor": "rgba(255, 255, 255, 0.9)",
-                "borderColor": "#E5E5EA",
-                "textStyle": {
-                    "color": "#1D1D1F"
-                }
-            },
-            "legend": {
-                "type": "scroll",
-                "top": 50,
-                "textStyle": {
-                    "color": "#86868B"
-                }
-            },
-            "toolbox": {
-                "show": True,
-                "right": 20,
-                "feature": {
-                    "saveAsImage": {
-                        "title": "Save Chart"
-                    }
-                }
-            },
-            "xAxis": {
-                "type": "time",
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {
-                        "type": "dashed",
-                        "color": "#E5E5EA"
-                    }
-                },
-                "axisLabel": {
-                    "color": "#86868B"
-                }
-            },
-            "yAxis": {
-                "type": "value",
-                "name": "Proportion",
-                "nameTextStyle": {
-                    "color": "#86868B",
-                    "fontSize": 12,
-                    "padding": [0, 30, 0, 0]
-                },
-                "axisLabel": {
-                    "color": "#86868B",
-                    "formatter": "{value}%"
-                },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {
-                        "type": "dashed",
-                        "color": "#E5E5EA"
-                    }
-                }
-            },
-            "color": colors,
-            "series": []
-        }).style("height: 450px; margin: 20px 0;").classes("border rounded-lg shadow-sm")
+            )
+            .style("height: 450px; margin: 20px 0;")
+            .classes("border rounded-lg shadow-sm")
+        )
 
     def analyze_cytoband_cnv(self, cnv_data: dict, chromosome: str) -> pd.DataFrame:
         """
         Analyze CNV values within each cytoband to detect duplications and deletions.
         Uses dynamic thresholds based on data variation for more robust detection.
-        
+
         Args:
             cnv_data (dict): Dictionary containing CNV values
             chromosome (str): Chromosome to analyze
-        
+
         Returns:
             pd.DataFrame: DataFrame containing merged cytoband CNV analysis results
         """
@@ -2211,65 +2365,76 @@ class CNVAnalysis(BaseAnalysis):
         logger.debug(f"Starting CNV analysis for {chromosome}")
         logger.debug(f"CNV data keys: {list(cnv_data.keys())}")
         logger.debug(f"Bin width: {self.cnv_dict['bin_width']}")
-        
+
         # Check if bin width is small enough for accurate CNV calling
         if self.cnv_dict["bin_width"] > 10_000_000:
             logger.debug("Resolution insufficient for CNV calling")
             return pd.DataFrame()
-        
+
         bin_width = self.cnv_dict["bin_width"]
-        chromosome_cytobands = self.cytobands_bed[self.cytobands_bed["chrom"] == chromosome].copy()
-        logger.debug(f"Number of cytobands for {chromosome}: {len(chromosome_cytobands)}")
-        
+        chromosome_cytobands = self.cytobands_bed[
+            self.cytobands_bed["chrom"] == chromosome
+        ].copy()
+        logger.debug(
+            f"Number of cytobands for {chromosome}: {len(chromosome_cytobands)}"
+        )
+
         # Initialize results storage
         merged_cytobands = []
         whole_chr_event = False
         whole_chr_state = "NORMAL"
-        
+
         # First, analyze the whole chromosome for potential aneuploidy
         if chromosome in cnv_data:
-            logger.debug(f"\nAnalyzing chromosome {chromosome} for whole chromosome events:")
-            
+            logger.debug(
+                f"\nAnalyzing chromosome {chromosome} for whole chromosome events:"
+            )
+
             # Calculate mean CNV for the entire chromosome, excluding centromeric regions
             centromere = self.centromere_bed[self.centromere_bed["chrom"] == chromosome]
             if not centromere.empty:
                 cent_start_bin = int(centromere["start_pos"].iloc[0] / bin_width)
                 cent_end_bin = int(centromere["end_pos"].iloc[0] / bin_width)
-                chr_cnv = np.concatenate([
-                    cnv_data[chromosome][:cent_start_bin],
-                    cnv_data[chromosome][cent_end_bin:]
-                ])
-                logger.debug(f"Excluded centromere region: {cent_start_bin}-{cent_end_bin}")
+                chr_cnv = np.concatenate(
+                    [
+                        cnv_data[chromosome][:cent_start_bin],
+                        cnv_data[chromosome][cent_end_bin:],
+                    ]
+                )
+                logger.debug(
+                    f"Excluded centromere region: {cent_start_bin}-{cent_end_bin}"
+                )
             else:
                 chr_cnv = cnv_data[chromosome]
-            
+
             # Calculate chromosome-wide statistics
             chr_mean = np.mean(chr_cnv)
             chr_std = np.std(chr_cnv)
             logger.debug(f"Chromosome-wide mean: {chr_mean:.3f}, std: {chr_std:.3f}")
-            
+
             # Calculate SD of chromosome means for whole chromosome event detection
             chromosome_means = []
             for chrom in cnv_data:
-                if chrom.startswith('chr') and chrom[3:].isdigit():  # Only autosomes
+                if chrom.startswith("chr") and chrom[3:].isdigit():  # Only autosomes
                     chrom_data = cnv_data[chrom]
                     # Exclude centromere regions if present
                     cent = self.centromere_bed[self.centromere_bed["chrom"] == chrom]
                     if not cent.empty:
                         cent_start = int(cent["start_pos"].iloc[0] / bin_width)
                         cent_end = int(cent["end_pos"].iloc[0] / bin_width)
-                        chrom_data = np.concatenate([
-                            chrom_data[:cent_start],
-                            chrom_data[cent_end:]
-                        ])
+                        chrom_data = np.concatenate(
+                            [chrom_data[:cent_start], chrom_data[cent_end:]]
+                        )
                     chromosome_means.append(np.mean(chrom_data))
-            
+
             means_std = np.std(chromosome_means)
             means_mean = np.mean(chromosome_means)
-            logger.debug(f"Mean of chromosome means: {means_mean:.3f}, std of means: {means_std:.3f}")
-            
+            logger.debug(
+                f"Mean of chromosome means: {means_mean:.3f}, std of means: {means_std:.3f}"
+            )
+
             # Base thresholds on standard deviations from the mean
-            if chromosome.startswith('chr') and chromosome[3:].isdigit():  # Autosomes
+            if chromosome.startswith("chr") and chromosome[3:].isdigit():  # Autosomes
                 # For whole chromosome events, use SD of means with 70% confidence
                 gain_threshold = means_mean + (1.0 * means_std)  # ~70% confidence
                 loss_threshold = means_mean - (1.0 * means_std)
@@ -2299,16 +2464,22 @@ class CNVAnalysis(BaseAnalysis):
                     loss_threshold = means_mean - (1.2 * means_std)
                     cytoband_gain_threshold = chr_mean + (1.2 * chr_std)
                     cytoband_loss_threshold = chr_mean - (1.2 * chr_std)
-            
-            logger.debug(f"Thresholds - Whole chr gain: {gain_threshold:.3f}, loss: {loss_threshold:.3f}")
-            logger.debug(f"Thresholds - Cytoband gain: {cytoband_gain_threshold:.3f}, loss: {cytoband_loss_threshold:.3f}")
-            
+
+            logger.debug(
+                f"Thresholds - Whole chr gain: {gain_threshold:.3f}, loss: {loss_threshold:.3f}"
+            )
+            logger.debug(
+                f"Thresholds - Cytoband gain: {cytoband_gain_threshold:.3f}, loss: {cytoband_loss_threshold:.3f}"
+            )
+
             # Calculate proportion of bins supporting gain/loss using thresholds
             bins_above_gain = np.sum(chr_cnv > gain_threshold) / len(chr_cnv)
             bins_below_loss = np.sum(chr_cnv < loss_threshold) / len(chr_cnv)
-            
-            logger.debug(f"Proportion of bins - Above gain: {bins_above_gain:.3f}, Below loss: {bins_below_loss:.3f}")
-            
+
+            logger.debug(
+                f"Proportion of bins - Above gain: {bins_above_gain:.3f}, Below loss: {bins_below_loss:.3f}"
+            )
+
             # Detect whole chromosome events with proportion threshold
             min_proportion = 0.7  # Require at least 50% of bins to support the event
             if bins_above_gain > min_proportion:
@@ -2319,45 +2490,52 @@ class CNVAnalysis(BaseAnalysis):
                 whole_chr_event = True
                 whole_chr_state = "LOSS"
                 logger.debug(f"WHOLE CHROMOSOME EVENT DETECTED: {chromosome} LOSS")
-            
+
             # If whole chromosome event detected, add it to results
             if whole_chr_event:
-                genes_in_chr = self.gene_bed[
-                    self.gene_bed['chrom'] == chromosome
-                ]['gene'].tolist()
-                
-                merged_cytobands.append({
-                    'chrom': chromosome,
-                    'start_pos': chromosome_cytobands['start_pos'].min(),
-                    'end_pos': chromosome_cytobands['end_pos'].max(),
-                    'name': f"{chromosome} WHOLE CHROMOSOME {whole_chr_state}",
-                    'mean_cnv': chr_mean,
-                    'cnv_state': whole_chr_state,
-                    'length': chromosome_cytobands['end_pos'].max() - chromosome_cytobands['start_pos'].min(),
-                    'genes': genes_in_chr
-                })
-            
+                genes_in_chr = self.gene_bed[self.gene_bed["chrom"] == chromosome][
+                    "gene"
+                ].tolist()
+
+                merged_cytobands.append(
+                    {
+                        "chrom": chromosome,
+                        "start_pos": chromosome_cytobands["start_pos"].min(),
+                        "end_pos": chromosome_cytobands["end_pos"].max(),
+                        "name": f"{chromosome} WHOLE CHROMOSOME {whole_chr_state}",
+                        "mean_cnv": chr_mean,
+                        "cnv_state": whole_chr_state,
+                        "length": chromosome_cytobands["end_pos"].max()
+                        - chromosome_cytobands["start_pos"].min(),
+                        "genes": genes_in_chr,
+                    }
+                )
+
             # Now analyze individual cytobands regardless of whole chromosome event
             current_group = None
-            
+
             for _, cytoband in chromosome_cytobands.iterrows():
                 start_bin = int(cytoband["start_pos"] / bin_width)
                 end_bin = int(cytoband["end_pos"] / bin_width)
-                
+
                 if start_bin < len(cnv_data[chromosome]):
-                    region_cnv = cnv_data[chromosome][start_bin:end_bin+1]
+                    region_cnv = cnv_data[chromosome][start_bin : end_bin + 1]
                     mean_cnv = np.mean(region_cnv) if len(region_cnv) > 0 else 0
-                    
+
                     # Determine cytoband state relative to whole chromosome state
                     if whole_chr_event:
                         # For whole chromosome events, only report significant deviations in opposite direction
                         if whole_chr_state == "GAIN":
-                            if mean_cnv < chr_mean - (2.0 * chr_std):  # More stringent threshold for opposite changes
+                            if mean_cnv < chr_mean - (
+                                2.0 * chr_std
+                            ):  # More stringent threshold for opposite changes
                                 state = "LOSS"  # Only report significant losses within gained chromosomes
                             else:
                                 state = "NORMAL"  # Don't duplicate gains
                         elif whole_chr_state == "LOSS":
-                            if mean_cnv > chr_mean + (2.0 * chr_std):  # More stringent threshold for opposite changes
+                            if mean_cnv > chr_mean + (
+                                2.0 * chr_std
+                            ):  # More stringent threshold for opposite changes
                                 state = "GAIN"  # Only report significant gains within lost chromosomes
                             else:
                                 state = "NORMAL"  # Don't duplicate losses
@@ -2372,78 +2550,100 @@ class CNVAnalysis(BaseAnalysis):
                 else:
                     mean_cnv = 0
                     state = "NO_DATA"
-                
+
                 # Group cytobands with same state
                 if current_group is None:
                     current_group = {
-                        'chrom': cytoband['chrom'],
-                        'start_pos': cytoband['start_pos'],
-                        'end_pos': cytoband['end_pos'],
-                        'name': cytoband['name'],
-                        'mean_cnv': [mean_cnv],
-                        'cnv_state': state,
-                        'bands': [cytoband['name']],
-                        'length': cytoband['end_pos'] - cytoband['start_pos'],
-                        'genes': []
+                        "chrom": cytoband["chrom"],
+                        "start_pos": cytoband["start_pos"],
+                        "end_pos": cytoband["end_pos"],
+                        "name": cytoband["name"],
+                        "mean_cnv": [mean_cnv],
+                        "cnv_state": state,
+                        "bands": [cytoband["name"]],
+                        "length": cytoband["end_pos"] - cytoband["start_pos"],
+                        "genes": [],
                     }
-                elif state == current_group['cnv_state']:
-                    current_group['end_pos'] = cytoband['end_pos']
-                    current_group['mean_cnv'].append(mean_cnv)
-                    current_group['bands'].append(cytoband['name'])
+                elif state == current_group["cnv_state"]:
+                    current_group["end_pos"] = cytoband["end_pos"]
+                    current_group["mean_cnv"].append(mean_cnv)
+                    current_group["bands"].append(cytoband["name"])
                 else:
                     # Process current group
-                    if current_group['cnv_state'] in ['GAIN', 'LOSS', 'HIGH_GAIN', 'DEEP_LOSS']:
+                    if current_group["cnv_state"] in [
+                        "GAIN",
+                        "LOSS",
+                        "HIGH_GAIN",
+                        "DEEP_LOSS",
+                    ]:
                         genes_in_region = self.gene_bed[
-                            (self.gene_bed['chrom'] == current_group['chrom']) &
-                            (self.gene_bed['start_pos'] <= current_group['end_pos']) &
-                            (self.gene_bed['end_pos'] >= current_group['start_pos'])
-                        ]['gene'].tolist()
-                        current_group['genes'] = genes_in_region
-                    
-                    current_group['name'] = f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
-                    current_group['mean_cnv'] = np.mean(current_group['mean_cnv'])
-                    current_group['length'] = current_group['end_pos'] - current_group['start_pos']
-                    
+                            (self.gene_bed["chrom"] == current_group["chrom"])
+                            & (self.gene_bed["start_pos"] <= current_group["end_pos"])
+                            & (self.gene_bed["end_pos"] >= current_group["start_pos"])
+                        ]["gene"].tolist()
+                        current_group["genes"] = genes_in_region
+
+                    current_group["name"] = (
+                        f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
+                    )
+                    current_group["mean_cnv"] = np.mean(current_group["mean_cnv"])
+                    current_group["length"] = (
+                        current_group["end_pos"] - current_group["start_pos"]
+                    )
+
                     # Only add significant changes relative to whole chromosome state
-                    if (not whole_chr_event) or (current_group['cnv_state'] != whole_chr_state):
+                    if (not whole_chr_event) or (
+                        current_group["cnv_state"] != whole_chr_state
+                    ):
                         merged_cytobands.append(current_group)
-                    
+
                     # Start new group
                     current_group = {
-                        'chrom': cytoband['chrom'],
-                        'start_pos': cytoband['start_pos'],
-                        'end_pos': cytoband['end_pos'],
-                        'name': cytoband['name'],
-                        'mean_cnv': [mean_cnv],
-                        'cnv_state': state,
-                        'bands': [cytoband['name']],
-                        'length': cytoband['end_pos'] - cytoband['start_pos'],
-                        'genes': []
+                        "chrom": cytoband["chrom"],
+                        "start_pos": cytoband["start_pos"],
+                        "end_pos": cytoband["end_pos"],
+                        "name": cytoband["name"],
+                        "mean_cnv": [mean_cnv],
+                        "cnv_state": state,
+                        "bands": [cytoband["name"]],
+                        "length": cytoband["end_pos"] - cytoband["start_pos"],
+                        "genes": [],
                     }
-            
+
             # Process the last group
             if current_group is not None:
-                if current_group['cnv_state'] in ['GAIN', 'LOSS', 'HIGH_GAIN', 'DEEP_LOSS']:
+                if current_group["cnv_state"] in [
+                    "GAIN",
+                    "LOSS",
+                    "HIGH_GAIN",
+                    "DEEP_LOSS",
+                ]:
                     genes_in_region = self.gene_bed[
-                        (self.gene_bed['chrom'] == current_group['chrom']) &
-                        (self.gene_bed['start_pos'] <= current_group['end_pos']) &
-                        (self.gene_bed['end_pos'] >= current_group['start_pos'])
-                    ]['gene'].tolist()
-                    current_group['genes'] = genes_in_region
-                
-                current_group['name'] = f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
-                current_group['mean_cnv'] = np.mean(current_group['mean_cnv'])
-                current_group['length'] = current_group['end_pos'] - current_group['start_pos']
-                
+                        (self.gene_bed["chrom"] == current_group["chrom"])
+                        & (self.gene_bed["start_pos"] <= current_group["end_pos"])
+                        & (self.gene_bed["end_pos"] >= current_group["start_pos"])
+                    ]["gene"].tolist()
+                    current_group["genes"] = genes_in_region
+
+                current_group["name"] = (
+                    f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
+                )
+                current_group["mean_cnv"] = np.mean(current_group["mean_cnv"])
+                current_group["length"] = (
+                    current_group["end_pos"] - current_group["start_pos"]
+                )
+
                 # Only add significant changes relative to whole chromosome state
-                if (not whole_chr_event) or (current_group['cnv_state'] != whole_chr_state):
+                if (not whole_chr_event) or (
+                    current_group["cnv_state"] != whole_chr_state
+                ):
                     merged_cytobands.append(current_group)
-        
+
         # Convert results to DataFrame and sort
         merged_df = pd.DataFrame(merged_cytobands)
         if not merged_df.empty:
-            merged_df = merged_df.sort_values('start_pos')
-        
+            merged_df = merged_df.sort_values("start_pos")
+
         return merged_df
 
     def get_cytoband_cnv_summary(self, chromosome: str) -> str:
@@ -2458,22 +2658,26 @@ class CNVAnalysis(BaseAnalysis):
         """
         if not hasattr(self, "result3") or not self.result3.cnv:
             return "No CNV data available"
-            
+
         cytoband_analysis = self.analyze_cytoband_cnv(self.result3.cnv, chromosome)
-        
+
         # Filter for gains and losses
         gains = cytoband_analysis[cytoband_analysis["cnv_state"] == "GAIN"]
         losses = cytoband_analysis[cytoband_analysis["cnv_state"] == "LOSS"]
-        
+
         summary = []
         if not gains.empty:
-            gain_bands = [f"{row['name']} ({row['mean_cnv']:.2f})" for _, row in gains.iterrows()]
+            gain_bands = [
+                f"{row['name']} ({row['mean_cnv']:.2f})" for _, row in gains.iterrows()
+            ]
             summary.append(f"Gains: {', '.join(gain_bands)}")
-            
+
         if not losses.empty:
-            loss_bands = [f"{row['name']} ({row['mean_cnv']:.2f})" for _, row in losses.iterrows()]
+            loss_bands = [
+                f"{row['name']} ({row['mean_cnv']:.2f})" for _, row in losses.iterrows()
+            ]
             summary.append(f"Losses: {', '.join(loss_bands)}")
-            
+
         return "\n".join(summary) if summary else "No significant CNV changes detected"
 
 

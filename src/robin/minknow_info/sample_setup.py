@@ -63,19 +63,19 @@ UNIQUE_ID: str = str(uuid.uuid4())
 class ExperimentSpec(object):
     """
     A class to hold experiment specifications for a MinKNOW sequencing position.
-    
+
     This class maintains information about a sequencing position and its associated
     protocol ID for experiment execution.
-    
+
     Attributes:
         position: The sequencing position object from MinKNOW
         protocol_id (str): The identifier for the protocol to be run
     """
-    
+
     def __init__(self, position):
         """
         Initialize an ExperimentSpec instance.
-        
+
         Args:
             position: A MinKNOW position object representing a sequencing position
         """
@@ -90,19 +90,19 @@ ExperimentSpecs = Sequence[ExperimentSpec]
 def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_id):
     """
     Add protocol IDs to experiment specifications based on flowcell and kit information.
-    
+
     This function validates flowcell presence and compatibility, then finds and assigns
     the appropriate protocol ID for each experiment specification.
-    
+
     Args:
         experiment_specs (list): List of ExperimentSpec objects
         kit (str): The sequencing kit identifier
         basecall_config (str): Basecalling configuration name
         expected_flowcell_id (str): The expected flowcell ID to validate against
-        
+
     Returns:
         bool: True if protocol IDs were successfully added, False otherwise
-        
+
     Raises:
         None: Errors are handled internally and reported via UI notifications
     """
@@ -176,15 +176,15 @@ def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_i
 def disable(button: ui.button):
     """
     Context manager to temporarily disable a UI button.
-    
+
     This ensures the button is re-enabled even if an exception occurs.
-    
+
     Args:
         button (ui.button): The button to disable
-        
+
     Yields:
         None
-        
+
     Example:
         with disable(my_button):
             # Perform some operation
@@ -200,10 +200,10 @@ def disable(button: ui.button):
 class MinKNOWFish:
     """
     Main class for handling MinKNOW connections and experiment setup.
-    
+
     This class manages the connection to MinKNOW instances, handles device
     configuration, and coordinates experiment setup and execution.
-    
+
     Attributes:
         tabs: UI tabs container
         manager: MinKNOW manager connection
@@ -233,7 +233,7 @@ class MinKNOWFish:
     ):
         """
         Initialize a MinKNOWFish instance.
-        
+
         Args:
             kit (str): Sequencing kit identifier
             centreID (str): Centre identifier
@@ -251,7 +251,7 @@ class MinKNOWFish:
         self.connected = False
         self.watchfolder = None
         self.devices = set()
-        
+
         # Store configuration parameters
         self.kit = kit
         self.basecall_config = basecall_config
@@ -333,29 +333,31 @@ class MinKNOWFish:
     ):
         """
         Start a sequencing run with the specified parameters.
-        
+
         This method configures and initiates a sequencing run on the selected
         position with the provided parameters.
-        
+
         Args:
             position (str, optional): Device position identifier
             reference (str, optional): Reference genome path
             sample_id (str, optional): Sample identifier
             experiment_group_id (str, optional): Group identifier
             flowcell_id (str, optional): Flowcell identifier
-            
+
         Note:
             Notifies the user of run status through the UI
         """
         ui.notify(f"Starting Run {sample_id} on {flowcell_id}!", type="positive")
-        
+
         # Build experiment specifications
         experiment_specs = []
         for pos in self.manager.flow_cell_positions():
             if pos.name == position:
                 experiment_specs.append(ExperimentSpec(position=pos))
 
-        if add_protocol_ids(experiment_specs, self.kit, self.basecall_config, flowcell_id):
+        if add_protocol_ids(
+            experiment_specs, self.kit, self.basecall_config, flowcell_id
+        ):
             # Configure run parameters
             alignment_args = protocols.AlignmentArgs(
                 reference_files=[self.reference],
@@ -379,7 +381,7 @@ class MinKNOWFish:
             # Start the protocol
             for spec in experiment_specs:
                 position_connection = spec.position.connect()
-                
+
                 # Set up stop criteria
                 stop_criteria = protocols.CriteriaValues(
                     runtime=int(self.experiment_duration * 60 * 60)
@@ -631,11 +633,11 @@ async def content():
 def main():
     """
     Main entry point for the sample setup application.
-    
+
     This function initializes and runs the web interface for sample setup
     and run configuration. It sets up the necessary routes and starts
     the web server.
-    
+
     Returns:
         None
     """

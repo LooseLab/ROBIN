@@ -43,12 +43,16 @@ from sturgeon.callmapping import (
 
 import yappi
 import tabulate
+import shutil
 
 from robin import submodules
+
 from robin.utilities.merge_bedmethyl import (
     merge_bedmethyl,
     save_bedmethyl,
+    collapse_bedmethyl,
 )
+
 from typing import List, Tuple
 
 # Use the main logger configured in the main application
@@ -71,20 +75,89 @@ def run_sturgeon_merge_probes(calls_per_probe_file, merged_output_file):
 
 
 def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
-    command = (
-        f"Rscript {HVPATH}/bin/methylation_classification_nanodx_v0.1.R -s "
-        + f"live_{batch} -o {rcns2folder} -i {bed} "
-        + f"-p {HVPATH}/bin/top_probes_hm450.Rdata "
-        + f"--training_data {HVPATH}/bin/capper_top_100k_betas_binarised.Rdata "
-        + f"--array_file {HVPATH}/bin/HM450.hg38.manifest.gencode.v22.Rdata "
-        + f"-t {threads} "
-    )
-    if not showerrors:
-        command += ">/dev/null 2>&1"
-    logger.debug(command)
-    # print(command)
+    """
+    Run the Random Forest R script on the methylation data.
 
-    os.system(command)
+    Parameters
+    ----------
+    rcns2folder : str
+        Directory for R script output
+    batch : int
+        Batch number for output file naming
+    bed : str
+        Path to input BED file
+    threads : int
+        Number of threads to use
+    showerrors : bool
+        Whether to show error messages
+    """
+    try:
+        logger.info(f"Starting run_rcns2 with bed file: {bed}")
+        logger.info(f"Output directory: {rcns2folder}")
+        logger.info(f"Batch number: {batch}")
+
+        # Check if R script exists
+        r_script_path = f"{HVPATH}/bin/methylation_classification_nanodx_v0.1.R"
+        if not os.path.exists(r_script_path):
+            logger.error(f"R script not found at: {r_script_path}")
+            raise FileNotFoundError(f"R script not found: {r_script_path}")
+
+        # Check if other required files exist
+        required_files = {
+            "probes": f"{HVPATH}/bin/top_probes_hm450.Rdata",
+            "training_data": f"{HVPATH}/bin/capper_top_100k_betas_binarised.Rdata",
+            "array_file": f"{HVPATH}/bin/HM450.hg38.manifest.gencode.v22.Rdata",
+        }
+
+        for file_type, file_path in required_files.items():
+            if not os.path.exists(file_path):
+                logger.error(f"{file_type} file not found at: {file_path}")
+                raise FileNotFoundError(f"{file_type} file not found: {file_path}")
+
+        # Run the R script
+        command = (
+            f"Rscript {r_script_path} -s "
+            + f"live_{batch} -o {rcns2folder} -i {bed} "
+            + f"-p {HVPATH}/bin/top_probes_hm450.Rdata "
+            + f"--training_data {HVPATH}/bin/capper_top_100k_betas_binarised.Rdata "
+            + f"--array_file {HVPATH}/bin/HM450.hg38.manifest.gencode.v22.Rdata "
+            + f"-t {threads} "
+        )
+
+        logger.info(f"Executing R command: {command}")
+
+        # Execute command and capture output
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                command.split(), capture_output=True, text=True, check=True
+            )
+            logger.info("R script executed successfully")
+            logger.debug(f"R script stdout: {result.stdout}")
+            if result.stderr:
+                pass
+                logger.warning(f"R script stderr: {result.stderr}")
+        except subprocess.CalledProcessError as e:
+            # logger.error(f"R script failed with return code {e.returncode}")
+            # logger.error(f"stdout: {e.stdout}")
+            # logger.error(f"stderr: {e.stderr}")
+            # raise
+            pass
+
+        # Check if output file was created
+        expected_output = f"{rcns2folder}/live_{batch}_votes.tsv"
+        if os.path.exists(expected_output):
+            logger.info(f"Output file created successfully: {expected_output}")
+        else:
+            logger.error(f"Expected output file not found: {expected_output}")
+            raise FileNotFoundError(
+                f"R script did not create expected output file: {expected_output}"
+            )
+
+    except Exception as e:
+        logger.error(f"Error in run_rcns2: {str(e)}", exc_info=True)
+        raise
 
 
 def run_samtools_sort(file, tomerge, sortfile, threads, regions):
@@ -116,9 +189,47 @@ def run_modkit(bamfile, outbed, cpgs, threads, showerrors):
         os.system(command)
         # self.log("Done processing bam file")
     except Exception as e:
-        print(e)
+        logger.error(e)
         # self.log(e)
         pass
+
+
+def load_modkit_data(parquet_path):
+    for attempt in range(5):  # Retry up to 5 times
+        try:
+            merged_modkit_df = pd.read_parquet(parquet_path)
+            logger.debug("Successfully read the Parquet file.")
+            break
+        except Exception as e:
+            logger.debug(f"Attempt {attempt+1}: File not ready ({e}). Retrying...")
+            time.sleep(10)
+    else:
+        logger.debug("Failed to read Parquet file after multiple attempts.")
+        return None
+
+    column_names = [
+        "chrom",
+        "chromStart",
+        "chromEnd",
+        "mod_code",
+        "score_bed",
+        "strand",
+        "thickStart",
+        "thickEnd",
+        "color",
+        "valid_cov",
+        "percent_modified",
+        "n_mod",
+        "n_canonical",
+        "n_othermod",
+        "n_delete",
+        "n_fail",
+        "n_diff",
+        "n_nocall",
+    ]
+
+    # Keep only the original 18 columns
+    return merged_modkit_df[column_names]
 
 
 class RandomForest_object(BaseAnalysis):
@@ -163,6 +274,7 @@ class RandomForest_object(BaseAnalysis):
     merged_bed_file : dict
         Dictionary of merged BED files
     """
+
     def __init__(self, *args, showerrors=False, **kwargs):
         self.rcns2_df_store = {}
         self.threshold = 0.5
@@ -208,7 +320,7 @@ class RandomForest_object(BaseAnalysis):
         """
         try:
             logger.info("Starting show_previous_data")
-            
+
             # Get output path
             if not self.browse:
                 for item in app.storage.general[self.mainuuid]:
@@ -228,278 +340,254 @@ class RandomForest_object(BaseAnalysis):
                 logger.info(f"Loading scores from: {scores_file}")
                 try:
                     self.rcns2_df_store = pd.read_csv(scores_file, index_col=0)
-                    logger.info(f"DataFrame loaded with shape: {self.rcns2_df_store.shape}")
-                    
+                    logger.info(
+                        f"DataFrame loaded with shape: {self.rcns2_df_store.shape}"
+                    )
+
                     if not self.rcns2_df_store.empty:
-                        columns_greater_than_threshold = (self.rcns2_df_store > self.threshold).any()
-                        columns_not_greater_than_threshold = ~columns_greater_than_threshold
-                        result = self.rcns2_df_store.columns[columns_not_greater_than_threshold].tolist()
+                        columns_greater_than_threshold = (
+                            self.rcns2_df_store > self.threshold
+                        ).any()
+                        columns_not_greater_than_threshold = (
+                            ~columns_greater_than_threshold
+                        )
+                        result = self.rcns2_df_store.columns[
+                            columns_not_greater_than_threshold
+                        ].tolist()
                         logger.debug(f"Filtered columns: {result}")
-                        
+
                         # Update time series chart
                         filtered_df = self.rcns2_df_store.drop(columns=result)
-                        logger.info(f"Updating time chart with filtered data shape: {filtered_df.shape}")
+                        logger.info(
+                            f"Updating time chart with filtered data shape: {filtered_df.shape}"
+                        )
                         self.update_rcns2_time_chart(filtered_df)
-                        
+
                         # Get last row data
                         lastrow = self.rcns2_df_store.iloc[-1]
                         logger.debug(f"Last row before processing: {lastrow.to_dict()}")
-                        
+
                         n_features = lastrow.get("number_probes", 0)
                         if "number_probes" in lastrow.index:
                             lastrow = lastrow.drop("number_probes")
-                            logger.info(f"Dropped number_probes column, features found: {n_features}")
-                        
+                            logger.info(
+                                f"Dropped number_probes column, features found: {n_features}"
+                            )
+
                         lastrow_plot = lastrow.sort_values(ascending=False).head(10)
                         lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-                        logger.info(f"Top classification: {lastrow_plot_top.index[0]} ({lastrow_plot_top.values[0]:.1f}%)")
-                        
+                        logger.info(
+                            f"Top classification: {lastrow_plot_top.index[0]} ({lastrow_plot_top.values[0]:.1f}%)"
+                        )
+
                         # Update summary card
                         if self.summary:
                             with self.summary:
                                 self.summary.clear()
                                 classification_text = f"Forest classification: {lastrow_plot_top.index[0]}"
-                                logger.debug(f"Creating summary card with text: {classification_text}")
+                                logger.debug(
+                                    f"Creating summary card with text: {classification_text}"
+                                )
                                 self.create_summary_card(
                                     classification_text=classification_text,
                                     confidence_value=lastrow_plot_top.values[0] / 100,
-                                    features_found=int(n_features) if n_features else None
+                                    features_found=(
+                                        int(n_features) if n_features else None
+                                    ),
                                 )
-                        
+
                         # Update bar plot
                         logger.info("Updating bar plot with top 10 classifications")
                         self.update_rcns2_plot(
                             lastrow_plot.index.to_list(),
                             list(lastrow_plot.values),
                             "All",
-                            n_features if n_features else None
+                            n_features if n_features else None,
                         )
                         logger.info("Completed show_previous_data successfully")
                 except Exception as e:
                     logger.error(f"Error reading scores file: {str(e)}", exc_info=True)
             else:
                 logger.debug(f"No scores file found at: {scores_file}")
-                
+
         except Exception as e:
             logger.error(f"Error in show_previous_data: {str(e)}", exc_info=True)
             raise
 
     async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
         """
-        Processes the BAM files and performs the NanoDX analysis.
+        Process BAM files and perform Random Forest analysis.
 
-        Args:
-            bamfile (List[Tuple[str, float]]): List of BAM files with their timestamps.
+        Parameters
+        ----------
+        bamfile : List[Tuple[str, float]]
+            List of tuples containing BAM file paths and their timestamps
         """
         sampleID = self.sampleID
+        # Initialize directories for each sampleID if not already present
         if sampleID not in self.dataDir.keys():
             self.dataDir[sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
-        if sampleID not in self.bedDir.keys():
             self.bedDir[sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
         tomerge = []
         latest_file = 0
-        while len(bamfile) > 0:
-            self.running = True
-            (file, filetime) = bamfile.pop(0)
-            if filetime > latest_file:
-                latest_file = filetime
-            tomerge.append(file)
+        if (
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bams_in_processing"
-            ] += 1
-            if len(tomerge) > 100:
-                break
-        if latest_file:
-            currenttime = latest_file * 1000
-        else:
-            currenttime = time.time() * 1000
-        if len(tomerge) > 0:
-            tempbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bam",
-            )
-            sortbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bam",
-            )
-            tempbed = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bed",
-            )
-            self.bambatch[sampleID] = self.bambatch.get(sampleID, 0) + 1
+                "bam_count"
+            ]
+            > 0
+        ):
+            if latest_file:
+                currenttime = latest_file * 1000
+            else:
+                currenttime = time.time() * 1000
 
-            await run.cpu_bound(
-                run_samtools_sort,
-                tempbam.name,
-                tomerge,
-                sortbam.name,
-                self.threads,
-                self.cpgs_file,
+            parquet_path = os.path.join(
+                self.check_and_create_folder(self.output, sampleID),
+                f"{sampleID}.parquet",
             )
-
-            await run.cpu_bound(
-                run_modkit,
-                sortbam.name,
-                tempbed.name,
-                self.cpgs_file,
-                self.threads,
-                self.showerrors,
-            )
+            logger.info(f"Processing parquet file: {parquet_path}")
 
             try:
-                os.remove(f"{sortbam.name}.csi")
-            except FileNotFoundError:
-                pass
-
-            if sampleID in self.first_run.keys() and not self.first_run[sampleID]:
-                bed_a = pd.read_table(
-                    f"{tempbed.name}",
-                    names=[
-                        "chrom",
-                        "start_pos",
-                        "end_pos",
-                        "mod",
-                        "score",
-                        "strand",
-                        "start_pos2",
-                        "end_pos2",
-                        "colour",
-                        "Nvalid",
-                        "fraction",
-                        "Nmod",
-                        "Ncanon",
-                        "Nother",
-                        "Ndel",
-                        "Nfail",
-                        "Ndiff",
-                        "Nnocall",
-                    ],
-                    dtype={
-                        "chrom": "category",
-                        "start_pos": "int32",
-                        "end_pos": "int32",
-                        "mod": "category",
-                        "score": "int16",
-                        "strand": "category",
-                        "start_pos2": "int32",
-                        "end_pos2": "int32",
-                        "colour": "category",
-                        "Nvalid": "int16",
-                        "fraction": "float16",
-                        "Nmod": "int16",
-                        "Ncanon": "int16",
-                        "Nother": "int16",
-                        "Ndel": "int16",
-                        "Nfail": "int16",
-                        "Ndiff": "int16",
-                        "Nnocall": "int16",
-                    },
-                    header=None,
-                    sep="\s+",
-                )
-
-                self.merged_bed_file[sampleID] = await run.cpu_bound(
-                    merge_bedmethyl, bed_a, self.merged_bed_file.get(sampleID)
-                )
-                save_bedmethyl(self.merged_bed_file[sampleID], f"{tempbed.name}")
-            else:
-                self.merged_bed_file[sampleID] = pd.read_table(
-                    f"{tempbed.name}",
-                    names=[
-                        "chrom",
-                        "start_pos",
-                        "end_pos",
-                        "mod",
-                        "score",
-                        "strand",
-                        "start_pos2",
-                        "end_pos2",
-                        "colour",
-                        "Nvalid",
-                        "fraction",
-                        "Nmod",
-                        "Ncanon",
-                        "Nother",
-                        "Ndel",
-                        "Nfail",
-                        "Ndiff",
-                        "Nnocall",
-                    ],
-                    dtype={
-                        "chrom": "category",
-                        "start_pos": "int32",
-                        "end_pos": "int32",
-                        "mod": "category",
-                        "score": "int16",
-                        "strand": "category",
-                        "start_pos2": "int32",
-                        "end_pos2": "int32",
-                        "colour": "category",
-                        "Nvalid": "int16",
-                        "fraction": "float16",
-                        "Nmod": "int16",
-                        "Ncanon": "int16",
-                        "Nother": "int16",
-                        "Ndel": "int16",
-                        "Nfail": "int16",
-                        "Ndiff": "int16",
-                        "Nnocall": "int16",
-                    },
-                    header=None,
-                    sep="\s+",
-                )
-                self.first_run[sampleID] = False
-
-            tempDir = tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
-
-            await run.cpu_bound(
-                run_rcns2,
-                tempDir.name,
-                self.bambatch[sampleID],
-                tempbed.name,
-                self.threads,
-                self.showerrors,
-            )
-
-            if os.path.isfile(
-                f"{tempDir.name}/live_{self.bambatch[sampleID]}_votes.tsv"
-            ):
-                scores = pd.read_table(
-                    f"{tempDir.name}/live_{self.bambatch[sampleID]}_votes.tsv",
-                    sep="\s+",
-                )
-                scores_to_save = scores.drop(columns=["Freq"]).T
-                scores_to_save["timestamp"] = currenttime
-
-                if sampleID not in self.rcns2_df_store:
-                    self.rcns2_df_store[sampleID] = pd.DataFrame()
-
-                self.rcns2_df_store[sampleID] = pd.concat(
-                    [
-                        self.rcns2_df_store[sampleID],
-                        scores_to_save.set_index("timestamp"),
-                    ]
-                )
-
-                self.rcns2_df_store[sampleID].to_csv(
-                    os.path.join(
+                if self.check_file_time(parquet_path):
+                    logger.debug("Parquet file exists and is ready for processing")
+                    tomerge_length_file = os.path.join(
                         self.check_and_create_folder(self.output, sampleID),
-                        "random_forest_scores.csv",
+                        "tomerge_length.txt",
                     )
-                )
+                    try:
+                        with open(tomerge_length_file, "r") as f:
+                            tomerge_length = int(f.readline().strip().split(": ")[1])
+                        logger.info(f"Number of files to merge: {tomerge_length}")
+                    except FileNotFoundError:
+                        logger.warning(
+                            "tomerge_length.txt not found yet, waiting for file creation"
+                        )
+                        return
+                    except Exception as e:
+                        logger.error(f"Error reading tomerge_length.txt: {str(e)}")
+                        return
 
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bam_processed"
-            ] += len(tomerge)
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bams_in_processing"
-            ] -= len(tomerge)
+                    logger.debug("Loading modkit data from parquet file...")
+                    merged_modkit_df = await run.cpu_bound(
+                        load_modkit_data, parquet_path
+                    )
+
+                    merged_modkit_df.rename(
+                        columns={
+                            "chromStart": "start_pos",
+                            "chromEnd": "end_pos",
+                            "mod_code": "mod",
+                            "thickStart": "start_pos2",
+                            "thickEnd": "end_pos2",
+                            "color": "colour",
+                        },
+                        inplace=True,
+                    )
+                    merged_modkit_df.rename(
+                        columns={
+                            "n_canonical": "Ncanon",
+                            "n_delete": "Ndel",
+                            "n_diff": "Ndiff",
+                            "n_fail": "Nfail",
+                            "n_mod": "Nmod",
+                            "n_nocall": "Nnocall",
+                            "n_othermod": "Nother",
+                            "valid_cov": "Nvalid",
+                            "percent_modified": "score",
+                        },
+                        inplace=True,
+                    )
+
+                    forest_dx = await run.cpu_bound(
+                        collapse_bedmethyl, merged_modkit_df
+                    )
+                    merged_modkit_df = forest_dx
+                    if merged_modkit_df is None:
+                        logger.error("Failed to load modkit data from parquet file")
+                        return
+                    logger.info(
+                        f"Loaded modkit data with shape: {merged_modkit_df.shape}"
+                    )
+
+                    # Create a temporary directory for R script output
+                    rcns2folder = tempfile.mkdtemp(
+                        dir=self.check_and_create_folder(self.output, sampleID)
+                    )
+                    logger.info(
+                        f"Created temporary directory for R output: {rcns2folder}"
+                    )
+
+                    # Write the BED file to the output folder as "RandomForestBed.bed"
+                    randomforest_bed_output = os.path.join(
+                        self.check_and_create_folder(self.output, sampleID),
+                        "RandomForestBed.bed",
+                    )
+                    logger.info(f"Writing BED file to: {randomforest_bed_output}")
+
+                    merged_modkit_df.to_csv(
+                        randomforest_bed_output, sep="\t", index=False, header=False
+                    )
+
+                    # Initialize batch number if not exists
+                    if sampleID not in self.bambatch:
+                        self.bambatch[sampleID] = 1
+                    logger.info(f"Using batch number: {self.bambatch[sampleID]}")
+
+                    # Run the R script
+                    logger.info("Attempting to run R script...")
+                    try:
+                        await run.cpu_bound(
+                            run_rcns2,
+                            rcns2folder,
+                            self.bambatch[sampleID],
+                            randomforest_bed_output,
+                            self.threads,
+                            self.showerrors,
+                        )
+                        logger.info("R script completed successfully")
+                    except Exception as e:
+                        logger.error(f"Error running R script: {str(e)}", exc_info=True)
+                        raise
+
+                    votes_file = (
+                        f"{rcns2folder}/live_{self.bambatch[sampleID]}_votes.tsv"
+                    )
+                    if os.path.isfile(votes_file):
+                        logger.info(f"Found votes file: {votes_file}")
+                        scores = pd.read_table(votes_file, sep="\s+")
+                        scores_to_save = scores.drop(columns=["Freq"]).T
+                        scores_to_save["timestamp"] = currenttime
+
+                        if sampleID not in self.rcns2_df_store:
+                            self.rcns2_df_store[sampleID] = pd.DataFrame()
+
+                        self.rcns2_df_store[sampleID] = pd.concat(
+                            [
+                                self.rcns2_df_store[sampleID],
+                                scores_to_save.set_index("timestamp"),
+                            ]
+                        )
+
+                        # Save results
+                        output_file = os.path.join(
+                            self.check_and_create_folder(self.output, sampleID),
+                            "random_forest_scores.csv",
+                        )
+                        logger.info(f"Saving results to: {output_file}")
+                        self.rcns2_df_store[sampleID].to_csv(output_file)
+                    else:
+                        logger.error(f"Votes file not found: {votes_file}")
+
+                    app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                        "bam_processed"
+                    ] = tomerge_length
+
+            except Exception as e:
+                logger.error(f"Error in process_bam: {str(e)}", exc_info=True)
 
         self.running = False
 
@@ -508,169 +596,158 @@ class RandomForest_object(BaseAnalysis):
         Create a bar chart for displaying Random Forest classification results.
         """
         self.echart = self.create_chart(title)
-        self.echart.options.update({
-            "backgroundColor": "transparent",
-            "title": {
-                "text": title,
-                "left": "center",
-                "top": 10,
-                "textStyle": {
-                    "fontSize": 16,
-                    "fontWeight": "normal",
-                    "color": "#000000"
-                }
-            },
-            "tooltip": {
-                "trigger": "axis",
-                "axisPointer": {"type": "shadow"},
-                "formatter": "{b}: {c}%",
-                "textStyle": {"fontSize": 14}
-            },
-            "grid": {
-                "left": "5%",
-                "right": "5%",
-                "bottom": "5%",
-                "top": "25%",
-                "containLabel": True
-            },
-            "xAxis": {
-                "type": "value",
-                "min": 0,
-                "max": 100,
-                "interval": 20,
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{value}%",
-                    "color": "#666666"
+        self.echart.options.update(
+            {
+                "backgroundColor": "transparent",
+                "title": {
+                    "text": title,
+                    "left": "center",
+                    "top": 10,
+                    "textStyle": {
+                        "fontSize": 16,
+                        "fontWeight": "normal",
+                        "color": "#000000",
+                    },
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {
-                        "color": "#E0E0E0",
-                        "type": "dashed"
+                "tooltip": {
+                    "trigger": "axis",
+                    "axisPointer": {"type": "shadow"},
+                    "formatter": "{b}: {c}%",
+                    "textStyle": {"fontSize": 14},
+                },
+                "grid": {
+                    "left": "5%",
+                    "right": "5%",
+                    "bottom": "5%",
+                    "top": "25%",
+                    "containLabel": True,
+                },
+                "xAxis": {
+                    "type": "value",
+                    "min": 0,
+                    "max": 100,
+                    "interval": 20,
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{value}%",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
+                },
+                "yAxis": {
+                    "type": "category",
+                    "inverse": True,
+                    "data": [],
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "width": 250,
+                        "overflow": "break",
+                        "interval": 0,
+                        "align": "right",
+                        "color": "#666666",
+                    },
+                },
+                "series": [
+                    {
+                        "type": "bar",
+                        "name": "Confidence",
+                        "barMaxWidth": "60%",
+                        "itemStyle": {"color": "#007AFF", "borderRadius": [0, 4, 4, 0]},
+                        "label": {
+                            "show": True,
+                            "position": "right",
+                            "formatter": "{c}%",
+                            "fontSize": 12,
+                            "color": "#666666",
+                        },
+                        "data": [],
                     }
-                }
-            },
-            "yAxis": {
-                "type": "category",
-                "inverse": True,
-                "data": [],
-                "axisLabel": {
-                    "fontSize": 12,
-                    "width": 250,
-                    "overflow": "break",
-                    "interval": 0,
-                    "align": "right",
-                    "color": "#666666"
-                }
-            },
-            "series": [{
-                "type": "bar",
-                "name": "Confidence",
-                "barMaxWidth": "60%",
-                "itemStyle": {
-                    "color": "#007AFF",
-                    "borderRadius": [0, 4, 4, 0]
-                },
-                "label": {
-                    "show": True,
-                    "position": "right",
-                    "formatter": "{c}%",
-                    "fontSize": 12,
-                    "color": "#666666"
-                },
-                "data": []
-            }]
-        })
+                ],
+            }
+        )
 
     def create_rcns2_time_chart(self, title):
         """
         Create a time series chart for Random Forest results.
         """
         self.rcns2_time_chart = self.create_time_chart(title)
-        self.rcns2_time_chart.options.update({
-            "backgroundColor": "transparent",
-            "title": {
-                "text": title,
-                "left": "center",
-                "top": 5,
-                "textStyle": {
-                    "fontSize": 16,
-                    "fontWeight": "normal",
-                    "color": "#000000"
+        self.rcns2_time_chart.options.update(
+            {
+                "backgroundColor": "transparent",
+                "title": {
+                    "text": title,
+                    "left": "center",
+                    "top": 5,
+                    "textStyle": {
+                        "fontSize": 16,
+                        "fontWeight": "normal",
+                        "color": "#000000",
+                    },
+                    "padding": [0, 0, 20, 0],  # Add padding below title
                 },
-                "padding": [0, 0, 20, 0]  # Add padding below title
-            },
-            "tooltip": {
-                "trigger": "axis",
-                "axisPointer": {"type": "line"},
-                "textStyle": {"fontSize": 14}
-            },
-            "grid": {
-                "left": "5%",
-                "right": "5%",
-                "bottom": "5%",
-                "top": "25%",
-                "containLabel": True
-            },
-            "legend": {
-                "type": "scroll",
-                "orient": "horizontal",
-                "top": 45,  # Increased from 35
-                "width": "90%",
-                "left": "center",
-                "textStyle": {
-                    "fontSize": 12,
-                    "color": "#666666"
+                "tooltip": {
+                    "trigger": "axis",
+                    "axisPointer": {"type": "line"},
+                    "textStyle": {"fontSize": 14},
                 },
-                "pageButtonPosition": "end",
-                "pageButtonGap": 5,
-                "pageButtonItemGap": 5,
-                "pageIconColor": "#666666",
-                "pageIconInactiveColor": "#aaa",
-                "pageIconSize": 12,
-                "pageTextStyle": {
-                    "color": "#666666"
+                "grid": {
+                    "left": "5%",
+                    "right": "5%",
+                    "bottom": "5%",
+                    "top": "25%",
+                    "containLabel": True,
                 },
-                "itemGap": 25,
-                "itemWidth": 14,
-                "itemHeight": 14,
-                "selectedMode": True
-            },
-            "xAxis": {
-                "type": "time",
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{HH}:{mm}",
-                    "color": "#666666"
+                "legend": {
+                    "type": "scroll",
+                    "orient": "horizontal",
+                    "top": 45,  # Increased from 35
+                    "width": "90%",
+                    "left": "center",
+                    "textStyle": {"fontSize": 12, "color": "#666666"},
+                    "pageButtonPosition": "end",
+                    "pageButtonGap": 5,
+                    "pageButtonItemGap": 5,
+                    "pageIconColor": "#666666",
+                    "pageIconInactiveColor": "#aaa",
+                    "pageIconSize": 12,
+                    "pageTextStyle": {"color": "#666666"},
+                    "itemGap": 25,
+                    "itemWidth": 14,
+                    "itemHeight": 14,
+                    "selectedMode": True,
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {
-                        "color": "#E0E0E0",
-                        "type": "dashed"
-                    }
-                }
-            },
-            "yAxis": {
-                "type": "value",
-                "min": 0,
-                "max": 100,
-                "interval": 20,
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{value}%",
-                    "color": "#666666"
+                "xAxis": {
+                    "type": "time",
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{HH}:{mm}",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {
-                        "color": "#E0E0E0",
-                        "type": "dashed"
-                    }
-                }
+                "yAxis": {
+                    "type": "value",
+                    "min": 0,
+                    "max": 100,
+                    "interval": 20,
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{value}%",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
+                },
             }
-        })
+        )
 
     def update_rcns2_plot(self, x, y, count, n_features=None):
         """
@@ -690,36 +767,42 @@ class RandomForest_object(BaseAnalysis):
         try:
             logger.debug(f"Updating plot with {len(x)} categories")
             logger.debug(f"Input values - x: {x}, y: {y}")
-            
+
             # Values are already percentages, just format them
             formatted_values = [float(f"{val:.1f}") for val in y]
             logger.debug(f"Formatted values: {formatted_values}")
-            
+
             # Sort the data in descending order and take top 10
-            sorted_indices = sorted(range(len(formatted_values)), key=lambda k: formatted_values[k], reverse=True)[:10]
+            sorted_indices = sorted(
+                range(len(formatted_values)),
+                key=lambda k: formatted_values[k],
+                reverse=True,
+            )[:10]
             sorted_values = [formatted_values[i] for i in sorted_indices]
             sorted_labels = [x[i] for i in sorted_indices]
             logger.debug(f"Top 10 sorted values: {sorted_values}")
             logger.debug(f"Top 10 sorted labels: {sorted_labels}")
-            
+
             # Create descriptive title with key information
             title_text = f"Random Forest Analysis Results\n{count} samples processed"
             if n_features:
                 title_text += f" • {int(n_features)} features found"
             logger.debug(f"Setting title: {title_text}")
-            
+
             self.echart.options["title"]["text"] = title_text
             self.echart.options["yAxis"]["data"] = sorted_labels
-            self.echart.options["series"][0].update({
-                "data": sorted_values,
-                "itemStyle": {
-                    "color": "#007AFF",  # iOS blue
-                    "borderRadius": [0, 4, 4, 0]
+            self.echart.options["series"][0].update(
+                {
+                    "data": sorted_values,
+                    "itemStyle": {
+                        "color": "#007AFF",  # iOS blue
+                        "borderRadius": [0, 4, 4, 0],
+                    },
                 }
-            })
+            )
             self.echart.update()
             logger.debug("Plot updated successfully")
-            
+
         except Exception as e:
             logger.error(f"Error in update_rcns2_plot: {str(e)}", exc_info=True)
             raise
@@ -736,9 +819,9 @@ class RandomForest_object(BaseAnalysis):
         try:
             logger.debug(f"Updating time chart with DataFrame shape: {datadf.shape}")
             logger.debug(f"DataFrame columns: {datadf.columns.tolist()}")
-            
+
             self.rcns2_time_chart.options["series"] = []
-            
+
             # iOS color palette for multiple series
             colors = [
                 "#007AFF",  # Blue
@@ -750,63 +833,62 @@ class RandomForest_object(BaseAnalysis):
                 "#5AC8FA",  # Light Blue
                 "#4CD964",  # Light Green
             ]
-            
+
             # Get the top 10 diagnoses based on the latest data point
             latest_data = datadf.iloc[-1]
             if "number_probes" in latest_data:
                 latest_data = latest_data.drop("number_probes")
             top_10_diagnoses = latest_data.nlargest(10).index.tolist()
-            
+
             # Filter dataframe to only include top 10 diagnoses
             filtered_df = datadf[top_10_diagnoses]
-            
+
             for idx, (series, data) in enumerate(filtered_df.to_dict().items()):
                 logger.debug(f"Processing series: {series}")
                 # Values are already percentages, just format them
-                data_list = [[key, float(f"{value:.1f}")] for key, value in data.items()]
+                data_list = [
+                    [key, float(f"{value:.1f}")] for key, value in data.items()
+                ]
                 logger.debug(f"First few data points for {series}: {data_list[:3]}")
-                
-                self.rcns2_time_chart.options["series"].append({
-                    "name": series,
-                    "type": "line",
-                    "smooth": True,
-                    "animation": False,
-                    "symbolSize": 6,
-                    "emphasis": {
-                        "focus": "series",
-                        "itemStyle": {
-                            "borderWidth": 2
-                        }
-                    },
-                    "endLabel": {
-                        "show": True,
-                        "formatter": "{a}: {c}%",
-                        "distance": 10,
-                        "fontSize": 12
-                    },
-                    "lineStyle": {
-                        "width": 2,
-                        "color": colors[idx % len(colors)]
-                    },
-                    "itemStyle": {
-                        "color": colors[idx % len(colors)]
-                    },
-                    "data": data_list
-                })
-            
+
+                self.rcns2_time_chart.options["series"].append(
+                    {
+                        "name": series,
+                        "type": "line",
+                        "smooth": True,
+                        "animation": False,
+                        "symbolSize": 6,
+                        "emphasis": {
+                            "focus": "series",
+                            "itemStyle": {"borderWidth": 2},
+                        },
+                        "endLabel": {
+                            "show": True,
+                            "formatter": "{a}: {c}%",
+                            "distance": 10,
+                            "fontSize": 12,
+                        },
+                        "lineStyle": {"width": 2, "color": colors[idx % len(colors)]},
+                        "itemStyle": {"color": colors[idx % len(colors)]},
+                        "data": data_list,
+                    }
+                )
+
             # Update chart title with summary
-            max_confidence = latest_data.max()  # Get maximum confidence (already percentage)
+            max_confidence = (
+                latest_data.max()
+            )  # Get maximum confidence (already percentage)
             max_type = latest_data.idxmax()  # Get type with maximum confidence
             logger.debug(f"Max confidence: {max_confidence:.1f}% for type: {max_type}")
-            
+
             self.rcns2_time_chart.options["title"]["text"] = (
                 f"Classification Confidence Over Time\n"
                 f"Current highest confidence: {max_type} ({max_confidence:.1f}%)"
             )
-            
+
             self.rcns2_time_chart.update()
             logger.debug("Time chart updated successfully")
-            
+
         except Exception as e:
             logger.error(f"Error in update_rcns2_time_chart: {str(e)}", exc_info=True)
             raise

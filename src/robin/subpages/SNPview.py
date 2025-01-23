@@ -27,16 +27,16 @@ class SNPview:
     def is_pathogenic(self, info_str: str) -> bool:
         """
         Check if a variant is pathogenic based on CLNSIG field.
-        
+
         Args:
             info_str (str): The INFO field string from the VCF file
-            
+
         Returns:
             bool: True if the variant is pathogenic, False otherwise
         """
         if "CLNSIG=" not in info_str:
             return False
-            
+
         # Extract CLNSIG value
         for field in info_str.split(";"):
             if field.startswith("CLNSIG="):
@@ -215,7 +215,9 @@ class SNPview:
 
                         def set_pathogenic(value: bool) -> None:
                             if value:
-                                self.snptable.filter = lambda row: row.get("is_pathogenic", False)
+                                self.snptable.filter = lambda row: row.get(
+                                    "is_pathogenic", False
+                                )
                             else:
                                 self.snptable.filter = None
 

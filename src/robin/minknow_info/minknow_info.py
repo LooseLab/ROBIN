@@ -61,19 +61,19 @@ UNIQUE_ID: str = str(uuid.uuid4())
 class ExperimentSpec(object):
     """
     A class to hold experiment specifications for a MinKNOW sequencing position.
-    
+
     This class maintains information about a sequencing position and its associated
     protocol ID for experiment execution.
-    
+
     Attributes:
         position: The sequencing position object from MinKNOW
         protocol_id (str): The identifier for the protocol to be run
     """
-    
+
     def __init__(self, position):
         """
         Initialize an ExperimentSpec instance.
-        
+
         Args:
             position: A MinKNOW position object representing a sequencing position
         """
@@ -88,23 +88,23 @@ ExperimentSpecs = Sequence[ExperimentSpec]
 def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_id):
     """
     Add protocol IDs to experiment specifications based on flowcell and kit information.
-    
+
     This function validates flowcell presence and compatibility, then finds and assigns
     the appropriate protocol ID for each experiment specification.
-    
+
     Args:
         experiment_specs (list): List of ExperimentSpec objects
         kit (str): The sequencing kit identifier
         basecall_config (str): Basecalling configuration name
         expected_flowcell_id (str): The expected flowcell ID to validate against
-        
+
     Returns:
         bool: True if protocol IDs were successfully added, False otherwise
-        
+
     Raises:
         None: Errors are handled internally and reported via UI notifications
     """
-    
+
     for spec in experiment_specs:
         # Connect to the sequencing position:
         position_connection = spec.position.connect()
@@ -156,15 +156,15 @@ def add_protocol_ids(experiment_specs, kit, basecall_config, expected_flowcell_i
 def disable(button: ui.button):
     """
     Context manager to temporarily disable a UI button.
-    
+
     This ensures the button is re-enabled even if an exception occurs.
-    
+
     Args:
         button (ui.button): The button to disable
-        
+
     Yields:
         None
-        
+
     Example:
         with disable(my_button):
             # Perform some operation
@@ -330,40 +330,62 @@ class Minknow_Info:
         )
 
         # Create containers for both panels with full width
-        with ui.column().classes('w-full h-full'):
+        with ui.column().classes("w-full h-full"):
             # Setup Panel - only visible when not running
-            setup_container = ui.element('div').classes('w-full h-full').bind_visibility_from(self, 'show', value=False)
-            monitor_container = ui.element('div').classes('w-full h-full').bind_visibility_from(self, 'show')
+            setup_container = (
+                ui.element("div")
+                .classes("w-full h-full")
+                .bind_visibility_from(self, "show", value=False)
+            )
+            monitor_container = (
+                ui.element("div")
+                .classes("w-full h-full")
+                .bind_visibility_from(self, "show")
+            )
 
             with monitor_container:
-                with ui.card().classes('w-full h-full'):
+                with ui.card().classes("w-full h-full"):
                     # Device Header
-                    with ui.row().classes('items-center q-pa-md'):
-                        with ui.avatar(size='xl').classes('q-mr-md'):
+                    with ui.row().classes("items-center q-pa-md"):
+                        with ui.avatar(size="xl").classes("q-mr-md"):
                             ui.image(self.deviceicon)
                         with ui.column():
-                            ui.label(f'{self.name} - {self.position.name}').classes('text-h6')
-                            ui.label('MinKNOW Monitoring').classes(f'text-caption {self.color}')
-                            ui.label(f'Device Type: {self.position.device_type}').classes('text-body2')
+                            ui.label(f"{self.name} - {self.position.name}").classes(
+                                "text-h6"
+                            )
+                            ui.label("MinKNOW Monitoring").classes(
+                                f"text-caption {self.color}"
+                            )
+                            ui.label(
+                                f"Device Type: {self.position.device_type}"
+                            ).classes("text-body2")
 
                     # Status Indicators
-                    with ui.row().classes('q-pa-md q-gutter-md justify-between'):
-                        self._render_status_chip('Running', self, 'show')
-                        self._render_status_chip('Basecalling', self, 'Basecall_Speed', 
-                                              lambda v: 'positive' if v > 0 else 'negative')
+                    with ui.row().classes("q-pa-md q-gutter-md justify-between"):
+                        self._render_status_chip("Running", self, "show")
+                        self._render_status_chip(
+                            "Basecalling",
+                            self,
+                            "Basecall_Speed",
+                            lambda v: "positive" if v > 0 else "negative",
+                        )
 
                     # Monitoring Grid
-                    with ui.grid(columns=3).classes('q-pa-md q-gutter-md').bind_visibility_from(self, 'show'):
+                    with ui.grid(columns=3).classes(
+                        "q-pa-md q-gutter-md"
+                    ).bind_visibility_from(self, "show"):
                         # Basic Info
-                        self._render_monitoring_tile('Experiment Group', 'Experiment_Group')
-                        self._render_monitoring_tile('Sample ID', 'Sample_ID')
-                        self._render_monitoring_tile('Flowcell Type', 'Flowcell_Type')
-                    
+                        self._render_monitoring_tile(
+                            "Experiment Group", "Experiment_Group"
+                        )
+                        self._render_monitoring_tile("Sample ID", "Sample_ID")
+                        self._render_monitoring_tile("Flowcell Type", "Flowcell_Type")
+
                     # Yield Plot Container
-                    with ui.card().classes('w-full').style('min-height: 500px'):
+                    with ui.card().classes("w-full").style("min-height: 500px"):
                         with ui.card_section():
-                            ui.label('Sequencing Yield').classes('text-h6')
-                        
+                            ui.label("Sequencing Yield").classes("text-h6")
+
                         # Initialize the yield plot
                         logging.debug("=== Initializing Yield Plot ===")
                         logging.debug("Initial timestamps: %d", len(self.timestamps))
@@ -371,68 +393,116 @@ class Minknow_Info:
                         logging.debug("Initial pass reads: %d", len(self.pass_reads))
                         logging.debug("Initial pass bases: %d", len(self.pass_bases))
                         initial_options = self.create_yield_plot()
-                        self.yield_plot = ui.echart(options=initial_options).classes('w-full').style('height: 400px')
-                        logging.debug("Plot initialized with ID: %s", self.yield_plot.id)
+                        self.yield_plot = (
+                            ui.echart(options=initial_options)
+                            .classes("w-full")
+                            .style("height: 400px")
+                        )
+                        logging.debug(
+                            "Plot initialized with ID: %s", self.yield_plot.id
+                        )
                         logging.debug("=== Plot Initialization Complete ===")
 
             with setup_container:
-                with ui.card().classes('w-full h-full'):
+                with ui.card().classes("w-full h-full"):
                     with ui.card_section():
-                        ui.label("Sample Setup").classes('text-h5 text-primary q-mb-md')
-                    
-                    with ui.card_section().classes('q-pa-md'):
-                        with ui.stepper().props('vertical').classes('w-full') as stepper:
-                            # Sample ID Step
-                            with ui.step('Sample ID').classes('text-body1 text-weight-medium'):
-                                ui.label('Sample ID Guidelines').classes('text-subtitle1 text-weight-medium q-mb-sm')
-                                ui.label('IDs should not include human identifiable information').classes('text-caption q-mb-md')
-                                
-                                with ui.row().classes('items-center w-full q-gutter-md'):
-                                    sampleid = ui.input(
-                                        placeholder='Enter sample ID',
-                                        validation={
-                                            "Too short": lambda value: len(value) >= 5,
-                                            "No Flowcell IDs": lambda value: re.match(r"^[A-Za-z]{3}\d{5}$", value) is None,
-                                            "Alphanumeric only": lambda value: value.isalnum() and not any(char.isspace() for char in value),
-                                        }
-                                    ).props('outlined dense').classes('w-full')
-                                    
-                                    sample_camera.show_camera()
-                                    
-                                with ui.stepper_navigation():
-                                    checker = ErrorChecker(sampleid)
-                                    ui.button('Next', on_click=stepper.next).bind_enabled_from(checker, 'no_errors')
+                        ui.label("Sample Setup").classes("text-h5 text-primary q-mb-md")
 
-                            # Flowcell ID Step
-                            with ui.step('Flowcell').classes('text-body1 text-weight-medium'):
-                                ui.label('Flowcell ID Entry').classes('text-subtitle1 text-weight-medium q-mb-sm')
-                                
-                                with ui.row().classes('items-center w-full q-gutter-md'):
-                                    flowcellid = ui.input(
-                                        placeholder='Enter flowcell ID',
-                                        validation={
-                                            "Not a valid flowcell ID": lambda value: re.match(
-                                                r"^[A-Za-z]{3}\d{5}$", value
-                                            ) is not None
-                                        },
-                                    ).props('outlined dense').classes('w-full')
-                                    
-                                    flowcell_camera.show_camera()
-                                
-                                with ui.stepper_navigation():
-                                    ui.button('Back', on_click=stepper.previous).props('flat')
-                                    checkerflowcell = ErrorChecker(flowcellid)
-                                    ui.button('Next', on_click=stepper.next).bind_enabled_from(
-                                        checkerflowcell, 'no_errors'
+                    with ui.card_section().classes("q-pa-md"):
+                        with ui.stepper().props("vertical").classes(
+                            "w-full"
+                        ) as stepper:
+                            # Sample ID Step
+                            with ui.step("Sample ID").classes(
+                                "text-body1 text-weight-medium"
+                            ):
+                                ui.label("Sample ID Guidelines").classes(
+                                    "text-subtitle1 text-weight-medium q-mb-sm"
+                                )
+                                ui.label(
+                                    "IDs should not include human identifiable information"
+                                ).classes("text-caption q-mb-md")
+
+                                with ui.row().classes(
+                                    "items-center w-full q-gutter-md"
+                                ):
+                                    sampleid = (
+                                        ui.input(
+                                            placeholder="Enter sample ID",
+                                            validation={
+                                                "Too short": lambda value: len(value)
+                                                >= 5,
+                                                "No Flowcell IDs": lambda value: re.match(
+                                                    r"^[A-Za-z]{3}\d{5}$", value
+                                                )
+                                                is None,
+                                                "Alphanumeric only": lambda value: value.isalnum()
+                                                and not any(
+                                                    char.isspace() for char in value
+                                                ),
+                                            },
+                                        )
+                                        .props("outlined dense")
+                                        .classes("w-full")
                                     )
 
+                                    sample_camera.show_camera()
+
+                                with ui.stepper_navigation():
+                                    checker = ErrorChecker(sampleid)
+                                    ui.button(
+                                        "Next", on_click=stepper.next
+                                    ).bind_enabled_from(checker, "no_errors")
+
+                            # Flowcell ID Step
+                            with ui.step("Flowcell").classes(
+                                "text-body1 text-weight-medium"
+                            ):
+                                ui.label("Flowcell ID Entry").classes(
+                                    "text-subtitle1 text-weight-medium q-mb-sm"
+                                )
+
+                                with ui.row().classes(
+                                    "items-center w-full q-gutter-md"
+                                ):
+                                    flowcellid = (
+                                        ui.input(
+                                            placeholder="Enter flowcell ID",
+                                            validation={
+                                                "Not a valid flowcell ID": lambda value: re.match(
+                                                    r"^[A-Za-z]{3}\d{5}$", value
+                                                )
+                                                is not None
+                                            },
+                                        )
+                                        .props("outlined dense")
+                                        .classes("w-full")
+                                    )
+
+                                    flowcell_camera.show_camera()
+
+                                with ui.stepper_navigation():
+                                    ui.button("Back", on_click=stepper.previous).props(
+                                        "flat"
+                                    )
+                                    checkerflowcell = ErrorChecker(flowcellid)
+                                    ui.button(
+                                        "Next", on_click=stepper.next
+                                    ).bind_enabled_from(checkerflowcell, "no_errors")
+
                             # Device Position Step
-                            with ui.step('Device Position').classes('text-body1 text-weight-medium'):
-                                ui.label('Position Selection').classes('text-subtitle1 text-weight-medium q-mb-sm')
-                                ui.label('Select the correct device position').classes('text-caption q-mb-md')
-                                
+                            with ui.step("Device Position").classes(
+                                "text-body1 text-weight-medium"
+                            ):
+                                ui.label("Position Selection").classes(
+                                    "text-subtitle1 text-weight-medium q-mb-sm"
+                                )
+                                ui.label("Select the correct device position").classes(
+                                    "text-caption q-mb-md"
+                                )
+
                                 run_button = ui.button(
-                                    'Start Run',
+                                    "Start Run",
                                     on_click=lambda: self.start_run(
                                         position=self.position.name,
                                         reference=self.reference,
@@ -443,64 +513,73 @@ class Minknow_Info:
                                         centreID=self.centreID,
                                         experiment_duration=self.experiment_duration,
                                         bed_file=self.bed_file,
-                                    )
-                                ).props('color=primary')
+                                    ),
+                                ).props("color=primary")
 
                                 ui.radio(
-                                    [self.position.name], 
-                                    value=self.position.name
-                                ).on('update:model-value', lambda: run_button.enable()
-                                ).classes('q-mt-md')
+                                    [self.position.name], value=self.position.name
+                                ).on(
+                                    "update:model-value", lambda: run_button.enable()
+                                ).classes(
+                                    "q-mt-md"
+                                )
 
                                 with ui.stepper_navigation():
-                                    ui.button('Back', on_click=stepper.previous).props('flat')
+                                    ui.button("Back", on_click=stepper.previous).props(
+                                        "flat"
+                                    )
                                     run_button.disable()
 
                         # Settings Summary
-                        with ui.expansion('Fixed Settings', icon='settings').classes('w-full q-mt-md'):
-                            with ui.card().classes('q-pa-md'):
-                                self._render_setting_item('Device', self.device)
+                        with ui.expansion("Fixed Settings", icon="settings").classes(
+                            "w-full q-mt-md"
+                        ):
+                            with ui.card().classes("q-pa-md"):
+                                self._render_setting_item("Device", self.device)
                                 current_date = datetime.now()
                                 self._render_setting_item(
-                                    'Experiment Group ID', 
-                                    f"{self.centreID}_{current_date.strftime('%B')}_{current_date.year}"
+                                    "Experiment Group ID",
+                                    f"{self.centreID}_{current_date.strftime('%B')}_{current_date.year}",
                                 )
-                                self._render_setting_item('Kit', self.kit)
-                                self._render_setting_item('Reference', self.reference)
+                                self._render_setting_item("Kit", self.kit)
+                                self._render_setting_item("Reference", self.reference)
 
     def _render_setting_item(self, label: str, value: str):
         """Helper method to render consistent setting items"""
-        with ui.row().classes('items-center justify-between w-full q-py-sm'):
-            ui.label(label).classes('text-body2')
-            ui.label(str(value)).classes('text-body2 text-weight-medium')
+        with ui.row().classes("items-center justify-between w-full q-py-sm"):
+            ui.label(label).classes("text-body2")
+            ui.label(str(value)).classes("text-body2 text-weight-medium")
 
     def _render_monitoring_tile(self, label: str, bind_property: str, format_func=str):
         """Helper method to render monitoring information tiles"""
-        with ui.card().classes('q-pa-sm'):
-            ui.label(label).classes(f'text-caption {self.color}')
-            ui.label('--').bind_text_from(
-                self, bind_property,
-                lambda n: format_func(n) if n is not None else '--'
-            ).classes('text-body1 text-weight-medium')
+        with ui.card().classes("q-pa-sm"):
+            ui.label(label).classes(f"text-caption {self.color}")
+            ui.label("--").bind_text_from(
+                self, bind_property, lambda n: format_func(n) if n is not None else "--"
+            ).classes("text-body1 text-weight-medium")
 
-    def _render_status_chip(self, label: str, obj, bind_property: str, 
-                           color_func=lambda v: 'positive' if v else 'negative'):
+    def _render_status_chip(
+        self,
+        label: str,
+        obj,
+        bind_property: str,
+        color_func=lambda v: "positive" if v else "negative",
+    ):
         """Helper method to render status indicator chips"""
-        status_button = ui.button(
-            label,
-            icon='circle'
-        ).props('flat dense').classes('q-ma-xs')
-        
+        status_button = (
+            ui.button(label, icon="circle").props("flat dense").classes("q-ma-xs")
+        )
+
         # Store the update function and button in a list for batch updates
-        if not hasattr(self, '_status_updates'):
+        if not hasattr(self, "_status_updates"):
             self._status_updates = []
-        
+
         def update_status():
             if hasattr(obj, bind_property):
                 value = getattr(obj, bind_property)
                 color = color_func(value)
-                status_button.props(f'color={color}')
-        
+                status_button.props(f"color={color}")
+
         self._status_updates.append(update_status)
         return status_button
 
@@ -515,38 +594,34 @@ class Minknow_Info:
     def create_yield_plot(self):
         """Create an interactive yield plot using echarts"""
         # Format timestamps for x-axis
-        timestamps = [t.strftime('%H:%M:%S') for t in self.timestamps]
-        
+        timestamps = [t.strftime("%H:%M:%S") for t in self.timestamps]
+
         # Determine appropriate scale for bases
         max_bases = max(self.pass_bases) if self.pass_bases else 0
         if max_bases >= 1:  # Greater than 1 Gb
             base_scale = 1
-            base_unit = 'Gb'
+            base_unit = "Gb"
             formatted_bases = self.pass_bases
         else:
             base_scale = 1000  # Convert to Mb
-            base_unit = 'Mb'
+            base_unit = "Mb"
             formatted_bases = [b * 1000 for b in self.pass_bases]  # Convert Gb to Mb
-        
+
         options = {
-            'animation': False,  # Disable animations for smoother updates
-            'title': {
-                'text': 'Sequencing Yield Over Time',
-                'left': 'center',
-                'top': '20px'  # Add space above title
+            "animation": False,  # Disable animations for smoother updates
+            "title": {
+                "text": "Sequencing Yield Over Time",
+                "left": "center",
+                "top": "20px",  # Add space above title
             },
-            'toolbox': {
-                'show': True,
-                'feature': {
-                    'saveAsImage': {'title': 'Save Image'}
-                }
+            "toolbox": {
+                "show": True,
+                "feature": {"saveAsImage": {"title": "Save Image"}},
             },
-            'tooltip': {
-                'trigger': 'axis',
-                'axisPointer': {
-                    'type': 'cross'
-                },
-                ':formatter': f'''
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "cross"},
+                ":formatter": f"""
                     function(params) {{
                         let result = params[0].axisValueLabel + '<br/>';
                         for (let i = 0; i < params.length; i++) {{
@@ -562,117 +637,107 @@ class Minknow_Info:
                         }}
                         return result;
                     }}
-                '''
+                """,
             },
-            'legend': {
-                'data': ['Total Reads', 'Pass Reads', f'Pass Bases ({base_unit})'],
-                'top': '50px',  # Move legend below title
-                'padding': [10, 10]  # Add padding around legend
+            "legend": {
+                "data": ["Total Reads", "Pass Reads", f"Pass Bases ({base_unit})"],
+                "top": "50px",  # Move legend below title
+                "padding": [10, 10],  # Add padding around legend
             },
-            'grid': {
-                'left': '10%',      # Increased left padding for y-axis labels
-                'right': '10%',     # Increased right padding for second y-axis
-                'bottom': '15%',    # Increased bottom padding for x-axis labels
-                'top': '25%',       # Increased top padding for title and legend
-                'containLabel': True
+            "grid": {
+                "left": "10%",  # Increased left padding for y-axis labels
+                "right": "10%",  # Increased right padding for second y-axis
+                "bottom": "15%",  # Increased bottom padding for x-axis labels
+                "top": "25%",  # Increased top padding for title and legend
+                "containLabel": True,
             },
-            'xAxis': {
-                'type': 'category',
-                'boundaryGap': False,
-                'data': timestamps,
-                'axisLabel': {
-                    'rotate': 45,
-                    'margin': 15    # Add margin for rotated labels
+            "xAxis": {
+                "type": "category",
+                "boundaryGap": False,
+                "data": timestamps,
+                "axisLabel": {
+                    "rotate": 45,
+                    "margin": 15,  # Add margin for rotated labels
                 },
-                'nameLocation': 'middle',
-                'nameGap': 35      # Add gap for axis name
+                "nameLocation": "middle",
+                "nameGap": 35,  # Add gap for axis name
             },
-            'yAxis': [
+            "yAxis": [
                 {
-                    'type': 'value',
-                    'name': 'Read Count',
-                    'position': 'left',
-                    'nameLocation': 'middle',
-                    'nameGap': 50,  # Add gap for axis name
-                    'axisLine': {
-                        'show': True,
-                        'lineStyle': {
-                            'color': '#5470C6'
-                        }
+                    "type": "value",
+                    "name": "Read Count",
+                    "position": "left",
+                    "nameLocation": "middle",
+                    "nameGap": 50,  # Add gap for axis name
+                    "axisLine": {"show": True, "lineStyle": {"color": "#5470C6"}},
+                    "axisLabel": {
+                        ":formatter": "value => value.toLocaleString()",
+                        "margin": 10,  # Add margin for labels
                     },
-                    'axisLabel': {
-                        ':formatter': 'value => value.toLocaleString()',
-                        'margin': 10  # Add margin for labels
-                    }
                 },
                 {
-                    'type': 'value',
-                    'name': f'Bases ({base_unit})',
-                    'position': 'right',
-                    'nameLocation': 'middle',
-                    'nameGap': 50,  # Add gap for axis name
-                    'axisLine': {
-                        'show': True,
-                        'lineStyle': {
-                            'color': '#91CC75'
-                        }
+                    "type": "value",
+                    "name": f"Bases ({base_unit})",
+                    "position": "right",
+                    "nameLocation": "middle",
+                    "nameGap": 50,  # Add gap for axis name
+                    "axisLine": {"show": True, "lineStyle": {"color": "#91CC75"}},
+                    "axisLabel": {
+                        ":formatter": "value => value.toFixed(1)",
+                        "margin": 10,  # Add margin for labels
                     },
-                    'axisLabel': {
-                        ':formatter': 'value => value.toFixed(1)',
-                        'margin': 10  # Add margin for labels
-                    }
-                }
+                },
             ],
-            'series': [
+            "series": [
                 {
-                    'name': 'Total Reads',
-                    'type': 'line',
-                    'smooth': True,
-                    'data': list(self.read_counts),
-                    'itemStyle': {'color': '#5470C6'},
-                    'showSymbol': False  # Hide symbols for smoother line
+                    "name": "Total Reads",
+                    "type": "line",
+                    "smooth": True,
+                    "data": list(self.read_counts),
+                    "itemStyle": {"color": "#5470C6"},
+                    "showSymbol": False,  # Hide symbols for smoother line
                 },
                 {
-                    'name': 'Pass Reads',
-                    'type': 'line',
-                    'smooth': True,
-                    'data': list(self.pass_reads),
-                    'itemStyle': {'color': '#91CC75'},
-                    'showSymbol': False  # Hide symbols for smoother line
+                    "name": "Pass Reads",
+                    "type": "line",
+                    "smooth": True,
+                    "data": list(self.pass_reads),
+                    "itemStyle": {"color": "#91CC75"},
+                    "showSymbol": False,  # Hide symbols for smoother line
                 },
                 {
-                    'name': f'Pass Bases ({base_unit})',
-                    'type': 'line',
-                    'smooth': True,
-                    'yAxisIndex': 1,
-                    'data': list(formatted_bases),
-                    'itemStyle': {'color': '#FAC858'},
-                    'showSymbol': False  # Hide symbols for smoother line
-                }
-            ]
+                    "name": f"Pass Bases ({base_unit})",
+                    "type": "line",
+                    "smooth": True,
+                    "yAxisIndex": 1,
+                    "data": list(formatted_bases),
+                    "itemStyle": {"color": "#FAC858"},
+                    "showSymbol": False,  # Hide symbols for smoother line
+                },
+            ],
         }
-        
+
         return options
 
     def update_yield_data(self, read_count, pass_read_count, pass_bases):
         """
         Update the yield data with new values from the sequencing run.
-        
+
         This method updates the internal data structures with new sequencing
         statistics and triggers UI updates if sufficient time has passed since
         the last update.
-        
+
         Args:
             read_count (int): Total number of reads
             pass_read_count (int): Number of reads passing quality filters
             pass_bases (int): Total number of bases in passing reads
-            
+
         Note:
             Updates are rate-limited by self.update_interval to prevent
             overwhelming the UI.
         """
         current_time = datetime.now()
-        
+
         # Only update if enough time has passed and we're not getting historical data
         if time.time() - self.last_update >= self.update_interval:
             # Check if this timestamp would be newer than our last one
@@ -683,41 +748,51 @@ class Minknow_Info:
                 self.pass_reads.append(pass_read_count)
                 self.pass_bases.append(pass_bases / 1e9)  # Convert to Gb
                 self.last_update = time.time()
-                
+
                 # Update current values
                 self.Read_Count = read_count
                 self.Pass_Read_Count = pass_read_count
                 self.Pass_Bases = pass_bases
-                
+
                 # Update the plot data
-                if hasattr(self, 'yield_plot'):
+                if hasattr(self, "yield_plot"):
                     # Determine appropriate scale
                     max_bases = max(self.pass_bases)
                     if max_bases >= 1:  # Greater than 1 Gb
                         base_scale = 1
-                        base_unit = 'Gb'
+                        base_unit = "Gb"
                         formatted_bases = self.pass_bases
                     else:
                         base_scale = 1000  # Convert to Mb
-                        base_unit = 'Mb'
-                        formatted_bases = [b * 1000 for b in self.pass_bases]  # Convert Gb to Mb
-                    
+                        base_unit = "Mb"
+                        formatted_bases = [
+                            b * 1000 for b in self.pass_bases
+                        ]  # Convert Gb to Mb
+
                     # Update x-axis data
-                    new_timestamps = [t.strftime('%H:%M:%S') for t in self.timestamps]
-                    self.yield_plot.options['xAxis']['data'] = new_timestamps
-                    
+                    new_timestamps = [t.strftime("%H:%M:%S") for t in self.timestamps]
+                    self.yield_plot.options["xAxis"]["data"] = new_timestamps
+
                     # Update y-axis label
-                    self.yield_plot.options['yAxis'][1]['name'] = f'Bases ({base_unit})'
-                    
+                    self.yield_plot.options["yAxis"][1]["name"] = f"Bases ({base_unit})"
+
                     # Update legend
-                    self.yield_plot.options['legend']['data'] = ['Total Reads', 'Pass Reads', f'Pass Bases ({base_unit})']
-                    
+                    self.yield_plot.options["legend"]["data"] = [
+                        "Total Reads",
+                        "Pass Reads",
+                        f"Pass Bases ({base_unit})",
+                    ]
+
                     # Update series data
-                    self.yield_plot.options['series'][0]['data'] = list(self.read_counts)
-                    self.yield_plot.options['series'][1]['data'] = list(self.pass_reads)
-                    self.yield_plot.options['series'][2]['data'] = list(formatted_bases)
-                    self.yield_plot.options['series'][2]['name'] = f'Pass Bases ({base_unit})'
-                    
+                    self.yield_plot.options["series"][0]["data"] = list(
+                        self.read_counts
+                    )
+                    self.yield_plot.options["series"][1]["data"] = list(self.pass_reads)
+                    self.yield_plot.options["series"][2]["data"] = list(formatted_bases)
+                    self.yield_plot.options["series"][2][
+                        "name"
+                    ] = f"Pass Bases ({base_unit})"
+
                     # Trigger the update
                     self.yield_plot.update()
 
@@ -725,7 +800,7 @@ class Minknow_Info:
         """Start streaming acquisition output data"""
         logging.info("=== Starting Acquisition Stream ===")
         logging.debug(f"Acquisition Run ID: {self.acquisition_run_id}")
-        
+
         if not self.acquisition_run_id:
             logging.warning("No acquisition run ID available, cannot start stream")
             return
@@ -733,24 +808,28 @@ class Minknow_Info:
         try:
             # Create a proper DataSelection object for historical data
             from minknow_api.statistics_pb2 import DataSelection
+
             data_selection = DataSelection()
             data_selection.start = 0  # From the beginning
             data_selection.step = 60  # Get data every minute
-            logging.debug(f"Created DataSelection: start={data_selection.start}, step={data_selection.step}")
+            logging.debug(
+                f"Created DataSelection: start={data_selection.start}, step={data_selection.step}"
+            )
 
             logging.debug("Setting up acquisition stream...")
             # Set up the acquisition output stream
-            self._acquisition_stream = self.connection.statistics.stream_acquisition_output(
-                acquisition_run_id=self.acquisition_run_id,
-                data_selection=data_selection
+            self._acquisition_stream = (
+                self.connection.statistics.stream_acquisition_output(
+                    acquisition_run_id=self.acquisition_run_id,
+                    data_selection=data_selection,
+                )
             )
             logging.debug("Acquisition stream created successfully")
 
             # Start a thread to process the stream
             logging.debug("Starting acquisition processing thread...")
             self._acquisition_thread = threading.Thread(
-                target=self._process_acquisition_stream,
-                daemon=True
+                target=self._process_acquisition_stream, daemon=True
             )
             self._acquisition_thread.start()
             logging.debug("Acquisition processing thread started")
@@ -763,75 +842,137 @@ class Minknow_Info:
         try:
             for data in self._acquisition_stream:
                 try:
-                    if hasattr(data, 'snapshots') and data.snapshots:
+                    if hasattr(data, "snapshots") and data.snapshots:
                         # The data structure has snapshots nested inside snapshots
                         for outer_snapshot in data.snapshots:
-                            if hasattr(outer_snapshot, 'snapshots'):
+                            if hasattr(outer_snapshot, "snapshots"):
                                 for snapshot in outer_snapshot.snapshots:
                                     try:
                                         # Get the time in seconds from the acquisition start
-                                        acquisition_time = getattr(snapshot, 'seconds', None)
+                                        acquisition_time = getattr(
+                                            snapshot, "seconds", None
+                                        )
                                         if acquisition_time is None:
-                                            logging.debug("No valid timestamp found in snapshot, using current time")
+                                            logging.debug(
+                                                "No valid timestamp found in snapshot, using current time"
+                                            )
                                             current_time = datetime.now()
                                         else:
                                             # Calculate the actual timestamp
-                                            current_time = datetime.fromtimestamp(self.start_time.timestamp() + float(acquisition_time))
-                                        
+                                            current_time = datetime.fromtimestamp(
+                                                self.start_time.timestamp()
+                                                + float(acquisition_time)
+                                            )
+
                                         # Check if yield_summary exists
-                                        if not hasattr(snapshot, 'yield_summary'):
-                                            logging.debug("No yield_summary in snapshot, available fields: %s", 
-                                                      [field.name for field in snapshot.DESCRIPTOR.fields])
+                                        if not hasattr(snapshot, "yield_summary"):
+                                            logging.debug(
+                                                "No yield_summary in snapshot, available fields: %s",
+                                                [
+                                                    field.name
+                                                    for field in snapshot.DESCRIPTOR.fields
+                                                ],
+                                            )
                                             continue
-                                        
+
                                         yield_summary = snapshot.yield_summary
-                                        
+
                                         # Check if yield_summary has the required fields
-                                        if not all(hasattr(yield_summary, attr) for attr in ['read_count', 'basecalled_pass_read_count', 'basecalled_pass_bases']):
-                                            logging.debug("Missing required fields in yield_summary, available fields: %s",
-                                                      [field.name for field in yield_summary.DESCRIPTOR.fields])
+                                        if not all(
+                                            hasattr(yield_summary, attr)
+                                            for attr in [
+                                                "read_count",
+                                                "basecalled_pass_read_count",
+                                                "basecalled_pass_bases",
+                                            ]
+                                        ):
+                                            logging.debug(
+                                                "Missing required fields in yield_summary, available fields: %s",
+                                                [
+                                                    field.name
+                                                    for field in yield_summary.DESCRIPTOR.fields
+                                                ],
+                                            )
                                             continue
-                                        
+
                                         # Update current values
                                         self.Read_Count = yield_summary.read_count
-                                        self.Pass_Read_Count = yield_summary.basecalled_pass_read_count
-                                        self.Pass_Bases = yield_summary.basecalled_pass_bases
-                                        
+                                        self.Pass_Read_Count = (
+                                            yield_summary.basecalled_pass_read_count
+                                        )
+                                        self.Pass_Bases = (
+                                            yield_summary.basecalled_pass_bases
+                                        )
+
                                         # Only append if it's a new timestamp
-                                        if not self.timestamps or current_time > self.timestamps[-1]:
+                                        if (
+                                            not self.timestamps
+                                            or current_time > self.timestamps[-1]
+                                        ):
                                             self.timestamps.append(current_time)
-                                            self.read_counts.append(yield_summary.read_count)
-                                            self.pass_reads.append(yield_summary.basecalled_pass_read_count)
-                                            self.pass_bases.append(yield_summary.basecalled_pass_bases / 1e9)  # Convert to Gb
-                                            
-                                            logging.debug("Added data point - Time: %s, Reads: %s, Pass: %s, Bases: %.1fGb",
-                                                      current_time.strftime('%H:%M:%S'),
-                                                      f"{yield_summary.read_count:,}",
-                                                      f"{yield_summary.basecalled_pass_read_count:,}",
-                                                      yield_summary.basecalled_pass_bases/1e9)
-                                            
+                                            self.read_counts.append(
+                                                yield_summary.read_count
+                                            )
+                                            self.pass_reads.append(
+                                                yield_summary.basecalled_pass_read_count
+                                            )
+                                            self.pass_bases.append(
+                                                yield_summary.basecalled_pass_bases
+                                                / 1e9
+                                            )  # Convert to Gb
+
+                                            logging.debug(
+                                                "Added data point - Time: %s, Reads: %s, Pass: %s, Bases: %.1fGb",
+                                                current_time.strftime("%H:%M:%S"),
+                                                f"{yield_summary.read_count:,}",
+                                                f"{yield_summary.basecalled_pass_read_count:,}",
+                                                yield_summary.basecalled_pass_bases
+                                                / 1e9,
+                                            )
+
                                             # Update the plot data
-                                            if hasattr(self, 'yield_plot'):
+                                            if hasattr(self, "yield_plot"):
                                                 # Update x-axis data
-                                                new_timestamps = [t.strftime('%H:%M:%S') for t in self.timestamps]
-                                                self.yield_plot.options['xAxis']['data'] = new_timestamps
-                                                
+                                                new_timestamps = [
+                                                    t.strftime("%H:%M:%S")
+                                                    for t in self.timestamps
+                                                ]
+                                                self.yield_plot.options["xAxis"][
+                                                    "data"
+                                                ] = new_timestamps
+
                                                 # Update series data
-                                                self.yield_plot.options['series'][0]['data'] = list(self.read_counts)
-                                                self.yield_plot.options['series'][1]['data'] = list(self.pass_reads)
-                                                self.yield_plot.options['series'][2]['data'] = list(self.pass_bases)
-                                                
+                                                self.yield_plot.options["series"][0][
+                                                    "data"
+                                                ] = list(self.read_counts)
+                                                self.yield_plot.options["series"][1][
+                                                    "data"
+                                                ] = list(self.pass_reads)
+                                                self.yield_plot.options["series"][2][
+                                                    "data"
+                                                ] = list(self.pass_bases)
+
                                                 # Trigger the update
                                                 self.yield_plot.update()
-                                    
+
                                     except Exception as e:
-                                        logging.error("Error processing individual snapshot: %s", str(e))
-                                        if hasattr(snapshot, 'DESCRIPTOR'):
-                                            logging.debug("Available snapshot fields: %s", 
-                                                      [field.name for field in snapshot.DESCRIPTOR.fields])
+                                        logging.error(
+                                            "Error processing individual snapshot: %s",
+                                            str(e),
+                                        )
+                                        if hasattr(snapshot, "DESCRIPTOR"):
+                                            logging.debug(
+                                                "Available snapshot fields: %s",
+                                                [
+                                                    field.name
+                                                    for field in snapshot.DESCRIPTOR.fields
+                                                ],
+                                            )
                             else:
-                                logging.debug("No nested snapshots found in outer snapshot")
-                            
+                                logging.debug(
+                                    "No nested snapshots found in outer snapshot"
+                                )
+
                 except Exception as e:
                     logging.error("Error processing acquisition data: %s", str(e))
         except Exception as e:
@@ -851,7 +992,9 @@ class Minknow_Info:
             for info in self._stream_instance_activity:
                 try:
                     if info.HasField("device_info"):
-                        self.Channel_Count = info.device_info.device_info.max_channel_count
+                        self.Channel_Count = (
+                            info.device_info.device_info.max_channel_count
+                        )
                     if info.HasField("acquisition_run_info"):
                         logging.info("Received acquisition_run_info:")
                         self.basecalling_config_filename = (
@@ -867,16 +1010,20 @@ class Minknow_Info:
                         logging.debug("  Config: %s", self.basecalling_config_filename)
                         logging.debug("  Start Time: %s", self.start_time)
                         logging.debug("  Output Folder: %s", self.output_folder)
-                        
+
                         # Start acquisition stream when we get run info
-                        if hasattr(info.acquisition_run_info, 'run_id'):
-                            logging.debug("  Found Run ID: %s", info.acquisition_run_info.run_id)
+                        if hasattr(info.acquisition_run_info, "run_id"):
+                            logging.debug(
+                                "  Found Run ID: %s", info.acquisition_run_info.run_id
+                            )
                             self.acquisition_run_id = info.acquisition_run_info.run_id
                             self.start_acquisition_stream()
                         else:
                             logging.warning("  No Run ID found in acquisition_run_info")
                     if info.HasField("basecall_speed"):
-                        self.Mean_Basecall_Speed = info.basecall_speed.mean_basecall_speed
+                        self.Mean_Basecall_Speed = (
+                            info.basecall_speed.mean_basecall_speed
+                        )
                     if info.HasField("n50"):
                         self.N50 = info.n50.n50
                         self.Estimated_N50 = info.n50.estimated_n50
@@ -895,19 +1042,21 @@ class Minknow_Info:
                         self.Experiment_Group = (
                             info.protocol_run_info.user_info.protocol_group_id.value
                         )
-                        self.Sample_ID = info.protocol_run_info.user_info.sample_id.value
+                        self.Sample_ID = (
+                            info.protocol_run_info.user_info.sample_id.value
+                        )
                     if info.HasField("yield_summary"):
                         try:
                             # Update yield data for plotting
                             self.Read_Count = info.yield_summary.read_count
-                            self.Pass_Read_Count = info.yield_summary.basecalled_pass_read_count
+                            self.Pass_Read_Count = (
+                                info.yield_summary.basecalled_pass_read_count
+                            )
                             self.Pass_Bases = info.yield_summary.basecalled_pass_bases
-                            
+
                             # Update the plot data
                             self.update_yield_data(
-                                self.Read_Count,
-                                self.Pass_Read_Count,
-                                self.Pass_Bases
+                                self.Read_Count, self.Pass_Read_Count, self.Pass_Bases
                             )
                         except Exception as e:
                             logging.error("Error processing yield summary: %s", str(e))
@@ -1042,7 +1191,8 @@ def run_class(port: int, reload: bool):
     :param reload: Should we reload the app on changes.
     :return:
     """
-    ui.add_css("""
+    ui.add_css(
+        """
         .monitoring-tile {
             transition: all 0.3s ease;
         }
@@ -1061,8 +1211,9 @@ def run_class(port: int, reload: bool):
                 grid-template-columns: repeat(2, 1fr) !important;
             }
         }
-    """)
-    
+    """
+    )
+
     # Register some fonts that we might need later on.
     app.add_static_files("/fonts", str(Path(__file__).parent.parent / "fonts"))
 
@@ -1077,11 +1228,11 @@ def run_class(port: int, reload: bool):
 def main():
     """
     Main entry point for the MinKNOW monitoring application.
-    
+
     This function initializes and runs the web interface for monitoring
     MinKNOW sequencing runs. It sets up the necessary routes and starts
     the web server.
-    
+
     Returns:
         None
     """

@@ -23,5 +23,5 @@ __all__ = [
     "MGMTSection",
     "RunDataSection",
     "DisclaimerSection",
-    "VariantsSection"
+    "VariantsSection",
 ]

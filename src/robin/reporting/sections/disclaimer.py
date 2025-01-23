@@ -18,7 +18,7 @@ class DisclaimerSection(ReportSection):
         self.add_section_header("Disclaimer")
 
         # Split the text into paragraphs and create separate Paragraph objects
-        paragraphs = EXTENDED_DISCLAIMER_TEXT.split('\n\n')
+        paragraphs = EXTENDED_DISCLAIMER_TEXT.split("\n\n")
         for p in paragraphs:
             self.elements.append(Paragraph(p, self.styles.styles["Normal"]))
             self.elements.append(Spacer(1, 12))  # Add some space between paragraphs

@@ -159,6 +159,7 @@ class BaseAnalysis:
             return False
 
         self.file_mod_times[file_path] = current_mod_time
+
         return True
 
     def check_and_create_folder(self, path, folder_name=None):
@@ -275,10 +276,13 @@ class BaseAnalysis:
 
         while self.bamqueue.qsize() > 0:
             bamfile, timestamp, sampleID = self.bamqueue.get()
+
             if sampleID not in self.bams:
                 self.bams[sampleID] = []
+
             self.bams[sampleID].append((bamfile, timestamp))
             count += 1
+
             if sampleID not in app.storage.general[self.mainuuid]:
                 app.storage.general[self.mainuuid][sampleID] = {}
 
@@ -290,6 +294,7 @@ class BaseAnalysis:
                         bam_count=0, bam_processed=0, bams_in_processing=0
                     )
                 }
+
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bam_count"
             ] += 1
@@ -386,28 +391,36 @@ class BaseAnalysis:
             ] = {
                 "counters": Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
             }
-            
+
         with self.progress_trackers:
             # Create expansion with custom header
-            with ui.expansion().classes('w-full') as expansion:
+            with ui.expansion().classes("w-full") as expansion:
                 # Header slot with summary
-                with expansion.add_slot('header'):
+                with expansion.add_slot("header"):
                     with ui.row().classes("w-full items-center justify-between gap-1"):
                         with ui.column().classes("flex-grow gap-0"):
-                            ui.label("File Processing Status").classes("text-sm font-medium mb-0 pb-0")
+                            ui.label("File Processing Status").classes(
+                                "text-sm font-medium mb-0 pb-0"
+                            )
                             with ui.row().classes("w-full items-center gap-1"):
-                                progress_summary = ui.linear_progress(
-                                    size="4px",
-                                    show_value=False,
-                                    value=0,
-                                    color="primary",
-                                ).classes("flex-grow my-1").props("instant-feedback")
+                                progress_summary = (
+                                    ui.linear_progress(
+                                        size="4px",
+                                        show_value=False,
+                                        value=0,
+                                        color="primary",
+                                    )
+                                    .classes("flex-grow my-1")
+                                    .props("instant-feedback")
+                                )
                                 ui.label().bind_text_from(
-                                    app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"],
+                                    app.storage.general[self.mainuuid][self.sampleID][
+                                        self.name
+                                    ]["counters"],
                                     "bam_processed",
-                                    backward=lambda n: f"{n}/{app.storage.general[self.mainuuid][self.sampleID][self.name]['counters']['bam_count']}"
+                                    backward=lambda n: f"{n}/{app.storage.general[self.mainuuid][self.sampleID][self.name]['counters']['bam_count']}",
                                 ).classes("text-xs min-w-fit")
-                
+
                 # Detailed content
                 with ui.column().classes("w-full gap-0 mt-1"):
                     # Files not processed yet
@@ -425,10 +438,19 @@ class BaseAnalysis:
                             .classes("flex-grow my-0")
                         )
                         ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"],
+                            app.storage.general[self.mainuuid][self.sampleID][
+                                self.name
+                            ]["counters"],
                             "bam_count",
-                            backward=lambda n: str(n - app.storage.general[self.mainuuid][self.sampleID][self.name]['counters']['bam_processed'] - 
-                                               app.storage.general[self.mainuuid][self.sampleID][self.name]['counters']['bams_in_processing'])
+                            backward=lambda n: str(
+                                n
+                                - app.storage.general[self.mainuuid][self.sampleID][
+                                    self.name
+                                ]["counters"]["bam_processed"]
+                                - app.storage.general[self.mainuuid][self.sampleID][
+                                    self.name
+                                ]["counters"]["bams_in_processing"]
+                            ),
                         ).classes("text-xs min-w-[30px] text-right")
 
                     # Files being processed (only shown in batch mode)
@@ -447,9 +469,11 @@ class BaseAnalysis:
                                 .classes("flex-grow my-0")
                             )
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"],
+                                app.storage.general[self.mainuuid][self.sampleID][
+                                    self.name
+                                ]["counters"],
                                 "bams_in_processing",
-                                backward=lambda n: str(n)
+                                backward=lambda n: str(n),
                             ).classes("text-xs min-w-[30px] text-right")
 
                     # Files processed
@@ -467,9 +491,11 @@ class BaseAnalysis:
                             .classes("flex-grow my-0")
                         )
                         ui.label().bind_text_from(
-                            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"],
+                            app.storage.general[self.mainuuid][self.sampleID][
+                                self.name
+                            ]["counters"],
                             "bam_processed",
-                            backward=lambda n: str(n)
+                            backward=lambda n: str(n),
                         ).classes("text-xs min-w-[30px] text-right")
 
             # Update progress bars
@@ -563,7 +589,7 @@ class BaseAnalysis:
                     "series": [],
                 }
             )
-            .classes('border-double text-sky-600 dark:text-white dark:bg-black')
+            .classes("border-double text-sky-600 dark:text-white dark:bg-black")
             .style("height: 350px")
         )
 
@@ -590,9 +616,9 @@ class BaseAnalysis:
                     "series": [],
                 }
             )
-            .classes('border-double text-sky-600 dark:text-white dark:bg-black')
+            .classes("border-double text-sky-600 dark:text-white dark:bg-black")
             .style("font-size: 150%; font-weight: 300; height: 350px")
-            #.classes("border-double")
+            # .classes("border-double")
         )
 
     def process_bam(self, bamfile: BinaryIO, timestamp: float) -> None:
@@ -634,7 +660,13 @@ class BaseAnalysis:
         """
         pass
 
-    def create_summary_card(self, classification_text, confidence_value, model_name=None, features_found=None):
+    def create_summary_card(
+        self,
+        classification_text,
+        confidence_value,
+        model_name=None,
+        features_found=None,
+    ):
         """
         Create a standardized summary card for displaying classification results.
         Following Apple HIG principles for presenting machine learning results.
@@ -650,50 +682,48 @@ class BaseAnalysis:
         features_found : int, optional
             Number of features/probes found
         """
-        with ui.card().classes(
-            "w-full shadow-sm rounded-lg"
-        ).style('background-color: #F5F5F7; padding: 16px; margin-bottom: 16px;'):
+        with ui.card().classes("w-full shadow-sm rounded-lg").style(
+            "background-color: #F5F5F7; padding: 16px; margin-bottom: 16px;"
+        ):
             # Main classification result
-            with ui.row().classes('w-full items-center justify-between gap-4'):
+            with ui.row().classes("w-full items-center justify-between gap-4"):
                 # Left side - Classification info
-                with ui.column().classes('gap-2 flex-grow'):
+                with ui.column().classes("gap-2 flex-grow"):
                     # Primary classification
                     ui.label(classification_text.split(" - ")[0]).classes(
-                        'text-lg font-medium text-gray-900'
+                        "text-lg font-medium text-gray-900"
                     )
                     # Secondary info row
-                    with ui.row().classes('gap-4 items-center'):
+                    with ui.row().classes("gap-4 items-center"):
                         if model_name:
                             ui.label(f"Model: {model_name}").classes(
-                                'text-sm text-gray-500'
+                                "text-sm text-gray-500"
                             )
                         if features_found:
                             ui.label(f"Features: {features_found:,}").classes(
-                                'text-sm text-gray-500'
+                                "text-sm text-gray-500"
                             )
-                
+
                 # Right side - Confidence indicator
                 confidence_percent = confidence_value * 100
-                with ui.column().classes('items-end gap-1 min-w-fit'):
+                with ui.column().classes("items-end gap-1 min-w-fit"):
                     # Confidence value
                     ui.label(f"{confidence_percent:.1f}%").classes(
-                        'text-xl font-semibold'
-                    ).style(
-                        f'color: {self._get_confidence_color(confidence_value)}'
-                    )
+                        "text-xl font-semibold"
+                    ).style(f"color: {self._get_confidence_color(confidence_value)}")
                     # Confidence label
                     ui.label(self._get_confidence_text(confidence_value)).classes(
-                        'text-sm text-gray-500'
+                        "text-sm text-gray-500"
                     )
 
     def _get_confidence_color(self, confidence):
         """Get color based on confidence level."""
         if confidence >= 0.9:
-            return '#34C759'  # Green for high confidence
+            return "#34C759"  # Green for high confidence
         elif confidence >= 0.7:
-            return '#007AFF'  # Blue for medium confidence
+            return "#007AFF"  # Blue for medium confidence
         else:
-            return '#FF9500'  # Orange for low confidence
+            return "#FF9500"  # Orange for low confidence
 
     def _get_confidence_text(self, confidence):
         """Get descriptive text based on confidence level."""
