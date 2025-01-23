@@ -985,6 +985,7 @@ class CNVAnalysis(BaseAnalysis):
                 ],
                 rows=[],
                 row_key='name',
+                pagination=25
             ).classes('w-full').props('dense')
             
             # Add slot for conditional formatting of the CNV state and row styling
