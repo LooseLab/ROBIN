@@ -90,8 +90,8 @@ def run_methylartist(tempmgmtdir: str, plot_out: str) -> None:
         os.system(
             f"methylartist locus -i chr10:129466536-129467536 -b {os.path.join(tempmgmtdir, 'mgmt.bam')} -o {plot_out} --motif CG --mods m > /dev/null 2>&1"
         )
-    except Exception:
-        # logger.error(f"Error running methylartist: {e}")
+    except Exception as e:
+        logger.error(f"Error running methylartist: {e}")
         raise
 
 
@@ -390,55 +390,55 @@ class MGMT_Object(BaseAnalysis):
             output = self.output
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
-        if not self.last_seen:
-            for file in natsort.natsorted(os.listdir(output)):
-                if file.endswith("_mgmt.csv"):
-                    count = int(file.split("_")[0])
-                    if count > self.last_seen:
-                        results = pd.read_csv(os.path.join(output, file))
-                        plot_out = os.path.join(output, file.replace(".csv", ".png"))
-                        self.mgmtable.clear()
-                        with self.mgmtable:
-                            self.tabulate(results)
-                        if os.path.exists(plot_out):
-                            self.mgmtplot.clear()
-                            with self.mgmtplot.classes("w-full"):
-                                ui.image(plot_out).props("fit=scale-up")
-                        if self.summary:
-                            with self.summary:
-                                self.summary.clear()
-                                with ui.card().classes('w-full p-4 mb-4'):
-                                    with ui.row().classes('w-full items-center justify-between'):
-                                        # Left side - MGMT Status
-                                        with ui.column().classes('gap-2'):
-                                            if 'status' in results.columns:
-                                                status = results['status'].values[0]
-                                                average = float(results['average'].values[0])
-                                                pred = float(results['pred'].values[0])
-                                                
-                                                # Determine status styling
-                                                if status.lower() == 'methylated':
-                                                    status_color = "text-blue-600"
-                                                    status_bg = "bg-blue-100"
-                                                else:
-                                                    status_color = "text-amber-600"
-                                                    status_bg = "bg-amber-100"
+        for file in natsort.natsorted(os.listdir(output)):
+            if file.endswith("_mgmt.csv"):
+                count = int(file.split("_")[0])
+                if count > self.last_seen:
+                    results = pd.read_csv(os.path.join(output, file))
+                    plot_out = os.path.join(output, file.replace(".csv", ".png"))
+                    self.mgmtable.clear()
+                    with self.mgmtable:
+                        self.tabulate(results)
+                    if os.path.exists(plot_out):
+                        self.mgmtplot.clear()
+                    with self.mgmtplot.classes("w-full"):
+                        ui.image(plot_out).props("fit=scale-up")
+                    if self.summary:
+                        with self.summary:
+                            self.summary.clear()
+                            with ui.card().classes('w-full p-4 mb-4'):
+                                with ui.row().classes('w-full items-center justify-between'):
+                                    # Left side - MGMT Status
+                                    with ui.column().classes('gap-2'):
+                                        if 'status' in results.columns:
+                                            status = results['status'].values[0]
+                                            average = float(results['average'].values[0])
+                                            pred = float(results['pred'].values[0])
+                                            
+                                            # Determine status styling
+                                            if status.lower() == 'methylated':
+                                                status_color = "text-blue-600"
+                                                status_bg = "bg-blue-100"
+                                            else:
+                                                status_color = "text-amber-600"
+                                                status_bg = "bg-amber-100"
 
-                                                ui.label("MGMT Methylation Analysis").classes('text-lg font-medium')
-                                                with ui.row().classes('items-center gap-2'):
-                                                    ui.label(f"Status: {status}").classes(f'{status_color} font-medium')
-                                                    ui.label(f"{pred:.1f}%").classes(f'px-2 py-1 rounded {status_bg} {status_color}')
+                                            ui.label("MGMT Methylation Analysis").classes('text-lg font-medium')
+                                            with ui.row().classes('items-center gap-2'):
+                                                ui.label(f"Status: {status}").classes(f'{status_color} font-medium')
+                                                ui.label(f"{pred:.1f}%").classes(f'px-2 py-1 rounded {status_bg} {status_color}')
 
-                                        # Right side - Additional metrics
-                                        with ui.column().classes('gap-2 text-right'):
-                                            ui.label("Analysis Details").classes('font-medium')
-                                            ui.label(f"Average Methylation: {average:.1f}%").classes('text-gray-600')
-                                            ui.label(f"Prediction Score: {pred:.1f}%").classes('text-gray-600')
+                                    # Right side - Additional metrics
+                                    with ui.column().classes('gap-2 text-right'):
+                                        ui.label("Analysis Details").classes('font-medium')
+                                        ui.label(f"Average Methylation: {average:.1f}%").classes('text-gray-600')
+                                        ui.label(f"Prediction Score: {pred:.1f}%").classes('text-gray-600')
 
-                                    # Bottom row - Information
-                                    with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
-                                        ui.label("MGMT status determined from methylation analysis of 137 CpG sites")
-                        self.last_seen = count
+                                # Bottom row - Information
+                                with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
+                                    ui.label("MGMT status determined from methylation analysis of 137 CpG sites")
+                    self.last_seen = count
+            
 
 
 def test_me(

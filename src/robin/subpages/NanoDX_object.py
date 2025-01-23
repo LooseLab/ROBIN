@@ -374,7 +374,6 @@ class NanoDX_object(BaseAnalysis):
                     
                     merged_modkit_df = await run.cpu_bound(load_modkit_data, parquet_path)
                     
-                    print (merged_modkit_df.columns)
                     merged_modkit_df.rename(columns={"chromStart":"start_pos", "chromEnd":"end_pos", "mod_code":"mod", "thickStart":"start_pos2", "thickEnd":"end_pos2", "color":"colour"}, inplace=True)
                     merged_modkit_df.rename(columns={'n_canonical':'Ncanon', 'n_delete':'Ndel', 'n_diff':'Ndiff', 'n_fail':'Nfail', 'n_mod':'Nmod', 'n_nocall':'Nnocall', 'n_othermod':'Nother', 'valid_cov':'Nvalid', 'percent_modified':'score'}, inplace=True)
                     

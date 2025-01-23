@@ -96,53 +96,6 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
         logger.info(f"Output directory: {rcns2folder}")
         logger.info(f"Batch number: {batch}")
         
-        """
-        # Check if input file exists
-        if not os.path.exists(bed):
-            logger.error(f"Input BED file does not exist: {bed}")
-            raise FileNotFoundError(f"BED file not found: {bed}")
-            
-        # Read the bed file
-        logger.debug("Reading BED file...")
-        bed_df = pd.read_csv(bed, sep="\t")
-        logger.info(f"Read BED file with shape: {bed_df.shape}")
-        logger.debug(f"BED file columns: {bed_df.columns.tolist()}")
-        
-        # Ensure numeric types for position columns
-        logger.debug("Converting position columns to numeric...")
-        bed_df["chromStart"] = pd.to_numeric(bed_df["chromStart"], errors="coerce")
-        bed_df["chromEnd"] = pd.to_numeric(bed_df["chromEnd"], errors="coerce")
-        
-        # Drop any rows with NaN values after conversion
-        bed_df = bed_df.dropna(subset=["chromStart", "chromEnd"])
-        
-        # Rename columns to match expected format
-        logger.debug("Renaming columns...")
-        bed_df = bed_df.rename(columns={
-            "chromStart": "start",  # Changed from start_pos to start
-            "chromEnd": "end",      # Changed from end_pos to end
-            "percent_modified": "methylation_call"
-        })
-        
-        
-        # Convert methylation calls to binary format (0/1)
-        logger.debug("Converting methylation calls to binary format...")
-        bed_df["methylation_call"] = (bed_df["methylation_call"] >= 60).astype(int)
-        
-        # Ensure all required columns are present
-        required_columns = ["chrom", "start", "end", "methylation_call"]
-        missing_columns = [col for col in required_columns if col not in bed_df.columns]
-        if missing_columns:
-            logger.error(f"Missing required columns: {missing_columns}")
-            raise ValueError(f"Missing required columns: {missing_columns}")
-        
-        # Save in format expected by R script
-        converted_bed = os.path.join(os.path.dirname(bed), "converted_for_r.bed")
-        logger.info(f"Saving converted BED file to: {converted_bed}")
-        # Save only required columns in correct order
-        bed_df.to_csv(converted_bed, sep="\t", index=False, header=False)
-        """
-        
         # Check if R script exists
         r_script_path = f"{HVPATH}/bin/methylation_classification_nanodx_v0.1.R"
         if not os.path.exists(r_script_path):
@@ -185,12 +138,14 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
             logger.info("R script executed successfully")
             logger.debug(f"R script stdout: {result.stdout}")
             if result.stderr:
+                pass
                 logger.warning(f"R script stderr: {result.stderr}")
         except subprocess.CalledProcessError as e:
-            logger.error(f"R script failed with return code {e.returncode}")
-            logger.error(f"stdout: {e.stdout}")
-            logger.error(f"stderr: {e.stderr}")
-            raise
+            #logger.error(f"R script failed with return code {e.returncode}")
+            #logger.error(f"stdout: {e.stdout}")
+            #logger.error(f"stderr: {e.stderr}")
+            #raise
+            pass
         
         # Check if output file was created
         expected_output = f"{rcns2folder}/live_{batch}_votes.tsv"
@@ -475,7 +430,7 @@ class RandomForest_object(BaseAnalysis):
                     
                     logger.debug("Loading modkit data from parquet file...")
                     merged_modkit_df = await run.cpu_bound(load_modkit_data, parquet_path)
-                    print (merged_modkit_df.columns)
+                    
                     merged_modkit_df.rename(columns={"chromStart":"start_pos", "chromEnd":"end_pos", "mod_code":"mod", "thickStart":"start_pos2", "thickEnd":"end_pos2", "color":"colour"}, inplace=True)
                     merged_modkit_df.rename(columns={'n_canonical':'Ncanon', 'n_delete':'Ndel', 'n_diff':'Ndiff', 'n_fail':'Nfail', 'n_mod':'Nmod', 'n_nocall':'Nnocall', 'n_othermod':'Nother', 'valid_cov':'Nvalid', 'percent_modified':'score'}, inplace=True)
                    

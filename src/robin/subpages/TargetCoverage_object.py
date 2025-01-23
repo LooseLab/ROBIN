@@ -57,6 +57,7 @@ import queue
 import docker
 from robin.utilities.decompress import decompress_gzip_file
 from robin.subpages.base_analysis import BaseAnalysis
+import subprocess  # Ensure this import is present
 
 os.environ["CI"] = "1"
 logger = logging.getLogger(__name__)
@@ -285,24 +286,41 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             f"--remove_intermediate_dir "
             f"--platform ont_r10_guppy_hac_5khz "
             f"--output_dir {workdirout} -b {bedfile}"
-            # f" >/dev/null 2>&1"
         )
         if showerrors:
             logger.info(runcommand)
-        os.system(runcommand)
-        shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
-        shutil.copy2(
-            f"{workdirout}/indel.vcf.gz", f"{workdirout}/output_indel_done.vcf.gz"
-        )
 
+        # Run the Docker command
+        result = subprocess.run(runcommand, shell=True, capture_output=True, text=True)
+        logger.info(result.stdout)
+        if result.stderr:
+            logger.error(result.stderr)
+
+        # Replace os.system calls with subprocess.run
         command = f"snpEff -q hg38 {workdirout}/output_done.vcf.gz > {workdirout}/snpeff_output.vcf"
-        os.system(command)
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        logger.info(result.stdout)
+        if result.stderr:
+            logger.error(result.stderr)
+
         command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf"
-        os.system(command)
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        logger.info(result.stdout)
+        if result.stderr:
+            logger.error(result.stderr)
+
         command = f"snpEff -q hg38 {workdirout}/output_indel_done.vcf.gz > {workdirout}/snpeff_indel_output.vcf"
-        os.system(command)
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        logger.info(result.stdout)
+        if result.stderr:
+            logger.error(result.stderr)
+
         command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} {workdirout}/snpeff_indel_output.vcf > {workdirout}/snpsift_indel_output.vcf"
-        os.system(command)
+        result = subprocess.run(command, shell=True, capture_output=True, text=True)
+        logger.info(result.stdout)
+        if result.stderr:
+            logger.error(result.stderr)
+
         parse_vcf(f"{workdirout}/snpsift_output.vcf")
         parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
 
