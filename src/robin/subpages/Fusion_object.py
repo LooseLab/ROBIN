@@ -92,6 +92,8 @@ plt.rcParams["font.sans-serif"] = [
 os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
 
+
+
 decompress_gzip_file(
     os.path.join(
         os.path.dirname(os.path.abspath(resources.__file__)),
@@ -99,6 +101,90 @@ decompress_gzip_file(
     )
 )
 
+
+
+def classify_alignment(aln) -> str:
+    """Return 'PRIMARY' or 'SUPPLEMENTARY' (exclude secondary)"""
+    if aln.is_supplementary:
+        return "SUPPLEMENTARY"
+    else:
+        return "PRIMARY"
+
+def process_bam_file_svs(bam_path: str) -> pd.DataFrame:
+    """
+    Function that, for a single BAM file, returns a DataFrame
+    of all primary + supplementary alignments for reads that have at
+    least one supplementary alignment (or SA tag).
+    
+    
+    """
+    
+    reads_with_supp = set()
+    
+    # First pass: identify read IDs that have supplementary alignments
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        for aln in bam:
+            if aln.is_unmapped:
+                continue
+            # Strict approach: only set is_supplementary (0x800)
+            if aln.is_supplementary:
+                reads_with_supp.add(aln.query_name)
+            # Also count SA-tag reads as "supplementary"
+            elif aln.has_tag("SA"):
+                reads_with_supp.add(aln.query_name)
+
+    # If none found, just return empty
+    if not reads_with_supp:
+        return pd.DataFrame()
+
+    # Second pass: gather alignment data for these reads
+    rows = []
+    with pysam.AlignmentFile(bam_path, "rb") as bam:
+        for aln in bam:
+            if aln.is_unmapped:
+                continue
+            if aln.query_name not in reads_with_supp:
+                continue
+            # Skip secondary alignments - we only want primary + supplementary
+            if aln.is_secondary:
+                continue
+
+            ref_name   = bam.get_reference_name(aln.reference_id) if aln.reference_id >= 0 else None
+            ref_start  = aln.reference_start
+            ref_end    = aln.reference_end
+            ref_span   = ref_end - ref_start if (ref_start >= 0 and ref_end >= 0) else None
+
+            read_start = aln.query_alignment_start
+            read_end   = aln.query_alignment_end
+            read_span  = (read_end - read_start) if (read_start >= 0 and read_end >= 0) else None
+
+            mapq = aln.mapping_quality
+            strand = "-" if aln.is_reverse else "+"
+
+            aln_type = classify_alignment(aln)
+
+            rows.append({
+                "BAM_FILE":   os.path.basename(bam_path),
+                "QNAME":      aln.query_name,
+                "TYPE":       aln_type,   # PRIMARY or SUPPLEMENTARY
+                "RNAME":      ref_name,
+                "REF_START":  ref_start,
+                "REF_END":    ref_end,
+                "REF_SPAN":   ref_span,
+                "READ_START": read_start,
+                "READ_END":   read_end,
+                "READ_SPAN":  read_span,    
+                "MQ":         mapq,
+                "STRAND":     strand
+            })
+
+    df = pd.DataFrame(rows)
+    # Possibly sort or reset index
+    df.sort_values(["QNAME","TYPE","REF_START"], inplace=True)
+    df.reset_index(drop=True, inplace=True)
+    df = df[~df['QNAME'].isin(df[df['MQ']<50]['QNAME'])]
+
+    return df
 
 def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
     """
@@ -432,6 +518,58 @@ def fusion_work(
     return fusion_candidates, fusion_candidates_all
 
 
+def structural_variant_work(
+    threads: int,
+    bamfile: str,
+    tempreadfile: str,
+    tempbamfile: str,
+) -> Optional[pd.DataFrame]:
+    """
+    Identify structural variants from BAM file across the whole genome.
+    Only considers high-quality supplementary alignments.
+
+    Args:
+        threads (int): Number of threads to use for parallel processing.
+        bamfile (str): Path to the BAM file.
+        tempreadfile (str): Path to the temporary file to store read names.
+        tempbamfile (str): Path to the temporary BAM file.
+
+    Returns:
+        Optional[pd.DataFrame]: DataFrame with structural variant candidates.
+    """
+    try:
+        # Extract ONLY reads with supplementary alignments
+        run_command(
+            f"samtools view -@{threads} -f 2048 {bamfile} | cut -f1 > {tempreadfile}"
+        )
+
+        if os.path.getsize(tempreadfile) > 0:
+            # Extract these reads and their primary alignments to a temporary BAM file
+            run_command(
+                f"samtools view -@{threads} --write-index -N {tempreadfile} -o {tempbamfile} {bamfile}"
+            )
+            if os.path.getsize(tempbamfile) > 0:
+                read_data = extract_bam_info(tempbamfile)
+                
+                # Filter for high quality alignments
+                read_data = read_data[
+                    (read_data["mapping_quality"] >= 60) &  # Very high mapping quality
+                    ((read_data["reference_end"] - read_data["reference_start"]) >= 1000)  # Minimum alignment length
+                ]
+
+                if os.path.isfile(f"{tempbamfile}.csi"):
+                    logger.debug(f"removing {tempbamfile}.csi")
+                    os.remove(f"{tempbamfile}.csi")
+
+                return read_data
+
+    except Exception:
+        logger.error("Error during structural variant detection", exc_info=True)
+        raise
+
+    return None
+
+
 class FusionObject(BaseAnalysis):
     """
     FusionObject handles the gene fusion identification process, including setting up the GUI
@@ -441,8 +579,11 @@ class FusionObject(BaseAnalysis):
         target_panel (str): Name of the target panel.
         fusion_candidates (pd.DataFrame): DataFrame with fusion candidates.
         fusion_candidates_all (pd.DataFrame): DataFrame with all fusion candidates.
+        structural_variants (dict): Dictionary to store structural variants.
+        sv_count (int): Counter for structural variants.
         fstable_all (ui.Table): UI table for displaying all fusion candidates.
         fstable (ui.Table): UI table for displaying fusion candidates.
+        sv_table (ui.Table): UI table for displaying structural variants.
         fstable_all_row_count (int): Row count for all fusion candidates table.
         all_candidates (int): Number of all fusion candidates.
         fstable_row_count (int): Row count for fusion candidates table.
@@ -456,15 +597,25 @@ class FusionObject(BaseAnalysis):
 
     def __init__(self, *args, target_panel=None, **kwargs):
         self.target_panel = target_panel
-
-        self.fusion_candidates = {}  # pd.DataFrame()
-        self.fusion_candidates_all = {}  # pd.DataFrame()
+        self.fusion_candidates = {}
+        self.fusion_candidates_all = {}
+        self.structural_variants = {}  # Store structural variants
+        self.sv_count = 0  # Counter for structural variants
         self.fstable_all = None
         self.fstable = None
+        self.sv_table = None  # Table for structural variants
         self.fstable_all_row_count = 0
         self.all_candidates = 0
         self.fstable_row_count = 0
         self.candidates = 0
+        # Initialize UI elements
+        self.sv_plot = None
+        self.sv_table_container = None
+        self.fusionplot = None
+        self.fusionplot_all = None
+        self.fusiontable = None
+        self.fusiontable_all = None
+
         self.gene_gff3_2 = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "gencode.v45.basic.annotation.gff3",
@@ -544,7 +695,7 @@ class FusionObject(BaseAnalysis):
 
     def setup_ui(self) -> None:
         """
-        Sets up the user interface for the Fusion Panel. This function creates the UI elements for the Fusion Panel.
+        Sets up the user interface for the Fusion Panel and Structural Variant Analysis.
         """
         if self.summary:
             with self.summary:
@@ -552,75 +703,44 @@ class FusionObject(BaseAnalysis):
                     with ui.row().classes("w-full items-center justify-between"):
                         # Left side - Fusion Status
                         with ui.column().classes("gap-2"):
-                            ui.label("Gene Fusion Analysis").classes(
-                                "text-lg font-medium"
-                            )
+                            ui.label("Gene Fusion Analysis").classes("text-lg font-medium")
                             with ui.row().classes("items-center gap-2"):
-                                ui.label(f"Panel: {self.target_panel}").classes(
-                                    "text-gray-600 font-medium"
-                                )
-                                ui.label("0").bind_text_from(
-                                    self,
-                                    "candidates",
-                                    backward=lambda n: f"{n} high confidence",
-                                ).classes("px-2 py-1 rounded bg-blue-100 text-blue-600")
+                                ui.label(f"Panel: {self.target_panel}").classes("text-gray-600 font-medium")
+                                ui.label("0").bind_text_from(self, "candidates", backward=lambda n: f"{n} high confidence").classes("px-2 py-1 rounded bg-blue-100 text-blue-600")
 
                         # Right side - Additional metrics
                         with ui.column().classes("gap-2 text-right"):
                             ui.label("Analysis Details").classes("font-medium")
-                            ui.label("0").bind_text_from(
-                                self,
-                                "all_candidates",
-                                backward=lambda n: f"{n} low confidence fusions",
-                            ).classes("text-gray-600")
+                            ui.label("0").bind_text_from(self, "all_candidates", backward=lambda n: f"{n} low confidence fusions").classes("text-gray-600")
 
                     # Bottom row - Information
-                    with ui.row().classes(
-                        "w-full mt-4 text-sm text-gray-500 justify-center"
-                    ):
-                        ui.label(
-                            "Fusion candidates identified from reads with supplementary alignments"
-                        )
+                    with ui.row().classes("w-full mt-4 text-sm text-gray-500 justify-center"):
+                        ui.label("Fusion candidates identified from reads with supplementary alignments")
+
         with ui.card().style("width: 100%"):
-            ui.label("Gene Fusion Candidates").classes(
-                "text-sky-600 dark:text-white"
-            ).style("font-size: 150%; font-weight: 300").tailwind(
-                "drop-shadow", "font-bold"
-            )
+            ui.label("Gene Fusion and Structural Variant Analysis").classes("text-sky-600 dark:text-white").style("font-size: 150%; font-weight: 300").tailwind("drop-shadow", "font-bold")
             ui.label(
-                "This panel identifies gene fusion candidates from the input bam files. "
-                "The panel is split into two tabs, one for gene fusions between genes within the target panel and one for genome wide fusions. "
-                "Fusions are identified on a streaming basis derived from reads with supplementary alignments. "
-                "The plots are indicative of the presence of a fusion and should be interpreted with care. "
-                "The tables show the reads that are indicative of a fusion."
+                "This panel identifies gene fusion candidates and structural variants from the input bam files. "
+                "The panel is split into three tabs: gene fusions within the target panel, genome wide fusions, and structural variants. "
+                "Events are identified on a streaming basis derived from reads with supplementary alignments. "
+                "The plots are indicative of the presence of events and should be interpreted with care."
             ).style("font-size: 125%; font-weight: 300")
+            
             with ui.tabs().classes("w-full") as tabs:
-                one = ui.tab("Within Target Fusions").style(
-                    "font-size: 125%; font-weight: 300"
-                )
+                one = ui.tab("Within Target Fusions").style("font-size: 125%; font-weight: 300")
                 with one:
-                    self.badge_one = (
-                        ui.badge("0", color="red")
-                        .bind_text_from(self, "candidates", backward=lambda n: f"{n}")
-                        .props("floating rounded outline")
-                    )
-                two = ui.tab("Genome Wide Fusions").style(
-                    "font-size: 125%; font-weight: 300"
-                )
+                    self.badge_one = ui.badge("0", color="red").bind_text_from(self, "candidates", backward=lambda n: f"{n}").props("floating rounded outline")
+                two = ui.tab("Genome Wide Fusions").style("font-size: 125%; font-weight: 300")
                 with two:
-                    self.badge_two = (
-                        ui.badge("0", color="red")
-                        .bind_text_from(
-                            self, "all_candidates", backward=lambda n: f"{n}"
-                        )
-                        .props("floating rounded outline")
-                    )
+                    self.badge_two = ui.badge("0", color="red").bind_text_from(self, "all_candidates", backward=lambda n: f"{n}").props("floating rounded outline")
+                three = ui.tab("Structural Variants").style("font-size: 125%; font-weight: 300")
+                with three:
+                    self.badge_three = ui.badge("0", color="red").bind_text_from(self, "sv_count", backward=lambda n: f"{n}").props("floating rounded outline")
+
             with ui.tab_panels(tabs, value=one).classes("w-full"):
                 with ui.tab_panel(one):
                     with ui.card().style("width: 100%"):
-                        ui.label("Fusion Candidates (within targets)").style(
-                            "font-size: 125%; font-weight: 300"
-                        ).tailwind("drop-shadow", "font-bold")
+                        ui.label("Fusion Candidates (within targets)").style("font-size: 125%; font-weight: 300").tailwind("drop-shadow", "font-bold")
                         ui.separator()
                         ui.label(
                             "Fusion Candidates are identified by looking for reads that map to two different genes from within the target panel. "
@@ -630,27 +750,17 @@ class FusionObject(BaseAnalysis):
                         self.fusionplot = ui.row()
                         with self.fusionplot.classes("w-full"):
                             with ui.column().classes("gap-2"):
-                                ui.label("Awaiting Fusion Plot").classes(
-                                    "text-lg font-medium"
-                                )
-                                ui.label(
-                                    "Plot will be displayed here when fusion data is available"
-                                ).classes("text-gray-600")
+                                ui.label("Awaiting Fusion Plot").classes("text-lg font-medium")
+                                ui.label("Plot will be displayed here when fusion data is available").classes("text-gray-600")
                         self.fusiontable = ui.row().classes("w-full")
                         with self.fusiontable:
                             with ui.column().classes("gap-2"):
-                                ui.label("Awaiting Fusion Data").classes(
-                                    "text-lg font-medium"
-                                )
-                                ui.label(
-                                    "Table will be displayed here when fusion data is available"
-                                ).classes("text-gray-600")
+                                ui.label("Awaiting Fusion Data").classes("text-lg font-medium")
+                                ui.label("Table will be displayed here when fusion data is available").classes("text-gray-600")
 
                 with ui.tab_panel(two):
                     with ui.card().style("width: 100%"):
-                        ui.label("Fusion Candidates (genome wide)").style(
-                            "font-size: 125%; font-weight: 300"
-                        ).tailwind("drop-shadow", "font-bold")
+                        ui.label("Fusion Candidates (genome wide)").style("font-size: 125%; font-weight: 300").tailwind("drop-shadow", "font-bold")
                         ui.separator()
                         ui.label(
                             "Fusion Candidates are identified by looking for reads that map to at least one gene from within the target panel. "
@@ -660,21 +770,26 @@ class FusionObject(BaseAnalysis):
                         self.fusionplot_all = ui.row()
                         with self.fusionplot_all.classes("w-full"):
                             with ui.column().classes("gap-2"):
-                                ui.label("Awaiting Genome-wide Fusion Plot").classes(
-                                    "text-lg font-medium"
-                                )
-                                ui.label(
-                                    "Plot will be displayed here when genome-wide fusion data is available"
-                                ).classes("text-gray-600")
+                                ui.label("Awaiting Genome-wide Fusion Plot").classes("text-lg font-medium")
+                                ui.label("Plot will be displayed here when genome-wide fusion data is available").classes("text-gray-600")
                         self.fusiontable_all = ui.row().classes("w-full")
                         with self.fusiontable_all:
                             with ui.column().classes("gap-2"):
-                                ui.label("Awaiting Genome-wide Fusion Data").classes(
-                                    "text-lg font-medium"
-                                )
-                                ui.label(
-                                    "Table will be displayed here when genome-wide fusion data is available"
-                                ).classes("text-gray-600")
+                                ui.label("Awaiting Genome-wide Fusion Data").classes("text-lg font-weight: 300")
+                                ui.label("Table will be displayed here when genome-wide fusion data is available").classes("text-gray-600")
+
+                with ui.tab_panel(three):
+                    with ui.card().style("width: 100%"):
+                        ui.label("Structural Variants").style("font-size: 125%; font-weight: 300").tailwind("drop-shadow", "font-bold")
+                        ui.separator()
+                        ui.label(
+                            "Structural variants are identified by analyzing reads with supplementary alignments. "
+                            "The analysis identifies deletions, insertions, inversions, and translocations. "
+                            "Events are visualized and detailed in the table below."
+                        ).style("font-size: 125%; font-weight: 300")
+                        
+                        self.sv_plot = ui.row().classes("w-full")
+                        self.sv_table_container = ui.row().classes("w-full")
 
         if self.browse:
             self.show_previous_data()
@@ -687,9 +802,7 @@ class FusionObject(BaseAnalysis):
         """
         # if not self.fusion_candidates_all.empty:
         if self.sampleID in self.fusion_candidates_all.keys():
-            uniques_all = self.fusion_candidates_all[self.sampleID][
-                "read_id"
-            ].duplicated(keep=False)
+            uniques_all = self.fusion_candidates_all[self.sampleID]["read_id"].duplicated(keep=False)
             doubles_all = self.fusion_candidates_all[self.sampleID][uniques_all]
             counts_all = doubles_all.groupby("read_id")["col4"].transform("nunique")
             result_all = doubles_all[counts_all > 1]
@@ -746,9 +859,7 @@ class FusionObject(BaseAnalysis):
                         col["sortable"] = True
 
                     with self.fstable_all.add_slot("top-right"):
-                        with ui.input(placeholder="Search").props(
-                            "type=search"
-                        ).bind_value(self.fstable_all, "filter").add_slot("append"):
+                        with ui.input(placeholder="Search").props("type=search").bind_value(self.fstable_all, "filter").add_slot("append"):
                             ui.icon("search")
 
                 self.fusionplot_all.clear()
@@ -776,6 +887,7 @@ class FusionObject(BaseAnalysis):
                     )
                     .to_dict("records")
                 )
+
                 self.fstable_all.update()
                 self.fusionplot_all.clear()
 
@@ -791,16 +903,12 @@ class FusionObject(BaseAnalysis):
                     gene_groups_test = get_gene_network(gene_pairs)
                     gene_groups = []
                     for gene_group in gene_groups_test:
-                        if (
-                            len(
-                                _get_reads(
-                                    result_all[goodpairs][
-                                        result_all[goodpairs][3].isin(gene_group)
-                                    ]
-                                )
-                            )
-                            > 1
-                        ):
+                        reads = _get_reads(
+                            result_all[goodpairs][
+                                result_all[goodpairs][3].isin(gene_group)
+                            ]
+                        )
+                        if len(reads) > 1:
                             gene_groups.append(gene_group)
                     self.all_candidates = len(gene_groups)
                     with ui.row().classes("w-full"):
@@ -814,23 +922,15 @@ class FusionObject(BaseAnalysis):
                     with ui.row().classes("w-full"):
                         self.all_card = ui.card()
                         with self.all_card:
-                            ui.label("Select gene pair to see results.").tailwind(
-                                "drop-shadow", "font-bold"
-                            )
+                            ui.label("Select gene pair to see results.").tailwind("drop-shadow", "font-bold")
 
                     def show_gene_pair(gene_group: str, result_all, goodpairs) -> None:
                         ui.notify(gene_group)
                         self.all_card.clear()
                         with self.all_card:
                             with ui.row():
-                                ui.label(f"{gene_group}").tailwind(
-                                    "drop-shadow", "font-bold"
-                                )
+                                ui.label(f"{gene_group}").tailwind("drop-shadow", "font-bold")
                             with ui.row():
-                                # for gene in gene_pair.split(", "):
-                                #    reads = result_all[goodpairs].sort_values(by=7)[
-                                #        result_all[goodpairs].sort_values(by=7)[3].str.contains(gene)
-                                #    ]
                                 reads = result_all[goodpairs][
                                     result_all[goodpairs][3].isin(gene_group)
                                 ]
@@ -901,9 +1001,7 @@ class FusionObject(BaseAnalysis):
                         col["sortable"] = True
 
                     with self.fstable.add_slot("top-right"):
-                        with ui.input(placeholder="Search").props(
-                            "type=search"
-                        ).bind_value(self.fstable, "filter").add_slot("append"):
+                        with ui.input(placeholder="Search").props("type=search").bind_value(self.fstable, "filter").add_slot("append"):
                             ui.icon("search")
 
                 self.fusionplot.clear()
@@ -947,16 +1045,12 @@ class FusionObject(BaseAnalysis):
                     gene_groups_test = get_gene_network(gene_pairs)
                     gene_groups = []
                     for gene_group in gene_groups_test:
-                        if (
-                            len(
-                                _get_reads(
-                                    result[goodpairs][
-                                        result[goodpairs][3].isin(gene_group)
-                                    ]
-                                )
-                            )
-                            > 1
-                        ):
+                        reads = _get_reads(
+                            result[goodpairs][
+                                result[goodpairs][3].isin(gene_group)
+                            ]
+                        )
+                        if len(reads) > 1:
                             gene_groups.append(gene_group)
                     self.candidates = len(gene_groups)
                     with ui.row().classes("w-full"):
@@ -970,47 +1064,19 @@ class FusionObject(BaseAnalysis):
                     with ui.row().classes("w-full"):
                         self.card = ui.card()
                         with self.card:
-                            ui.label("Select gene pair to see results.").tailwind(
-                                "drop-shadow", "font-bold"
-                            )
+                            ui.label("Select gene pair to see results.").tailwind("drop-shadow", "font-bold")
 
                     def show_gene_pair(gene_group: str, result, goodpairs) -> None:
                         ui.notify(gene_group)
                         self.card.clear()
                         with self.card:
                             with ui.row():
-                                ui.label(f"{gene_group}").tailwind(
-                                    "drop-shadow", "font-bold"
-                                )
+                                ui.label(f"{gene_group}").tailwind("drop-shadow", "font-bold")
                             with ui.row():
-                                # for gene in gene_pair.split(", "):
-                                #    reads = result_all[goodpairs].sort_values(by=7)[
-                                #        result_all[goodpairs].sort_values(by=7)[3].str.contains(gene)
-                                #    ]
                                 reads = result[goodpairs][
                                     result[goodpairs][3].isin(gene_group)
                                 ]
                                 self.create_fusion_plot(gene_group, reads)
-
-            """
-            with self.fusionplot.classes("w-full"):
-                for gene_pair in result[goodpairs].sort_values(by=7)["tag"].unique():
-                    with ui.card():
-                        with ui.row():
-                            ui.label(f"{gene_pair}").tailwind(
-                                "drop-shadow", "font-bold"
-                            )
-                        with ui.row():
-                            for gene in result[
-                                goodpairs & result[goodpairs]["tag"].eq(gene_pair)
-                            ][3].unique():
-                                self.create_fusion_plot(
-                                    gene,
-                                    result[goodpairs].sort_values(by=7)[
-                                        result[goodpairs].sort_values(by=7)[3].eq(gene)
-                                    ],
-                                )
-            """
 
     def create_fusion_plot(self, title: str, reads: pd.DataFrame) -> None:
         """
@@ -1064,31 +1130,18 @@ class FusionObject(BaseAnalysis):
                 group = group.reset_index(drop=True)
                 for i in range(len(group)):
                     if i < len(group) - 1:
-                        if (
-                            group.loc[i, "Occurrence"] == 1
-                        ):  # The first read in the sequence of read mappings
+                        if group.loc[i, "Occurrence"] == 1:
                             group.loc[i, "Join_Gene"] = group.loc[i + 1, "gene"]
-                            group.loc[i, "Join_Start"] = group.loc[
-                                i, "start2"
-                            ]  # Reference end of current read
-                            group.loc[i, "Join_Chromosome"] = group.loc[
-                                i + 1, "chromosome2"
-                            ]
+                            group.loc[i, "Join_Start"] = group.loc[i, "start2"]
+                            group.loc[i, "Join_Chromosome"] = group.loc[i + 1, "chromosome2"]
                             group.loc[i, "spanB"] = group.loc[i + 1, "span"]
                             group.loc[i, "start3"] = group.loc[i + 1, "start2"]
                             group.loc[i, "end3"] = group.loc[i + 1, "end2"]
                             group.loc[i, "rankB"] = group.loc[i + 1, "rank"]
                             if group.loc[i + 1, "strand"] == "+":
-
-                                group.loc[i, "Join_End"] = group.loc[
-                                    i + 1, "end2"
-                                ]  # Reference start of next read
+                                group.loc[i, "Join_End"] = group.loc[i + 1, "end2"]
                             else:
-
-                                group.loc[i, "Join_End"] = group.loc[
-                                    i + 1, "start2"
-                                ]  # Reference end of next read
-
+                                group.loc[i, "Join_End"] = group.loc[i + 1, "start2"]
                 return group
 
             # Initialize columns for the coordinates where the read joins the next read
@@ -1107,7 +1160,6 @@ class FusionObject(BaseAnalysis):
             lines = lines.dropna()
 
             # Dict to store ax
-
             axdict = {}
 
             if len(result) > 1:
@@ -1215,7 +1267,7 @@ class FusionObject(BaseAnalysis):
                                         start=int(row["start2"]),
                                         end=int(row["end2"]),
                                         strand=STRAND[row["strand"]],
-                                        color=row["color"],
+                                        color=row["color"]
                                     )
                                 )
 
@@ -1242,37 +1294,260 @@ class FusionObject(BaseAnalysis):
                     gene_counter = Counter()
 
                     for index, row in lines.iterrows():
-                        # Coordinates in data space of each subplot
-
-                        xyB = (row["Join_Start"], row["rank"])  # Point in subplot 1
+                        xyB = (row["Join_Start"], row["rank"])
                         xyA = (row["Join_End"], row["rankB"])
-
                         gene_counter[row["gene"]] += 1
                         gene_counter[row["Join_Gene"]] += 1
 
-                        """
-                        if row["Join_Gene"] in axdict.keys():
-                            # Create an arc connection
-                            con = ConnectionPatch(
-                                xyA=xyA,
-                                coordsA=axdict[row["Join_Gene"]].transData,
-                                xyB=xyB,
-                                coordsB=axdict[row["gene"]].transData,
-                                axesB=row["gene"],
-                                axesA=row["Join_Gene"],
-                                connectionstyle="arc3,rad=0.05",
-                                arrowstyle="->",
-                                linestyle="--",
-                                color=row["color"],
-                            )
-                            # Add the arc connection to the second subplot (ax2)
-                            # axdict[row["Join_Gene"]].add_artist(con)
-                            # plt.tight_layout()
-                        """
+    def process_structural_variants(self, reads_df):
+        """
+        Process reads to identify structural variants based on precise breakpoint coordinates.
+        Only considers high-quality alignments and requires support from both sides of the break.
+
+        Args:
+            reads_df (pd.DataFrame): DataFrame containing read alignments
+
+        Returns:
+            pd.DataFrame: DataFrame containing structural variant information
+        """
+        logger.info(f"Processing structural variants from DataFrame with shape: {reads_df.shape}")
+        
+        try:
+            # Group reads by read ID to find supplementary alignments
+            grouped = reads_df.groupby("read_id")
+            sv_events = []
+
+            MIN_EVENT_SIZE = 1000  # Minimum size for SV events (1kb)
+            MIN_MAPPING_QUALITY = 60  # Minimum mapping quality
+            BREAKPOINT_TOLERANCE = 100  # Allow 100bp tolerance for grouping breakpoints
+
+            for read_id, group in grouped:
+                if len(group) < 2:  # Need at least 2 alignments
+                    continue
+
+                try:
+                    # Sort alignments by position
+                    group = group.sort_values(by=["reference_id", "reference_start"])
+                    
+                    # Compare adjacent alignments for the same read
+                    for i in range(len(group) - 1):
+                        read1 = group.iloc[i]
+                        read2 = group.iloc[i + 1]
+                        
+                        # Skip if either alignment has low mapping quality
+                        if (float(read1["mapping_quality"]) < MIN_MAPPING_QUALITY or 
+                            float(read2["mapping_quality"]) < MIN_MAPPING_QUALITY):
+                            continue
+                        
+                        # Determine breakpoint coordinates based on read orientation
+                        if read1["strand"] == "+":
+                            break1 = int(read1["reference_end"])
+                        else:
+                            break1 = int(read1["reference_start"])
+                            
+                        if read2["strand"] == "+":
+                            break2 = int(read2["reference_start"])
+                        else:
+                            break2 = int(read2["reference_end"])
+                        
+                        # Calculate event size for intrachromosomal events
+                        if read1["reference_id"] == read2["reference_id"]:
+                            event_size = abs(break2 - break1)
+                            if event_size < MIN_EVENT_SIZE:
+                                continue
+                        
+                        # Determine SV type based on chromosome, strand, and coordinates
+                        if read1["reference_id"] != read2["reference_id"]:
+                            sv_type = "translocation"
+                            orientation = f"{read1['strand']}{read2['strand']}"
+                        else:
+                            if read1["strand"] != read2["strand"]:
+                                if event_size >= MIN_EVENT_SIZE:
+                                    sv_type = "inversion"
+                                    orientation = f"{read1['strand']}{read2['strand']}"
+                                else:
+                                    continue
+                            else:
+                                if break2 > break1:
+                                    sv_type = "deletion"
+                                    orientation = f"{read1['strand']}{read2['strand']}"
+                                else:
+                                    sv_type = "insertion"
+                                    orientation = f"{read1['strand']}{read2['strand']}"
+                                if abs(break2 - break1) < MIN_EVENT_SIZE:
+                                    continue
+                        
+                        # Create unique keys for both breakpoints
+                        break1_key = f"{read1['reference_id']}_{break1//BREAKPOINT_TOLERANCE*BREAKPOINT_TOLERANCE}_{read1['strand']}"
+                        break2_key = f"{read2['reference_id']}_{break2//BREAKPOINT_TOLERANCE*BREAKPOINT_TOLERANCE}_{read2['strand']}"
+                        
+                        # Create event key that combines both breakpoints
+                        event_key = f"{sv_type}_{break1_key}_{break2_key}"
+                        
+                        sv_events.append({
+                            "read_id": read_id,
+                            "event_key": event_key,
+                            "sv_type": sv_type,
+                            "chrom1": read1["reference_id"],
+                            "break1": break1,
+                            "strand1": read1["strand"],
+                            "chrom2": read2["reference_id"],
+                            "break2": break2,
+                            "strand2": read2["strand"],
+                            "orientation": orientation,
+                            "mapping_quality": min(float(read1["mapping_quality"]), float(read2["mapping_quality"])),
+                            "span": event_size if read1["reference_id"] == read2["reference_id"] else None,
+                            "break1_key": break1_key,
+                            "break2_key": break2_key
+                        })
+                except Exception as e:
+                    logger.error(f"Error processing read group {read_id}: {str(e)}")
+                    continue
+            
+            # Convert to DataFrame
+            new_sv_df = pd.DataFrame(sv_events)
+            
+            if new_sv_df.empty:
+                return pd.DataFrame()
+            
+            # Return the new events without filtering - filtering will be done after merging
+            return new_sv_df
+            
+        except Exception as e:
+            logger.error(f"Error in structural variant processing: {str(e)}")
+            logger.error(f"Full DataFrame info:\n{reads_df.info()}")
+            raise
+
+    def create_sv_plot(self, sv_df, title):
+        """
+        Create a plot visualizing structural variants.
+
+        Args:
+            sv_df (pd.DataFrame): DataFrame containing structural variant information
+            title (str): Title for the plot
+        """
+        with ui.card().classes("w-full no-shadow border-[2px]"):
+            with ui.pyplot(figsize=(19, 8)).classes("w-full"):
+                plt.rcParams["figure.constrained_layout.use"] = True
+                
+                # Create main plot
+                fig, ax = plt.subplots(figsize=(15, 6))
+                
+                # Plot each SV type with different colors and styles
+                colors = {
+                    "deletion": "red",
+                    "insertion": "blue",
+                    "inversion": "green",
+                    "translocation": "purple",
+                    "complex": "gray"
+                }
+                
+                for sv_type in colors.keys():
+                    sv_subset = sv_df[sv_df["sv_type"] == sv_type]
+                    if len(sv_subset) == 0:
+                        continue
+                    
+                    for _, row in sv_subset.iterrows():
+                        if row["chrom1"] == row["chrom2"]:
+                            # Plot intrachromosomal events
+                            plt.plot([int(row["break1"]), int(row["break2"])], 
+                                   [0, 0], 
+                                   color=colors[sv_type],
+                                   alpha=0.5,
+                                   linewidth=2,
+                                   label=sv_type)
+                        else:
+                            # Plot interchromosomal events
+                            plt.scatter(int(row["break1"]), 0, 
+                                      color=colors[sv_type],
+                                      alpha=0.5,
+                                      s=50,
+                                      label=f"{sv_type} ({row['chrom1']}->{row['chrom2']})")
+                
+                # Remove duplicate labels
+                handles, labels = plt.gca().get_legend_handles_labels()
+                by_label = dict(zip(labels, handles))
+                plt.legend(by_label.values(), by_label.keys())
+                
+                plt.title(f"Structural Variants - {title}")
+                plt.xlabel("Genomic Position")
+                plt.yticks([])
+                
+                # Add chromosome labels
+                chroms = sorted(set(sv_df["chrom1"].unique()) | set(sv_df["chrom2"].unique()))
+
+    def update_sv_table(self, sv_df):
+        """
+        Update the structural variants table in the UI.
+        Groups events by breakpoint coordinates and requires support from both sides.
+
+        Args:
+            sv_df (pd.DataFrame): DataFrame containing structural variant information
+        """
+        if sv_df is None or sv_df.empty:
+            return
+
+        # Count supporting reads for each breakpoint
+        break1_counts = sv_df.groupby('break1_key')['read_id'].nunique().reset_index()
+        break1_counts.columns = ['break1_key', 'break1_support']
+        break2_counts = sv_df.groupby('break2_key')['read_id'].nunique().reset_index()
+        break2_counts.columns = ['break2_key', 'break2_support']
+
+        # Add support counts to the DataFrame
+        sv_df = sv_df.merge(break1_counts, on='break1_key', how='left')
+        sv_df = sv_df.merge(break2_counts, on='break2_key', how='left')
+
+        # Filter for events with at least 3 supporting reads on both sides
+        sv_df = sv_df[
+            (sv_df['break1_support'] >= 3) & 
+            (sv_df['break2_support'] >= 3)
+        ]
+
+        # Group similar events and calculate mean breakpoint positions
+        sv_df = sv_df.groupby('event_key').agg({
+            'sv_type': 'first',
+            'chrom1': 'first',
+            'break1': 'mean',
+            'strand1': 'first',
+            'chrom2': 'first',
+            'break2': 'mean',
+            'strand2': 'first',
+            'orientation': 'first',
+            'break1_support': 'first',
+            'break2_support': 'first',
+            'span': 'mean'
+        }).reset_index()
+
+        # Round breakpoint positions to nearest integer
+        sv_df['break1'] = sv_df['break1'].round().astype(int)
+        sv_df['break2'] = sv_df['break2'].round().astype(int)
+        sv_df['span'] = sv_df['span'].round().astype(int)
+
+        self.sv_table_container.clear()
+        with self.sv_table_container:
+            self.sv_table = (
+                ui.table.from_pandas(
+                    sv_df,
+                    pagination=25
+                )
+                .props("dense")
+                .classes("w-full")
+                .style("height: 900px")
+                .style("font-size: 100%; font-weight: 300")
+            )
+            
+            # Make all columns sortable
+            for col in self.sv_table.columns:
+                col["sortable"] = True
+
+            # Add search functionality
+            with self.sv_table.add_slot("top-right"):
+                with ui.input(placeholder="Search").props("type=search").bind_value(self.sv_table, "filter").add_slot("append"):
+                    ui.icon("search")
 
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
-        Processes a BAM file and identifies fusion candidates.
+        Processes a BAM file and identifies fusion candidates and structural variants.
 
         Args:
             bamfile (str): Path to the BAM file to process.
@@ -1290,8 +1565,16 @@ class FusionObject(BaseAnalysis):
         tempallmappings = tempfile.NamedTemporaryFile(
             dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
         )
+        temp_sv_readfile = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
+        )
+        temp_sv_bamfile = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+        )
 
         try:
+            # Process fusion candidates
+            logger.info(f"Processing BAM file for fusions: {bamfile}")
             fusion_candidates, fusion_candidates_all = await run.cpu_bound(
                 fusion_work,
                 self.threads,
@@ -1304,7 +1587,19 @@ class FusionObject(BaseAnalysis):
                 tempallmappings.name,
             )
 
+            # Process genome-wide structural variants
+            #logger.info(f"Processing BAM file for structural variants: {bamfile}")
+            #sv_reads = await run.cpu_bound(
+            #    structural_variant_work,
+            #    self.threads,
+            #    bamfile,
+            #    temp_sv_readfile.name,
+            #    temp_sv_bamfile.name,
+            #)
+
+            # Update fusion candidates
             if fusion_candidates is not None:
+                logger.info("Processing fusion candidates")
                 if self.sampleID not in self.fusion_candidates.keys():
                     self.fusion_candidates[self.sampleID] = fusion_candidates
                 else:
@@ -1313,6 +1608,7 @@ class FusionObject(BaseAnalysis):
                     ).reset_index(drop=True)
 
             if fusion_candidates_all is not None:
+                logger.info("Processing all fusion candidates")
                 if self.sampleID not in self.fusion_candidates_all.keys():
                     self.fusion_candidates_all[self.sampleID] = fusion_candidates_all
                 else:
@@ -1323,11 +1619,103 @@ class FusionObject(BaseAnalysis):
                         ]
                     ).reset_index(drop=True)
 
+            """
+            # Process structural variants
+            if sv_reads is not None:
+                logger.info("Processing structural variants")
+                new_sv_df = self.process_structural_variants(sv_reads)
+                
+                # Merge with existing structural variants
+                if self.sampleID not in self.structural_variants.keys():
+                    merged_sv_df = new_sv_df
+                else:
+                    # Remove any existing supporting_reads column before concatenation
+                    if 'supporting_reads' in self.structural_variants[self.sampleID].columns:
+                        self.structural_variants[self.sampleID] = self.structural_variants[self.sampleID].drop(columns=['supporting_reads'])
+                    
+                    # Ensure consistent dtypes before concatenation
+                    existing_df = self.structural_variants[self.sampleID]
+                    
+                    # Define expected dtypes
+                    dtype_dict = {
+                        'read_id': str,
+                        'event_key': str,
+                        'sv_type': str,
+                        'chrom1': str,
+                        'break1': int,
+                        'strand1': str,
+                        'chrom2': str,
+                        'break2': int,
+                        'strand2': str,
+                        'orientation': str,
+                        'mapping_quality': float,
+                        'span': float,  # Using float to handle None values
+                        'break1_key': str,
+                        'break2_key': str
+                    }
+                    
+                    # Convert dtypes for both DataFrames
+                    for col, dtype in dtype_dict.items():
+                        if col in existing_df.columns:
+                            existing_df[col] = existing_df[col].astype(dtype)
+                        if col in new_sv_df.columns:
+                            new_sv_df[col] = new_sv_df[col].astype(dtype)
+                    
+                    # Concatenate with explicit ignore_index
+                    merged_sv_df = pd.concat(
+                        [existing_df, new_sv_df],
+                        ignore_index=True,
+                        verify_integrity=True
+                    )
+                
+                # Now apply the 3+ supporting reads filter to the merged data
+                event_counts = merged_sv_df.groupby('event_key').agg({
+                    'read_id': 'nunique'
+                }).reset_index()
+                event_counts.columns = ['event_key', 'supporting_reads']
+                
+                # Filter for events with at least 3 supporting reads
+                valid_events = event_counts[event_counts['supporting_reads'] >= 3]['event_key']
+                filtered_sv_df = merged_sv_df[merged_sv_df['event_key'].isin(valid_events)]
+                
+                # Add supporting read count to the filtered DataFrame
+                filtered_sv_df = filtered_sv_df.merge(
+                    event_counts,
+                    on='event_key',
+                    how='left',
+                    suffixes=('', '_count')
+                )
+                
+                # Update the stored structural variants
+                self.structural_variants[self.sampleID] = filtered_sv_df
+                
+                # Update UI with structural variants if UI is initialized
+                if not filtered_sv_df.empty:
+                    logger.info(f"Found {len(filtered_sv_df)} structural variants with 3+ supporting reads")
+                    self.sv_count = len(filtered_sv_df)
+                    if hasattr(self, 'sv_plot') and self.sv_plot is not None:
+                        self.sv_plot.clear()
+                        with self.sv_plot:
+                            self.create_sv_plot(filtered_sv_df, self.sampleID)
+                    if hasattr(self, 'sv_table_container') and self.sv_table_container is not None:
+                        self.update_sv_table(filtered_sv_df)
+
+                # Save structural variants to file
+                output_file = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "structural_variants.csv",
+                )
+                logger.info(f"Saving structural variants to {output_file}")
+                filtered_sv_df.to_csv(output_file, index=False)
+            """
+
+            # Update fusion tables
             self.fusion_table()
             self.fusion_table_all()
 
-        except Exception:
-            # logging.error(f"Error processing BAM file: {e}")
+        except Exception as e:
+            logger.error(f"Error processing BAM file: {str(e)}")
+            logger.error("Exception details:", exc_info=True)
             raise
         finally:
             self.running = False
@@ -1335,9 +1723,6 @@ class FusionObject(BaseAnalysis):
     def show_previous_data(self) -> None:
         """
         Displays previously analyzed data from the specified output folder.
-
-        Args:
-            output (str): Path to the output folder.
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
@@ -1348,13 +1733,12 @@ class FusionObject(BaseAnalysis):
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
 
+        # Load fusion candidates
         if self.check_file_time(os.path.join(output, "fusion_candidates_master.csv")):
             try:
                 fusion_candidates = pd.read_csv(
                     os.path.join(output, "fusion_candidates_master.csv"),
                     dtype=str,
-                    # names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
-                    # names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
                     header=None,
                     skiprows=1,
                 )
@@ -1367,12 +1751,23 @@ class FusionObject(BaseAnalysis):
                 fusion_candidates_all = pd.read_csv(
                     os.path.join(output, "fusion_candidates_all.csv"),
                     dtype=str,
-                    # names=["index", 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
-                    # names=[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, "diff"],
                     header=None,
                     skiprows=1,
                 )
                 self.update_fusion_table_all(fusion_candidates_all)
+            except pd.errors.EmptyDataError:
+                pass
+
+        # Load structural variants
+        if self.check_file_time(os.path.join(output, "structural_variants.csv")):
+            try:
+                sv_df = pd.read_csv(os.path.join(output, "structural_variants.csv"))
+                if not sv_df.empty:
+                    self.sv_count = len(sv_df)
+                    self.sv_plot.clear()
+                    with self.sv_plot:
+                        self.create_sv_plot(sv_df, self.sampleID)
+                    self.update_sv_table(sv_df)
             except pd.errors.EmptyDataError:
                 pass
 
