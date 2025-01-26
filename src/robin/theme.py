@@ -71,7 +71,7 @@ STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 
 
 @contextmanager
-def frame(navtitle: str, smalltitle=None):
+def frame(navtitle: str, batphone=False, smalltitle=None):
     """
     Context manager to create a custom page frame with consistent styling and behavior across all pages.
 
@@ -85,6 +85,8 @@ def frame(navtitle: str, smalltitle=None):
         >>> with frame("Home"):
         ...     ui.label("Welcome to the Application")
     """
+    if batphone:
+        navtitle = f"BATMAN & {navtitle}"
     # Add custom HTML and CSS to the head of the page
     ui.add_head_html(
         '<script src="https://cdn.jsdelivr.net/npm/igv@2.15.13/dist/igv.min.js"></script>'
@@ -121,7 +123,17 @@ def frame(navtitle: str, smalltitle=None):
                     "histopathological and molecular evaluation. The final interpretation and diagnosis should always be "
                     "made by qualified healthcare professionals based on all available information."
                 ).classes("text-body1 q-mb-md")
-
+                
+                if batphone:
+                    ui.label("BATMAN Mode").classes("text-h5 text-weight-bold q-mb-md")
+                    ui.label(
+                        "You are running this tool in BATMAN mode. "
+                        "This is a beta version of the tool and may not be fully functional. "
+                        "BATMAN means: Breakpoint Adaptive Targeting alongside Methylation Analysis on Nanopore. "
+                        "This means that the target regions will be updated in real-time based on detected breakpoints. "
+                        "This code only works with ReadFish at this time. "
+                        )
+                
                 def acknowledge():
                     app.storage.tab["disclaimer_acknowledged"] = True
                     disclaimer_dialog.close()
@@ -148,19 +160,22 @@ def frame(navtitle: str, smalltitle=None):
         ).classes("shadow-lg")
 
     # Create a header with navigation title and menu
-    with ui.header(elevated=True).classes("items-center duration-200 p-0 px-4 no-wrap"):
+    header_classes = "items-center duration-200 p-0 px-4 no-wrap"
+    if batphone:
+        header_classes += " batphone"
+    with ui.header(elevated=True).classes(header_classes):
         with ui.grid(columns=2).style("width: 100%"):
             with ui.row().classes(
                 f"max-[{MENU_BREAKPOINT}px]:hidden items-center align-left"
             ):  # .classes('items-left m-auto'):
                 ui.html(navtitle).classes("shadows-into").style(
-                    "color: #FFFFFF; font-size: 150%; font-weight: 300"
+                    "font-size: 150%; font-weight: 300"
                 ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes(
                 f"min-[{MENU_BREAKPOINT+1}px]:hidden items-center align-left"
             ):
                 ui.html(smalltitle).style(
-                    "color: #FFFFFF; font-size: 150%; font-weight: 300"
+                    "font-size: 150%; font-weight: 300"
                 ).tailwind("drop-shadow", "font-bold")
             with ui.row().classes("ml-auto align-top"):
                 with ui.row().classes("items-center m-auto"):
@@ -218,7 +233,11 @@ def frame(navtitle: str, smalltitle=None):
                     ui.image(IMAGEFILE).style("width: 50px")
 
     # Create a footer with useful information and quit button
-    with ui.footer().style("background-color: #4F9153"):
+    # Create a header with navigation title and menu
+    footer_classes = "items-center"
+    if batphone:
+        footer_classes += " batphone"
+    with ui.footer().classes(footer_classes):
         # ui.on('resize', lambda e: print(f'resize: {e.args}'))
 
         with ui.dialog() as dialog, ui.card():
@@ -304,8 +323,8 @@ def use_on_air(args: events.ValueChangeEventArguments):
 @ui.page("/")
 def my_page():
     with frame(
-        "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
-        smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
+        "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>",
+        smalltitle="<strong>R.O.B.I.N</strong>",
     ):
         ui.label("Welcome to the Application")
 

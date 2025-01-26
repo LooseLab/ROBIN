@@ -71,6 +71,25 @@ a:active:not(.browser-window *) {
   background-color: #4F9153d0;
 }
 
+.q-header.batphone {
+  color: #FDE311 !important;  /* Sets text color to bright yellow for all elements inside batphone header */
+  height: 60px;
+  background-color: #000000;
+}
+.q-header.batphone.fade {
+  color: #FDE311 !important;  /* Sets text color to bright yellow for all elements inside batphone header */
+  background-color: #000000d0;
+  backdrop-filter: blur(5px);
+}
+.body--dark .q-header.batphone {
+  color: #FDE311 !important;  /* Sets text color to bright yellow for all elements inside batphone header */
+  background-color: #000000;
+}
+.body--dark .q-header.batphone.fade {
+  color: #FDE311 !important;  /* Sets text color to bright yellow for all elements inside batphone header */
+  background-color: #000000d0;
+}
+
 .q-footer {
   background-color: #4F9153;
   transition: background-color 0.3s ease;
@@ -84,6 +103,26 @@ a:active:not(.browser-window *) {
 }
 .body--dark .q-footer.fade {
   background-color: #4F9153d0;
+}
+
+.q-footer.batphone {
+  color: #FDE311 !important;  /* Sets text color to bright yellow for all elements inside batphone header */
+  background-color: #000000;
+  transition: background-color 0.3s ease; 
+}
+.q-footer.batphone.fade {
+  color: #FDE311 !important; 
+  background-color: #000000d0;
+  backdrop-filter: blur(5px);
+}
+.body--dark .q-footer.batphone {
+  color: #FDE311 !important; 
+  background-color: #000000;
+}
+.body--dark .q-footer.batphone.fade {
+  color: #FDE311 !important; 
+  background-color: #000000d0;
+  backdrop-filter: blur(5px);
 }
 
 .scroll-indicator:after {
