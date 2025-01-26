@@ -66,7 +66,7 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib import font_manager
 from robin.subpages.base_analysis import BaseAnalysis
 from robin.utilities.decompress import decompress_gzip_file
-from collections import Counter
+from collections import Counter, defaultdict
 
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
@@ -110,13 +110,15 @@ def classify_alignment(aln) -> str:
     else:
         return "PRIMARY"
 
-def process_bam_file_svs(bam_path: str) -> pd.DataFrame:
+def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
     """
     Function that, for a single BAM file, returns a DataFrame
     of all primary + supplementary alignments for reads that have at
     least one supplementary alignment (or SA tag).
     
-    
+    Args:
+        bam_path: Path to the BAM file
+        sv_store: Path to store the structural variant data (as string)
     """
     
     reads_with_supp = set()
@@ -182,9 +184,112 @@ def process_bam_file_svs(bam_path: str) -> pd.DataFrame:
     # Possibly sort or reset index
     df.sort_values(["QNAME","TYPE","REF_START"], inplace=True)
     df.reset_index(drop=True, inplace=True)
-    df = df[~df['QNAME'].isin(df[df['MQ']<50]['QNAME'])]
+    
+    if len(df) > 0:
+        df = df[~df['QNAME'].isin(df[df['MQ']<50]['QNAME'])]
+        df = df[~df['RNAME'].eq('chrM')]
+        # Save or append to sv_store
+    try:
+        if os.path.exists(sv_store) and os.path.getsize(sv_store) > 0:
+            try:
+                # Read existing data
+                existing_df = pd.read_csv(sv_store)
+                # Append new data
+                combined_df = pd.concat([existing_df, df], ignore_index=True)
+            except pd.errors.EmptyDataError:
+                # If the file exists but is empty, just use the new data
+                combined_df = df
+        else:
+            # If file doesn't exist or is empty, use new data
+            combined_df = df
+        
+        # Save combined data
+        combined_df.to_csv(sv_store, index=False)
+        df = combined_df
+    except Exception as e:
+        logger.error(f"Error saving structural variants: {str(e)}")
+        # Continue processing even if save fails
+        pass
+    
 
     return df
+    
+
+def build_breakpoint_graph(df, max_proximity=50000, group_by_sv=False):
+    """
+    Builds an undirected graph where nodes are structural variant breakpoints.
+    
+    Edges are added if:
+      1) The breakpoints come from the same read.
+      2) The breakpoints are within `max_proximity` bases on the same chromosome/strand.
+      3) (Optional) They share the same structural variant type (`SV_TYPE`).
+
+    Parameters:
+        df (pd.DataFrame): Input dataframe with SV calls.
+        max_proximity (int): Maximum base-pair distance to connect breakpoints.
+        group_by_sv (bool): Whether to require matching SV_TYPE for proximity links.
+
+    Returns:
+        nx.Graph: A networkx undirected graph of breakpoint clusters.
+    """
+    G = nx.Graph()
+
+    # Extract unique breakpoint nodes
+    nodes = []
+    for i, row in df.iterrows():
+        chrom = row["RNAME"]
+        start = row["REF_START"]
+        end   = row["REF_END"]
+        pos   = (start + end) // 2  # Midpoint, or use start/end directly
+        strand = row.get("STRAND", "+")
+        sv_type = row.get("SV_TYPE", "UNKNOWN")
+        
+        # Unique node ID
+        if group_by_sv:
+            node_id = (chrom, pos, strand, sv_type, row["QNAME"])
+        else:
+            node_id = (chrom, pos, strand, row["QNAME"])
+
+        nodes.append((i, node_id))  # Store (index -> node data)
+
+    # Add nodes to the graph
+    for i, node_data in nodes:
+        G.add_node(i, data=node_data)
+
+    # --- Step 1: Connect breakpoints from the same read ---
+    read_dict = defaultdict(list)
+    for i, (node_idx, node_data) in enumerate(nodes):
+        read_dict[node_data[-1]].append(node_idx)  # Group by read name (QNAME)
+
+    for qname, node_indices in read_dict.items():
+        if len(node_indices) > 1:
+            for i1 in range(len(node_indices)):
+                for i2 in range(i1 + 1, len(node_indices)):
+                    G.add_edge(node_indices[i1], node_indices[i2], reason="same_read")
+
+    # --- Step 2: Connect breakpoints by proximity ---
+    chrom_dict = defaultdict(list)
+    for node_idx, node_data in G.nodes(data="data"):
+        if group_by_sv:
+            chrom, pos, strand, sv_type, qname = node_data
+            key = (chrom, strand, sv_type)
+        else:
+            chrom, pos, strand, qname = node_data
+            key = (chrom, strand)  # No SV type grouping
+
+        chrom_dict[key].append((node_idx, pos))
+
+    # Sort each chromosome's breakpoints by position for efficient searching
+    for key, lst in chrom_dict.items():
+        lst_sorted = sorted(lst, key=lambda x: x[1])  # Sort by position
+        for i in range(len(lst_sorted) - 1):
+            idx1, pos1 = lst_sorted[i]
+            idx2, pos2 = lst_sorted[i + 1]
+            if abs(pos2 - pos1) <= max_proximity:
+                G.add_edge(idx1, idx2, reason="proximity")
+
+    return G
+
 
 def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
     """
@@ -518,58 +623,6 @@ def fusion_work(
     return fusion_candidates, fusion_candidates_all
 
 
-def structural_variant_work(
-    threads: int,
-    bamfile: str,
-    tempreadfile: str,
-    tempbamfile: str,
-) -> Optional[pd.DataFrame]:
-    """
-    Identify structural variants from BAM file across the whole genome.
-    Only considers high-quality supplementary alignments.
-
-    Args:
-        threads (int): Number of threads to use for parallel processing.
-        bamfile (str): Path to the BAM file.
-        tempreadfile (str): Path to the temporary file to store read names.
-        tempbamfile (str): Path to the temporary BAM file.
-
-    Returns:
-        Optional[pd.DataFrame]: DataFrame with structural variant candidates.
-    """
-    try:
-        # Extract ONLY reads with supplementary alignments
-        run_command(
-            f"samtools view -@{threads} -f 2048 {bamfile} | cut -f1 > {tempreadfile}"
-        )
-
-        if os.path.getsize(tempreadfile) > 0:
-            # Extract these reads and their primary alignments to a temporary BAM file
-            run_command(
-                f"samtools view -@{threads} --write-index -N {tempreadfile} -o {tempbamfile} {bamfile}"
-            )
-            if os.path.getsize(tempbamfile) > 0:
-                read_data = extract_bam_info(tempbamfile)
-                
-                # Filter for high quality alignments
-                read_data = read_data[
-                    (read_data["mapping_quality"] >= 60) &  # Very high mapping quality
-                    ((read_data["reference_end"] - read_data["reference_start"]) >= 1000)  # Minimum alignment length
-                ]
-
-                if os.path.isfile(f"{tempbamfile}.csi"):
-                    logger.debug(f"removing {tempbamfile}.csi")
-                    os.remove(f"{tempbamfile}.csi")
-
-                return read_data
-
-    except Exception:
-        logger.error("Error during structural variant detection", exc_info=True)
-        raise
-
-    return None
-
-
 class FusionObject(BaseAnalysis):
     """
     FusionObject handles the gene fusion identification process, including setting up the GUI
@@ -644,8 +697,7 @@ class FusionObject(BaseAnalysis):
             self.gene_table = pd.read_csv(
                 os.path.join(
                     os.path.dirname(os.path.abspath(resources.__file__)), datafile
-                )
-            )
+                ))
         else:
             # logging.info(
             #    f"This looks like the first time you have run the {self.target_panel} panel."
@@ -1299,252 +1351,7 @@ class FusionObject(BaseAnalysis):
                         gene_counter[row["gene"]] += 1
                         gene_counter[row["Join_Gene"]] += 1
 
-    def process_structural_variants(self, reads_df):
-        """
-        Process reads to identify structural variants based on precise breakpoint coordinates.
-        Only considers high-quality alignments and requires support from both sides of the break.
-
-        Args:
-            reads_df (pd.DataFrame): DataFrame containing read alignments
-
-        Returns:
-            pd.DataFrame: DataFrame containing structural variant information
-        """
-        logger.info(f"Processing structural variants from DataFrame with shape: {reads_df.shape}")
-        
-        try:
-            # Group reads by read ID to find supplementary alignments
-            grouped = reads_df.groupby("read_id")
-            sv_events = []
-
-            MIN_EVENT_SIZE = 1000  # Minimum size for SV events (1kb)
-            MIN_MAPPING_QUALITY = 60  # Minimum mapping quality
-            BREAKPOINT_TOLERANCE = 100  # Allow 100bp tolerance for grouping breakpoints
-
-            for read_id, group in grouped:
-                if len(group) < 2:  # Need at least 2 alignments
-                    continue
-
-                try:
-                    # Sort alignments by position
-                    group = group.sort_values(by=["reference_id", "reference_start"])
-                    
-                    # Compare adjacent alignments for the same read
-                    for i in range(len(group) - 1):
-                        read1 = group.iloc[i]
-                        read2 = group.iloc[i + 1]
-                        
-                        # Skip if either alignment has low mapping quality
-                        if (float(read1["mapping_quality"]) < MIN_MAPPING_QUALITY or 
-                            float(read2["mapping_quality"]) < MIN_MAPPING_QUALITY):
-                            continue
-                        
-                        # Determine breakpoint coordinates based on read orientation
-                        if read1["strand"] == "+":
-                            break1 = int(read1["reference_end"])
-                        else:
-                            break1 = int(read1["reference_start"])
-                            
-                        if read2["strand"] == "+":
-                            break2 = int(read2["reference_start"])
-                        else:
-                            break2 = int(read2["reference_end"])
-                        
-                        # Calculate event size for intrachromosomal events
-                        if read1["reference_id"] == read2["reference_id"]:
-                            event_size = abs(break2 - break1)
-                            if event_size < MIN_EVENT_SIZE:
-                                continue
-                        
-                        # Determine SV type based on chromosome, strand, and coordinates
-                        if read1["reference_id"] != read2["reference_id"]:
-                            sv_type = "translocation"
-                            orientation = f"{read1['strand']}{read2['strand']}"
-                        else:
-                            if read1["strand"] != read2["strand"]:
-                                if event_size >= MIN_EVENT_SIZE:
-                                    sv_type = "inversion"
-                                    orientation = f"{read1['strand']}{read2['strand']}"
-                                else:
-                                    continue
-                            else:
-                                if break2 > break1:
-                                    sv_type = "deletion"
-                                    orientation = f"{read1['strand']}{read2['strand']}"
-                                else:
-                                    sv_type = "insertion"
-                                    orientation = f"{read1['strand']}{read2['strand']}"
-                                if abs(break2 - break1) < MIN_EVENT_SIZE:
-                                    continue
-                        
-                        # Create unique keys for both breakpoints
-                        break1_key = f"{read1['reference_id']}_{break1//BREAKPOINT_TOLERANCE*BREAKPOINT_TOLERANCE}_{read1['strand']}"
-                        break2_key = f"{read2['reference_id']}_{break2//BREAKPOINT_TOLERANCE*BREAKPOINT_TOLERANCE}_{read2['strand']}"
-                        
-                        # Create event key that combines both breakpoints
-                        event_key = f"{sv_type}_{break1_key}_{break2_key}"
-                        
-                        sv_events.append({
-                            "read_id": read_id,
-                            "event_key": event_key,
-                            "sv_type": sv_type,
-                            "chrom1": read1["reference_id"],
-                            "break1": break1,
-                            "strand1": read1["strand"],
-                            "chrom2": read2["reference_id"],
-                            "break2": break2,
-                            "strand2": read2["strand"],
-                            "orientation": orientation,
-                            "mapping_quality": min(float(read1["mapping_quality"]), float(read2["mapping_quality"])),
-                            "span": event_size if read1["reference_id"] == read2["reference_id"] else None,
-                            "break1_key": break1_key,
-                            "break2_key": break2_key
-                        })
-                except Exception as e:
-                    logger.error(f"Error processing read group {read_id}: {str(e)}")
-                    continue
-            
-            # Convert to DataFrame
-            new_sv_df = pd.DataFrame(sv_events)
-            
-            if new_sv_df.empty:
-                return pd.DataFrame()
-            
-            # Return the new events without filtering - filtering will be done after merging
-            return new_sv_df
-            
-        except Exception as e:
-            logger.error(f"Error in structural variant processing: {str(e)}")
-            logger.error(f"Full DataFrame info:\n{reads_df.info()}")
-            raise
-
-    def create_sv_plot(self, sv_df, title):
-        """
-        Create a plot visualizing structural variants.
-
-        Args:
-            sv_df (pd.DataFrame): DataFrame containing structural variant information
-            title (str): Title for the plot
-        """
-        with ui.card().classes("w-full no-shadow border-[2px]"):
-            with ui.pyplot(figsize=(19, 8)).classes("w-full"):
-                plt.rcParams["figure.constrained_layout.use"] = True
-                
-                # Create main plot
-                fig, ax = plt.subplots(figsize=(15, 6))
-                
-                # Plot each SV type with different colors and styles
-                colors = {
-                    "deletion": "red",
-                    "insertion": "blue",
-                    "inversion": "green",
-                    "translocation": "purple",
-                    "complex": "gray"
-                }
-                
-                for sv_type in colors.keys():
-                    sv_subset = sv_df[sv_df["sv_type"] == sv_type]
-                    if len(sv_subset) == 0:
-                        continue
-                    
-                    for _, row in sv_subset.iterrows():
-                        if row["chrom1"] == row["chrom2"]:
-                            # Plot intrachromosomal events
-                            plt.plot([int(row["break1"]), int(row["break2"])], 
-                                   [0, 0], 
-                                   color=colors[sv_type],
-                                   alpha=0.5,
-                                   linewidth=2,
-                                   label=sv_type)
-                        else:
-                            # Plot interchromosomal events
-                            plt.scatter(int(row["break1"]), 0, 
-                                      color=colors[sv_type],
-                                      alpha=0.5,
-                                      s=50,
-                                      label=f"{sv_type} ({row['chrom1']}->{row['chrom2']})")
-                
-                # Remove duplicate labels
-                handles, labels = plt.gca().get_legend_handles_labels()
-                by_label = dict(zip(labels, handles))
-                plt.legend(by_label.values(), by_label.keys())
-                
-                plt.title(f"Structural Variants - {title}")
-                plt.xlabel("Genomic Position")
-                plt.yticks([])
-                
-                # Add chromosome labels
-                chroms = sorted(set(sv_df["chrom1"].unique()) | set(sv_df["chrom2"].unique()))
-
-    def update_sv_table(self, sv_df):
-        """
-        Update the structural variants table in the UI.
-        Groups events by breakpoint coordinates and requires support from both sides.
-
-        Args:
-            sv_df (pd.DataFrame): DataFrame containing structural variant information
-        """
-        if sv_df is None or sv_df.empty:
-            return
-
-        # Count supporting reads for each breakpoint
-        break1_counts = sv_df.groupby('break1_key')['read_id'].nunique().reset_index()
-        break1_counts.columns = ['break1_key', 'break1_support']
-        break2_counts = sv_df.groupby('break2_key')['read_id'].nunique().reset_index()
-        break2_counts.columns = ['break2_key', 'break2_support']
-
-        # Add support counts to the DataFrame
-        sv_df = sv_df.merge(break1_counts, on='break1_key', how='left')
-        sv_df = sv_df.merge(break2_counts, on='break2_key', how='left')
-
-        # Filter for events with at least 3 supporting reads on both sides
-        sv_df = sv_df[
-            (sv_df['break1_support'] >= 3) & 
-            (sv_df['break2_support'] >= 3)
-        ]
-
-        # Group similar events and calculate mean breakpoint positions
-        sv_df = sv_df.groupby('event_key').agg({
-            'sv_type': 'first',
-            'chrom1': 'first',
-            'break1': 'mean',
-            'strand1': 'first',
-            'chrom2': 'first',
-            'break2': 'mean',
-            'strand2': 'first',
-            'orientation': 'first',
-            'break1_support': 'first',
-            'break2_support': 'first',
-            'span': 'mean'
-        }).reset_index()
-
-        # Round breakpoint positions to nearest integer
-        sv_df['break1'] = sv_df['break1'].round().astype(int)
-        sv_df['break2'] = sv_df['break2'].round().astype(int)
-        sv_df['span'] = sv_df['span'].round().astype(int)
-
-        self.sv_table_container.clear()
-        with self.sv_table_container:
-            self.sv_table = (
-                ui.table.from_pandas(
-                    sv_df,
-                    pagination=25
-                )
-                .props("dense")
-                .classes("w-full")
-                .style("height: 900px")
-                .style("font-size: 100%; font-weight: 300")
-            )
-            
-            # Make all columns sortable
-            for col in self.sv_table.columns:
-                col["sortable"] = True
-
-            # Add search functionality
-            with self.sv_table.add_slot("top-right"):
-                with ui.input(placeholder="Search").props("type=search").bind_value(self.sv_table, "filter").add_slot("append"):
-                    ui.icon("search")
-
+    
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
         Processes a BAM file and identifies fusion candidates and structural variants.
@@ -1565,12 +1372,12 @@ class FusionObject(BaseAnalysis):
         tempallmappings = tempfile.NamedTemporaryFile(
             dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
         )
-        temp_sv_readfile = tempfile.NamedTemporaryFile(
-            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
-        )
-        temp_sv_bamfile = tempfile.NamedTemporaryFile(
-            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
-        )
+        #temp_sv_readfile = tempfile.NamedTemporaryFile(
+        #    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
+        #)
+        #temp_sv_bamfile = tempfile.NamedTemporaryFile(
+        #    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+        #)
 
         try:
             # Process fusion candidates
@@ -1588,14 +1395,63 @@ class FusionObject(BaseAnalysis):
             )
 
             # Process genome-wide structural variants
-            #logger.info(f"Processing BAM file for structural variants: {bamfile}")
-            #sv_reads = await run.cpu_bound(
-            #    structural_variant_work,
-            #    self.threads,
-            #    bamfile,
-            #    temp_sv_readfile.name,
-            #    temp_sv_bamfile.name,
-            #)
+            logger.info(f"Processing BAM file for structural variants: {bamfile}")
+            sv_csv_file = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "sv_master.csv",
+                )
+            sv_reads = await run.cpu_bound(
+                process_bam_file_svs,
+                bamfile,
+                sv_csv_file,
+            )
+            
+            print(len(sv_reads))
+            G = await run.cpu_bound(
+                build_breakpoint_graph,
+                sv_reads,
+                max_proximity=50000, 
+                group_by_sv=True
+            )
+            
+            components = list(nx.connected_components(G))
+            
+            counter = 0
+            for i, comp in enumerate(components, start=1):
+                # comp is a set of node indices in the graph
+                # G.nodes[node_idx]["data"] is your tuple or dict of info
+                
+                node_data_list = [G.nodes[node_idx]["data"] for node_idx in comp]
+
+                # Determine tuple length dynamically
+                if len(node_data_list[0]) == 5:
+                    chroms = {d[0] for d in node_data_list}
+                    positions = [d[1] for d in node_data_list]
+                    strands = {d[2] for d in node_data_list}
+                    sv_types = {d[3] for d in node_data_list}
+                    read_names = {d[4] for d in node_data_list}
+                else:  # Case where group_by_sv=False, no SV_TYPE in tuple
+                    chroms = {d[0] for d in node_data_list}
+                    positions = [d[1] for d in node_data_list]
+                    strands = {d[2] for d in node_data_list}
+                    sv_types = {"UNKNOWN"}  # No explicit SV type available
+                    read_names = {d[3] for d in node_data_list}
+
+                min_pos = min(positions)
+                max_pos = max(positions)
+
+                if 100 > len(read_names) > 1 and len(chroms) < 3:
+                    counter += 1
+                    if "chr9" in chroms:
+                        print(f"\nCONNECTED COMPONENT #{i}")
+                        print(f"  Chromosome(s): {chroms}")
+                        print(f"  Positions: from {min_pos} to {max_pos}")
+                        print(f"  Strands: {strands}")
+                        print(f"  SV Types: {sv_types}")
+                        print(f"  Distinct read names: {len(read_names)} => {read_names}")
+
+            print(f"We found {counter} possible events.")
+            
 
             # Update fusion candidates
             if fusion_candidates is not None:
