@@ -55,6 +55,7 @@ import pysam
 import logging
 import networkx as nx
 import pandas as pd
+import numpy as np
 import click
 from typing import Optional, Tuple
 from nicegui import ui, run, app
@@ -66,6 +67,7 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib import font_manager
 from robin.subpages.base_analysis import BaseAnalysis
 from robin.utilities.decompress import decompress_gzip_file
+from robin.utilities.bed_file import BedTree
 from collections import Counter, defaultdict
 
 matplotlib.use("agg")
@@ -109,6 +111,91 @@ def classify_alignment(aln) -> str:
         return "SUPPLEMENTARY"
     else:
         return "PRIMARY"
+
+def infer_sv_type_for_read(df_read):
+    """
+    Given all alignment segments (PRIMARY+SUPPLEMENTARY) for a single read,
+    return a naive label of the structural variant type based on:
+      - chromosome changes => translocation
+      - strand flips => inversion
+      - differences in reference vs. read coverage => insertion, deletion
+      - repeat coverage => duplication
+      - multiple conflicting events => complex
+    """
+
+    # If only 1 segment, no obvious structural rearrangement
+    if len(df_read) == 1:
+        return "NONE"
+
+    # Sort by read-aligned coordinates so we process them in the order the read is laid out
+    df_read = df_read.sort_values("READ_START")
+
+    events = []
+
+    # We'll compare consecutive segments
+    for i in range(len(df_read) - 1):
+        seg1 = df_read.iloc[i]
+        seg2 = df_read.iloc[i+1]
+
+        # Check if chromosome changed => translocation
+        if seg1["RNAME"] != seg2["RNAME"]:
+            events.append("TRANSLOCATION")
+            continue
+
+        # Same chromosome => check orientation
+        if seg1["STRAND"] != seg2["STRAND"]:
+            events.append("INVERSION")
+
+        # Evaluate difference in read coverage vs. reference coverage
+        # We'll compare the gap between seg1 REF_END and seg2 REF_START
+        # vs. the gap between seg1 READ_END and seg2 READ_START
+        ref_gap  = seg2["REF_START"] - seg1["REF_END"]
+        read_gap = seg2["READ_START"] - seg1["READ_END"]
+
+        # If ref_gap significantly > read_gap => possible deletion
+        # If read_gap significantly > ref_gap => possible insertion
+        # We'll define an arbitrary "threshold" to label these as events
+        gap_diff = ref_gap - read_gap
+
+        # Very naive thresholding:
+        if gap_diff > 50:      # reference gap > read gap => missing bases in read => deletion
+            events.append("DELETION")
+        elif gap_diff < -50:   # read gap > reference gap => extra bases in read => insertion
+            events.append("INSERTION")
+
+        # Check overlap or repeated coverage in reference
+        if seg2["REF_START"] < seg1["REF_END"]:
+            # There's an overlap in reference coordinates => potential duplication or repeat
+            events.append("DUPLICATION")
+
+    # Summarize: if multiple different types => "COMPLEX"
+    unique_events = set(events)
+    if not unique_events:
+        return "NONE"
+    elif len(unique_events) == 1:
+        return unique_events.pop()
+    else:
+        return "COMPLEX"
+
+def label_reads_with_svs(df):
+    """
+    Given a dataframe of alignments (like the example above),
+    group by QNAME and assign a naive 'SV_TYPE' label to each read.
+    """
+    # For convenience, we create a new column "SV_TYPE" on every row,
+    # but each read will have the same label.
+    sv_labels = []
+
+    grouped = df.groupby("QNAME", sort=False)
+    for qname, group_df in grouped:
+        sv_type = infer_sv_type_for_read(group_df)
+        # We'll build a small DataFrame so we can merge back easily
+        tmp_df = group_df.copy()
+        tmp_df["SV_TYPE"] = sv_type
+        sv_labels.append(tmp_df)
+
+    df_labeled = pd.concat(sv_labels, ignore_index=True)
+    return df_labeled
 
 def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
     """
@@ -186,7 +273,7 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
     df.reset_index(drop=True, inplace=True)
     
     if len(df) > 0:
-        df = df[~df['QNAME'].isin(df[df['MQ']<50]['QNAME'])]
+        df = df[~df['QNAME'].isin(df[df['MQ']<55]['QNAME'])]
         df = df[~df['RNAME'].eq('chrM')]
         # Save or append to sv_store
     try:
@@ -205,7 +292,7 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
         
         # Save combined data
         combined_df.to_csv(sv_store, index=False)
-        df = combined_df
+        df = label_reads_with_svs(combined_df)
     except Exception as e:
         logger.error(f"Error saving structural variants: {str(e)}")
         # Continue processing even if save fails
@@ -213,6 +300,94 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
     
 
     return df
+
+def dataframe_to_bed_lines(df: pd.DataFrame) -> list:
+    """
+    Convert a DataFrame with columns [chrom, strand, sv_type, min_bin, max_bin]
+    into a list of BED-like strings:
+    
+      chrom    min_bin    max_bin    sv_type    .    strand
+    
+    Returns a list of strings, each representing one line in BED format.
+    """
+    bed_lines = []
+    for row in df.itertuples():
+        # row.chrom, row.strand, row.sv_type, row.min_bin, row.max_bin
+        line = f"{row.chrom}\t{row.min_bin}\t{row.max_bin}\t{row.sv_type}\t.\t{row.strand}"
+        bed_lines.append(line)
+    return bed_lines
+
+def merge_overlapping_intervals(group: pd.DataFrame) -> pd.DataFrame:
+    """
+    Merge overlapping intervals within a single group (chrom, strand, sv_type).
+    For any rows that overlap or touch, collapse them into one row with:
+       min_bin = the smallest min_bin
+       max_bin = the largest max_bin
+    Returns a DataFrame of merged rows for this group.
+    """
+    # Sort by min_bin so we can process in ascending order
+    group = group.sort_values(by="min_bin")
+
+    merged = []
+    current_min = None
+    current_max = None
+
+    for row in group.itertuples():
+        # For clarity, row has attributes like row.min_bin, row.max_bin
+        if current_min is None:
+            # first interval in this group
+            current_min = row.min_bin
+            current_max = row.max_bin
+        else:
+            # check if this interval overlaps the current merge
+            if row.min_bin <= current_max:
+                # Overlap => expand the current_max if needed
+                current_max = max(current_max, row.max_bin)
+            else:
+                # No overlap => finalize the previous merged interval
+                merged.append({
+                    "chrom": row.chrom,
+                    "strand": row.strand,
+                    "sv_type": row.sv_type,
+                    "min_bin": current_min,
+                    "max_bin": current_max
+                })
+                # start a new merge interval
+                current_min = row.min_bin
+                current_max = row.max_bin
+
+    # Finalize the last interval if it exists
+    if current_min is not None:
+        merged.append({
+            "chrom": group["chrom"].iloc[0],    # same for entire group
+            "strand": group["strand"].iloc[0],  # same for entire group
+            "sv_type": group["sv_type"].iloc[0],
+            "min_bin": current_min,
+            "max_bin": current_max
+        })
+
+    return pd.DataFrame(merged)
+
+# ------------------------------------------------------------------
+# 2) Group by (chrom, strand, sv_type) and apply the merging function
+# ------------------------------------------------------------------
+
+# grouped_merge = df.groupby(["chrom","strand","sv_type"], group_keys=False)\
+#                    .apply(merge_overlapping_intervals)
+# 
+# If you like to reset the index at the end:
+# grouped_merge = grouped_merge.reset_index(drop=True)
+
+# For a fully self-contained example, let's do it in one snippet:
+
+def collapse_overlaps(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    For each (chrom, strand, sv_type), merge overlapping [min_bin, max_bin] intervals.
+    Returns a new DataFrame with the collapsed intervals.
+    """
+    grouped = df.groupby(["chrom", "strand", "sv_type"], group_keys=False)
+    merged_df = grouped.apply(merge_overlapping_intervals)
+    return merged_df.reset_index(drop=True)
     
 
 def build_breakpoint_graph(df, max_proximity=50000, group_by_sv=False):
@@ -648,7 +823,7 @@ class FusionObject(BaseAnalysis):
         gene_table_small (pd.DataFrame): Filtered DataFrame with gene annotations.
     """
 
-    def __init__(self, *args, target_panel=None, **kwargs):
+    def __init__(self, *args, target_panel=None, NewBed: Optional[BedTree] = None, **kwargs):
         self.target_panel = target_panel
         self.fusion_candidates = {}
         self.fusion_candidates_all = {}
@@ -743,6 +918,8 @@ class FusionObject(BaseAnalysis):
                 compression="gzip",
             )
             self.gene_table = self.gene_table_small
+            
+        self.NewBed = NewBed
         super().__init__(*args, **kwargs)
 
     def setup_ui(self) -> None:
@@ -1406,7 +1583,6 @@ class FusionObject(BaseAnalysis):
                 sv_csv_file,
             )
             
-            print(len(sv_reads))
             G = await run.cpu_bound(
                 build_breakpoint_graph,
                 sv_reads,
@@ -1417,6 +1593,7 @@ class FusionObject(BaseAnalysis):
             components = list(nx.connected_components(G))
             
             counter = 0
+            bed_lines=[]
             for i, comp in enumerate(components, start=1):
                 # comp is a set of node indices in the graph
                 # G.nodes[node_idx]["data"] is your tuple or dict of info
@@ -1440,7 +1617,7 @@ class FusionObject(BaseAnalysis):
                 min_pos = min(positions)
                 max_pos = max(positions)
 
-                if 100 > len(read_names) > 1 and len(chroms) < 3:
+                if 100 > len(read_names) > 2 and len(chroms) < 3:
                     counter += 1
                     if "chr9" in chroms:
                         print(f"\nCONNECTED COMPONENT #{i}")
@@ -1449,8 +1626,33 @@ class FusionObject(BaseAnalysis):
                         print(f"  Strands: {strands}")
                         print(f"  SV Types: {sv_types}")
                         print(f"  Distinct read names: {len(read_names)} => {read_names}")
-
-            print(f"We found {counter} possible events.")
+                    
+                    bin_size = 1000
+                    df = pd.DataFrame(node_data_list, columns=["chrom", "pos", "strand", "sv_type", "qname"])
+                    df["bin"] = df["pos"] // bin_size
+                    df["min_bin"] = np.where(df["strand"] == "+", df["bin"] - 1, df["bin"] - 5) * bin_size
+                    df["max_bin"] = np.where(df["strand"] == "+", df["bin"] + 5, df["bin"] + 1) * bin_size
+                    if "chr9" in chroms:
+                        print(df)
+                    df.drop(columns=["pos","qname","bin"], inplace=True)
+                    df.drop_duplicates(inplace=True)
+                    if "chr9" in chroms:
+                        print(collapse_overlaps(df))
+                    
+                    #print(dataframe_to_bed_lines(collapse_overlaps(df)))
+                    #if len(dataframe_to_bed_lines(collapse_overlaps(df))) < 3:
+                    #    bed_lines.extend(dataframe_to_bed_lines(collapse_overlaps(df)))
+            if len(bed_lines) > 0:
+                self.NewBed.load_from_string(
+                        "\n".join(bed_lines),
+                        merge=False,
+                        write_files=True,
+                        output_location=os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID)
+                        ),
+                        source_type="FUSION",
+                    )
+            logger.info(f"We found {counter} possible events.")
             
 
             # Update fusion candidates
@@ -1474,96 +1676,6 @@ class FusionObject(BaseAnalysis):
                             fusion_candidates_all,
                         ]
                     ).reset_index(drop=True)
-
-            """
-            # Process structural variants
-            if sv_reads is not None:
-                logger.info("Processing structural variants")
-                new_sv_df = self.process_structural_variants(sv_reads)
-                
-                # Merge with existing structural variants
-                if self.sampleID not in self.structural_variants.keys():
-                    merged_sv_df = new_sv_df
-                else:
-                    # Remove any existing supporting_reads column before concatenation
-                    if 'supporting_reads' in self.structural_variants[self.sampleID].columns:
-                        self.structural_variants[self.sampleID] = self.structural_variants[self.sampleID].drop(columns=['supporting_reads'])
-                    
-                    # Ensure consistent dtypes before concatenation
-                    existing_df = self.structural_variants[self.sampleID]
-                    
-                    # Define expected dtypes
-                    dtype_dict = {
-                        'read_id': str,
-                        'event_key': str,
-                        'sv_type': str,
-                        'chrom1': str,
-                        'break1': int,
-                        'strand1': str,
-                        'chrom2': str,
-                        'break2': int,
-                        'strand2': str,
-                        'orientation': str,
-                        'mapping_quality': float,
-                        'span': float,  # Using float to handle None values
-                        'break1_key': str,
-                        'break2_key': str
-                    }
-                    
-                    # Convert dtypes for both DataFrames
-                    for col, dtype in dtype_dict.items():
-                        if col in existing_df.columns:
-                            existing_df[col] = existing_df[col].astype(dtype)
-                        if col in new_sv_df.columns:
-                            new_sv_df[col] = new_sv_df[col].astype(dtype)
-                    
-                    # Concatenate with explicit ignore_index
-                    merged_sv_df = pd.concat(
-                        [existing_df, new_sv_df],
-                        ignore_index=True,
-                        verify_integrity=True
-                    )
-                
-                # Now apply the 3+ supporting reads filter to the merged data
-                event_counts = merged_sv_df.groupby('event_key').agg({
-                    'read_id': 'nunique'
-                }).reset_index()
-                event_counts.columns = ['event_key', 'supporting_reads']
-                
-                # Filter for events with at least 3 supporting reads
-                valid_events = event_counts[event_counts['supporting_reads'] >= 3]['event_key']
-                filtered_sv_df = merged_sv_df[merged_sv_df['event_key'].isin(valid_events)]
-                
-                # Add supporting read count to the filtered DataFrame
-                filtered_sv_df = filtered_sv_df.merge(
-                    event_counts,
-                    on='event_key',
-                    how='left',
-                    suffixes=('', '_count')
-                )
-                
-                # Update the stored structural variants
-                self.structural_variants[self.sampleID] = filtered_sv_df
-                
-                # Update UI with structural variants if UI is initialized
-                if not filtered_sv_df.empty:
-                    logger.info(f"Found {len(filtered_sv_df)} structural variants with 3+ supporting reads")
-                    self.sv_count = len(filtered_sv_df)
-                    if hasattr(self, 'sv_plot') and self.sv_plot is not None:
-                        self.sv_plot.clear()
-                        with self.sv_plot:
-                            self.create_sv_plot(filtered_sv_df, self.sampleID)
-                    if hasattr(self, 'sv_table_container') and self.sv_table_container is not None:
-                        self.update_sv_table(filtered_sv_df)
-
-                # Save structural variants to file
-                output_file = os.path.join(
-                    self.check_and_create_folder(self.output, self.sampleID),
-                    "structural_variants.csv",
-                )
-                logger.info(f"Saving structural variants to {output_file}")
-                filtered_sv_df.to_csv(output_file, index=False)
-            """
 
             # Update fusion tables
             self.fusion_table()

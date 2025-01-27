@@ -14,6 +14,7 @@ from robin import theme
 from robin import images
 from configparser import ConfigParser
 
+
 from robin.brain_class import BrainMeth
 from robin.minknow_info.minknow_panel import MinKNOWFish
 

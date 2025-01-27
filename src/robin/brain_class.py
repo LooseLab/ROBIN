@@ -102,6 +102,7 @@ from robin.subpages.TargetCoverage_object import TargetCoverage
 from robin.subpages.Fusion_object import FusionObject
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.ReadBam import ReadBam
+from robin.utilities.bed_file import BedTree
 from robin.reporting.report import create_pdf
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
@@ -488,6 +489,16 @@ class BrainMeth:
             os.path.dirname(os.path.abspath(resources.__file__)),
             "sturg_nanodx_cpgs_0125.bed.gz",
         )
+        if self.reference:
+            self.NewBed = BedTree(
+                preserve_original_tree=True,
+                reference_file=f"{self.reference}.fai",
+                readfish_toml=self.readfish_toml,
+            )
+            if self.bed_file:
+                self.NewBed.load_from_file(self.bed_file)
+        else:
+            self.NewBed = None
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
 
@@ -629,6 +640,7 @@ class BrainMeth:
                 reference_file=self.reference,
                 bed_file=self.bed_file,
                 readfish_toml=self.readfish_toml,
+                NewBed=self.NewBed,
                 **common_args,
             )
             self.CNV.process_data()
@@ -655,6 +667,7 @@ class BrainMeth:
                 analysis_name="FUSION",
                 bamqueue=self.bamforfusions,
                 target_panel=self.target_panel,
+                NewBed=self.NewBed,
                 **common_args,
             )
             self.Fusion_panel.process_data()
@@ -2243,6 +2256,7 @@ class BrainMeth:
                                         target_panel=self.target_panel,
                                         reference_file=self.reference,
                                         bed_file=self.bed_file,
+                                        NewBed=self.NewBed,
                                         **display_args,
                                     )
                                     await self.CNV.render_ui(sample_id=self.sampleID)
@@ -2280,6 +2294,7 @@ class BrainMeth:
                                         analysis_name="FUSION",
                                         summary=fusions,
                                         target_panel=self.target_panel,
+                                        NewBed=self.NewBed,
                                         **display_args,
                                     )
                                     await self.Fusion_panel.render_ui(

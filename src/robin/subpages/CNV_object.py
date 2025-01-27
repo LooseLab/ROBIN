@@ -384,6 +384,7 @@ class CNVAnalysis(BaseAnalysis):
         reference_file: Optional[str] = None,
         bed_file: Optional[str] = None,
         readfish_toml: Optional[Path] = None,
+        NewBed: Optional[BedTree] = None,
         **kwargs,
     ) -> None:
         # self.file_list = []
@@ -450,18 +451,10 @@ class CNVAnalysis(BaseAnalysis):
             header=None,
             sep="\s+",
         )
+        self.NewBed = NewBed
         super().__init__(*args, **kwargs)
         # Only initialize BedTree if reference file is provided
-        if self.reference_file:
-            self.NewBed = BedTree(
-                preserve_original_tree=True,
-                reference_file=f"{self.reference_file}.fai",
-                readfish_toml=self.readfish_toml,
-            )
-            if self.bed_file:
-                self.NewBed.load_from_file(self.bed_file)
-        else:
-            self.NewBed = None
+        
         self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
 
     def calculate_chromosome_stats(self, result, ref_result):
@@ -840,6 +833,7 @@ class CNVAnalysis(BaseAnalysis):
                     output_location=os.path.join(
                         self.check_and_create_folder(self.output, self.sampleID)
                     ),
+                    source_type="CNV",
                 )
 
             np.save(
@@ -2225,7 +2219,7 @@ class CNVAnalysis(BaseAnalysis):
                     bedcontent += f'{self.CNVResults[chrom]["bed_data_breakpoints"]}\n'
                     local_update = True
 
-            self.NewBed.load_from_string(bedcontent, merge=False)
+            self.NewBed.load_from_string(bedcontent, merge=False, source_type="CNV")
 
             if self.check_file_time(os.path.join(output, "bedranges.csv")):
                 self.proportions_df_store = pd.read_csv(
