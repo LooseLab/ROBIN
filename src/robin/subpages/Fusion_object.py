@@ -1619,29 +1619,28 @@ class FusionObject(BaseAnalysis):
 
                 if 100 > len(read_names) > 2 and len(chroms) < 3:
                     counter += 1
-                    if "chr9" in chroms:
-                        print(f"\nCONNECTED COMPONENT #{i}")
-                        print(f"  Chromosome(s): {chroms}")
-                        print(f"  Positions: from {min_pos} to {max_pos}")
-                        print(f"  Strands: {strands}")
-                        print(f"  SV Types: {sv_types}")
-                        print(f"  Distinct read names: {len(read_names)} => {read_names}")
+                    #if "chr9" in chroms:
+                    #    print(f"\nCONNECTED COMPONENT #{i}")
+                    #    print(f"  Chromosome(s): {chroms}")
+                    #    print(f"  Positions: from {min_pos} to {max_pos}")
+                    #    print(f"  Strands: {strands}")
+                    #    print(f"  SV Types: {sv_types}")
+                    #    print(f"  Distinct read names: {len(read_names)} => {read_names}")
                     
                     bin_size = 1000
                     df = pd.DataFrame(node_data_list, columns=["chrom", "pos", "strand", "sv_type", "qname"])
                     df["bin"] = df["pos"] // bin_size
                     df["min_bin"] = np.where(df["strand"] == "+", df["bin"] - 1, df["bin"] - 5) * bin_size
                     df["max_bin"] = np.where(df["strand"] == "+", df["bin"] + 5, df["bin"] + 1) * bin_size
-                    if "chr9" in chroms:
-                        print(df)
+                    #if "chr9" in chroms:
+                    #    print(df)
                     df.drop(columns=["pos","qname","bin"], inplace=True)
                     df.drop_duplicates(inplace=True)
-                    if "chr9" in chroms:
-                        print(collapse_overlaps(df))
-                    
+                    #if "chr9" in chroms:
+                    #    print(collapse_overlaps(df))                    
                     #print(dataframe_to_bed_lines(collapse_overlaps(df)))
-                    #if len(dataframe_to_bed_lines(collapse_overlaps(df))) < 3:
-                    #    bed_lines.extend(dataframe_to_bed_lines(collapse_overlaps(df)))
+                    if len(dataframe_to_bed_lines(collapse_overlaps(df))) < 3:
+                        bed_lines.extend(dataframe_to_bed_lines(collapse_overlaps(df)))
             if len(bed_lines) > 0:
                 self.NewBed.load_from_string(
                         "\n".join(bed_lines),

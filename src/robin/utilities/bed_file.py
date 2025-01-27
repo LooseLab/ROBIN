@@ -26,6 +26,7 @@ import pandas as pd
 from typing import Optional
 import tomli
 import tomli_w
+from pprint import pprint
 from pathlib import Path
 
 
@@ -388,31 +389,93 @@ class BedTree:
             self.output_location = output_location
             
         if not merge:
+            #rint(self.tree_data)
             if "children" in self.tree_data.keys():
                 if source_type:
-                    # Preserve entries that don't match our source type
-                    for chromosome in self.tree_data["children"]:
-                        for strand_group in chromosome.get("children", []):
-                            strand_group["children"] = [
-                                target for target in strand_group.get("children", [])
-                                if (
-                                    # Keep CNV entries if we're updating fusions
-                                    (source_type == "FUSION" and target.get("name") == "CNV_detected") or
-                                    # Keep fusion entries if we're updating CNVs
-                                    (source_type == "CNV" and target.get("name") in 
-                                     ["TRANSLOCATION", "INVERSION", "DELETION", "INSERTION", 
-                                      "DUPLICATION", "COMPLEX"])
-                                )
-                            ]
+                    # First pass: Remove all entries of the type we're updating
+                    for chromosome in self.tree_data["children"][:]:
+                        for strand_group in chromosome.get("children", [])[:]:
+                            if source_type == "FUSION":
+                                # Remove all entries that are NOT CNV_detected
+                                to_remove = []
+                                for i, target in enumerate(strand_group.get("children", [])):
+                                    if target.get("name") != "CNV_detected":
+                                        to_remove.append(i)
+                                        #print(i)
+                                        #print(target)
+                                # Remove entries in reverse order to maintain correct indices
+                                for i in reversed(to_remove):
+                                    del strand_group["children"][i]
+                                    
+                            elif source_type == "CNV":
+                                # Remove all CNV_detected entries
+                                to_remove = []
+                                for i, target in enumerate(strand_group.get("children", [])):
+                                    if target.get("name") == "CNV_detected":
+                                        to_remove.append(i)
+                                        #print(i)
+                                        #print(target)
+                                # Remove entries in reverse order to maintain correct indices
+                                for i in reversed(to_remove):
+                                    del strand_group["children"][i]
+                            
+                            # Remove empty strand groups
+                            if not strand_group.get("children", []):
+                                chromosome["children"].remove(strand_group)
+                                
+                    # Remove empty chromosomes
+                    self.tree_data["children"] = [
+                        chrom for chrom in self.tree_data["children"] 
+                        if chrom.get("children")
+                    ]
                 else:
                     # If no source_type specified, clear everything as before
                     self.tree_data["children"] = []
-                    
-            if not merge and not source_type:
-                self.tree_dict = {}
-                if self.preserve_original_tree and self.reference_tree:
+            
+            # Handle the tree_dict preservation
+            if self.preserve_original_tree and self.reference_tree:
+                if not self.tree_dict:
+                    # If tree_dict is empty, simply copy the reference tree
                     self.tree_dict = copy.deepcopy(self.reference_tree)
-
+                else:
+                    # Merge reference tree entries with existing tree_dict
+                    reference_copy = copy.deepcopy(self.reference_tree)
+                    for chrom_key, chrom_value in reference_copy.items():
+                        if chrom_key not in self.tree_dict:
+                            # If chromosome doesn't exist, add it completely
+                            self.tree_dict[chrom_key] = chrom_value
+                        else:
+                            # Chromosome exists, need to merge strand groups
+                            existing_chrom = self.tree_dict[chrom_key]
+                            if 'children' in chrom_value:
+                                if 'children' not in existing_chrom:
+                                    existing_chrom['children'] = []
+                                
+                                # For each strand group in reference
+                                for ref_strand_group in chrom_value['children']:
+                                    strand_group_id = ref_strand_group['id']
+                                    # Find matching strand group in existing chromosome
+                                    existing_strand_group = next(
+                                        (group for group in existing_chrom['children'] 
+                                         if group['id'] == strand_group_id),
+                                        None
+                                    )                                    
+                                    if existing_strand_group is None:
+                                        # If strand group doesn't exist, add it
+                                        existing_chrom['children'].append(ref_strand_group)
+                                    else:
+                                        # Merge children of strand groups
+                                        if 'children' in ref_strand_group:
+                                            if 'children' not in existing_strand_group:
+                                                existing_strand_group['children'] = []
+                                            # Add any missing targets
+                                            existing_ids = {child['id'] for child in existing_strand_group['children']}
+                                            for ref_target in ref_strand_group['children']:
+                                                if ref_target['id'] not in existing_ids:
+                                                    existing_strand_group['children'].append(ref_target)
+            elif not self.preserve_original_tree:
+                self.tree_dict = {}
+                
         bed_file = StringIO(bed_string)
         reader = csv.reader(bed_file, delimiter="\t")
         self._process_bed_data(reader)
