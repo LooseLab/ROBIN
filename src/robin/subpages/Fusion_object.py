@@ -368,17 +368,6 @@ def merge_overlapping_intervals(group: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(merged)
 
-# ------------------------------------------------------------------
-# 2) Group by (chrom, strand, sv_type) and apply the merging function
-# ------------------------------------------------------------------
-
-# grouped_merge = df.groupby(["chrom","strand","sv_type"], group_keys=False)\
-#                    .apply(merge_overlapping_intervals)
-# 
-# If you like to reset the index at the end:
-# grouped_merge = grouped_merge.reset_index(drop=True)
-
-# For a fully self-contained example, let's do it in one snippet:
 
 def collapse_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -390,7 +379,7 @@ def collapse_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     return merged_df.reset_index(drop=True)
     
 
-def build_breakpoint_graph(df, max_proximity=50000, group_by_sv=False):
+def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
     """
     Builds an undirected graph where nodes are structural variant breakpoints.
     
@@ -489,7 +478,7 @@ def build_breakpoint_graph(df, max_proximity=50000, group_by_sv=False):
         min_pos = min(positions)
         max_pos = max(positions)
 
-        if 100 > len(read_names) > 2 and len(chroms) < 3:
+        if 100 > len(read_names) > 2 and len(chroms) < 4:
             counter += 1
             #if "chr9" in chroms:
             #    print(f"\nCONNECTED COMPONENT #{i}")
@@ -511,8 +500,9 @@ def build_breakpoint_graph(df, max_proximity=50000, group_by_sv=False):
             #if "chr9" in chroms:
             #    print(collapse_overlaps(df))                    
             #print(dataframe_to_bed_lines(collapse_overlaps(df)))
-            if len(dataframe_to_bed_lines(collapse_overlaps(df))) < 3:
+            if len(dataframe_to_bed_lines(collapse_overlaps(df))) < 5:
                 bed_lines.extend(dataframe_to_bed_lines(collapse_overlaps(df)))
+                
 
     return bed_lines
 

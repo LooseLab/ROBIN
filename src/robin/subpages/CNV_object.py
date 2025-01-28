@@ -1403,6 +1403,8 @@ class CNVAnalysis(BaseAnalysis):
                         "backgroundColor": "rgba(255, 255, 255, 0.9)",
                         "borderColor": "#E5E5EA",
                         "textStyle": {"color": "#1D1D1F"},
+                        "axisPointer": {"type": "cross"},
+                        ":formatter": "params => `Position: ${params[0].value[0]}<br/>Value: ${params[0].value[1].toFixed(2)}`"
                     },
                     "xAxis": {
                         "type": f"{type}",
@@ -2302,6 +2304,8 @@ class CNVAnalysis(BaseAnalysis):
                         "backgroundColor": "rgba(255, 255, 255, 0.9)",
                         "borderColor": "#E5E5EA",
                         "textStyle": {"color": "#1D1D1F"},
+                        "axisPointer": {"type": "cross"},
+                        ":formatter": "params => `Position: ${params[0].value[0]}<br/>Value: ${params[0].value[1].toFixed(2)}`"
                     },
                     "legend": {
                         "type": "scroll",
