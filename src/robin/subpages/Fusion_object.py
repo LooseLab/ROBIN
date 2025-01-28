@@ -462,8 +462,59 @@ def build_breakpoint_graph(df, max_proximity=50000, group_by_sv=False):
             idx2, pos2 = lst_sorted[i + 1]
             if abs(pos2 - pos1) <= max_proximity:
                 G.add_edge(idx1, idx2, reason="proximity")
+                
+    components = list(nx.connected_components(G))
+    counter = 0
+    bed_lines=[]
+    for i, comp in enumerate(components, start=1):
+        # comp is a set of node indices in the graph
+        # G.nodes[node_idx]["data"] is your tuple or dict of info
+        
+        node_data_list = [G.nodes[node_idx]["data"] for node_idx in comp]
 
-    return G
+        # Determine tuple length dynamically
+        if len(node_data_list[0]) == 5:
+            chroms = {d[0] for d in node_data_list}
+            positions = [d[1] for d in node_data_list]
+            strands = {d[2] for d in node_data_list}
+            sv_types = {d[3] for d in node_data_list}
+            read_names = {d[4] for d in node_data_list}
+        else:  # Case where group_by_sv=False, no SV_TYPE in tuple
+            chroms = {d[0] for d in node_data_list}
+            positions = [d[1] for d in node_data_list]
+            strands = {d[2] for d in node_data_list}
+            sv_types = {"UNKNOWN"}  # No explicit SV type available
+            read_names = {d[3] for d in node_data_list}
+
+        min_pos = min(positions)
+        max_pos = max(positions)
+
+        if 100 > len(read_names) > 2 and len(chroms) < 3:
+            counter += 1
+            #if "chr9" in chroms:
+            #    print(f"\nCONNECTED COMPONENT #{i}")
+            #    print(f"  Chromosome(s): {chroms}")
+            #    print(f"  Positions: from {min_pos} to {max_pos}")
+            #    print(f"  Strands: {strands}")
+            #    print(f"  SV Types: {sv_types}")
+            #    print(f"  Distinct read names: {len(read_names)} => {read_names}")
+            
+            bin_size = 1000
+            df = pd.DataFrame(node_data_list, columns=["chrom", "pos", "strand", "sv_type", "qname"])
+            df["bin"] = df["pos"] // bin_size
+            df["min_bin"] = np.where(df["strand"] == "+", df["bin"] - 1, df["bin"] - 5) * bin_size
+            df["max_bin"] = np.where(df["strand"] == "+", df["bin"] + 5, df["bin"] + 1) * bin_size
+            #if "chr9" in chroms:
+            #    print(df)
+            df.drop(columns=["pos","qname","bin"], inplace=True)
+            df.drop_duplicates(inplace=True)
+            #if "chr9" in chroms:
+            #    print(collapse_overlaps(df))                    
+            #print(dataframe_to_bed_lines(collapse_overlaps(df)))
+            if len(dataframe_to_bed_lines(collapse_overlaps(df))) < 3:
+                bed_lines.extend(dataframe_to_bed_lines(collapse_overlaps(df)))
+
+    return bed_lines
 
 
 def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
@@ -1583,64 +1634,13 @@ class FusionObject(BaseAnalysis):
                 sv_csv_file,
             )
             
-            G = await run.cpu_bound(
+            bed_lines = await run.cpu_bound(
                 build_breakpoint_graph,
                 sv_reads,
                 max_proximity=50000, 
                 group_by_sv=True
             )
             
-            components = list(nx.connected_components(G))
-            
-            counter = 0
-            bed_lines=[]
-            for i, comp in enumerate(components, start=1):
-                # comp is a set of node indices in the graph
-                # G.nodes[node_idx]["data"] is your tuple or dict of info
-                
-                node_data_list = [G.nodes[node_idx]["data"] for node_idx in comp]
-
-                # Determine tuple length dynamically
-                if len(node_data_list[0]) == 5:
-                    chroms = {d[0] for d in node_data_list}
-                    positions = [d[1] for d in node_data_list]
-                    strands = {d[2] for d in node_data_list}
-                    sv_types = {d[3] for d in node_data_list}
-                    read_names = {d[4] for d in node_data_list}
-                else:  # Case where group_by_sv=False, no SV_TYPE in tuple
-                    chroms = {d[0] for d in node_data_list}
-                    positions = [d[1] for d in node_data_list]
-                    strands = {d[2] for d in node_data_list}
-                    sv_types = {"UNKNOWN"}  # No explicit SV type available
-                    read_names = {d[3] for d in node_data_list}
-
-                min_pos = min(positions)
-                max_pos = max(positions)
-
-                if 100 > len(read_names) > 2 and len(chroms) < 3:
-                    counter += 1
-                    #if "chr9" in chroms:
-                    #    print(f"\nCONNECTED COMPONENT #{i}")
-                    #    print(f"  Chromosome(s): {chroms}")
-                    #    print(f"  Positions: from {min_pos} to {max_pos}")
-                    #    print(f"  Strands: {strands}")
-                    #    print(f"  SV Types: {sv_types}")
-                    #    print(f"  Distinct read names: {len(read_names)} => {read_names}")
-                    
-                    bin_size = 1000
-                    df = pd.DataFrame(node_data_list, columns=["chrom", "pos", "strand", "sv_type", "qname"])
-                    df["bin"] = df["pos"] // bin_size
-                    df["min_bin"] = np.where(df["strand"] == "+", df["bin"] - 1, df["bin"] - 5) * bin_size
-                    df["max_bin"] = np.where(df["strand"] == "+", df["bin"] + 5, df["bin"] + 1) * bin_size
-                    #if "chr9" in chroms:
-                    #    print(df)
-                    df.drop(columns=["pos","qname","bin"], inplace=True)
-                    df.drop_duplicates(inplace=True)
-                    #if "chr9" in chroms:
-                    #    print(collapse_overlaps(df))                    
-                    #print(dataframe_to_bed_lines(collapse_overlaps(df)))
-                    if len(dataframe_to_bed_lines(collapse_overlaps(df))) < 3:
-                        bed_lines.extend(dataframe_to_bed_lines(collapse_overlaps(df)))
             if len(bed_lines) > 0:
                 self.NewBed.load_from_string(
                         "\n".join(bed_lines),
@@ -1651,7 +1651,7 @@ class FusionObject(BaseAnalysis):
                         ),
                         source_type="FUSION",
                     )
-            logger.info(f"We found {counter} possible events.")
+            logger.info(f"We found {len(bed_lines)} possible events.")
             
 
             # Update fusion candidates

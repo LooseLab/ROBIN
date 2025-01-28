@@ -164,21 +164,33 @@ class BedTree:
         return chromosome_lengths
 
     def _merge_ranges(self, existing_ranges, new_range):
-        start, end = new_range
+        """
+        Merge ranges while preserving those with different names.
+        existing_ranges: list of tuples (start, end, name)
+        new_range: tuple (start, end, name)
+        """
+        start, end, name = new_range
         merged_ranges = []
         i = 0
 
         while i < len(existing_ranges):
-            existing_start, existing_end = existing_ranges[i]
-            if not (end < existing_start or start > existing_end):
-                start = min(existing_start, start)
-                end = max(existing_end, end)
+            existing_start, existing_end, existing_name = existing_ranges[i]
+            
+            # Only merge if names match or both are default (".")
+            if (name == existing_name or (name == "." and existing_name == ".")):
+                if not (end < existing_start or start > existing_end):
+                    start = min(existing_start, start)
+                    end = max(existing_end, end)
+                else:
+                    merged_ranges.append((existing_start, existing_end, existing_name))
             else:
-                merged_ranges.append((existing_start, existing_end))
+                # Keep ranges separate if names differ
+                merged_ranges.append((existing_start, existing_end, existing_name))
             i += 1
 
-        merged_ranges.append((start, end))
-        merged_ranges.sort()
+        merged_ranges.append((start, end, name))
+        # Sort by start position, then end position if starts are equal
+        merged_ranges.sort(key=lambda x: (x[0], x[1]))
 
         return merged_ranges
 
@@ -198,7 +210,6 @@ class BedTree:
                         "count": 0,
                         "range_sum": 0,
                         "description": "chromosome",
-                        #"name": name,
                     }
 
                 strand_id = f"{chromosome} {strand}"
@@ -216,15 +227,17 @@ class BedTree:
                         "children": [],
                         "count": 0,
                         "range_sum": 0,
-                        #"name": name,
                     }
                     self.tree_dict[chromosome]["children"].append(strand_group)
 
+                # Include name in the range information
                 existing_ranges = [
-                    (int(r["id"].split("-")[0]), int(r["id"].split("-")[1]))
+                    (int(r["id"].split("-")[0]), 
+                     int(r["id"].split("-")[1]),
+                     r["name"])
                     for r in strand_group["children"]
                 ]
-                merged_ranges = self._merge_ranges(existing_ranges, (start, end))
+                merged_ranges = self._merge_ranges(existing_ranges, (start, end, name))
 
                 strand_group["children"] = [
                     {
@@ -235,9 +248,9 @@ class BedTree:
                         "proportion": (e - s + 1)
                         / self.chromosome_lengths.get(chromosome, 0)
                         * 100,
-                        "name": name,
+                        "name": n,
                     }
-                    for s, e in merged_ranges
+                    for s, e, n in merged_ranges
                 ]
                 
                 self.tree_dict[chromosome]["count"] = sum(
