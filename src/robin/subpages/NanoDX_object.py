@@ -481,7 +481,7 @@ class NanoDX_object(BaseAnalysis):
                     ] = tomerge_length
 
             except Exception as e:
-                print(e)
+                logger.error(f"Error in process_bam (nanodx): {e}")
 
         self.running = False
 

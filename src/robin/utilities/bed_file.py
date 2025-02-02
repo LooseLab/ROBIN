@@ -26,7 +26,6 @@ import pandas as pd
 from typing import Optional
 import tomli
 import tomli_w
-from pprint import pprint
 from pathlib import Path
 
 
@@ -61,7 +60,7 @@ class BedTree:
         if self.readfish_toml:
             with open(self.readfish_toml, "rb") as f:
                 self.toml_dict = tomli.load(f)
-                print(self.toml_dict)
+                #print(self.toml_dict)
         else:
             self.toml_dict = None
         if reference_file:

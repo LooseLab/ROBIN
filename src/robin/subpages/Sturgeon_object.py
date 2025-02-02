@@ -505,7 +505,7 @@ def run_modkit(file, temp, threads):
             f"--force --suppress-progress >/dev/null 2>&1"
         )
     except Exception as e:
-        print(e)
+        logger.error(f"Error in run_modkit: {e}")
         pass
 
 
@@ -555,7 +555,7 @@ def run_sturgeon_inputtobed(temp, temp2):
             f"--reference-genome hg38 >/dev/null 2>&1"
         )
     except Exception as e:
-        print(e)
+        logger.error(f"Error in run_sturgeon_inputtobed: {e}")
         pass
 
 
@@ -805,7 +805,7 @@ class Sturgeon_object(BaseAnalysis):
                 # ] -= tomerge_length
                 # print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
             except Exception as e:
-                print(e)
+                logger.error(f"Error in process_bam (sturgeon): {e}")
 
         self.running = False
 
@@ -1120,7 +1120,7 @@ def test_me(
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
     else:
-        print("Browse mode not implemented.")
+        logger.info("Browse mode not implemented.")
         TestObject.progress_trackers.visible = False
         # TestObject.show_previous_data(output)
     ui.run(port=port, reload=False)

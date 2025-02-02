@@ -47,6 +47,7 @@ import sys
 import logging
 import click
 import time
+import subprocess
 from pathlib import Path
 from nicegui import ui, run, app
 from io import StringIO
@@ -55,6 +56,7 @@ import tempfile
 import shutil
 import queue
 import docker
+import asyncio
 from robin.utilities.decompress import decompress_gzip_file
 from robin.subpages.base_analysis import BaseAnalysis
 
@@ -241,70 +243,191 @@ def parse_vcf(vcf_file):
                 print(e)
                 sys.exit(1)
 
+
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, showerrors):
     """
-    Run the Clair3 variant caller on targeted regions.
-
-    This function executes Clair3 in a Docker container to call variants in specified
-    regions of a BAM file. It also performs annotation using snpEff and SnpSift.
-
+    Run the Clair3 pipeline in a Docker container using the Docker SDK.
+    
+    This function builds and executes the Clair3 variant calling pipeline inside a Docker
+    container. It sets up the required volume bindings, builds the command, and manages the
+    container lifecycle (creation, start, logging, wait, and cleanup). Finally, it 
+    copies the output VCF files and runs local annotation steps via snpEff and SnpSift.
+    
     Parameters
     ----------
     bamfile : str
-        Path to the input BAM file.
+        Path to the input tumor BAM file.
     bedfile : str
         Path to the BED file defining target regions.
     workdir : str
-        Working directory for temporary files.
+        Directory on the host for temporary work files.
     workdirout : str
-        Output directory for results.
+        Output directory on the host for pipeline results.
     threads : int
-        Number of threads to use.
+        Number of threads to use for processing.
     reference : str
-        Path to the reference genome.
+        Path to the reference genome file.
     showerrors : bool
-        Whether to display error messages.
-
-    Notes
-    -----
-    Requires Docker to be running and the Clair3 image to be available.
+        If True, detailed logging information (debug messages) will be printed.
+    
+    Returns
+    -------
+    None
     """
-    # ToDo: handle any platform
-    # ToDo: Get basecall model from bam file info
-    if sys.platform in ["darwin", "linux"]:
-        runcommand = (
-            f"docker run -it -v {workdir}:{workdir} "
-            f"-v {workdirout}:{workdirout} "
-            f"-v {reference}:{reference} "
-            f"-v {reference}.fai:{reference}.fai "
-            f"hkubal/clairs-to:latest "
-            f"/opt/bin/run_clairs_to "
-            f"--tumor_bam_fn {bamfile} "
-            f"--ref_fn {reference} "
-            f"--threads {threads} "
-            f"--remove_intermediate_dir "
-            f"--platform ont_r10_guppy_hac_5khz "
-            f"--output_dir {workdirout} -b {bedfile}"
-            # f" >/dev/null 2>&1"
-        )
-        if showerrors:
-            logger.info(runcommand)
-        os.system(runcommand)
-        shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
-        shutil.copy2(
-            f"{workdirout}/indel.vcf.gz", f"{workdirout}/output_indel_done.vcf.gz"
-        )
+    #print("Running Clair3")
 
-        command = f"snpEff -q hg38 {workdirout}/output_done.vcf.gz > {workdirout}/snpeff_output.vcf"
-        os.system(command)
-        command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf"
-        os.system(command)
-        command = f"snpEff -q hg38 {workdirout}/output_indel_done.vcf.gz > {workdirout}/snpeff_indel_output.vcf"
-        os.system(command)
-        command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} {workdirout}/snpeff_indel_output.vcf > {workdirout}/snpsift_indel_output.vcf"
-        os.system(command)
-        parse_vcf(f"{workdirout}/snpsift_output.vcf")
-        parse_vcf(f"{workdirout}/snpsift_indel_output.vcf")
+    # Debug: Log input file paths for verification.
+    if showerrors:
+        logger.info(f"Input BAM file: {bamfile}")
+        logger.info(f"Input BED file: {bedfile}")
+        logger.info(f"Reference file: {reference}")
+        logger.info(f"Work directory: {workdir}")
+        logger.info(f"Output directory: {workdirout}")
+
+    # Verify that all required input files exist.
+    if not os.path.exists(bamfile):
+        logger.error(f"BAM file not found: {bamfile}")
+        return
+    if not os.path.exists(bedfile):
+        logger.error(f"BED file not found: {bedfile}")
+        return
+    if not os.path.exists(reference):
+        logger.error(f"Reference file not found: {reference}")
+        return
+
+    if sys.platform in ["darwin", "linux"]:
+        client = docker.from_env()
+        #print(bamfile)
+        try:
+            # Create container-specific paths from host file basenames.
+            container_bamfile = f"/data/output/{os.path.basename(bamfile)}"
+            container_bedfile = f"/data/workdir/{os.path.basename(bedfile)}"
+            container_reference = f"/data/reference/{os.path.basename(reference)}"
+            #container_workdir = "/data/workdir"
+            container_output = "/data/output"
+            # Ensure that the host-side work and output directories exist.
+            #os.makedirs(workdir, exist_ok=True)
+            #os.makedirs(workdirout, exist_ok=True)
+
+            # Define container volumes and map them with binds.
+            volumes = [
+                '/data/bam',
+                '/data/bed',
+                '/data/reference',
+                '/data/workdir',
+                '/data/output'
+            ]
+            volume_bindings = {
+                os.path.abspath(os.path.dirname(bamfile)): {
+                    'bind': '/data/bam',
+                    'mode': 'ro',
+                },
+                os.path.abspath(os.path.dirname(bedfile)): {
+                    'bind': '/data/bed',
+                    'mode': 'ro',
+                },
+                os.path.abspath(os.path.dirname(reference)): {
+                    'bind': '/data/reference',
+                    'mode': 'ro',
+                },
+                os.path.abspath(workdir): {
+                    'bind': '/data/workdir',
+                    'mode': 'rw',
+                },
+                os.path.abspath(workdirout): {
+                    'bind': '/data/output',
+                    'mode': 'rw',
+                }
+            }
+
+            # Create host configuration with the volume bindings.
+            host_config = client.api.create_host_config(binds=volume_bindings)
+
+            # Debug: Log the container-specific paths and volume mappings.
+            if showerrors:
+                logger.info("Container paths:")
+                logger.info(f"Container BAM file: {container_bamfile}")
+                logger.info(f"Container BED file: {container_bedfile}")
+                logger.info(f"Container reference: {container_reference}")
+                logger.info("Volume mappings:")
+                for host_path, container_info in volume_bindings.items():
+                    logger.info(f"{host_path} -> {container_info['bind']} ({container_info['mode']})")
+            
+            # Build the full command to be run inside the container.
+            command = (f"/opt/bin/run_clairs_to "
+                       f"--tumor_bam_fn {container_bamfile} "
+                       f"--ref_fn {container_reference} "
+                       f"--threads {threads} "
+                       f"--remove_intermediate_dir "
+                       f"--platform ont_r10_guppy_hac_5khz "
+                       f"--output_dir {container_output} "
+                       f"-b {container_bedfile}")
+            if showerrors:
+                logger.info(f"Running command: {command}")
+
+            # Create and start the container.
+            container = client.api.create_container(
+                image='hkubal/clairs-to:latest',
+                command=command,
+                volumes=volumes,
+                host_config=host_config
+            )
+            client.api.start(container=container.get('Id'))
+
+            # Stream and log container output.
+            for line in client.api.logs(container=container.get('Id'), stream=True, follow=True):
+                if showerrors:
+                    logger.info(f"Container log: {line.decode()}")
+                #else:
+                #    print(line.decode().strip())
+
+            # Wait for container process to complete.
+            result = client.api.wait(container=container.get('Id'))
+            if result['StatusCode'] != 0:
+                raise Exception(f"Container exited with status code {result['StatusCode']}")
+
+            # Cleanup the container.
+            client.api.remove_container(container=container.get('Id'))
+
+        except Exception as e:
+            logger.error("Error running Clair3")
+            logger.error(f"Error: {e}")
+            return
+
+        try:
+            # Copy the output VCF files from the work output directory.
+            shutil.copy2(os.path.join(workdirout, "snv.vcf.gz"),
+                         os.path.join(workdirout, "output_done.vcf.gz"))
+            shutil.copy2(os.path.join(workdirout, "indel.vcf.gz"),
+                         os.path.join(workdirout, "output_indel_done.vcf.gz"))
+        except Exception as e:
+            logger.error(f"Error copying output files: {e}")
+            return
+
+        # Run snpEff and SnpSift locally to annotate the VCF outputs.
+        snpeff_cmd_snv = (f"snpEff -q hg38 {os.path.join(workdirout, 'output_done.vcf.gz')} "
+                          f"> {os.path.join(workdirout, 'snpeff_output.vcf')}")
+        os.system(snpeff_cmd_snv)
+
+        snpsift_cmd_snv = (f"SnpSift annotate "
+                           f"{os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} "
+                           f"{os.path.join(workdirout, 'snpeff_output.vcf')} "
+                           f"> {os.path.join(workdirout, 'snpsift_output.vcf')}")
+        os.system(snpsift_cmd_snv)
+
+        snpeff_cmd_indel = (f"snpEff -q hg38 {os.path.join(workdirout, 'output_indel_done.vcf.gz')} "
+                            f"> {os.path.join(workdirout, 'snpeff_indel_output.vcf')}")
+        os.system(snpeff_cmd_indel)
+
+        snpsift_cmd_indel = (f"SnpSift annotate "
+                             f"{os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} "
+                             f"{os.path.join(workdirout, 'snpeff_indel_output.vcf')} "
+                             f"> {os.path.join(workdirout, 'snpsift_indel_output.vcf')}")
+        os.system(snpsift_cmd_indel)
+
+        # Parse the annotated VCF files.
+        parse_vcf(os.path.join(workdirout, "snpsift_output.vcf"))
+        parse_vcf(os.path.join(workdirout, "snpsift_indel_output.vcf"))
 
 def get_covdfs(bamfile):
     """
@@ -353,7 +476,8 @@ def get_covdfs(bamfile):
             sep="\t",
         )
     except Exception as e:
-        print(e)
+        #print(e)
+        logger.error(f"Error in get_covdfs: {e}")
         return None
     return newcovdf, bedcovdf
 
@@ -363,8 +487,7 @@ def subset_bam(bamfile, targets, output):
 def sort_bam(bamfile, output, threads):
     pysam.sort(f"-@{threads}", "-o", output, bamfile)
     pysam.index(f"{output}", f"{output}.bai")
-    print(f"Sorted bam file saved as {output}")
-
+    
 def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
     merged_df = pd.merge(
         newcovdf,
@@ -401,12 +524,35 @@ def run_bedmerge(newcovdf, cov_df_main, bedcovdf, bedcov_df_main):
 def run_bedtools(bamfile, bedfile, tempbamfile):
     """
     This function extracts the target sites from the bamfile.
+    
+    Parameters
+    ----------
+    bamfile : str
+        Path to the input BAM file
+    bedfile : str
+        Path to the BED file defining regions
+    tempbamfile : str
+        Path where the output BAM file should be written
     """
     try:
-        os.system(f"bedtools intersect -a {bamfile} -b {bedfile} > {tempbamfile}")
+        # Use subprocess.run with shell=True for commands with redirection
+        # Or open the output file and redirect stdout there
+        with open(tempbamfile, 'w') as outfile:
+            result = subprocess.run(
+                ['bedtools', 'intersect', '-a', bamfile, '-b', bedfile],
+                stdout=outfile,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False
+            )
+            
+        if result.returncode != 0:
+            logger.error(f"Error running bedtools: {result.stderr}")
+            return
+            
         pysam.index(tempbamfile)
     except Exception as e:
-        print(e)
+        logger.error(f"Error in run_bedtools: {e}")
 
 class TargetCoverage(BaseAnalysis):
     """
@@ -538,11 +684,11 @@ class TargetCoverage(BaseAnalysis):
                 os.mkdir(workdirout)
             # bamfile, bedfile, workdir, workdirout, threads
             self.clair3running = True
-            shutil.copy2(bedfile, f"{bedfile}2")
+            #shutil.copy2(bedfile, f"{bedfile}2")
             await run.cpu_bound(
                 run_clair3,
                 f"{bamfile}",
-                f"{bedfile}2",
+                f"{bedfile}",
                 self.check_and_create_folder(self.output, self.sampleID),
                 workdirout,
                 self.threads,
@@ -576,8 +722,6 @@ class TargetCoverage(BaseAnalysis):
                     with ui.row().classes('w-full mt-4 text-sm text-gray-500 justify-center'):
                         ui.label("Coverage analysis of target regions")
 
-        with ui.card().classes("w-full"):
-            ui.label("Current coverage estimates: Unknown")
         with ui.card().classes("w-full p-2"):
             ui.label("Coverage Data").classes('text-sky-600 dark:text-white').style(
                 "font-size: 150%; font-weight: 300"
@@ -733,7 +877,17 @@ class TargetCoverage(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {
                             "color": "#1D1D1F"
-                        }
+                        },
+                        ":formatter": """
+                            (params) => {
+                                let tooltip = '';
+                                tooltip += params[0].name + '<br>';
+                                params.forEach(item => {
+                                    tooltip += item.marker + ' ' + item.seriesName + ': ' + item.value.toFixed(2) + '<br>';
+                                });
+                                return tooltip;
+                            }
+                        """
                     },
                     "xAxis": {
                         "type": "category",
@@ -847,7 +1001,17 @@ class TargetCoverage(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {
                             "color": "#1D1D1F"
-                        }
+                        },
+                        ":formatter": """
+                            (params) => {
+                                let tooltip = '';
+                                tooltip += params[0].name + '<br>';
+                                params.forEach(item => {
+                                    tooltip += item.marker + ' ' + item.seriesName + ': ' + item.value.toFixed(2) + '<br>';
+                                });
+                                return tooltip;
+                            }
+                        """
                     },
                     "legend": {
                         "data": ["Off Target", "On Target"],
@@ -964,7 +1128,17 @@ class TargetCoverage(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {
                             "color": "#1D1D1F"
-                        }
+                        },
+                        ":formatter": """
+                            (params) => {
+                                let tooltip = '';
+                                tooltip += params[0].name + '<br>';
+                                params.forEach(item => {
+                                    tooltip += item.marker + ' ' + item.seriesName + ': ' + item.value.toFixed(2) + '<br>';
+                                });
+                                return tooltip;
+                            }
+                        """
                     },
                     "xAxis": {
                         "type": "time",
@@ -1122,7 +1296,17 @@ class TargetCoverage(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {
                             "color": "#1D1D1F"
-                        }
+                        },
+                        ":formatter": """
+                            (params) => {
+                                let tooltip = '';
+                                tooltip += params[0].name + '<br>';
+                                params.forEach(item => {
+                                    tooltip += item.marker + ' ' + item.seriesName + ': ' + item.value.toFixed(2) + '<br>';
+                                });
+                                return tooltip;
+                            }
+                        """
                     },
                     "dataZoom": [
                         {
@@ -1594,6 +1778,7 @@ class TargetCoverage(BaseAnalysis):
         run_list = self.target_coverage_df[
             self.target_coverage_df["coverage"].ge(self.callthreshold)
         ]
+        
         if self.sampleID not in self.targets_exceeding_threshold.keys():
             self.targets_exceeding_threshold[self.sampleID] = 0
         if self.reference:
