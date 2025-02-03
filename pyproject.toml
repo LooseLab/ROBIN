@@ -52,6 +52,8 @@ dependencies = [
   "opencv-python",
   "zxing-cpp",
   "tomli-w",
+  "pyranges",
+  "pyarrow",
 ]
 
 [project.scripts]
