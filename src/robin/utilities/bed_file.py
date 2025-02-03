@@ -529,6 +529,88 @@ class BedTree:
                 os.path.join(self.output_location, "bedranges.csv")
             )
 
+    def update_target_table(self) -> None:
+        """Update the target panel information table with current BedTree data."""
+        print("Updating target table")  # Basic debug print
+        logger.debug("Starting target table update")
+        if not hasattr(self, 'gene_bed') or self.gene_bed.empty:
+            logger.warning("No gene_bed data available")
+            return
+
+        table_rows = []
+        for _, row in self.gene_bed.iterrows():
+            target_status = "Original"
+            target_source = "Panel"
+            
+            if self.NewBed and self.NewBed.tree_dict:
+                chrom_data = self.NewBed.tree_dict.get(row.chrom, {})
+                if chrom_data:
+                    # Check for any overlap
+                    for strand_group in chrom_data.get("children", []):
+                        for target in strand_group.get("children", []):
+                            target_start, target_end = map(int, target["id"].split("-"))
+                            # Check for any overlap between intervals
+                            if (target_start <= row.end_pos and 
+                                target_end >= row.start_pos):
+                                target_status = "Active"
+                                source_name = target.get("name", "")
+                                if "CNV" in source_name:
+                                    target_source = "CNV_detected"
+                                elif source_name:
+                                    target_source = source_name
+                                break
+                        if target_status == "Active":
+                            break
+
+            table_rows.append({
+                'chrom': str(row.chrom),
+                'gene': str(row.gene),
+                'start_pos': int(row.start_pos),
+                'end_pos': int(row.end_pos),
+                'size': int(row.end_pos - row.start_pos),
+                'status': target_status,
+                'source': target_source
+            })
+
+        if self.target_table:
+            self.target_table.rows = table_rows
+            ui.update(self.target_table)
+
+    def get_unique_entries_count(self) -> dict:
+        """
+        Count the number of unique entries in the tree_dict.
+        
+        Returns:
+            dict: A dictionary containing:
+                - total_targets: Total number of unique target regions
+                - by_chromosome: Dictionary of counts per chromosome
+                - by_source: Dictionary of counts by source type (Panel, CNV_detected, etc.)
+        """
+        if not self.tree_dict:
+            return {"total_targets": 0, "by_chromosome": {}, "by_source": {}}
+            
+        total_targets = 0
+        by_chromosome = {}
+        by_source = {}
+        
+        for chrom, chrom_data in self.tree_dict.items():
+            chrom_count = 0
+            for strand_group in chrom_data.get("children", []):
+                for target in strand_group.get("children", []):
+                    chrom_count += 1
+                    # Count by source
+                    source = target.get("name", "unknown")
+                    by_source[source] = by_source.get(source, 0) + 1
+            
+            by_chromosome[chrom] = chrom_count
+            total_targets += chrom_count
+            
+        return {
+            "total_targets": total_targets,
+            "by_chromosome": by_chromosome,
+            "by_source": by_source
+        }
+
 
 @ui.page("/", response_timeout=30)
 def index_page() -> None:
