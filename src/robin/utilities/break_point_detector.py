@@ -292,8 +292,8 @@ class CNVChangeDetectorTracker:
                 for start, end in zip(data["start_positions"], data["end_positions"])
             ]
             bed_lines = [
-                f"{chrom}\t{start - self.bin_width}\t{end}\t.\t.\t+"
-                f"\n{chrom}\t{start}\t{end + self.bin_width}\t.\t.\t-"
+                f"{chrom}\t{start - self.bin_width}\t{end}\.\t.\t+"
+                f"\n{chrom}\t{start}\t{end + self.bin_width}\.\t.\t-"
                 for chrom, start, end in bedlist
             ]
             return "\n".join(bed_lines)
@@ -313,8 +313,8 @@ class CNVChangeDetectorTracker:
             data = self.ruptures_breakpoints[chromosome]
             bedlist = [(chromosome, start, end) for start, end in data]
             bed_lines = [
-                f"{chrom}\t{start - self.bin_width}\t{end}\t.\t.\t+"
-                f"\n{chrom}\t{start}\t{end + self.bin_width}\t.\t.\t-"
+                f"{chrom}\t{start - self.bin_width}\t{end}\tCNV_detected\t.\t+"
+                f"\n{chrom}\t{start}\t{end + self.bin_width}\tCNV_detected\t.\t-"
                 for chrom, start, end in bedlist
             ]
             return "\n".join(bed_lines)

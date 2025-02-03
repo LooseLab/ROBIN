@@ -60,7 +60,7 @@ class BedTree:
         if self.readfish_toml:
             with open(self.readfish_toml, "rb") as f:
                 self.toml_dict = tomli.load(f)
-                print(self.toml_dict)
+                #print(self.toml_dict)
         else:
             self.toml_dict = None
         if reference_file:
@@ -122,18 +122,34 @@ class BedTree:
                             strand_group["children"], key=lambda x: x["id"]
                         ):
                             start, end = map(int, target["id"].split("-"))
-                            f.write(
-                                f"{chromosome}\t{start}\t{end}\t.\t.\t{strand_group['id'].split()[-1]}\n"
+                            # Check if this target is from the original preserved tree
+                            is_preserved = (
+                                self.preserve_original_tree 
+                                and self.reference_tree 
+                                and any(
+                                    any(
+                                        any(t["id"] == target["id"] 
+                                            for t in sg["children"])
+                                        for sg in chrom["children"])
+                                    for chrom in self.reference_tree.values()
+                                    if chrom["id"] == chromosome
+                                )
                             )
-            self.previous_targets_hash = current_hash
-            self._update_proportions_df()
-            if self.toml_dict:
-                print(self.toml_dict["regions"])
-                for region in self.toml_dict["regions"]:
-                    print(region)
-                    region["targets"] = filename
-                with open(f"{self.readfish_toml}_live", "wb") as f:
-                    tomli_w.dump(self.toml_dict, f)
+                            # Use "fixed_target" for preserved targets, keep original name for others
+                            name = "fixed_target" if is_preserved else target.get("name", "unknown")
+                            strand = strand_group['id'].split()[-1]  # Get the strand from the group ID
+                            f.write(
+                                f"{chromosome}\t{start}\t{end}\t{name}\t.\t{strand}\n"
+                            )
+                self.previous_targets_hash = current_hash
+                self._update_proportions_df()
+                if self.toml_dict:
+                    #print(self.toml_dict["regions"])
+                    for region in self.toml_dict["regions"]:
+                        #print(region)
+                        region["targets"] = filename
+                    with open(f"{self.readfish_toml}_live", "wb") as f:
+                        tomli_w.dump(self.toml_dict, f)
             # print(f"Wrote new BED file: {filename}")
 
     def _get_chromosome_lengths(self, fai_file):
@@ -147,21 +163,33 @@ class BedTree:
         return chromosome_lengths
 
     def _merge_ranges(self, existing_ranges, new_range):
-        start, end = new_range
+        """
+        Merge ranges while preserving those with different names.
+        existing_ranges: list of tuples (start, end, name)
+        new_range: tuple (start, end, name)
+        """
+        start, end, name = new_range
         merged_ranges = []
         i = 0
 
         while i < len(existing_ranges):
-            existing_start, existing_end = existing_ranges[i]
-            if not (end < existing_start or start > existing_end):
-                start = min(existing_start, start)
-                end = max(existing_end, end)
+            existing_start, existing_end, existing_name = existing_ranges[i]
+            
+            # Only merge if names match or both are default (".")
+            if (name == existing_name or (name == "." and existing_name == ".")):
+                if not (end < existing_start or start > existing_end):
+                    start = min(existing_start, start)
+                    end = max(existing_end, end)
+                else:
+                    merged_ranges.append((existing_start, existing_end, existing_name))
             else:
-                merged_ranges.append((existing_start, existing_end))
+                # Keep ranges separate if names differ
+                merged_ranges.append((existing_start, existing_end, existing_name))
             i += 1
 
-        merged_ranges.append((start, end))
-        merged_ranges.sort()
+        merged_ranges.append((start, end, name))
+        # Sort by start position, then end position if starts are equal
+        merged_ranges.sort(key=lambda x: (x[0], x[1]))
 
         return merged_ranges
 
@@ -171,6 +199,7 @@ class BedTree:
                 chromosome = row[0]
                 start = int(row[1])
                 end = int(row[2])
+                name = row[3]
                 strand = row[5] if len(row) > 5 else "."
 
                 if chromosome not in self.tree_dict:
@@ -200,11 +229,14 @@ class BedTree:
                     }
                     self.tree_dict[chromosome]["children"].append(strand_group)
 
+                # Include name in the range information
                 existing_ranges = [
-                    (int(r["id"].split("-")[0]), int(r["id"].split("-")[1]))
+                    (int(r["id"].split("-")[0]), 
+                     int(r["id"].split("-")[1]),
+                     r["name"])
                     for r in strand_group["children"]
                 ]
-                merged_ranges = self._merge_ranges(existing_ranges, (start, end))
+                merged_ranges = self._merge_ranges(existing_ranges, (start, end, name))
 
                 strand_group["children"] = [
                     {
@@ -215,13 +247,11 @@ class BedTree:
                         "proportion": (e - s + 1)
                         / self.chromosome_lengths.get(chromosome, 0)
                         * 100,
+                        "name": n,
                     }
-                    for s, e in merged_ranges
+                    for s, e, n in merged_ranges
                 ]
-                # strand_group['count'] = len(merged_ranges)
-                # strand_group['range_sum'] = sum(e - s + 1 for s, e in merged_ranges)
-                # strand_group['proportion'] = sum(e - s + 1 for s, e in merged_ranges)/self.chromosome_lengths.get(chromosome, 0) * 100
-
+                
                 self.tree_dict[chromosome]["count"] = sum(
                     c["count"] for c in self.tree_dict[chromosome]["children"]
                 )
@@ -233,6 +263,7 @@ class BedTree:
         self.total_range_sum = sum(v["range_sum"] for v in self.tree_dict.values())
 
     def _add_if_not_exists(self, entries, new_item, description, chromosome):
+        """Add a new entry if it doesn't already exist in the entries list."""
         if not any(entry["id"] == new_item for entry in entries):
             entries.append(
                 {
@@ -264,7 +295,6 @@ class BedTree:
             child_count, child_range_sum = self._propagate_values(child)
             total_count += child_count
             total_range_sum += child_range_sum
-
         node["count"] = total_count
         node["range_sum"] = total_range_sum
 
@@ -355,18 +385,109 @@ class BedTree:
         # self._write_bed_file()
 
     def load_from_string(
-        self, bed_string, merge=False, write_files=False, output_location=None
+        self, bed_string, merge=False, write_files=False, output_location=None, source_type=None
     ):
+        """
+        Load BED data from a string while preserving entries from other sources.
+        
+        Args:
+            bed_string: The BED format string to load
+            merge: Whether to merge with existing data
+            write_files: Whether to write output files
+            output_location: Where to write output files
+            source_type: The type of source updating the BED ("CNV", "FUSION", etc.)
+        """
         if output_location:
             self.output_location = output_location
+            
         if not merge:
+            #rint(self.tree_data)
             if "children" in self.tree_data.keys():
-                self.tree_data["children"] = []
-            self.tree_dict = {}
-            if self.preserve_original_tree:
-                if self.reference_tree:
+                if source_type:
+                    # First pass: Remove all entries of the type we're updating
+                    for chromosome in self.tree_data["children"][:]:
+                        for strand_group in chromosome.get("children", [])[:]:
+                            if source_type == "FUSION":
+                                # Remove all entries that are NOT CNV_detected
+                                to_remove = []
+                                for i, target in enumerate(strand_group.get("children", [])):
+                                    if target.get("name") != "CNV_detected":
+                                        to_remove.append(i)
+                                        #print(i)
+                                        #print(target)
+                                # Remove entries in reverse order to maintain correct indices
+                                for i in reversed(to_remove):
+                                    del strand_group["children"][i]
+                                    
+                            elif source_type == "CNV":
+                                # Remove all CNV_detected entries
+                                to_remove = []
+                                for i, target in enumerate(strand_group.get("children", [])):
+                                    if target.get("name") == "CNV_detected":
+                                        to_remove.append(i)
+                                        #print(i)
+                                        #print(target)
+                                # Remove entries in reverse order to maintain correct indices
+                                for i in reversed(to_remove):
+                                    del strand_group["children"][i]
+                            
+                            # Remove empty strand groups
+                            if not strand_group.get("children", []):
+                                chromosome["children"].remove(strand_group)
+                                
+                    # Remove empty chromosomes
+                    self.tree_data["children"] = [
+                        chrom for chrom in self.tree_data["children"] 
+                        if chrom.get("children")
+                    ]
+                else:
+                    # If no source_type specified, clear everything as before
+                    self.tree_data["children"] = []
+            
+            # Handle the tree_dict preservation
+            if self.preserve_original_tree and self.reference_tree:
+                if not self.tree_dict:
+                    # If tree_dict is empty, simply copy the reference tree
                     self.tree_dict = copy.deepcopy(self.reference_tree)
-
+                else:
+                    # Merge reference tree entries with existing tree_dict
+                    reference_copy = copy.deepcopy(self.reference_tree)
+                    for chrom_key, chrom_value in reference_copy.items():
+                        if chrom_key not in self.tree_dict:
+                            # If chromosome doesn't exist, add it completely
+                            self.tree_dict[chrom_key] = chrom_value
+                        else:
+                            # Chromosome exists, need to merge strand groups
+                            existing_chrom = self.tree_dict[chrom_key]
+                            if 'children' in chrom_value:
+                                if 'children' not in existing_chrom:
+                                    existing_chrom['children'] = []
+                                
+                                # For each strand group in reference
+                                for ref_strand_group in chrom_value['children']:
+                                    strand_group_id = ref_strand_group['id']
+                                    # Find matching strand group in existing chromosome
+                                    existing_strand_group = next(
+                                        (group for group in existing_chrom['children'] 
+                                         if group['id'] == strand_group_id),
+                                        None
+                                    )                                    
+                                    if existing_strand_group is None:
+                                        # If strand group doesn't exist, add it
+                                        existing_chrom['children'].append(ref_strand_group)
+                                    else:
+                                        # Merge children of strand groups
+                                        if 'children' in ref_strand_group:
+                                            if 'children' not in existing_strand_group:
+                                                existing_strand_group['children'] = []
+                                            # Add any missing targets
+                                            existing_ids = {child['id'] for child in existing_strand_group['children']}
+                                            for ref_target in ref_strand_group['children']:
+                                                if ref_target['id'] not in existing_ids:
+                                                    existing_strand_group['children'].append(ref_target)
+            elif not self.preserve_original_tree:
+                self.tree_dict = {}
+                
         bed_file = StringIO(bed_string)
         reader = csv.reader(bed_file, delimiter="\t")
         self._process_bed_data(reader)
@@ -408,16 +529,87 @@ class BedTree:
                 os.path.join(self.output_location, "bedranges.csv")
             )
 
-        # print(self.proportions_df)
+    def update_target_table(self) -> None:
+        """Update the target panel information table with current BedTree data."""
+        print("Updating target table")  # Basic debug print
+        logger.debug("Starting target table update")
+        if not hasattr(self, 'gene_bed') or self.gene_bed.empty:
+            logger.warning("No gene_bed data available")
+            return
 
-    # def _log_proportions(self):
-    #    """Logs the top-level proportion and the proportion for each chromosome along with the time."""
-    #    # Log the top-level proportion (for the whole genome)
-    #    print(f"Total genome proportion covered: {self.tree_data['proportion']:.6f}")#
+        table_rows = []
+        for _, row in self.gene_bed.iterrows():
+            target_status = "Original"
+            target_source = "Panel"
+            
+            if self.NewBed and self.NewBed.tree_dict:
+                chrom_data = self.NewBed.tree_dict.get(row.chrom, {})
+                if chrom_data:
+                    # Check for any overlap
+                    for strand_group in chrom_data.get("children", []):
+                        for target in strand_group.get("children", []):
+                            target_start, target_end = map(int, target["id"].split("-"))
+                            # Check for any overlap between intervals
+                            if (target_start <= row.end_pos and 
+                                target_end >= row.start_pos):
+                                target_status = "Active"
+                                source_name = target.get("name", "")
+                                if "CNV" in source_name:
+                                    target_source = "CNV_detected"
+                                elif source_name:
+                                    target_source = source_name
+                                break
+                        if target_status == "Active":
+                            break
 
-    # Log proportions for each chromosome
-    #    for chromosome in self.tree_data['children']:
-    #        print(f"Chromosome {chromosome['id']} proportion covered: {chromosome['proportion']:.6f}")
+            table_rows.append({
+                'chrom': str(row.chrom),
+                'gene': str(row.gene),
+                'start_pos': int(row.start_pos),
+                'end_pos': int(row.end_pos),
+                'size': int(row.end_pos - row.start_pos),
+                'status': target_status,
+                'source': target_source
+            })
+
+        if self.target_table:
+            self.target_table.rows = table_rows
+            ui.update(self.target_table)
+
+    def get_unique_entries_count(self) -> dict:
+        """
+        Count the number of unique entries in the tree_dict.
+        
+        Returns:
+            dict: A dictionary containing:
+                - total_targets: Total number of unique target regions
+                - by_chromosome: Dictionary of counts per chromosome
+                - by_source: Dictionary of counts by source type (Panel, CNV_detected, etc.)
+        """
+        if not self.tree_dict:
+            return {"total_targets": 0, "by_chromosome": {}, "by_source": {}}
+            
+        total_targets = 0
+        by_chromosome = {}
+        by_source = {}
+        
+        for chrom, chrom_data in self.tree_dict.items():
+            chrom_count = 0
+            for strand_group in chrom_data.get("children", []):
+                for target in strand_group.get("children", []):
+                    chrom_count += 1
+                    # Count by source
+                    source = target.get("name", "unknown")
+                    by_source[source] = by_source.get(source, 0) + 1
+            
+            by_chromosome[chrom] = chrom_count
+            total_targets += chrom_count
+            
+        return {
+            "total_targets": total_targets,
+            "by_chromosome": by_chromosome,
+            "by_source": by_source
+        }
 
 
 @ui.page("/", response_timeout=30)

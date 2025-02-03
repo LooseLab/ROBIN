@@ -14,6 +14,7 @@ from robin import theme
 from robin import images
 from configparser import ConfigParser
 
+
 from robin.brain_class import BrainMeth
 from robin.minknow_info.minknow_panel import MinKNOWFish
 
@@ -327,6 +328,14 @@ class Methnice:
         self.basecall_config = basecall_config
         self.bed_file = bed_file
         self.readfish_toml = readfish_toml
+        if self.readfish_toml:
+            self.title = "<strong><font color='#FFFFFF'>R</font></strong>apid nanop<strong><font color='#FFFFFF'>O</font></strong>re <strong><font color='#FFFFFF'>B</font></strong>rain intraoperat<strong><font color='#FFFFFF'>I</font></strong>ve classificatio<strong><font color='#FFFFFF'>N</font></strong>"
+            self.smalltitle = "<strong>B.A.T.M.A.N & <font color='#FFFFFF'>R.O.B.I.N</font></strong>"
+            self.batphone = True
+        else:
+            self.title = "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>"
+            self.smalltitle = "<strong><font color='#000000'>R.O.B.I.N</font></strong>"
+            self.batphone = False
         self.minknow_connection = None
         if sample_id:
             self.sample_id = sample_id
@@ -423,8 +432,9 @@ class Methnice:
             handled by the caller.
         """
         with theme.frame(
-            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
-            smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
+            self.title,
+            smalltitle=self.smalltitle,
+            batphone=self.batphone,
         ):
             self.analysis_tab_pane = ui.row().classes("w-full")
             self.robin_browse = BrainMeth(
@@ -455,8 +465,9 @@ class Methnice:
         Async method for rendering the splash screen.
         """
         with theme.frame(
-            "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
-            smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
+            self.title,
+            smalltitle=self.smalltitle,
+            batphone=self.batphone,
         ):
             self.frontpage = ui.card().classes("w-full")
             with self.frontpage:
@@ -513,8 +524,9 @@ class Methnice:
         """
         try:
             with theme.frame(
-                "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",
-                smalltitle="<strong><font color='#000000'>R.O.B.I.N</font></strong>",
+                self.title,
+                smalltitle=self.smalltitle,
+                batphone=self.batphone,
             ):
                 await ui.context.client.connected()
                 with ui.column().classes("w-full"):
