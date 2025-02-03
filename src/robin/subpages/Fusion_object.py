@@ -1012,11 +1012,34 @@ class FusionObject(BaseAnalysis):
                     with ui.card().style("width: 100%"):
                         ui.label("Fusion Candidates (within targets)").style("font-size: 125%; font-weight: 300").tailwind("drop-shadow", "font-bold")
                         ui.separator()
-                        ui.label(
-                            "Fusion Candidates are identified by looking for reads that map to two different genes from within the target panel. "
-                            "Plots illustrate the alignments of reads to each region of the genome and individual reads are identified by colour. "
-                            "These plots should be interpreted with care and are only indicative of the presence of a fusion."
-                        ).style("font-size: 125%; font-weight: 300")
+                        with ui.expansion('Methods', caption='A description of the methods used to identify gene fusions within the target panel').classes('w-full'):
+                            ui.restructured_text('''
+                                Gene fusion analysis within the target panel is performed through a multi-step process:
+
+                                1. **Read Extraction**
+                                Reads with supplementary alignments are identified and extracted from the BAM file.
+
+                                2. **Target Gene Mapping**
+                                Extracted reads are intersected with the target panel gene coordinates using bedtools.
+
+                                3. **Fusion Candidate Identification**
+                                Reads mapping to multiple genes within the panel are identified as fusion candidates.
+
+                                The analysis requires:
+
+                                * Minimum mapping quality > 40
+                                * Minimum alignment length > 100bp
+                                * Multiple high-quality alignments to different genes
+
+                                For each fusion candidate, the following is provided:
+
+                                * Gene pairs involved
+                                * Precise genomic coordinates
+                                * Read alignment details
+                                * Mapping quality scores
+
+                                Results are visualized in plots showing read alignments to each gene region, with individual reads color-coded for tracking.
+                            ''').style("font-size: 100%; font-weight: 300")
                         self.fusionplot = ui.row()
                         with self.fusionplot.classes("w-full"):
                             with ui.column().classes("gap-2"):
@@ -1032,11 +1055,36 @@ class FusionObject(BaseAnalysis):
                     with ui.card().style("width: 100%"):
                         ui.label("Fusion Candidates (genome wide)").style("font-size: 125%; font-weight: 300").tailwind("drop-shadow", "font-bold")
                         ui.separator()
-                        ui.label(
-                            "Fusion Candidates are identified by looking for reads that map to at least one gene from within the target panel. "
-                            "Plots illustrate the alignments of reads to each region of the genome and individual reads are identified by colour. "
-                            "These plots should be interpreted with care and are only indicative of the presence of a fusion."
-                        ).style("font-size: 125%; font-weight: 300")
+                        with ui.expansion('Methods', caption='A description of the methods used to identify genome-wide fusions').classes('w-full'):
+                            ui.restructured_text('''
+                                Genome-wide fusion analysis extends the search beyond the target panel through the following steps:
+
+                                1. **Initial Screening**
+                                Reads with supplementary alignments are identified from the target panel regions.
+
+                                2. **Extended Mapping**
+                                Selected reads are then mapped against all annotated genes in the genome.
+
+                                3. **Partner Gene Identification**
+                                Additional gene partners are identified from genome-wide alignments.
+
+                                The analysis maintains strict criteria:
+
+                                * Minimum mapping quality > 40
+                                * Minimum alignment length > 100bp
+                                * At least one gene from the target panel
+                                * Multiple high-quality alignments
+
+                                Each fusion event includes:
+
+                                * Target panel gene
+                                * Partner gene(s) from anywhere in the genome
+                                * Precise genomic coordinates
+                                * Read alignment details
+                                * Mapping quality scores
+
+                                Results are displayed with gene-specific read alignment plots and comprehensive mapping details.
+                            ''').style("font-size: 100%; font-weight: 300")
                         self.fusionplot_all = ui.row()
                         with self.fusionplot_all.classes("w-full"):
                             with ui.column().classes("gap-2"):
@@ -1052,11 +1100,35 @@ class FusionObject(BaseAnalysis):
                     with ui.card().style("width: 100%"):
                         ui.label("Structural Variants").style("font-size: 125%; font-weight: 300").tailwind("drop-shadow", "font-bold")
                         ui.separator()
-                        ui.label(
-                            "Structural variants are identified by analyzing reads with supplementary alignments. "
-                            "The analysis identifies deletions, insertions, inversions, and translocations. "
-                            "Events are visualized and detailed in the table below."
-                        ).style("font-size: 125%; font-weight: 300")
+                        with ui.expansion('Methods', caption='A description of the methods used to identify structural variants').classes('w-full'):
+                            ui.restructured_text('''
+                                The analysis identifies structural variants through a multi-step process:
+
+                                1. **Breakpoint Detection**
+                                Reads with supplementary alignments are extracted and analyzed to identify potential breakpoints.
+
+                                2. **Event Clustering**
+                                Breakpoints are clustered within 50kb to identify event boundaries.
+
+                                3. **Partner Detection**
+                                Read pairs mapping to different chromosomes are used to identify translocation partners.
+
+                                The analysis identifies various structural variants including:
+
+                                * Deletions
+                                * Insertions  
+                                * Inversions
+                                * Translocations
+
+                                For each event, the following information is provided:
+
+                                * Precise genomic coordinates
+                                * Event type and size
+                                * For translocations: both primary and partner chromosomal locations
+
+                                The events are summarized in plots below and detailed in the table.
+                            ''').style("font-size: 100%; font-weight: 300")
+                        
                         
                         self.sv_plot = ui.row().classes("w-full")
                         self.sv_table_container = ui.row().classes("w-full")
@@ -1590,12 +1662,6 @@ class FusionObject(BaseAnalysis):
         tempallmappings = tempfile.NamedTemporaryFile(
             dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
         )
-        #temp_sv_readfile = tempfile.NamedTemporaryFile(
-        #    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
-        #)
-        #temp_sv_bamfile = tempfile.NamedTemporaryFile(
-        #    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
-        #)
 
         try:
             # Process fusion candidates
@@ -1632,17 +1698,106 @@ class FusionObject(BaseAnalysis):
             )
             
             if len(bed_lines) > 0:
+                # Convert bed lines to DataFrame for visualization
+                sv_data = []
+                
+                # First, create a mapping of read pairs from sv_reads
+                read_pairs = {}
+                if not sv_reads.empty:
+                    for _, row in sv_reads.iterrows():
+                        qname = row['QNAME']
+                        if qname not in read_pairs:
+                            read_pairs[qname] = []
+                        read_pairs[qname].append({
+                            'chrom': row['RNAME'],
+                            'start': row['REF_START'],
+                            'end': row['REF_END'],
+                            'type': row['TYPE'],
+                            'strand': row['STRAND']
+                        })
+                
+                for line in bed_lines:
+                    chrom, start, end, sv_type, _, strand = line.split('\t')
+                    # Format coordinates with commas for readability
+                    formatted_start = f"{int(start):,}"
+                    formatted_end = f"{int(end):,}"
+                    # Calculate size of the variant
+                    size = int(end) - int(start)
+                    formatted_size = f"{size:,}"
+                    
+                    # Find matching reads in sv_reads for this region
+                    matching_reads = sv_reads[
+                        (sv_reads['RNAME'] == chrom) & 
+                        (sv_reads['REF_START'].astype(int) >= int(start) - 1000) &
+                        (sv_reads['REF_END'].astype(int) <= int(end) + 1000)
+                    ]
+                    
+                    # Get partner chromosomes and positions
+                    partner_info = ""
+                    if not matching_reads.empty:
+                        for _, read in matching_reads.iterrows():
+                            qname = read['QNAME']
+                            if qname in read_pairs:
+                                pairs = read_pairs[qname]
+                                if len(pairs) > 1:
+                                    # Find the partner alignment
+                                    for pair in pairs:
+                                        if pair['chrom'] != chrom:
+                                            partner_chrom = pair['chrom']
+                                            partner_pos = f"{int(pair['start']):,}"
+                                            partner_info = f"{partner_chrom}:{partner_pos}"
+                                            break
+                    
+                    event_location = f"{chrom}:{formatted_start}-{formatted_end}"
+                    if partner_info:
+                        event_location += f" ⟷ {partner_info}"
+                    
+                    sv_data.append({
+                        'Event Type': sv_type,
+                        'Primary Location': f"{chrom}:{formatted_start}-{formatted_end}",
+                        'Partner Location': partner_info if partner_info else "N/A",
+                        'Size (bp)': formatted_size,
+                        'Strand': strand,
+                        'Full Location': event_location
+                    })
+                
+                sv_df = pd.DataFrame(sv_data)
+                
+                # Sort by event type and location
+                sv_df = sv_df.sort_values(['Event Type', 'Primary Location'])
+                
+                # Save structural variants to CSV
+                sv_df.to_csv(
+                    os.path.join(
+                        self.check_and_create_folder(self.output, self.sampleID),
+                        "structural_variants.csv"
+                    ),
+                    index=False
+                )
+                
+                # Update structural variant count and visualization
+                self.sv_count = len(sv_df)
+                
+                # Only update UI elements if they exist
+                if hasattr(self, 'sv_plot') and self.sv_plot is not None:
+                    self.sv_plot.clear()
+                    with self.sv_plot:
+                        self.create_sv_plot(sv_df, self.sampleID)
+                
+                if hasattr(self, 'sv_table_container') and self.sv_table_container is not None:
+                    self.update_sv_table(sv_df)
+                
+                # Add to BedTree if needed
                 self.NewBed.load_from_string(
-                        "\n".join(bed_lines),
-                        merge=False,
-                        write_files=True,
-                        output_location=os.path.join(
-                            self.check_and_create_folder(self.output, self.sampleID)
-                        ),
-                        source_type="FUSION",
-                    )
+                    "\n".join(bed_lines),
+                    merge=False,
+                    write_files=True,
+                    output_location=os.path.join(
+                        self.check_and_create_folder(self.output, self.sampleID)
+                    ),
+                    source_type="FUSION",
+                )
             logger.info(f"We found {len(bed_lines)} possible events.")
-            
 
             # Update fusion candidates
             if fusion_candidates is not None:
@@ -1718,16 +1873,133 @@ class FusionObject(BaseAnalysis):
         # Load structural variants
         if self.check_file_time(os.path.join(output, "structural_variants.csv")):
             try:
-                sv_df = pd.read_csv(os.path.join(output, "structural_variants.csv"))
+                # Read CSV with string dtype for location columns
+                sv_df = pd.read_csv(
+                    os.path.join(output, "structural_variants.csv"),
+                    dtype={
+                        'Primary Location': str,
+                        'Partner Location': str,
+                        'Full Location': str
+                    }
+                )
+                # Replace NaN values with 'N/A' in string columns
+                str_columns = ['Primary Location', 'Partner Location', 'Full Location']
+                for col in str_columns:
+                    sv_df[col] = sv_df[col].fillna('N/A')
+                
                 if not sv_df.empty:
                     self.sv_count = len(sv_df)
-                    self.sv_plot.clear()
-                    with self.sv_plot:
-                        self.create_sv_plot(sv_df, self.sampleID)
-                    self.update_sv_table(sv_df)
+                    # Only update UI elements if they exist
+                    if hasattr(self, 'sv_plot') and self.sv_plot is not None:
+                        self.sv_plot.clear()
+                        with self.sv_plot:
+                            self.create_sv_plot(sv_df, self.sampleID)
+                    if hasattr(self, 'sv_table_container') and self.sv_table_container is not None:
+                        self.update_sv_table(sv_df)
             except pd.errors.EmptyDataError:
                 pass
 
+    def update_sv_table(self, sv_df: pd.DataFrame) -> None:
+        """
+        Updates the structural variant table in the UI.
+
+        Args:
+            sv_df (pd.DataFrame): DataFrame containing structural variant data.
+        """
+        if not hasattr(self, 'sv_table_container') or self.sv_table_container is None:
+            return
+            
+        self.sv_table_container.clear()
+        with self.sv_table_container:
+            self.sv_table = (
+                ui.table.from_pandas(
+                    sv_df,
+                    pagination=25,
+                )
+                .props("dense")
+                .classes("w-full")
+                .style("height: 900px")
+                .style("font-size: 100%; font-weight: 300")
+            )
+            for col in self.sv_table.columns:
+                col["sortable"] = True
+
+            with self.sv_table.add_slot("top-right"):
+                with ui.input(placeholder="Search").props("type=search").bind_value(self.sv_table, "filter").add_slot("append"):
+                    ui.icon("search")
+
+    def create_sv_plot(self, sv_df: pd.DataFrame, sample_id: str) -> None:
+        """
+        Creates a plot visualizing structural variants.
+
+        Args:
+            sv_df (pd.DataFrame): DataFrame containing structural variant data.
+            sample_id (str): Sample identifier.
+        """
+        with ui.card().classes("w-full no-shadow border-[2px]"):
+            pass
+            """
+            with ui.pyplot(figsize=(19, 12)).classes("w-full"):
+                plt.rcParams["figure.constrained_layout.use"] = True
+                plt.rcParams["figure.constrained_layout.h_pad"] = 0.05
+                plt.rcParams["figure.constrained_layout.w_pad"] = 0.05
+
+                # Create a figure with three subplots
+                fig, (ax1, ax2, ax3) = plt.subplots(3, 1, height_ratios=[2, 1, 1])
+
+                # Plot 1: SV Type Distribution
+                sv_counts = sv_df['Event Type'].value_counts()
+                colors = plt.cm.Set3(np.linspace(0, 1, len(sv_counts)))
+                sv_counts.plot(kind='bar', ax=ax1, color=colors)
+                ax1.set_title('Structural Variant Type Distribution')
+                ax1.set_xlabel('Event Type')
+                ax1.set_ylabel('Count')
+                plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+                # Plot 2: Primary Chromosome Distribution
+                primary_chroms = []
+                for loc in sv_df['Primary Location']:
+                    if pd.notna(loc) and loc != 'N/A':
+                        try:
+                            chrom = loc.split(':')[0]
+                            primary_chroms.append(chrom)
+                        except (AttributeError, IndexError):
+                            continue
+
+                if primary_chroms:
+                    chrom_counts = pd.Series(primary_chroms).value_counts()
+                    # Sort chromosomes naturally
+                    chrom_counts = chrom_counts.reindex(sorted(chrom_counts.index, key=lambda x: int(x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25')) if x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25').isdigit() else float('inf')))
+                    chrom_counts.plot(kind='bar', ax=ax2, color='skyblue')
+                    ax2.set_title('Primary Chromosome Distribution')
+                    ax2.set_xlabel('Chromosome')
+                    ax2.set_ylabel('Count')
+                    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+                else:
+                    ax2.set_visible(False)
+
+                # Plot 3: Partner Chromosome Distribution (for translocations)
+                partner_chroms = []
+                for loc in sv_df['Partner Location']:
+                    if pd.notna(loc) and loc != 'N/A':
+                        try:
+                            chrom = loc.split(':')[0]
+                            partner_chroms.append(chrom)
+                        except (AttributeError, IndexError):
+                            continue
+
+                if partner_chroms:
+                    partner_counts = pd.Series(partner_chroms).value_counts()
+                    # Sort chromosomes naturally
+                    partner_counts = partner_counts.reindex(sorted(partner_counts.index, key=lambda x: int(x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25')) if x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25').isdigit() else float('inf')))
+                    partner_counts.plot(kind='bar', ax=ax3, color='lightgreen')
+                    ax3.set_title('Partner Chromosome Distribution (Translocations)')
+                    ax3.set_xlabel('Chromosome')
+                    ax3.set_ylabel('Count')
+                    plt.setp(ax3.xaxis.get_majorticklabels(), rotation=45, ha='right')
+                else:
+                    ax3.set_visible(False)
+            """
 
 def test_me(
     port: int,
