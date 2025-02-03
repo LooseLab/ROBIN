@@ -1174,7 +1174,7 @@ class CNVAnalysis(BaseAnalysis):
             )
 
         with ui.card().classes("w-full"):
-            with ui.column().classes("gap-2"):
+            with ui.column().classes("w-full"):
                 ui.label("New Target Information").classes("text-lg font-medium")
                 
                 with ui.card().classes("w-full"):
@@ -1332,7 +1332,7 @@ class CNVAnalysis(BaseAnalysis):
         
         if not latest_bed or not os.path.exists(latest_bed):
             return
-            
+        print("running here")    
         try:
             # Read the BED file
             bed_data = pd.read_csv(latest_bed, sep='\t', header=None,
@@ -2922,15 +2922,11 @@ class CNVAnalysis(BaseAnalysis):
 
     def update_target_table(self) -> None:
         """Update the target panel information table with current bed file data."""
-        #print("Updating target table")
-        # Get the latest bed file
         latest_bed = self.get_latest_bed_file()
-        #print(f"Latest bed file: {latest_bed}")
         
         try:
             if not latest_bed:
                 if self.target_table:
-                    #print("No bed file found, showing message")
                     message_df = pd.DataFrame([{
                         'chrom': '',
                         'gene': 'No target data available',
@@ -2948,38 +2944,48 @@ class CNVAnalysis(BaseAnalysis):
             bed_data = pd.read_csv(latest_bed, sep='\t', header=None,
                                  names=['chrom', 'start', 'end', 'name', 'score', 'strand'])
             
-            # Convert bed data directly to the format we need
-            target_data = pd.DataFrame({
-                'chrom': bed_data['chrom'],
-                'gene': bed_data['name'].apply(lambda x: str(x) if x != '.' else 'Unknown'),
-                'start_pos': bed_data['start'].astype(int),
-                'end_pos': bed_data['end'].astype(int),
-                'size': (bed_data['end'] - bed_data['start']).astype(int),
-                'status': 'Active',
-                'source': bed_data['name'].apply(lambda x: 'CNV_detected' if x == 'CNV_detected' else 'Panel')
-            })
+            # Prepare rows data
+            table_rows = []
+            for _, bed_row in bed_data.iterrows():
+                # Find overlapping genes from gene_bed
+                overlapping_genes = self.gene_bed[
+                    (self.gene_bed['chrom'] == bed_row['chrom']) &
+                    (
+                        ((self.gene_bed['start_pos'] >= bed_row['start']) & (self.gene_bed['start_pos'] <= bed_row['end'])) |
+                        ((self.gene_bed['end_pos'] >= bed_row['start']) & (self.gene_bed['end_pos'] <= bed_row['end'])) |
+                        ((self.gene_bed['start_pos'] <= bed_row['start']) & (self.gene_bed['end_pos'] >= bed_row['end']))
+                    )
+                ]
+                
+                # Get list of overlapping gene names
+                gene_names = overlapping_genes['gene'].tolist() if not overlapping_genes.empty else ['Unknown']
+                gene_label = ', '.join(gene_names)
+                
+                table_rows.append({
+                    'chrom': str(bed_row['chrom']),
+                    'gene': gene_label,
+                    'start_pos': int(bed_row['start']),
+                    'end_pos': int(bed_row['end']),
+                    'size': int(bed_row['end'] - bed_row['start']),
+                    'status': 'Active',
+                    'source': str(bed_row['name'])
+                })
             
-            # Sort by chromosome and start position
-            target_data = target_data.sort_values(['chrom', 'start_pos'])
-            
-            #print(f"Prepared {len(target_data)} target entries")
+            # Convert to DataFrame for sorting
+            target_data = pd.DataFrame(table_rows)
+            if not target_data.empty:
+                # Sort by chromosome and start position
+                target_data = target_data.sort_values(['chrom', 'start_pos'])
             
             try:
                 if self.target_table:
-                    #print("Updating table with new data")
                     self.target_table.rows = target_data.to_dict("records")
                     ui.update(self.target_table)
-                    #print("Table update complete")
-                #else:
-                    #print("No target table found to update")
-                    pass
             except Exception as e:
-                #print(f"Error during table update: {e}")
                 logger.error(f"Table update error: {e}")
                 
         except Exception as e:
             logger.error(f"Error processing bed file {latest_bed}: {e}")
-            #print(f"Error updating table: {e}")
             if self.target_table:
                 message_df = pd.DataFrame([{
                     'chrom': '',
