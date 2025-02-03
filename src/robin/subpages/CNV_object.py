@@ -455,7 +455,7 @@ class CNVAnalysis(BaseAnalysis):
         self.NewBed = NewBed
         super().__init__(*args, **kwargs)
         # Only initialize BedTree if reference file is provided
-        
+
         self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
         # Add target_table as instance variable
         self.target_table = None
@@ -834,7 +834,7 @@ class CNVAnalysis(BaseAnalysis):
                     source_type="CNV",
                 )
                 # Update the target table after loading new BedTree data
-                #self.update_target_table()
+                # self.update_target_table()
 
             np.save(
                 os.path.join(
@@ -978,8 +978,12 @@ class CNVAnalysis(BaseAnalysis):
             ).style("font-size: 150%; font-weight: 300").tailwind(
                 "drop-shadow", "font-bold"
             )
-            with ui.expansion('Methods', caption='A description of the methods used to identify genome-wide CNV events').classes('w-full'):
-                ui.restructured_text('''
+            with ui.expansion(
+                "Methods",
+                caption="A description of the methods used to identify genome-wide CNV events",
+            ).classes("w-full"):
+                ui.restructured_text(
+                    """
                     Copy Number Variation (CNV) analysis is performed through the following steps:
 
                     1. **Bin-based Coverage Analysis**
@@ -1015,7 +1019,8 @@ class CNVAnalysis(BaseAnalysis):
                     * Gene-level zoom capability
                     * Time series tracking of changes
                     * Comprehensive tabular summaries
-                ''').style("font-size: 100%; font-weight: 300")
+                """
+                ).style("font-size: 100%; font-weight: 300")
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
@@ -1176,73 +1181,75 @@ class CNVAnalysis(BaseAnalysis):
         with ui.card().classes("w-full"):
             with ui.column().classes("w-full"):
                 ui.label("New Target Information").classes("text-lg font-medium")
-                
+
                 with ui.card().classes("w-full"):
-                    ui.label(f"Panel: {self.target_panel or 'Not specified'}").classes("text-gray-600")
-                    #if self.gene_bed_file:
+                    ui.label(f"Panel: {self.target_panel or 'Not specified'}").classes(
+                        "text-gray-600"
+                    )
+                    # if self.gene_bed_file:
                     #    ui.label(f"Total Targets: {len(self.gene_bed)}").classes("text-gray-600")
 
                     # Create the table at class level if it doesn't exist
                     if self.target_table is None:
-                        #print("Creating new target table")
+                        # print("Creating new target table")
                         self.target_table = (
                             ui.table(
                                 columns=[
                                     {
-                                        'name': 'chrom',
-                                        'label': 'Chromosome',
-                                        'field': 'chrom',
-                                        'sortable': True,
-                                        'align': 'left'
+                                        "name": "chrom",
+                                        "label": "Chromosome",
+                                        "field": "chrom",
+                                        "sortable": True,
+                                        "align": "left",
                                     },
                                     {
-                                        'name': 'gene',
-                                        'label': 'Gene',
-                                        'field': 'gene',
-                                        'sortable': True,
-                                        'align': 'left'
+                                        "name": "gene",
+                                        "label": "Gene",
+                                        "field": "gene",
+                                        "sortable": True,
+                                        "align": "left",
                                     },
                                     {
-                                        'name': 'start',
-                                        'label': 'Start',
-                                        'field': 'start_pos',
-                                        'sortable': True,
-                                        'align': 'right',
-                                        ':format': 'val => Number(val).toLocaleString()'
+                                        "name": "start",
+                                        "label": "Start",
+                                        "field": "start_pos",
+                                        "sortable": True,
+                                        "align": "right",
+                                        ":format": "val => Number(val).toLocaleString()",
                                     },
                                     {
-                                        'name': 'end',
-                                        'label': 'End',
-                                        'field': 'end_pos',
-                                        'sortable': True,
-                                        'align': 'right',
-                                        ':format': 'val => Number(val).toLocaleString()'
+                                        "name": "end",
+                                        "label": "End",
+                                        "field": "end_pos",
+                                        "sortable": True,
+                                        "align": "right",
+                                        ":format": "val => Number(val).toLocaleString()",
                                     },
                                     {
-                                        'name': 'size',
-                                        'label': 'Size (bp)',
-                                        'field': 'size',
-                                        'sortable': True,
-                                        'align': 'right',
-                                        ':format': 'val => Number(val).toLocaleString()'
+                                        "name": "size",
+                                        "label": "Size (bp)",
+                                        "field": "size",
+                                        "sortable": True,
+                                        "align": "right",
+                                        ":format": "val => Number(val).toLocaleString()",
                                     },
                                     {
-                                        'name': 'status',
-                                        'label': 'Status',
-                                        'field': 'status',
-                                        'sortable': True,
-                                        'align': 'center'
+                                        "name": "status",
+                                        "label": "Status",
+                                        "field": "status",
+                                        "sortable": True,
+                                        "align": "center",
                                     },
                                     {
-                                        'name': 'source',
-                                        'label': 'Source',
-                                        'field': 'source',
-                                        'sortable': True,
-                                        'align': 'left'
-                                    }
+                                        "name": "source",
+                                        "label": "Source",
+                                        "field": "source",
+                                        "sortable": True,
+                                        "align": "left",
+                                    },
                                 ],
                                 rows=[],
-                                row_key='gene',
+                                row_key="gene",
                                 pagination=25,
                             )
                             .classes("w-full")
@@ -1276,48 +1283,52 @@ class CNVAnalysis(BaseAnalysis):
                                                 :label="props.row.source"/>
                                 </q-td>
                             </q-tr>
-                            """
+                            """,
                         )
 
                         # Add search input after table is created
                         with ui.row().classes("w-full my-2"):
-                            ui.input("Search targets...").bind_value_to(self.target_table, "filter")
-                        
-                        #print("Target table created successfully")
+                            ui.input("Search targets...").bind_value_to(
+                                self.target_table, "filter"
+                            )
+
+                        # print("Target table created successfully")
 
         with ui.card().classes("w-full"):
             ui.label("Proportion Over Time Information")
             self.create_proportion_time_chart2("Proportions over time - Genome Wide.")
             self.create_proportion_time_chart("Proportions over time.")
 
-        
-                    
         if self.browse:
             ui.timer(0.1, lambda: self.show_previous_data(), once=True)
         else:
             ui.timer(15, lambda: self.show_previous_data())
 
-
-
     def get_latest_bed_file(self) -> Optional[str]:
         """Get the path to the latest bed file in the output directory."""
-        if not hasattr(self, 'output') or not hasattr(self, 'sampleID'):
-            #print("No output or sampleID found")
+        if not hasattr(self, "output") or not hasattr(self, "sampleID"):
+            # print("No output or sampleID found")
             return None
-            
+
         bed_dir = os.path.join(self.output, "bed_files")
         if not os.path.exists(bed_dir):
-            #print(f"Bed directory does not exist: {bed_dir}")
+            # print(f"Bed directory does not exist: {bed_dir}")
             return None
-            
-        bed_files = [f for f in os.listdir(bed_dir) if f.startswith("new_file_") and f.endswith(".bed")]
+
+        bed_files = [
+            f
+            for f in os.listdir(bed_dir)
+            if f.startswith("new_file_") and f.endswith(".bed")
+        ]
         if not bed_files:
-            #print("No bed files found")
+            # print("No bed files found")
             return None
-            
+
         # Sort by the numeric part of the filename to get the latest
-        latest_file = sorted(bed_files, key=lambda x: int(x.split("_")[2].split(".")[0]))[-1]
-        #print(f"Latest bed file: {latest_file}")
+        latest_file = sorted(
+            bed_files, key=lambda x: int(x.split("_")[2].split(".")[0])
+        )[-1]
+        # print(f"Latest bed file: {latest_file}")
         return os.path.join(bed_dir, latest_file)
 
     def check_and_update_from_bed_file(self) -> None:
@@ -1326,68 +1337,85 @@ class CNVAnalysis(BaseAnalysis):
         # Only check every 5 seconds to avoid excessive file system access
         if current_time - self.last_bed_check < 5:
             return
-            
+
         self.last_bed_check = current_time
         latest_bed = self.get_latest_bed_file()
-        
+
         if not latest_bed or not os.path.exists(latest_bed):
             return
-        print("running here")    
+        print("running here")
         try:
             # Read the BED file
-            bed_data = pd.read_csv(latest_bed, sep='\t', header=None,
-                                 names=['chrom', 'start', 'end', 'name', 'score', 'strand'])
-            
+            bed_data = pd.read_csv(
+                latest_bed,
+                sep="\t",
+                header=None,
+                names=["chrom", "start", "end", "name", "score", "strand"],
+            )
+
             # Prepare the rows data
             table_rows = []
             for _, row in self.gene_bed.iterrows():
                 target_status = "Original"
                 target_source = "Panel"
-                
+
                 # Check for overlaps with this gene
                 overlaps = bed_data[
-                    (bed_data['chrom'] == row.chrom) &
-                    (
-                        ((bed_data['start'] >= row.start_pos) & (bed_data['start'] <= row.end_pos)) |
-                        ((bed_data['end'] >= row.start_pos) & (bed_data['end'] <= row.end_pos)) |
-                        ((bed_data['start'] <= row.start_pos) & (bed_data['end'] >= row.end_pos))
+                    (bed_data["chrom"] == row.chrom)
+                    & (
+                        (
+                            (bed_data["start"] >= row.start_pos)
+                            & (bed_data["start"] <= row.end_pos)
+                        )
+                        | (
+                            (bed_data["end"] >= row.start_pos)
+                            & (bed_data["end"] <= row.end_pos)
+                        )
+                        | (
+                            (bed_data["start"] <= row.start_pos)
+                            & (bed_data["end"] >= row.end_pos)
+                        )
                     )
                 ]
-                
+
                 if not overlaps.empty:
                     target_status = "Active"
-                    source_name = overlaps.iloc[0]['name'] if 'name' in overlaps.columns else ""
+                    source_name = (
+                        overlaps.iloc[0]["name"] if "name" in overlaps.columns else ""
+                    )
                     if source_name == "CNV_detected":
                         target_source = "CNV_detected"
                     elif source_name:
                         target_source = source_name
 
-                table_rows.append({
-                    'chrom': str(row.chrom),
-                    'gene': str(row.gene),
-                    'start_pos': int(row.start_pos),
-                    'end_pos': int(row.end_pos),
-                    'size': int(row.end_pos - row.start_pos),
-                    'status': target_status,
-                    'source': target_source
-                })
+                table_rows.append(
+                    {
+                        "chrom": str(row.chrom),
+                        "gene": str(row.gene),
+                        "start_pos": int(row.start_pos),
+                        "end_pos": int(row.end_pos),
+                        "size": int(row.end_pos - row.start_pos),
+                        "status": target_status,
+                        "source": target_source,
+                    }
+                )
 
             # Update the table if it exists
             if self.target_table:
-                #print("Updating table with new rows")
+                # print("Updating table with new rows")
                 # Clear existing rows first
                 self.target_table.rows = []
                 ui.update(self.target_table)
                 # Add new rows
                 self.target_table.rows = table_rows
                 ui.update(self.target_table)
-                #print("Table update complete")
-            #else:
-                #print("No target table found to update")
-                
+                # print("Table update complete")
+            # else:
+            # print("No target table found to update")
+
         except Exception as e:
             logger.error(f"Error reading bed file {latest_bed}: {e}")
-            #print(f"Error updating table: {e}")
+            # print(f"Error updating table: {e}")
             if self.target_table:
                 self.target_table.rows = []
                 ui.update(self.target_table)
@@ -1644,7 +1672,7 @@ class CNVAnalysis(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {"color": "#1D1D1F"},
                         "axisPointer": {"type": "cross"},
-                        ":formatter": "params => `Position: ${params[0].value[0]}<br/>Value: ${params[0].value[1].toFixed(2)}`"
+                        ":formatter": "params => `Position: ${params[0].value[0]}<br/>Value: ${params[0].value[1].toFixed(2)}`",
                     },
                     "xAxis": {
                         "type": f"{type}",
@@ -2485,7 +2513,7 @@ class CNVAnalysis(BaseAnalysis):
 
                 self.update_proportion_time_chart(pivot_df)
                 self.update_proportion_time_chart2(pivot_df2)
-                
+
             self.update_target_table()
 
             if self.summary:
@@ -2547,7 +2575,7 @@ class CNVAnalysis(BaseAnalysis):
                         "borderColor": "#E5E5EA",
                         "textStyle": {"color": "#1D1D1F"},
                         "axisPointer": {"type": "cross"},
-                        ":formatter": "params => `Position: ${params[0].value[0]}<br/>Value: ${params[0].value[1].toFixed(2)}`"
+                        ":formatter": "params => `Position: ${params[0].value[0]}<br/>Value: ${params[0].value[1].toFixed(2)}`",
                     },
                     "legend": {
                         "type": "scroll",
@@ -2923,79 +2951,106 @@ class CNVAnalysis(BaseAnalysis):
     def update_target_table(self) -> None:
         """Update the target panel information table with current bed file data."""
         latest_bed = self.get_latest_bed_file()
-        
+
         try:
             if not latest_bed:
                 if self.target_table:
-                    message_df = pd.DataFrame([{
-                        'chrom': '',
-                        'gene': 'No target data available',
-                        'start_pos': 0,
-                        'end_pos': 0,
-                        'size': 0,
-                        'status': 'Inactive',
-                        'source': 'None'
-                    }])
+                    message_df = pd.DataFrame(
+                        [
+                            {
+                                "chrom": "",
+                                "gene": "No target data available",
+                                "start_pos": 0,
+                                "end_pos": 0,
+                                "size": 0,
+                                "status": "Inactive",
+                                "source": "None",
+                            }
+                        ]
+                    )
                     self.target_table.rows = message_df.to_dict("records")
                     ui.update(self.target_table)
                 return
-                
+
             # Read the BED file
-            bed_data = pd.read_csv(latest_bed, sep='\t', header=None,
-                                 names=['chrom', 'start', 'end', 'name', 'score', 'strand'])
-            
+            bed_data = pd.read_csv(
+                latest_bed,
+                sep="\t",
+                header=None,
+                names=["chrom", "start", "end", "name", "score", "strand"],
+            )
+
             # Prepare rows data
             table_rows = []
             for _, bed_row in bed_data.iterrows():
                 # Find overlapping genes from gene_bed
                 overlapping_genes = self.gene_bed[
-                    (self.gene_bed['chrom'] == bed_row['chrom']) &
-                    (
-                        ((self.gene_bed['start_pos'] >= bed_row['start']) & (self.gene_bed['start_pos'] <= bed_row['end'])) |
-                        ((self.gene_bed['end_pos'] >= bed_row['start']) & (self.gene_bed['end_pos'] <= bed_row['end'])) |
-                        ((self.gene_bed['start_pos'] <= bed_row['start']) & (self.gene_bed['end_pos'] >= bed_row['end']))
+                    (self.gene_bed["chrom"] == bed_row["chrom"])
+                    & (
+                        (
+                            (self.gene_bed["start_pos"] >= bed_row["start"])
+                            & (self.gene_bed["start_pos"] <= bed_row["end"])
+                        )
+                        | (
+                            (self.gene_bed["end_pos"] >= bed_row["start"])
+                            & (self.gene_bed["end_pos"] <= bed_row["end"])
+                        )
+                        | (
+                            (self.gene_bed["start_pos"] <= bed_row["start"])
+                            & (self.gene_bed["end_pos"] >= bed_row["end"])
+                        )
                     )
                 ]
-                
+
                 # Get list of overlapping gene names
-                gene_names = overlapping_genes['gene'].tolist() if not overlapping_genes.empty else ['Unknown']
-                gene_label = ', '.join(gene_names)
-                
-                table_rows.append({
-                    'chrom': str(bed_row['chrom']),
-                    'gene': gene_label,
-                    'start_pos': int(bed_row['start']),
-                    'end_pos': int(bed_row['end']),
-                    'size': int(bed_row['end'] - bed_row['start']),
-                    'status': 'Active',
-                    'source': str(bed_row['name'])
-                })
-            
+                gene_names = (
+                    overlapping_genes["gene"].tolist()
+                    if not overlapping_genes.empty
+                    else ["Unknown"]
+                )
+                gene_label = ", ".join(gene_names)
+
+                table_rows.append(
+                    {
+                        "chrom": str(bed_row["chrom"]),
+                        "gene": gene_label,
+                        "start_pos": int(bed_row["start"]),
+                        "end_pos": int(bed_row["end"]),
+                        "size": int(bed_row["end"] - bed_row["start"]),
+                        "status": "Active",
+                        "source": str(bed_row["name"]),
+                    }
+                )
+
             # Convert to DataFrame for sorting
             target_data = pd.DataFrame(table_rows)
             if not target_data.empty:
                 # Sort by chromosome and start position
-                target_data = target_data.sort_values(['chrom', 'start_pos'])
-            
+                target_data = target_data.sort_values(["chrom", "start_pos"])
+
             try:
                 if self.target_table:
                     self.target_table.rows = target_data.to_dict("records")
                     ui.update(self.target_table)
             except Exception as e:
                 logger.error(f"Table update error: {e}")
-                
+
         except Exception as e:
             logger.error(f"Error processing bed file {latest_bed}: {e}")
             if self.target_table:
-                message_df = pd.DataFrame([{
-                    'chrom': '',
-                    'gene': f'Error loading target data: {str(e)}',
-                    'start_pos': 0,
-                    'end_pos': 0,
-                    'size': 0,
-                    'status': 'Error',
-                    'source': 'Error'
-                }])
+                message_df = pd.DataFrame(
+                    [
+                        {
+                            "chrom": "",
+                            "gene": f"Error loading target data: {str(e)}",
+                            "start_pos": 0,
+                            "end_pos": 0,
+                            "size": 0,
+                            "status": "Error",
+                            "source": "Error",
+                        }
+                    ]
+                )
                 self.target_table.rows = message_df.to_dict("records")
                 ui.update(self.target_table)
 

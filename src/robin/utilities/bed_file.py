@@ -60,7 +60,7 @@ class BedTree:
         if self.readfish_toml:
             with open(self.readfish_toml, "rb") as f:
                 self.toml_dict = tomli.load(f)
-                #print(self.toml_dict)
+                # print(self.toml_dict)
         else:
             self.toml_dict = None
         if reference_file:
@@ -124,29 +124,38 @@ class BedTree:
                             start, end = map(int, target["id"].split("-"))
                             # Check if this target is from the original preserved tree
                             is_preserved = (
-                                self.preserve_original_tree 
-                                and self.reference_tree 
+                                self.preserve_original_tree
+                                and self.reference_tree
                                 and any(
                                     any(
-                                        any(t["id"] == target["id"] 
-                                            for t in sg["children"])
-                                        for sg in chrom["children"])
+                                        any(
+                                            t["id"] == target["id"]
+                                            for t in sg["children"]
+                                        )
+                                        for sg in chrom["children"]
+                                    )
                                     for chrom in self.reference_tree.values()
                                     if chrom["id"] == chromosome
                                 )
                             )
                             # Use "fixed_target" for preserved targets, keep original name for others
-                            name = "fixed_target" if is_preserved else target.get("name", "unknown")
-                            strand = strand_group['id'].split()[-1]  # Get the strand from the group ID
+                            name = (
+                                "fixed_target"
+                                if is_preserved
+                                else target.get("name", "unknown")
+                            )
+                            strand = strand_group["id"].split()[
+                                -1
+                            ]  # Get the strand from the group ID
                             f.write(
                                 f"{chromosome}\t{start}\t{end}\t{name}\t.\t{strand}\n"
                             )
                 self.previous_targets_hash = current_hash
                 self._update_proportions_df()
                 if self.toml_dict:
-                    #print(self.toml_dict["regions"])
+                    # print(self.toml_dict["regions"])
                     for region in self.toml_dict["regions"]:
-                        #print(region)
+                        # print(region)
                         region["targets"] = filename
                     with open(f"{self.readfish_toml}_live", "wb") as f:
                         tomli_w.dump(self.toml_dict, f)
@@ -174,9 +183,9 @@ class BedTree:
 
         while i < len(existing_ranges):
             existing_start, existing_end, existing_name = existing_ranges[i]
-            
+
             # Only merge if names match or both are default (".")
-            if (name == existing_name or (name == "." and existing_name == ".")):
+            if name == existing_name or (name == "." and existing_name == "."):
                 if not (end < existing_start or start > existing_end):
                     start = min(existing_start, start)
                     end = max(existing_end, end)
@@ -231,9 +240,7 @@ class BedTree:
 
                 # Include name in the range information
                 existing_ranges = [
-                    (int(r["id"].split("-")[0]), 
-                     int(r["id"].split("-")[1]),
-                     r["name"])
+                    (int(r["id"].split("-")[0]), int(r["id"].split("-")[1]), r["name"])
                     for r in strand_group["children"]
                 ]
                 merged_ranges = self._merge_ranges(existing_ranges, (start, end, name))
@@ -251,7 +258,7 @@ class BedTree:
                     }
                     for s, e, n in merged_ranges
                 ]
-                
+
                 self.tree_dict[chromosome]["count"] = sum(
                     c["count"] for c in self.tree_dict[chromosome]["children"]
                 )
@@ -385,11 +392,16 @@ class BedTree:
         # self._write_bed_file()
 
     def load_from_string(
-        self, bed_string, merge=False, write_files=False, output_location=None, source_type=None
+        self,
+        bed_string,
+        merge=False,
+        write_files=False,
+        output_location=None,
+        source_type=None,
     ):
         """
         Load BED data from a string while preserving entries from other sources.
-        
+
         Args:
             bed_string: The BED format string to load
             merge: Whether to merge with existing data
@@ -399,9 +411,9 @@ class BedTree:
         """
         if output_location:
             self.output_location = output_location
-            
+
         if not merge:
-            #rint(self.tree_data)
+            # rint(self.tree_data)
             if "children" in self.tree_data.keys():
                 if source_type:
                     # First pass: Remove all entries of the type we're updating
@@ -410,40 +422,45 @@ class BedTree:
                             if source_type == "FUSION":
                                 # Remove all entries that are NOT CNV_detected
                                 to_remove = []
-                                for i, target in enumerate(strand_group.get("children", [])):
+                                for i, target in enumerate(
+                                    strand_group.get("children", [])
+                                ):
                                     if target.get("name") != "CNV_detected":
                                         to_remove.append(i)
-                                        #print(i)
-                                        #print(target)
+                                        # print(i)
+                                        # print(target)
                                 # Remove entries in reverse order to maintain correct indices
                                 for i in reversed(to_remove):
                                     del strand_group["children"][i]
-                                    
+
                             elif source_type == "CNV":
                                 # Remove all CNV_detected entries
                                 to_remove = []
-                                for i, target in enumerate(strand_group.get("children", [])):
+                                for i, target in enumerate(
+                                    strand_group.get("children", [])
+                                ):
                                     if target.get("name") == "CNV_detected":
                                         to_remove.append(i)
-                                        #print(i)
-                                        #print(target)
+                                        # print(i)
+                                        # print(target)
                                 # Remove entries in reverse order to maintain correct indices
                                 for i in reversed(to_remove):
                                     del strand_group["children"][i]
-                            
+
                             # Remove empty strand groups
                             if not strand_group.get("children", []):
                                 chromosome["children"].remove(strand_group)
-                                
+
                     # Remove empty chromosomes
                     self.tree_data["children"] = [
-                        chrom for chrom in self.tree_data["children"] 
+                        chrom
+                        for chrom in self.tree_data["children"]
                         if chrom.get("children")
                     ]
                 else:
                     # If no source_type specified, clear everything as before
                     self.tree_data["children"] = []
-            
+
             # Handle the tree_dict preservation
             if self.preserve_original_tree and self.reference_tree:
                 if not self.tree_dict:
@@ -459,35 +476,49 @@ class BedTree:
                         else:
                             # Chromosome exists, need to merge strand groups
                             existing_chrom = self.tree_dict[chrom_key]
-                            if 'children' in chrom_value:
-                                if 'children' not in existing_chrom:
-                                    existing_chrom['children'] = []
-                                
+                            if "children" in chrom_value:
+                                if "children" not in existing_chrom:
+                                    existing_chrom["children"] = []
+
                                 # For each strand group in reference
-                                for ref_strand_group in chrom_value['children']:
-                                    strand_group_id = ref_strand_group['id']
+                                for ref_strand_group in chrom_value["children"]:
+                                    strand_group_id = ref_strand_group["id"]
                                     # Find matching strand group in existing chromosome
                                     existing_strand_group = next(
-                                        (group for group in existing_chrom['children'] 
-                                         if group['id'] == strand_group_id),
-                                        None
-                                    )                                    
+                                        (
+                                            group
+                                            for group in existing_chrom["children"]
+                                            if group["id"] == strand_group_id
+                                        ),
+                                        None,
+                                    )
                                     if existing_strand_group is None:
                                         # If strand group doesn't exist, add it
-                                        existing_chrom['children'].append(ref_strand_group)
+                                        existing_chrom["children"].append(
+                                            ref_strand_group
+                                        )
                                     else:
                                         # Merge children of strand groups
-                                        if 'children' in ref_strand_group:
-                                            if 'children' not in existing_strand_group:
-                                                existing_strand_group['children'] = []
+                                        if "children" in ref_strand_group:
+                                            if "children" not in existing_strand_group:
+                                                existing_strand_group["children"] = []
                                             # Add any missing targets
-                                            existing_ids = {child['id'] for child in existing_strand_group['children']}
-                                            for ref_target in ref_strand_group['children']:
-                                                if ref_target['id'] not in existing_ids:
-                                                    existing_strand_group['children'].append(ref_target)
+                                            existing_ids = {
+                                                child["id"]
+                                                for child in existing_strand_group[
+                                                    "children"
+                                                ]
+                                            }
+                                            for ref_target in ref_strand_group[
+                                                "children"
+                                            ]:
+                                                if ref_target["id"] not in existing_ids:
+                                                    existing_strand_group[
+                                                        "children"
+                                                    ].append(ref_target)
             elif not self.preserve_original_tree:
                 self.tree_dict = {}
-                
+
         bed_file = StringIO(bed_string)
         reader = csv.reader(bed_file, delimiter="\t")
         self._process_bed_data(reader)
@@ -533,7 +564,7 @@ class BedTree:
         """Update the target panel information table with current BedTree data."""
         print("Updating target table")  # Basic debug print
         logger.debug("Starting target table update")
-        if not hasattr(self, 'gene_bed') or self.gene_bed.empty:
+        if not hasattr(self, "gene_bed") or self.gene_bed.empty:
             logger.warning("No gene_bed data available")
             return
 
@@ -541,7 +572,7 @@ class BedTree:
         for _, row in self.gene_bed.iterrows():
             target_status = "Original"
             target_source = "Panel"
-            
+
             if self.NewBed and self.NewBed.tree_dict:
                 chrom_data = self.NewBed.tree_dict.get(row.chrom, {})
                 if chrom_data:
@@ -550,8 +581,10 @@ class BedTree:
                         for target in strand_group.get("children", []):
                             target_start, target_end = map(int, target["id"].split("-"))
                             # Check for any overlap between intervals
-                            if (target_start <= row.end_pos and 
-                                target_end >= row.start_pos):
+                            if (
+                                target_start <= row.end_pos
+                                and target_end >= row.start_pos
+                            ):
                                 target_status = "Active"
                                 source_name = target.get("name", "")
                                 if "CNV" in source_name:
@@ -562,15 +595,17 @@ class BedTree:
                         if target_status == "Active":
                             break
 
-            table_rows.append({
-                'chrom': str(row.chrom),
-                'gene': str(row.gene),
-                'start_pos': int(row.start_pos),
-                'end_pos': int(row.end_pos),
-                'size': int(row.end_pos - row.start_pos),
-                'status': target_status,
-                'source': target_source
-            })
+            table_rows.append(
+                {
+                    "chrom": str(row.chrom),
+                    "gene": str(row.gene),
+                    "start_pos": int(row.start_pos),
+                    "end_pos": int(row.end_pos),
+                    "size": int(row.end_pos - row.start_pos),
+                    "status": target_status,
+                    "source": target_source,
+                }
+            )
 
         if self.target_table:
             self.target_table.rows = table_rows
@@ -579,7 +614,7 @@ class BedTree:
     def get_unique_entries_count(self) -> dict:
         """
         Count the number of unique entries in the tree_dict.
-        
+
         Returns:
             dict: A dictionary containing:
                 - total_targets: Total number of unique target regions
@@ -588,11 +623,11 @@ class BedTree:
         """
         if not self.tree_dict:
             return {"total_targets": 0, "by_chromosome": {}, "by_source": {}}
-            
+
         total_targets = 0
         by_chromosome = {}
         by_source = {}
-        
+
         for chrom, chrom_data in self.tree_dict.items():
             chrom_count = 0
             for strand_group in chrom_data.get("children", []):
@@ -601,14 +636,14 @@ class BedTree:
                     # Count by source
                     source = target.get("name", "unknown")
                     by_source[source] = by_source.get(source, 0) + 1
-            
+
             by_chromosome[chrom] = chrom_count
             total_targets += chrom_count
-            
+
         return {
             "total_targets": total_targets,
             "by_chromosome": by_chromosome,
-            "by_source": by_source
+            "by_source": by_source,
         }
 
 

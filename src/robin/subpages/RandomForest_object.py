@@ -137,7 +137,7 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
             logger.debug(f"R script stdout: {result.stdout}")
             if result.stderr:
                 pass
-                #logger.warning(f"R script stderr: {result.stderr}")
+                # logger.warning(f"R script stderr: {result.stderr}")
         except subprocess.CalledProcessError as e:
             # logger.error(f"R script failed with return code {e.returncode}")
             # logger.error(f"stdout: {e.stdout}")

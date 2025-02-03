@@ -96,7 +96,6 @@ os.environ["CI"] = "1"
 STRAND = {"+": 1, "-": -1}
 
 
-
 decompress_gzip_file(
     os.path.join(
         os.path.dirname(os.path.abspath(resources.__file__)),
@@ -105,13 +104,13 @@ decompress_gzip_file(
 )
 
 
-
 def classify_alignment(aln) -> str:
     """Return 'PRIMARY' or 'SUPPLEMENTARY' (exclude secondary)"""
     if aln.is_supplementary:
         return "SUPPLEMENTARY"
     else:
         return "PRIMARY"
+
 
 def infer_sv_type_for_read(df_read):
     """
@@ -136,7 +135,7 @@ def infer_sv_type_for_read(df_read):
     # We'll compare consecutive segments
     for i in range(len(df_read) - 1):
         seg1 = df_read.iloc[i]
-        seg2 = df_read.iloc[i+1]
+        seg2 = df_read.iloc[i + 1]
 
         # Check if chromosome changed => translocation
         if seg1["RNAME"] != seg2["RNAME"]:
@@ -150,7 +149,7 @@ def infer_sv_type_for_read(df_read):
         # Evaluate difference in read coverage vs. reference coverage
         # We'll compare the gap between seg1 REF_END and seg2 REF_START
         # vs. the gap between seg1 READ_END and seg2 READ_START
-        ref_gap  = seg2["REF_START"] - seg1["REF_END"]
+        ref_gap = seg2["REF_START"] - seg1["REF_END"]
         read_gap = seg2["READ_START"] - seg1["READ_END"]
 
         # If ref_gap significantly > read_gap => possible deletion
@@ -159,9 +158,13 @@ def infer_sv_type_for_read(df_read):
         gap_diff = ref_gap - read_gap
 
         # Very naive thresholding:
-        if gap_diff > 50:      # reference gap > read gap => missing bases in read => deletion
+        if (
+            gap_diff > 50
+        ):  # reference gap > read gap => missing bases in read => deletion
             events.append("DELETION")
-        elif gap_diff < -50:   # read gap > reference gap => extra bases in read => insertion
+        elif (
+            gap_diff < -50
+        ):  # read gap > reference gap => extra bases in read => insertion
             events.append("INSERTION")
 
         # Check overlap or repeated coverage in reference
@@ -177,6 +180,7 @@ def infer_sv_type_for_read(df_read):
         return unique_events.pop()
     else:
         return "COMPLEX"
+
 
 def label_reads_with_svs(df):
     """
@@ -198,19 +202,20 @@ def label_reads_with_svs(df):
     df_labeled = pd.concat(sv_labels, ignore_index=True)
     return df_labeled
 
+
 def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
     """
     Function that, for a single BAM file, returns a DataFrame
     of all primary + supplementary alignments for reads that have at
     least one supplementary alignment (or SA tag).
-    
+
     Args:
         bam_path: Path to the BAM file
         sv_store: Path to store the structural variant data (as string)
     """
-    
+
     reads_with_supp = set()
-    
+
     # First pass: identify read IDs that have supplementary alignments
     with pysam.AlignmentFile(bam_path, "rb") as bam:
         for aln in bam:
@@ -239,43 +244,53 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
             if aln.is_secondary:
                 continue
 
-            ref_name   = bam.get_reference_name(aln.reference_id) if aln.reference_id >= 0 else None
-            ref_start  = aln.reference_start
-            ref_end    = aln.reference_end
-            ref_span   = ref_end - ref_start if (ref_start >= 0 and ref_end >= 0) else None
+            ref_name = (
+                bam.get_reference_name(aln.reference_id)
+                if aln.reference_id >= 0
+                else None
+            )
+            ref_start = aln.reference_start
+            ref_end = aln.reference_end
+            ref_span = (
+                ref_end - ref_start if (ref_start >= 0 and ref_end >= 0) else None
+            )
 
             read_start = aln.query_alignment_start
-            read_end   = aln.query_alignment_end
-            read_span  = (read_end - read_start) if (read_start >= 0 and read_end >= 0) else None
+            read_end = aln.query_alignment_end
+            read_span = (
+                (read_end - read_start) if (read_start >= 0 and read_end >= 0) else None
+            )
 
             mapq = aln.mapping_quality
             strand = "-" if aln.is_reverse else "+"
 
             aln_type = classify_alignment(aln)
 
-            rows.append({
-                "BAM_FILE":   os.path.basename(bam_path),
-                "QNAME":      aln.query_name,
-                "TYPE":       aln_type,   # PRIMARY or SUPPLEMENTARY
-                "RNAME":      ref_name,
-                "REF_START":  ref_start,
-                "REF_END":    ref_end,
-                "REF_SPAN":   ref_span,
-                "READ_START": read_start,
-                "READ_END":   read_end,
-                "READ_SPAN":  read_span,    
-                "MQ":         mapq,
-                "STRAND":     strand
-            })
+            rows.append(
+                {
+                    "BAM_FILE": os.path.basename(bam_path),
+                    "QNAME": aln.query_name,
+                    "TYPE": aln_type,  # PRIMARY or SUPPLEMENTARY
+                    "RNAME": ref_name,
+                    "REF_START": ref_start,
+                    "REF_END": ref_end,
+                    "REF_SPAN": ref_span,
+                    "READ_START": read_start,
+                    "READ_END": read_end,
+                    "READ_SPAN": read_span,
+                    "MQ": mapq,
+                    "STRAND": strand,
+                }
+            )
 
     df = pd.DataFrame(rows)
     # Possibly sort or reset index
-    df.sort_values(["QNAME","TYPE","REF_START"], inplace=True)
+    df.sort_values(["QNAME", "TYPE", "REF_START"], inplace=True)
     df.reset_index(drop=True, inplace=True)
-    
+
     if len(df) > 0:
-        df = df[~df['QNAME'].isin(df[df['MQ']<55]['QNAME'])]
-        df = df[~df['RNAME'].eq('chrM')]
+        df = df[~df["QNAME"].isin(df[df["MQ"] < 55]["QNAME"])]
+        df = df[~df["RNAME"].eq("chrM")]
         # Save or append to sv_store
     try:
         if os.path.exists(sv_store) and os.path.getsize(sv_store) > 0:
@@ -290,7 +305,7 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
         else:
             # If file doesn't exist or is empty, use new data
             combined_df = df
-        
+
         # Save combined data
         combined_df.to_csv(sv_store, index=False)
         df = label_reads_with_svs(combined_df)
@@ -298,25 +313,28 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
         logger.error(f"Error saving structural variants: {str(e)}")
         # Continue processing even if save fails
         pass
-    
 
     return df
+
 
 def dataframe_to_bed_lines(df: pd.DataFrame) -> list:
     """
     Convert a DataFrame with columns [chrom, strand, sv_type, min_bin, max_bin]
     into a list of BED-like strings:
-    
+
       chrom    min_bin    max_bin    sv_type    .    strand
-    
+
     Returns a list of strings, each representing one line in BED format.
     """
     bed_lines = []
     for row in df.itertuples():
         # row.chrom, row.strand, row.sv_type, row.min_bin, row.max_bin
-        line = f"{row.chrom}\t{row.min_bin}\t{row.max_bin}\t{row.sv_type}\t.\t{row.strand}"
+        line = (
+            f"{row.chrom}\t{row.min_bin}\t{row.max_bin}\t{row.sv_type}\t.\t{row.strand}"
+        )
         bed_lines.append(line)
     return bed_lines
+
 
 def merge_overlapping_intervals(group: pd.DataFrame) -> pd.DataFrame:
     """
@@ -346,26 +364,30 @@ def merge_overlapping_intervals(group: pd.DataFrame) -> pd.DataFrame:
                 current_max = max(current_max, row.max_bin)
             else:
                 # No overlap => finalize the previous merged interval
-                merged.append({
-                    "chrom": row.chrom,
-                    "strand": row.strand,
-                    "sv_type": row.sv_type,
-                    "min_bin": current_min,
-                    "max_bin": current_max
-                })
+                merged.append(
+                    {
+                        "chrom": row.chrom,
+                        "strand": row.strand,
+                        "sv_type": row.sv_type,
+                        "min_bin": current_min,
+                        "max_bin": current_max,
+                    }
+                )
                 # start a new merge interval
                 current_min = row.min_bin
                 current_max = row.max_bin
 
     # Finalize the last interval if it exists
     if current_min is not None:
-        merged.append({
-            "chrom": group["chrom"].iloc[0],    # same for entire group
-            "strand": group["strand"].iloc[0],  # same for entire group
-            "sv_type": group["sv_type"].iloc[0],
-            "min_bin": current_min,
-            "max_bin": current_max
-        })
+        merged.append(
+            {
+                "chrom": group["chrom"].iloc[0],  # same for entire group
+                "strand": group["strand"].iloc[0],  # same for entire group
+                "sv_type": group["sv_type"].iloc[0],
+                "min_bin": current_min,
+                "max_bin": current_max,
+            }
+        )
 
     return pd.DataFrame(merged)
 
@@ -378,12 +400,12 @@ def collapse_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     grouped = df.groupby(["chrom", "strand", "sv_type"], group_keys=False)
     merged_df = grouped.apply(merge_overlapping_intervals)
     return merged_df.reset_index(drop=True)
-    
+
 
 def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
     """
     Builds an undirected graph where nodes are structural variant breakpoints.
-    
+
     Edges are added if:
       1) The breakpoints come from the same read.
       2) The breakpoints are within `max_proximity` bases on the same chromosome/strand.
@@ -404,11 +426,11 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
     for i, row in df.iterrows():
         chrom = row["RNAME"]
         start = row["REF_START"]
-        end   = row["REF_END"]
-        pos   = (start + end) // 2  # Midpoint, or use start/end directly
+        end = row["REF_END"]
+        pos = (start + end) // 2  # Midpoint, or use start/end directly
         strand = row.get("STRAND", "+")
         sv_type = row.get("SV_TYPE", "UNKNOWN")
-        
+
         # Unique node ID
         if group_by_sv:
             node_id = (chrom, pos, strand, sv_type, row["QNAME"])
@@ -452,14 +474,14 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
             idx2, pos2 = lst_sorted[i + 1]
             if abs(pos2 - pos1) <= max_proximity:
                 G.add_edge(idx1, idx2, reason="proximity")
-                
+
     components = list(nx.connected_components(G))
     counter = 0
-    bed_lines=[]
+    bed_lines = []
     for i, comp in enumerate(components, start=1):
         # comp is a set of node indices in the graph
         # G.nodes[node_idx]["data"] is your tuple or dict of info
-        
+
         node_data_list = [G.nodes[node_idx]["data"] for node_idx in comp]
 
         # Determine tuple length dynamically
@@ -481,29 +503,34 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
 
         if 100 > len(read_names) > 2 and len(chroms) < 4:
             counter += 1
-            #if "chr9" in chroms:
+            # if "chr9" in chroms:
             #    print(f"\nCONNECTED COMPONENT #{i}")
             #    print(f"  Chromosome(s): {chroms}")
             #    print(f"  Positions: from {min_pos} to {max_pos}")
             #    print(f"  Strands: {strands}")
             #    print(f"  SV Types: {sv_types}")
             #    print(f"  Distinct read names: {len(read_names)} => {read_names}")
-            
+
             bin_size = 1000
-            df = pd.DataFrame(node_data_list, columns=["chrom", "pos", "strand", "sv_type", "qname"])
+            df = pd.DataFrame(
+                node_data_list, columns=["chrom", "pos", "strand", "sv_type", "qname"]
+            )
             df["bin"] = df["pos"] // bin_size
-            df["min_bin"] = np.where(df["strand"] == "+", df["bin"] - 1, df["bin"] - 5) * bin_size
-            df["max_bin"] = np.where(df["strand"] == "+", df["bin"] + 5, df["bin"] + 1) * bin_size
-            #if "chr9" in chroms:
+            df["min_bin"] = (
+                np.where(df["strand"] == "+", df["bin"] - 1, df["bin"] - 5) * bin_size
+            )
+            df["max_bin"] = (
+                np.where(df["strand"] == "+", df["bin"] + 5, df["bin"] + 1) * bin_size
+            )
+            # if "chr9" in chroms:
             #    print(df)
-            df.drop(columns=["pos","qname","bin"], inplace=True)
+            df.drop(columns=["pos", "qname", "bin"], inplace=True)
             df.drop_duplicates(inplace=True)
-            #if "chr9" in chroms:
-            #    print(collapse_overlaps(df))                    
-            #print(dataframe_to_bed_lines(collapse_overlaps(df)))
+            # if "chr9" in chroms:
+            #    print(collapse_overlaps(df))
+            # print(dataframe_to_bed_lines(collapse_overlaps(df)))
             if len(dataframe_to_bed_lines(collapse_overlaps(df))) < 5:
                 bed_lines.extend(dataframe_to_bed_lines(collapse_overlaps(df)))
-                
 
     return bed_lines
 
@@ -865,7 +892,9 @@ class FusionObject(BaseAnalysis):
         gene_table_small (pd.DataFrame): Filtered DataFrame with gene annotations.
     """
 
-    def __init__(self, *args, target_panel=None, NewBed: Optional[BedTree] = None, **kwargs):
+    def __init__(
+        self, *args, target_panel=None, NewBed: Optional[BedTree] = None, **kwargs
+    ):
         self.target_panel = target_panel
         self.fusion_candidates = {}
         self.fusion_candidates_all = {}
@@ -914,7 +943,8 @@ class FusionObject(BaseAnalysis):
             self.gene_table = pd.read_csv(
                 os.path.join(
                     os.path.dirname(os.path.abspath(resources.__file__)), datafile
-                ))
+                )
+            )
         else:
             # logging.info(
             #    f"This looks like the first time you have run the {self.target_panel} panel."
@@ -960,7 +990,7 @@ class FusionObject(BaseAnalysis):
                 compression="gzip",
             )
             self.gene_table = self.gene_table_small
-            
+
         self.NewBed = NewBed
         super().__init__(*args, **kwargs)
 
@@ -974,47 +1004,93 @@ class FusionObject(BaseAnalysis):
                     with ui.row().classes("w-full items-center justify-between"):
                         # Left side - Fusion Status
                         with ui.column().classes("gap-2"):
-                            ui.label("Gene Fusion Analysis").classes("text-lg font-medium")
+                            ui.label("Gene Fusion Analysis").classes(
+                                "text-lg font-medium"
+                            )
                             with ui.row().classes("items-center gap-2"):
-                                ui.label(f"Panel: {self.target_panel}").classes("text-gray-600 font-medium")
-                                ui.label("0").bind_text_from(self, "candidates", backward=lambda n: f"{n} high confidence").classes("px-2 py-1 rounded bg-blue-100 text-blue-600")
+                                ui.label(f"Panel: {self.target_panel}").classes(
+                                    "text-gray-600 font-medium"
+                                )
+                                ui.label("0").bind_text_from(
+                                    self,
+                                    "candidates",
+                                    backward=lambda n: f"{n} high confidence",
+                                ).classes("px-2 py-1 rounded bg-blue-100 text-blue-600")
 
                         # Right side - Additional metrics
                         with ui.column().classes("gap-2 text-right"):
                             ui.label("Analysis Details").classes("font-medium")
-                            ui.label("0").bind_text_from(self, "all_candidates", backward=lambda n: f"{n} low confidence fusions").classes("text-gray-600")
+                            ui.label("0").bind_text_from(
+                                self,
+                                "all_candidates",
+                                backward=lambda n: f"{n} low confidence fusions",
+                            ).classes("text-gray-600")
 
                     # Bottom row - Information
-                    with ui.row().classes("w-full mt-4 text-sm text-gray-500 justify-center"):
-                        ui.label("Fusion candidates identified from reads with supplementary alignments")
+                    with ui.row().classes(
+                        "w-full mt-4 text-sm text-gray-500 justify-center"
+                    ):
+                        ui.label(
+                            "Fusion candidates identified from reads with supplementary alignments"
+                        )
 
         with ui.card().style("width: 100%"):
-            ui.label("Gene Fusion and Structural Variant Analysis").classes("text-sky-600 dark:text-white").style("font-size: 150%; font-weight: 300").tailwind("drop-shadow", "font-bold")
+            ui.label("Gene Fusion and Structural Variant Analysis").classes(
+                "text-sky-600 dark:text-white"
+            ).style("font-size: 150%; font-weight: 300").tailwind(
+                "drop-shadow", "font-bold"
+            )
             ui.label(
                 "This panel identifies gene fusion candidates and structural variants from the input bam files. "
                 "The panel is split into three tabs: gene fusions within the target panel, genome wide fusions, and structural variants. "
                 "Events are identified on a streaming basis derived from reads with supplementary alignments. "
                 "The plots are indicative of the presence of events and should be interpreted with care."
             ).style("font-size: 125%; font-weight: 300")
-            
+
             with ui.tabs().classes("w-full") as tabs:
-                one = ui.tab("Within Target Fusions").style("font-size: 125%; font-weight: 300")
+                one = ui.tab("Within Target Fusions").style(
+                    "font-size: 125%; font-weight: 300"
+                )
                 with one:
-                    self.badge_one = ui.badge("0", color="red").bind_text_from(self, "candidates", backward=lambda n: f"{n}").props("floating rounded outline")
-                two = ui.tab("Genome Wide Fusions").style("font-size: 125%; font-weight: 300")
+                    self.badge_one = (
+                        ui.badge("0", color="red")
+                        .bind_text_from(self, "candidates", backward=lambda n: f"{n}")
+                        .props("floating rounded outline")
+                    )
+                two = ui.tab("Genome Wide Fusions").style(
+                    "font-size: 125%; font-weight: 300"
+                )
                 with two:
-                    self.badge_two = ui.badge("0", color="red").bind_text_from(self, "all_candidates", backward=lambda n: f"{n}").props("floating rounded outline")
-                three = ui.tab("Structural Variants").style("font-size: 125%; font-weight: 300")
+                    self.badge_two = (
+                        ui.badge("0", color="red")
+                        .bind_text_from(
+                            self, "all_candidates", backward=lambda n: f"{n}"
+                        )
+                        .props("floating rounded outline")
+                    )
+                three = ui.tab("Structural Variants").style(
+                    "font-size: 125%; font-weight: 300"
+                )
                 with three:
-                    self.badge_three = ui.badge("0", color="red").bind_text_from(self, "sv_count", backward=lambda n: f"{n}").props("floating rounded outline")
+                    self.badge_three = (
+                        ui.badge("0", color="red")
+                        .bind_text_from(self, "sv_count", backward=lambda n: f"{n}")
+                        .props("floating rounded outline")
+                    )
 
             with ui.tab_panels(tabs, value=one).classes("w-full"):
                 with ui.tab_panel(one):
                     with ui.card().style("width: 100%"):
-                        ui.label("Fusion Candidates (within targets)").style("font-size: 125%; font-weight: 300").tailwind("drop-shadow", "font-bold")
+                        ui.label("Fusion Candidates (within targets)").style(
+                            "font-size: 125%; font-weight: 300"
+                        ).tailwind("drop-shadow", "font-bold")
                         ui.separator()
-                        with ui.expansion('Methods', caption='A description of the methods used to identify gene fusions within the target panel').classes('w-full'):
-                            ui.restructured_text('''
+                        with ui.expansion(
+                            "Methods",
+                            caption="A description of the methods used to identify gene fusions within the target panel",
+                        ).classes("w-full"):
+                            ui.restructured_text(
+                                """
                                 Gene fusion analysis within the target panel is performed through a multi-step process:
 
                                 1. **Read Extraction**
@@ -1040,24 +1116,39 @@ class FusionObject(BaseAnalysis):
                                 * Mapping quality scores
 
                                 Results are visualized in plots showing read alignments to each gene region, with individual reads color-coded for tracking.
-                            ''').style("font-size: 100%; font-weight: 300")
+                            """
+                            ).style("font-size: 100%; font-weight: 300")
                         self.fusionplot = ui.row()
                         with self.fusionplot.classes("w-full"):
                             with ui.column().classes("gap-2"):
-                                ui.label("Awaiting Fusion Plot").classes("text-lg font-medium")
-                                ui.label("Plot will be displayed here when fusion data is available").classes("text-gray-600")
+                                ui.label("Awaiting Fusion Plot").classes(
+                                    "text-lg font-medium"
+                                )
+                                ui.label(
+                                    "Plot will be displayed here when fusion data is available"
+                                ).classes("text-gray-600")
                         self.fusiontable = ui.row().classes("w-full")
                         with self.fusiontable:
                             with ui.column().classes("gap-2"):
-                                ui.label("Awaiting Fusion Data").classes("text-lg font-medium")
-                                ui.label("Table will be displayed here when fusion data is available").classes("text-gray-600")
+                                ui.label("Awaiting Fusion Data").classes(
+                                    "text-lg font-medium"
+                                )
+                                ui.label(
+                                    "Table will be displayed here when fusion data is available"
+                                ).classes("text-gray-600")
 
                 with ui.tab_panel(two):
                     with ui.card().style("width: 100%"):
-                        ui.label("Fusion Candidates (genome wide)").style("font-size: 125%; font-weight: 300").tailwind("drop-shadow", "font-bold")
+                        ui.label("Fusion Candidates (genome wide)").style(
+                            "font-size: 125%; font-weight: 300"
+                        ).tailwind("drop-shadow", "font-bold")
                         ui.separator()
-                        with ui.expansion('Methods', caption='A description of the methods used to identify genome-wide fusions').classes('w-full'):
-                            ui.restructured_text('''
+                        with ui.expansion(
+                            "Methods",
+                            caption="A description of the methods used to identify genome-wide fusions",
+                        ).classes("w-full"):
+                            ui.restructured_text(
+                                """
                                 Genome-wide fusion analysis extends the search beyond the target panel through the following steps:
 
                                 1. **Initial Screening**
@@ -1085,24 +1176,39 @@ class FusionObject(BaseAnalysis):
                                 * Mapping quality scores
 
                                 Results are displayed with gene-specific read alignment plots and comprehensive mapping details.
-                            ''').style("font-size: 100%; font-weight: 300")
+                            """
+                            ).style("font-size: 100%; font-weight: 300")
                         self.fusionplot_all = ui.row()
                         with self.fusionplot_all.classes("w-full"):
                             with ui.column().classes("gap-2"):
-                                ui.label("Awaiting Genome-wide Fusion Plot").classes("text-lg font-medium")
-                                ui.label("Plot will be displayed here when genome-wide fusion data is available").classes("text-gray-600")
+                                ui.label("Awaiting Genome-wide Fusion Plot").classes(
+                                    "text-lg font-medium"
+                                )
+                                ui.label(
+                                    "Plot will be displayed here when genome-wide fusion data is available"
+                                ).classes("text-gray-600")
                         self.fusiontable_all = ui.row().classes("w-full")
                         with self.fusiontable_all:
                             with ui.column().classes("gap-2"):
-                                ui.label("Awaiting Genome-wide Fusion Data").classes("text-lg font-weight: 300")
-                                ui.label("Table will be displayed here when genome-wide fusion data is available").classes("text-gray-600")
+                                ui.label("Awaiting Genome-wide Fusion Data").classes(
+                                    "text-lg font-weight: 300"
+                                )
+                                ui.label(
+                                    "Table will be displayed here when genome-wide fusion data is available"
+                                ).classes("text-gray-600")
 
                 with ui.tab_panel(three):
                     with ui.card().style("width: 100%"):
-                        ui.label("Structural Variants").style("font-size: 125%; font-weight: 300").tailwind("drop-shadow", "font-bold")
+                        ui.label("Structural Variants").style(
+                            "font-size: 125%; font-weight: 300"
+                        ).tailwind("drop-shadow", "font-bold")
                         ui.separator()
-                        with ui.expansion('Methods', caption='A description of the methods used to identify structural variants').classes('w-full'):
-                            ui.restructured_text('''
+                        with ui.expansion(
+                            "Methods",
+                            caption="A description of the methods used to identify structural variants",
+                        ).classes("w-full"):
+                            ui.restructured_text(
+                                """
                                 The analysis identifies structural variants through a multi-step process:
 
                                 1. **Breakpoint Detection**
@@ -1128,9 +1234,9 @@ class FusionObject(BaseAnalysis):
                                 * For translocations: both primary and partner chromosomal locations
 
                                 The events are summarized in plots below and detailed in the table.
-                            ''').style("font-size: 100%; font-weight: 300")
-                        
-                        
+                            """
+                            ).style("font-size: 100%; font-weight: 300")
+
                         self.sv_plot = ui.row().classes("w-full")
                         self.sv_table_container = ui.row().classes("w-full")
 
@@ -1145,7 +1251,9 @@ class FusionObject(BaseAnalysis):
         """
         # if not self.fusion_candidates_all.empty:
         if self.sampleID in self.fusion_candidates_all.keys():
-            uniques_all = self.fusion_candidates_all[self.sampleID]["read_id"].duplicated(keep=False)
+            uniques_all = self.fusion_candidates_all[self.sampleID][
+                "read_id"
+            ].duplicated(keep=False)
             doubles_all = self.fusion_candidates_all[self.sampleID][uniques_all]
             counts_all = doubles_all.groupby("read_id")["col4"].transform("nunique")
             result_all = doubles_all[counts_all > 1]
@@ -1202,7 +1310,9 @@ class FusionObject(BaseAnalysis):
                         col["sortable"] = True
 
                     with self.fstable_all.add_slot("top-right"):
-                        with ui.input(placeholder="Search").props("type=search").bind_value(self.fstable_all, "filter").add_slot("append"):
+                        with ui.input(placeholder="Search").props(
+                            "type=search"
+                        ).bind_value(self.fstable_all, "filter").add_slot("append"):
                             ui.icon("search")
 
                 self.fusionplot_all.clear()
@@ -1265,14 +1375,18 @@ class FusionObject(BaseAnalysis):
                     with ui.row().classes("w-full"):
                         self.all_card = ui.card()
                         with self.all_card:
-                            ui.label("Select gene pair to see results.").tailwind("drop-shadow", "font-bold")
+                            ui.label("Select gene pair to see results.").tailwind(
+                                "drop-shadow", "font-bold"
+                            )
 
                     def show_gene_pair(gene_group: str, result_all, goodpairs) -> None:
                         ui.notify(gene_group)
                         self.all_card.clear()
                         with self.all_card:
                             with ui.row():
-                                ui.label(f"{gene_group}").tailwind("drop-shadow", "font-bold")
+                                ui.label(f"{gene_group}").tailwind(
+                                    "drop-shadow", "font-bold"
+                                )
                             with ui.row():
                                 reads = result_all[goodpairs][
                                     result_all[goodpairs][3].isin(gene_group)
@@ -1344,7 +1458,9 @@ class FusionObject(BaseAnalysis):
                         col["sortable"] = True
 
                     with self.fstable.add_slot("top-right"):
-                        with ui.input(placeholder="Search").props("type=search").bind_value(self.fstable, "filter").add_slot("append"):
+                        with ui.input(placeholder="Search").props(
+                            "type=search"
+                        ).bind_value(self.fstable, "filter").add_slot("append"):
                             ui.icon("search")
 
                 self.fusionplot.clear()
@@ -1389,9 +1505,7 @@ class FusionObject(BaseAnalysis):
                     gene_groups = []
                     for gene_group in gene_groups_test:
                         reads = _get_reads(
-                            result[goodpairs][
-                                result[goodpairs][3].isin(gene_group)
-                            ]
+                            result[goodpairs][result[goodpairs][3].isin(gene_group)]
                         )
                         if len(reads) > 1:
                             gene_groups.append(gene_group)
@@ -1407,14 +1521,18 @@ class FusionObject(BaseAnalysis):
                     with ui.row().classes("w-full"):
                         self.card = ui.card()
                         with self.card:
-                            ui.label("Select gene pair to see results.").tailwind("drop-shadow", "font-bold")
+                            ui.label("Select gene pair to see results.").tailwind(
+                                "drop-shadow", "font-bold"
+                            )
 
                     def show_gene_pair(gene_group: str, result, goodpairs) -> None:
                         ui.notify(gene_group)
                         self.card.clear()
                         with self.card:
                             with ui.row():
-                                ui.label(f"{gene_group}").tailwind("drop-shadow", "font-bold")
+                                ui.label(f"{gene_group}").tailwind(
+                                    "drop-shadow", "font-bold"
+                                )
                             with ui.row():
                                 reads = result[goodpairs][
                                     result[goodpairs][3].isin(gene_group)
@@ -1476,7 +1594,9 @@ class FusionObject(BaseAnalysis):
                         if group.loc[i, "Occurrence"] == 1:
                             group.loc[i, "Join_Gene"] = group.loc[i + 1, "gene"]
                             group.loc[i, "Join_Start"] = group.loc[i, "start2"]
-                            group.loc[i, "Join_Chromosome"] = group.loc[i + 1, "chromosome2"]
+                            group.loc[i, "Join_Chromosome"] = group.loc[
+                                i + 1, "chromosome2"
+                            ]
                             group.loc[i, "spanB"] = group.loc[i + 1, "span"]
                             group.loc[i, "start3"] = group.loc[i + 1, "start2"]
                             group.loc[i, "end3"] = group.loc[i + 1, "end2"]
@@ -1610,7 +1730,7 @@ class FusionObject(BaseAnalysis):
                                         start=int(row["start2"]),
                                         end=int(row["end2"]),
                                         strand=STRAND[row["strand"]],
-                                        color=row["color"]
+                                        color=row["color"],
                                     )
                                 )
 
@@ -1642,7 +1762,6 @@ class FusionObject(BaseAnalysis):
                         gene_counter[row["gene"]] += 1
                         gene_counter[row["Join_Gene"]] += 1
 
-    
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
         Processes a BAM file and identifies fusion candidates and structural variants.
@@ -1682,112 +1801,118 @@ class FusionObject(BaseAnalysis):
             # Process genome-wide structural variants
             logger.info(f"Processing BAM file for structural variants: {bamfile}")
             sv_csv_file = os.path.join(
-                    self.check_and_create_folder(self.output, self.sampleID),
-                    "sv_master.csv",
-                )
+                self.check_and_create_folder(self.output, self.sampleID),
+                "sv_master.csv",
+            )
             sv_reads = await run.cpu_bound(
                 process_bam_file_svs,
                 bamfile,
                 sv_csv_file,
             )
-            
+
             bed_lines = await run.cpu_bound(
-                build_breakpoint_graph,
-                sv_reads,
-                max_proximity=50000, 
-                group_by_sv=True
+                build_breakpoint_graph, sv_reads, max_proximity=50000, group_by_sv=True
             )
-            
+
             if len(bed_lines) > 0:
                 # Convert bed lines to DataFrame for visualization
                 sv_data = []
-                
+
                 # First, create a mapping of read pairs from sv_reads
                 read_pairs = {}
                 if not sv_reads.empty:
                     for _, row in sv_reads.iterrows():
-                        qname = row['QNAME']
+                        qname = row["QNAME"]
                         if qname not in read_pairs:
                             read_pairs[qname] = []
-                        read_pairs[qname].append({
-                            'chrom': row['RNAME'],
-                            'start': row['REF_START'],
-                            'end': row['REF_END'],
-                            'type': row['TYPE'],
-                            'strand': row['STRAND']
-                        })
-                
+                        read_pairs[qname].append(
+                            {
+                                "chrom": row["RNAME"],
+                                "start": row["REF_START"],
+                                "end": row["REF_END"],
+                                "type": row["TYPE"],
+                                "strand": row["STRAND"],
+                            }
+                        )
+
                 for line in bed_lines:
-                    chrom, start, end, sv_type, _, strand = line.split('\t')
+                    chrom, start, end, sv_type, _, strand = line.split("\t")
                     # Format coordinates with commas for readability
                     formatted_start = f"{int(start):,}"
                     formatted_end = f"{int(end):,}"
                     # Calculate size of the variant
                     size = int(end) - int(start)
                     formatted_size = f"{size:,}"
-                    
+
                     # Find matching reads in sv_reads for this region
                     matching_reads = sv_reads[
-                        (sv_reads['RNAME'] == chrom) & 
-                        (sv_reads['REF_START'].astype(int) >= int(start) - 1000) &
-                        (sv_reads['REF_END'].astype(int) <= int(end) + 1000)
+                        (sv_reads["RNAME"] == chrom)
+                        & (sv_reads["REF_START"].astype(int) >= int(start) - 1000)
+                        & (sv_reads["REF_END"].astype(int) <= int(end) + 1000)
                     ]
-                    
+
                     # Get partner chromosomes and positions
                     partner_info = ""
                     if not matching_reads.empty:
                         for _, read in matching_reads.iterrows():
-                            qname = read['QNAME']
+                            qname = read["QNAME"]
                             if qname in read_pairs:
                                 pairs = read_pairs[qname]
                                 if len(pairs) > 1:
                                     # Find the partner alignment
                                     for pair in pairs:
-                                        if pair['chrom'] != chrom:
-                                            partner_chrom = pair['chrom']
+                                        if pair["chrom"] != chrom:
+                                            partner_chrom = pair["chrom"]
                                             partner_pos = f"{int(pair['start']):,}"
-                                            partner_info = f"{partner_chrom}:{partner_pos}"
+                                            partner_info = (
+                                                f"{partner_chrom}:{partner_pos}"
+                                            )
                                             break
-                    
+
                     event_location = f"{chrom}:{formatted_start}-{formatted_end}"
                     if partner_info:
                         event_location += f" ⟷ {partner_info}"
-                    
-                    sv_data.append({
-                        'Event Type': sv_type,
-                        'Primary Location': f"{chrom}:{formatted_start}-{formatted_end}",
-                        'Partner Location': partner_info if partner_info else "N/A",
-                        'Size (bp)': formatted_size,
-                        'Strand': strand,
-                        'Full Location': event_location
-                    })
-                
+
+                    sv_data.append(
+                        {
+                            "Event Type": sv_type,
+                            "Primary Location": f"{chrom}:{formatted_start}-{formatted_end}",
+                            "Partner Location": partner_info if partner_info else "N/A",
+                            "Size (bp)": formatted_size,
+                            "Strand": strand,
+                            "Full Location": event_location,
+                        }
+                    )
+
                 sv_df = pd.DataFrame(sv_data)
-                
+
                 # Sort by event type and location
-                sv_df = sv_df.sort_values(['Event Type', 'Primary Location'])
-                
+                sv_df = sv_df.sort_values(["Event Type", "Primary Location"])
+
                 # Save structural variants to CSV
                 sv_df.to_csv(
                     os.path.join(
                         self.check_and_create_folder(self.output, self.sampleID),
-                        "structural_variants.csv"
+                        "structural_variants.csv",
                     ),
-                    index=False
+                    index=False,
                 )
-                
+
                 # Update structural variant count and visualization
                 self.sv_count = len(sv_df)
-                
+
                 # Only update UI elements if they exist
-                if hasattr(self, 'sv_plot') and self.sv_plot is not None:
+                if hasattr(self, "sv_plot") and self.sv_plot is not None:
                     self.sv_plot.clear()
                     with self.sv_plot:
                         self.create_sv_plot(sv_df, self.sampleID)
-                
-                if hasattr(self, 'sv_table_container') and self.sv_table_container is not None:
+
+                if (
+                    hasattr(self, "sv_table_container")
+                    and self.sv_table_container is not None
+                ):
                     self.update_sv_table(sv_df)
-                
+
                 # Add to BedTree if needed
                 self.NewBed.load_from_string(
                     "\n".join(bed_lines),
@@ -1878,24 +2003,27 @@ class FusionObject(BaseAnalysis):
                 sv_df = pd.read_csv(
                     os.path.join(output, "structural_variants.csv"),
                     dtype={
-                        'Primary Location': str,
-                        'Partner Location': str,
-                        'Full Location': str
-                    }
+                        "Primary Location": str,
+                        "Partner Location": str,
+                        "Full Location": str,
+                    },
                 )
                 # Replace NaN values with 'N/A' in string columns
-                str_columns = ['Primary Location', 'Partner Location', 'Full Location']
+                str_columns = ["Primary Location", "Partner Location", "Full Location"]
                 for col in str_columns:
-                    sv_df[col] = sv_df[col].fillna('N/A')
-                
+                    sv_df[col] = sv_df[col].fillna("N/A")
+
                 if not sv_df.empty:
                     self.sv_count = len(sv_df)
                     # Only update UI elements if they exist
-                    if hasattr(self, 'sv_plot') and self.sv_plot is not None:
+                    if hasattr(self, "sv_plot") and self.sv_plot is not None:
                         self.sv_plot.clear()
                         with self.sv_plot:
                             self.create_sv_plot(sv_df, self.sampleID)
-                    if hasattr(self, 'sv_table_container') and self.sv_table_container is not None:
+                    if (
+                        hasattr(self, "sv_table_container")
+                        and self.sv_table_container is not None
+                    ):
                         self.update_sv_table(sv_df)
             except pd.errors.EmptyDataError:
                 pass
@@ -1907,9 +2035,9 @@ class FusionObject(BaseAnalysis):
         Args:
             sv_df (pd.DataFrame): DataFrame containing structural variant data.
         """
-        if not hasattr(self, 'sv_table_container') or self.sv_table_container is None:
+        if not hasattr(self, "sv_table_container") or self.sv_table_container is None:
             return
-            
+
         self.sv_table_container.clear()
         with self.sv_table_container:
             self.sv_table = (
@@ -1926,7 +2054,9 @@ class FusionObject(BaseAnalysis):
                 col["sortable"] = True
 
             with self.sv_table.add_slot("top-right"):
-                with ui.input(placeholder="Search").props("type=search").bind_value(self.sv_table, "filter").add_slot("append"):
+                with ui.input(placeholder="Search").props("type=search").bind_value(
+                    self.sv_table, "filter"
+                ).add_slot("append"):
                     ui.icon("search")
 
     def create_sv_plot(self, sv_df: pd.DataFrame, sample_id: str) -> None:
@@ -2001,6 +2131,7 @@ class FusionObject(BaseAnalysis):
                 else:
                     ax3.set_visible(False)
             """
+
 
 def test_me(
     port: int,
