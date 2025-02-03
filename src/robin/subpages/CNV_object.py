@@ -978,6 +978,44 @@ class CNVAnalysis(BaseAnalysis):
             ).style("font-size: 150%; font-weight: 300").tailwind(
                 "drop-shadow", "font-bold"
             )
+            with ui.expansion('Methods', caption='A description of the methods used to identify genome-wide CNV events').classes('w-full'):
+                ui.restructured_text('''
+                    Copy Number Variation (CNV) analysis is performed through the following steps:
+
+                    1. **Bin-based Coverage Analysis**
+                       Reads from BAM files are counted in fixed-width bins across the genome, with 
+                       configurable bin sizes and mapping quality filters.
+
+                    2. **Reference Normalization**
+                       Sample coverage is compared against a control dataset to identify relative 
+                       copy number changes and reduce systematic biases.
+
+                    3. **Change Point Detection**
+                       The Kernel Change Point Detection algorithm identifies significant shifts in 
+                       copy number profiles, using:
+                       * Ruptures library with RBF kernel
+                       * Adaptive penalty values
+                       * Minimum segment size filtering
+
+                    The analysis maintains strict criteria:
+                    * Minimum mapping quality > 60
+                    * Bin-level variance tracking
+                    * Centromere region masking
+                    * Moving average smoothing
+
+                    Each CNV event includes:
+                    * Precise genomic coordinates
+                    * Mean copy number value
+                    * Event classification (Gain/Loss)
+                    * Affected genes and cytobands
+                    * Statistical confidence metrics
+
+                    Results are displayed with interactive visualizations including:
+                    * Chromosome-wide CNV plots
+                    * Gene-level zoom capability
+                    * Time series tracking of changes
+                    * Comprehensive tabular summaries
+                ''').style("font-size: 100%; font-weight: 300")
         with ui.row():
             self.chrom_select = ui.select(
                 options={"All": "All"},
@@ -1151,6 +1189,97 @@ class CNVAnalysis(BaseAnalysis):
             ui.timer(0.1, lambda: self.show_previous_data(), once=True)
         else:
             ui.timer(15, lambda: self.show_previous_data())
+
+        with ui.card().classes("w-full"):
+            with ui.column():
+                ui.label("Target Panel Information").classes("text-lg font-medium")
+                
+                # Display basic panel info
+                with ui.row().classes("justify-between items-center"):
+                    ui.label(f"Panel: {self.target_panel or 'Not specified'}").classes("text-gray-600")
+                    if self.gene_bed_file:
+                        ui.label(f"Total Targets: {len(self.gene_bed)}").classes("text-gray-600")
+
+                # Create a table to display target details
+                if hasattr(self, 'gene_bed') and not self.gene_bed.empty:
+                    # Print debug information
+                    logger.debug(f"Gene bed data shape: {self.gene_bed.shape}")
+                    logger.debug(f"First few rows of gene bed data:\n{self.gene_bed.head()}")
+                    
+                    # Prepare the rows data first
+                    table_rows = []
+                    for _, row in self.gene_bed.iterrows():
+                        table_rows.append({
+                            'chrom': str(row.chrom),  # Ensure string type
+                            'gene': str(row.gene),    # Ensure string type
+                            'start_pos': int(row.start_pos),  # Ensure integer type
+                            'end_pos': int(row.end_pos),      # Ensure integer type
+                            'size': int(row.end_pos - row.start_pos)
+                        })
+                    
+                    logger.debug(f"Number of prepared table rows: {len(table_rows)}")
+                    if table_rows:
+                        logger.debug(f"Sample row: {table_rows[0]}")
+
+                    # Create the table with the prepared data
+                    target_table = ui.table(
+                        columns=[
+                            {
+                                'name': 'chrom',
+                                'label': 'Chromosome',
+                                'field': 'chrom',
+                                'sortable': True,
+                                'align': 'left'
+                            },
+                            {
+                                'name': 'gene',
+                                'label': 'Gene',
+                                'field': 'gene',
+                                'sortable': True,
+                                'align': 'left'
+                            },
+                            {
+                                'name': 'start',
+                                'label': 'Start',
+                                'field': 'start_pos',
+                                'sortable': True,
+                                'align': 'right',
+                                ':format': 'val => Number(val).toLocaleString()'
+                            },
+                            {
+                                'name': 'end',
+                                'label': 'End',
+                                'field': 'end_pos',
+                                'sortable': True,
+                                'align': 'right',
+                                ':format': 'val => Number(val).toLocaleString()'
+                            },
+                            {
+                                'name': 'size',
+                                'label': 'Size (bp)',
+                                'field': 'size',
+                                'sortable': True,
+                                'align': 'right',
+                                ':format': 'val => Number(val).toLocaleString()'
+                            }
+                        ],
+                        rows=table_rows,
+                        pagination=10,
+                        row_key='gene'
+                    )
+                    
+                    # Add props and classes after table creation
+                    target_table.props('dense rows-per-page-options=[10,25,50,0] filter')
+                    target_table.classes("w-full")
+                    
+                    # Add search input above table
+                    with ui.row().classes("w-full my-2"):
+                        ui.input("Search targets...").bind_value_to(target_table, "filter")
+                else:
+                    ui.label("No target panel information available").classes("text-gray-500 italic")
+                    logger.warning("Gene bed data not available or empty")
+
+                # Rest of the code remains the same...
 
     def create_proportion_time_chart(self, title: str) -> None:
         """
