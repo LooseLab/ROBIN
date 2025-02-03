@@ -330,7 +330,9 @@ class Methnice:
         self.readfish_toml = readfish_toml
         if self.readfish_toml:
             self.title = "<strong><font color='#FFFFFF'>R</font></strong>apid nanop<strong><font color='#FFFFFF'>O</font></strong>re <strong><font color='#FFFFFF'>B</font></strong>rain intraoperat<strong><font color='#FFFFFF'>I</font></strong>ve classificatio<strong><font color='#FFFFFF'>N</font></strong>"
-            self.smalltitle = "<strong>B.A.T.M.A.N & <font color='#FFFFFF'>R.O.B.I.N</font></strong>"
+            self.smalltitle = (
+                "<strong>B.A.T.M.A.N & <font color='#FFFFFF'>R.O.B.I.N</font></strong>"
+            )
             self.batphone = True
         else:
             self.title = "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>"

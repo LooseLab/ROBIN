@@ -266,7 +266,7 @@ def merge_modkit_files(
 
     # Debugging Step: Check for missing columns before aggregation
     logging.debug("\n🔍 Checking DataFrame before aggregation:")
-    #logging.debug(new_df.info())
+    # logging.debug(new_df.info())
 
     # **Fix Aggregation Issue: Handle missing categorical values**
     for col in ["mod_code", "strand", "thickStart", "thickEnd", "color"]:

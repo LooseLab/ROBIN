@@ -123,7 +123,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                     "histopathological and molecular evaluation. The final interpretation and diagnosis should always be "
                     "made by qualified healthcare professionals based on all available information."
                 ).classes("text-body1 q-mb-md")
-                
+
                 if batphone:
                     ui.label("BATMAN Mode").classes("text-h5 text-weight-bold q-mb-md")
                     ui.label(
@@ -132,8 +132,8 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                         "BATMAN means: Breakpoint Adaptive Targeting alongside Methylation Analysis on Nanopore. "
                         "This means that the target regions will be updated in real-time based on detected breakpoints. "
                         "This code only works with ReadFish at this time. "
-                        )
-                
+                    )
+
                 def acknowledge():
                     app.storage.tab["disclaimer_acknowledged"] = True
                     disclaimer_dialog.close()
@@ -174,9 +174,9 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
             with ui.row().classes(
                 f"min-[{MENU_BREAKPOINT+1}px]:hidden items-center align-left"
             ):
-                ui.html(smalltitle).style(
-                    "font-size: 150%; font-weight: 300"
-                ).tailwind("drop-shadow", "font-bold")
+                ui.html(smalltitle).style("font-size: 150%; font-weight: 300").tailwind(
+                    "drop-shadow", "font-bold"
+                )
             with ui.row().classes("ml-auto align-top"):
                 with ui.row().classes("items-center m-auto"):
                     ui.label(f"Viewing: {platform.node()}").classes(
