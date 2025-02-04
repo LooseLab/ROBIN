@@ -24,7 +24,7 @@ classifiers = [
   "Programming Language :: Python :: Implementation :: PyPy",
 ]
 dependencies = [
-  "niceGUI", #==1.4.37",
+  "niceGUI>=2.9.1",
   "click",
   "flet",
   "cnv_from_bam",
@@ -43,7 +43,7 @@ dependencies = [
   "psutil",
   "ruptures",
   "pywebview",
-  "torch==1.12.1",
+  "torch==1.13.1",
   "scikit-learn",
   "yappi",
   "tabulate",
