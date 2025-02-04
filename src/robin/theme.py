@@ -31,17 +31,12 @@ External Dependencies:
 - os
 - psutil
 - platform
-
-Example usage::
-
-    from theme import frame
-
-    with frame("Home"):
-        ui.label("Welcome to the Application")
-
 """
 
 from contextlib import contextmanager
+from packaging import version
+import requests
+import asyncio
 
 from nicegui import ui, app, events, core
 import nicegui.air
@@ -54,6 +49,65 @@ from robin import __about__
 import os
 import psutil
 import platform
+
+async def check_version():
+    """
+    Check the current version against the remote version on GitHub.
+    Shows a notification to the user about their version status.
+    """
+    # Check if version has already been checked in this session
+    if app.storage.tab.get("version_checked", False):
+        return
+
+    try:
+        # Get the remote version from GitHub
+        response = requests.get('https://raw.githubusercontent.com/LooseLab/ROBIN/main/src/robin/__about__.py')
+        response.raise_for_status()
+        
+        # Extract version from the response text
+        remote_version_str = None
+        for line in response.text.split('\n'):
+            if line.startswith('__version__'):
+                remote_version_str = line.split('=')[1].strip().strip('"').strip("'")
+                break
+        
+        if not remote_version_str:
+            ui.notify('Could not determine remote version. Please check manually.', type='warning')
+            return
+
+        local_version = version.parse(__about__.__version__)
+        remote_version = version.parse(remote_version_str)
+
+        if local_version == remote_version:
+            ui.notify('Your ROBIN installation is up to date!', type='positive')
+        elif local_version < remote_version:
+            ui.notify(f'Update available! Your version: {local_version}, Latest version: {remote_version}', 
+                     type='negative',
+                     position='top',
+                     close_button=True,
+                     timeout=20000)
+        else:
+            ui.notify(f'You are running a development version ({local_version}). Latest release: {remote_version}', 
+                     type='warning',
+                     position='top',
+                     close_button=True,
+                     timeout=20000)
+    
+    except requests.RequestException:
+        ui.notify('Could not check for updates. \n'
+                  'Either you are not connected to the internet or you cannot access https://www.github.com/looselab/robin . \n'
+                  'Please manually check for updates.', 
+                  type='warning',
+                  timeout=20000,
+                  position='top',
+                  close_button=True,
+                  multi_line=True,
+                  )
+    except Exception as e:
+        ui.notify(f'Error checking version: {str(e)}', type='error')
+    
+    # Mark version as checked for this session
+    app.storage.tab["version_checked"] = True
 
 # Define the path to the image file used in the header and footer
 IMAGEFILE = os.path.join(
@@ -142,6 +196,9 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
             disclaimer_dialog.open()
 
     ui.timer(0.1, show_disclaimer, once=True)
+    
+    # Add version check timer
+    ui.timer(1.0, check_version, once=True)
 
     # Create a persistent dialog for quitting the app
     with ui.dialog().props("persistent") as quitdialog, ui.card():

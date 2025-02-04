@@ -54,6 +54,8 @@ dependencies = [
   "tomli-w",
   "pyranges",
   "pyarrow",
+  "packaging",
+  "requests",
 ]
 
 [project.scripts]
