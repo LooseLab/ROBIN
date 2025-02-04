@@ -53,7 +53,7 @@ import platform
 async def check_version():
     """
     Check the current version against the remote version on GitHub.
-    Shows a notification to the user about their version status.
+    Shows a notification or dialog to the user about their version status.
     """
     # Check if version has already been checked in this session
     if app.storage.tab.get("version_checked", False):
@@ -72,7 +72,11 @@ async def check_version():
                 break
         
         if not remote_version_str:
-            ui.notify('Could not determine remote version. Please check manually.', type='warning')
+            with ui.dialog() as dialog, ui.card():
+                ui.label('Version Check Error').classes('text-h6')
+                ui.label('Could not determine remote version. Please check manually.')
+                ui.button('OK', on_click=dialog.close)
+            dialog.open()
             return
 
         local_version = version.parse(__about__.__version__)
@@ -81,30 +85,39 @@ async def check_version():
         if local_version == remote_version:
             ui.notify('Your ROBIN installation is up to date!', type='positive')
         elif local_version < remote_version:
-            ui.notify(f'Update available! Your version: {local_version}, Latest version: {remote_version}', 
-                     type='negative',
-                     position='top',
-                     close_button=True,
-                     timeout=20000)
+            with ui.dialog() as dialog, ui.card():
+                ui.label('Update Available!').classes('text-h6')
+                ui.label(f'Your version: {local_version}')
+                ui.label(f'Latest version: {remote_version}')
+                ui.label('Would you like to visit the GitHub repository to update?')
+                with ui.row():
+                    ui.button('Continue with current version', on_click=dialog.close)
+                    ui.button('Visit GitHub', on_click=lambda: ui.open('https://github.com/LooseLab/ROBIN')).classes('bg-primary')
+            dialog.open()
         else:
-            ui.notify(f'You are running a development version ({local_version}). Latest release: {remote_version}', 
-                     type='warning',
-                     position='top',
-                     close_button=True,
-                     timeout=20000)
+            with ui.dialog() as dialog, ui.card():
+                ui.label('Development Version').classes('text-h6')
+                ui.label(f'You are running a development version ({local_version}).')
+                ui.label(f'Latest release: {remote_version}')
+                ui.label('This version may be unstable and is only for testing purposes. It is not recommended for production use.')
+                ui.label('Please consider using the latest release instead.')
+                ui.button('OK', on_click=dialog.close)
+            dialog.open()
     
     except requests.RequestException:
-        ui.notify('Could not check for updates. \n'
-                  'Either you are not connected to the internet or you cannot access https://www.github.com/looselab/robin . \n'
-                  'Please manually check for updates.', 
-                  type='warning',
-                  timeout=20000,
-                  position='top',
-                  close_button=True,
-                  multi_line=True,
-                  )
+        with ui.dialog() as dialog, ui.card():
+            ui.label('Connection Error').classes('text-h6')
+            ui.label('Could not check for updates.')
+            ui.label('Either you are not connected to the internet or you cannot access https://www.github.com/looselab/robin.')
+            ui.label('Please manually check for updates.')
+            ui.button('OK', on_click=dialog.close)
+        dialog.open()
     except Exception as e:
-        ui.notify(f'Error checking version: {str(e)}', type='error')
+        with ui.dialog() as dialog, ui.card():
+            ui.label('Error').classes('text-h6')
+            ui.label(f'Error checking version: {str(e)}')
+            ui.button('OK', on_click=dialog.close)
+        dialog.open()
     
     # Mark version as checked for this session
     app.storage.tab["version_checked"] = True
