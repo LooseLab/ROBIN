@@ -6,7 +6,7 @@ import signal
 import logging
 from datetime import datetime
 
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from pathlib import Path
 from nicegui import ui, app, core, observables
 import nicegui.air
@@ -17,6 +17,7 @@ from configparser import ConfigParser
 
 from robin.brain_class import BrainMeth
 from robin.minknow_info.minknow_panel import MinKNOWFish
+from robin.utilities.telemetry import Telemetry
 
 from robin.__about__ import __version__
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
@@ -26,6 +27,10 @@ DEFAULT_CFG: str = "config.ini"
 UNIQUE_ID: str = str(uuid.uuid4())
 
 DISCLAIMER = EXTENDED_DISCLAIMER_TEXT
+
+# Initialize telemetry
+TELEMETRY_ENDPOINT = "https://8n5cmljgjk.execute-api.eu-west-1.amazonaws.com/prod/record"
+telemetry = None  # Initialize to None, will be set after parsing arguments
 
 
 def get_user_acknowledgment():
@@ -473,38 +478,47 @@ class Methnice:
         ):
             self.frontpage = ui.card().classes("w-full")
             with self.frontpage:
-                ui.label("Welcome to R.O.B.I.N").classes(
-                    "text-sky-600 dark:text-white"
-                ).style("font-size: 150%; font-weight: 300").tailwind(
-                    "drop-shadow", "font-bold"
-                )
-                ui.label(
-                    "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
-                ).classes("text-black-600 dark:text-white").style(
-                    "font-size: 100%; font-weight: 300"
-                ).tailwind(
-                    "drop-shadow", "font-bold"
-                )
-                with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
-                    "color=green"
-                ):
-                    ui.label("View Live Data")
-                    ui.image(
-                        os.path.join(
-                            os.path.dirname(os.path.abspath(images.__file__)),
-                            "ROBIN_logo_small.png",
+                # Main content row
+                with ui.row().classes('w-full items-start justify-between'):
+                    # Left column with welcome text and buttons
+                    with ui.column().classes('flex-grow'):
+                        ui.label("Welcome to R.O.B.I.N").classes(
+                            "text-sky-600 dark:text-white"
+                        ).style("font-size: 150%; font-weight: 300").tailwind(
+                            "drop-shadow", "font-bold"
                         )
-                    ).classes("rounded-full w-16 h-16 ml-4")
-                with ui.button(on_click=lambda: ui.navigate.to("/browse")).props(
-                    "color=green"
-                ):
-                    ui.label("Browse Historic Data")
-                    ui.image(
-                        os.path.join(
-                            os.path.dirname(os.path.abspath(images.__file__)),
-                            "ROBIN_logo_small.png",
+                        ui.label(
+                            "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
+                        ).classes("text-black-600 dark:text-white").style(
+                            "font-size: 100%; font-weight: 300"
+                        ).tailwind(
+                            "drop-shadow", "font-bold"
                         )
-                    ).classes("rounded-full w-16 h-16 ml-4")
+                        with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
+                            "color=green"
+                        ):
+                            ui.label("View Live Data")
+                            ui.image(
+                                os.path.join(
+                                    os.path.dirname(os.path.abspath(images.__file__)),
+                                    "ROBIN_logo_small.png",
+                                )
+                            ).classes("rounded-full w-16 h-16 ml-4")
+                        with ui.button(on_click=lambda: ui.navigate.to("/browse")).props(
+                            "color=green"
+                        ):
+                            ui.label("Browse Historic Data")
+                            ui.image(
+                                os.path.join(
+                                    os.path.dirname(os.path.abspath(images.__file__)),
+                                    "ROBIN_logo_small.png",
+                                )
+                            ).classes("rounded-full w-16 h-16 ml-4")
+                    
+                    # Right column with location map
+                    if telemetry:
+                        with ui.column().classes('flex-none ml-4'):
+                            telemetry.create_map_element()
 
     async def index_page(self) -> None:
         """
@@ -773,7 +787,7 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     type=str,
 )
 @click.option(
-    "--centreID",
+    "--centreid",
     help="Provide an identifier to be used in the experiment name field.",
     required=True,
     type=str,
@@ -899,6 +913,13 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     ),
     required=False,
 )
+@click.option(
+    "--no-telemetry",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Opt out of sending anonymous usage statistics.",
+)
 @click.argument(
     "output",
     type=click.Path(
@@ -927,10 +948,39 @@ def package_run(
     basecall_config: str,
     readfish_toml: Optional[Path],
     experiment_duration: int,
+    no_telemetry: bool,
 ) -> None:
     """
-    Entrypoint for when GUI is launched directly.
+    Main entry point for the ROBIN package.
     """
+    
+    # Initialize telemetry based on opt-out setting
+    if not no_telemetry:
+        print("Telemetry collection enabled.")
+        telemetry = Telemetry(TELEMETRY_ENDPOINT)
+    else:
+        telemetry = None
+        print("Telemetry collection disabled by user request.")
+
+    # Collect run arguments for telemetry
+    run_args = {
+        "version": __version__,
+        "threads": threads,
+        "target_panel": target_panel,
+        "simtime": simtime,
+        "showerrors": showerrors,
+        "browse": browse,
+        "exclude": exclude,
+        "experiment_duration": experiment_duration
+    }
+
+    # Try to send telemetry, fall back to local storage if endpoint unavailable
+    if telemetry:
+        if not telemetry.send_telemetry(run_args) and output:
+            telemetry.save_local_telemetry(run_args, output)
+    else:
+        print("Telemetry collection is disabled by user request.")
+
     setup_logging(log_level, log_file)
 
     # Get user acknowledgment before proceeding

@@ -5,10 +5,10 @@ build-backend = "hatchling.build"
 [project]
 name = "robin"
 dynamic = ["version"]
-description = ''
+description = "Rapid nanopore brain intraoperative classification"
 readme = "README.md"
 requires-python = ">=3.8"
-license = "MIT"
+license = {text = "MIT"}
 keywords = []
 authors = [
   { name = "Matt Loose", email = "matt.loose@nottingham.ac.uk" },
@@ -56,6 +56,11 @@ dependencies = [
   "pyarrow",
   "packaging",
   "requests",
+  "numpy>=1.26.3",
+  "plotly>=5.18.0",
+  "svglib>=1.5.1",
+  "alive-progress>=3.1.5",
+  "geocoder>=1.38.1",
 ]
 
 [project.scripts]
