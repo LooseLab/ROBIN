@@ -30,7 +30,7 @@ DISCLAIMER = EXTENDED_DISCLAIMER_TEXT
 
 # Initialize telemetry
 TELEMETRY_ENDPOINT = "https://8n5cmljgjk.execute-api.eu-west-1.amazonaws.com/prod/record"
-telemetry = None  # Initialize to None, will be set after parsing arguments
+TELEMETRY_INSTANCE = None  # Initialize to None, will be set after parsing arguments
 
 
 def get_user_acknowledgment():
@@ -104,6 +104,11 @@ async def index() -> None:
     Main index page for the ROBIN site.
     Sets up an instance of Methnice for the splash screen and navigation.
     """
+    logging.info("Rendering index page")
+    if UNIQUE_ID not in app.storage.general:
+        logging.error("No storage found for this session")
+        return
+        
     GUI = Methnice(
         force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
         kit=app.storage.general[UNIQUE_ID]["kit"],
@@ -123,17 +128,14 @@ async def index() -> None:
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
+        telemetry_instance=TELEMETRY_INSTANCE
     )
+    logging.info(f"Created GUI instance with telemetry: {GUI.telemetry is not None}")
     GUI.setup()
 
     def use_on_air():
         """
         Enable or disable remote access based on the value of the general argument.
-
-        Example:
-            >>> args = events.ValueChangeEventArguments(value=True)
-            >>> use_on_air(args)
-            None
         """
         if "use_on_air" in app.storage.general.keys():
             if app.storage.general["use_on_air"]:
@@ -313,6 +315,7 @@ class Methnice:
         bed_file: str,
         experiment_duration: str,
         readfish_toml: Optional[Path],
+        telemetry_instance=None,
         sample_id: Optional[str] = None,
     ):
         self.force_sampleid = force_sampleid
@@ -333,6 +336,7 @@ class Methnice:
         self.basecall_config = basecall_config
         self.bed_file = bed_file
         self.readfish_toml = readfish_toml
+        self.telemetry = telemetry_instance
         if self.readfish_toml:
             self.title = "<strong><font color='#FFFFFF'>R</font></strong>apid nanop<strong><font color='#FFFFFF'>O</font></strong>re <strong><font color='#FFFFFF'>B</font></strong>rain intraoperat<strong><font color='#FFFFFF'>I</font></strong>ve classificatio<strong><font color='#FFFFFF'>N</font></strong>"
             self.smalltitle = (
@@ -471,6 +475,7 @@ class Methnice:
         """
         Async method for rendering the splash screen.
         """
+        logging.info(f"Rendering splash screen with telemetry: {self.telemetry is not None}")
         with theme.frame(
             self.title,
             smalltitle=self.smalltitle,
@@ -516,9 +521,12 @@ class Methnice:
                             ).classes("rounded-full w-16 h-16 ml-4")
                     
                     # Right column with location map
-                    if telemetry:
-                        with ui.column().classes('flex-none ml-4'):
-                            telemetry.create_map_element()
+                    if self.telemetry:
+                        logging.info("Adding telemetry map to splash screen")
+                        with ui.column().classes('flex-none ml-4 w-96'):  # Fixed width for map container
+                            self.telemetry.create_map_element()
+                    else:
+                        logging.warning("No telemetry instance available for map display")
 
     async def index_page(self) -> None:
         """
@@ -638,27 +646,17 @@ def run_class(
     browse: bool,
     exclude: List[str],
     reference: Path,
-    basecall_config: str,
     bed_file: Path,
+    basecall_config: str,
     readfish_toml: Optional[Path],
     experiment_duration: int,
+    telemetry=None,
 ) -> None:
     """
     Set up and run the ROBIN application.
-
-    :param port: Port for the GUI.
-    :param reload: Boolean indicating if the server should reload on changes.
-    :param threads: Number of threads available.
-    :param simtime: Boolean indicating if simulation mode is enabled.
-    :param watchfolder: Path to the watchfolder.
-    :param output: Path to the output directory.
-    :param sequencing_summary: Path to the sequencing summary file. If provided, timestamps will be taken from this file.
-    :param target_panel: Analysis gene panel.
-    :param showerrors: Boolean indicating if errors should be displayed.
-    :param browse: Boolean indicating if browse mode is enabled.
-    :param exclude: List of analysis types to exclude.
-    :param reference: Path to the reference genome and index.
     """
+    logging.info(f"run_class called with telemetry: {telemetry is not None}")
+    
     try:
         app.storage.general.clear()
     except Exception as e:
@@ -673,6 +671,10 @@ def run_class(
     except Exception as e:
         logging.error(f"Error locating favicon: {str(e)}")
         iconfile = None
+
+    # Store the telemetry instance in a module-level variable
+    global TELEMETRY_INSTANCE
+    TELEMETRY_INSTANCE = telemetry
 
     app.storage.general[UNIQUE_ID] = {
         "threads": threads,
@@ -711,7 +713,41 @@ def run_class(
     except Exception as e:
         logging.error(f"Error adding static files: {str(e)}")
 
-    app.on_startup(startup)
+    # Create a new instance of Methnice for startup
+    global_methnice = Methnice(
+        force_sampleid=force_sampleid,
+        kit=kit,
+        centreID=centreID,
+        threads=threads,
+        simtime=simtime,
+        watchfolder=watchfolder,
+        output=output,
+        sequencing_summary=sequencing_summary,
+        target_panel=target_panel,
+        showerrors=showerrors,
+        browse=browse,
+        exclude=exclude,
+        reference=reference,
+        bed_file=bed_file,
+        basecall_config=basecall_config,
+        experiment_duration=experiment_duration,
+        readfish_toml=readfish_toml,
+        unique_id=UNIQUE_ID,
+        telemetry_instance=telemetry,
+    )
+    logging.info(f"Created Methnice instance with telemetry: {global_methnice.telemetry is not None}")
+
+    # Initialize the Methnice instance
+    global_methnice.setup()
+
+    async def startup_with_methnice():
+        """
+        Start data processing in the main application loop.
+        """
+        logging.info(f"Setting up {UNIQUE_ID}.")
+        await global_methnice.start_analysis()
+
+    app.on_startup(startup_with_methnice)
 
     try:
         ui.run(
@@ -958,9 +994,11 @@ def package_run(
     if not no_telemetry:
         print("Telemetry collection enabled.")
         telemetry = Telemetry(TELEMETRY_ENDPOINT)
+        logging.info("Telemetry instance created successfully")
     else:
         telemetry = None
         print("Telemetry collection disabled by user request.")
+        logging.info("Telemetry disabled by user request")
 
     # Collect run arguments for telemetry
     run_args = {
@@ -976,10 +1014,12 @@ def package_run(
 
     # Try to send telemetry, fall back to local storage if endpoint unavailable
     if telemetry:
+        logging.info("Attempting to send telemetry data")
         if not telemetry.send_telemetry(run_args) and output:
+            logging.warning("Failed to send telemetry, saving locally")
             telemetry.save_local_telemetry(run_args, output)
     else:
-        print("Telemetry collection is disabled by user request.")
+        logging.info("Telemetry collection is disabled")
 
     setup_logging(log_level, log_file)
 
@@ -996,6 +1036,7 @@ def package_run(
             port=port,
             force_sampleid=force_sampleid,
             kit=kit,
+            centreID=centreid,
             reload=False,
             threads=threads,
             simtime=simtime,
@@ -1009,16 +1050,15 @@ def package_run(
             reference=click.format_filename(reference),
             bed_file=click.format_filename(bed_file),
             basecall_config=basecall_config,
-            readfish_toml=click.format_filename(readfish_toml),
+            readfish_toml=click.format_filename(readfish_toml) if readfish_toml else None,
             experiment_duration=experiment_duration,
+            telemetry=telemetry,
         )
     else:
         logging.info(f"Watchfolder: {watchfolder}, Output: {output}")
         if output is None:
             logging.error("Output is required when --browse is not set.")
             sys.exit(1)
-        if readfish_toml:
-            readfish_toml = click.format_filename(readfish_toml)
         run_class(
             port=port,
             force_sampleid=force_sampleid,
@@ -1039,8 +1079,9 @@ def package_run(
             reference=click.format_filename(reference),
             bed_file=click.format_filename(bed_file),
             basecall_config=basecall_config,
-            readfish_toml=readfish_toml,
+            readfish_toml=click.format_filename(readfish_toml) if readfish_toml else None,
             experiment_duration=experiment_duration,
+            telemetry=telemetry,
         )
 
 

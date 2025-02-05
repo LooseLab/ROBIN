@@ -338,25 +338,31 @@ class Telemetry:
         """
         try:
             coords = self.get_map_coordinates()
-            #location_desc = self.get_location_description()
-            print(coords)
-            print(f"Latitude: {coords[0]}, Longitude: {coords[1]}")
-            if coords:
-                with ui.card().classes('w-96'):
-                    ui.label('Your Location').classes('text-xl font-bold')
-                    #ui.label(location_desc)
+            location_desc = self.get_location_description()
+            
+            logging.info(f"Creating map with coordinates: {coords}")
+            logging.info(f"Location description: {location_desc}")
+            logging.info(f"Location info: {self._location_info}")
+            
+            with ui.card().classes('w-192'):  # Double the width from w-96 to w-192
+                ui.label('Your Location').classes('text-xl font-bold')
+                ui.label(location_desc)
+                
+                if coords and len(coords) == 2 and all(isinstance(x, (int, float)) for x in coords):
+                    logging.info("Creating leaflet map with valid coordinates")
                     m = ui.leaflet().classes('w-full h-64')
-                    m.set_center((coords[0], coords[1]))#, zoom=4)
-                    m.set_zoom(10)
-                    m.marker((coords[0],coords[1]))
-                    #           popup=f'ROBIN Instance<br>{location_desc}')
-            else:
-                with ui.card().classes('w-96'):
-                    ui.label('Location').classes('text-xl font-bold')
-                    ui.label('Location information not available')
+                    m.set_center(coords)  # Set the center coordinates
+                    m.set_zoom(10)  # Set the zoom level
+                    # Just create a basic marker at the coordinates
+                    m.marker(coords)
+                    # Add the location description below the map
+                    ui.label(f'ROBIN Instance at {location_desc}').classes('text-sm text-gray-600')
+                else:
+                    logging.warning(f"Invalid coordinates received: {coords}")
+                    ui.label('Location map not available - invalid coordinates')
                     
         except Exception as e:
-            logging.warning(f"Failed to create map element: {str(e)}")
-            with ui.card().classes('w-96'):
+            logging.error(f"Failed to create map element: {str(e)}", exc_info=True)
+            with ui.card().classes('w-192'):  # Also update the error card width
                 ui.label('Location').classes('text-xl font-bold')
                 ui.label('Error creating location map')
