@@ -179,8 +179,8 @@ class Telemetry:
         Returns:
             bool: True if telemetry was sent successfully, False otherwise
         """
-        print("Sending telemetry data...")
-        print(f"Endpoint URL: {self.endpoint_url}")
+        logging.info("Sending telemetry data...")
+        logging.debug(f"Endpoint URL: {self.endpoint_url}")
         
         # Create the telemetry data in the exact format expected by the API
         inner_data = {
@@ -223,17 +223,16 @@ class Telemetry:
             "body": json.dumps(inner_data)
         }
 
-        # Pretty print the telemetry data
-        print("\nTelemetry Data Being Collected:")
-        print("--------------------------------")
-        print("Telemetry data is collected anonymously to help us understand how ROBIN is used.")
-        print("It is not used to identify you or your data.")
-        print("It is only used to help us improve ROBIN.")
-        print("You can opt out by running with --no-telemetry.")
-        print("The information collected is as follows:")
-        print("--------------------------------")
-        print(json.dumps(inner_data, indent=2))
-        print()  # Extra newline for readability
+        # Log the telemetry data
+        logging.debug("\nTelemetry Data Being Collected:")
+        logging.debug("--------------------------------")
+        logging.info("Telemetry data is collected anonymously to help us understand how ROBIN is used.")
+        logging.info("It is not used to identify you or your data.")
+        logging.info("It is only used to help us improve ROBIN.")
+        logging.info("You can opt out by running with --no-telemetry.")
+        logging.debug("The information collected is as follows:")
+        logging.debug("--------------------------------")
+        logging.debug(json.dumps(inner_data, indent=2))
 
         if not self.endpoint_url:
             return False
@@ -253,23 +252,21 @@ class Telemetry:
             )
             
             if response.status_code != 200:
-                print(f"Failed to send telemetry. Status code: {response.status_code}, Response: {response.text}")
                 logging.warning(f"Failed to send telemetry. Status code: {response.status_code}, Response: {response.text}")
                 return False
 
             # Parse the response
             response_data = response.json()
             if response_data.get('statusCode') == 400:
-                print(f"Failed to process telemetry. Response: {response.text}")
                 logging.warning(f"Failed to process telemetry. Response: {response.text}")
                 return False
 
-            print(f"Telemetry sent successfully. Status code: {response.status_code}, Response: {response.text}")
-            print(f"Record ID: {inner_data['id']}")
+            logging.info(f"Telemetry sent successfully. Status code: {response.status_code}")
+            logging.debug(f"Response: {response.text}")
+            logging.debug(f"Record ID: {inner_data['id']}")
             return True
             
         except Exception as e:
-            print(f"Failed to send telemetry: {str(e)}")
             logging.warning(f"Failed to send telemetry: {str(e)}")
             return False
 
@@ -382,9 +379,9 @@ class Telemetry:
             return False
 
         try:
-            print("\n=== Sending Periodic Telemetry Update ===")
-            print(f"Session ID: {self.session_id}")
-            print(f"Time since start: {round((datetime.utcnow() - self.start_time).total_seconds() / 60, 1)} minutes")
+            logging.debug("\n=== Sending Periodic Telemetry Update ===")
+            logging.debug(f"Session ID: {self.session_id}")
+            logging.debug(f"Time since start: {round((datetime.utcnow() - self.start_time).total_seconds() / 60, 1)} minutes")
             
             # Get hardware metrics
             memory_mb = round(psutil.Process().memory_info().rss / (1024 * 1024), 2)
@@ -392,23 +389,23 @@ class Telemetry:
             disk_read = round(psutil.disk_io_counters().read_bytes / (1024 * 1024), 2)
             disk_write = round(psutil.disk_io_counters().write_bytes / (1024 * 1024), 2)
             
-            print("\nSystem Metrics:")
-            print(f"Memory Usage: {memory_mb} MB")
-            print(f"CPU Usage: {cpu_pct}%")
-            print(f"Disk Read: {disk_read} MB")
-            print(f"Disk Write: {disk_write} MB")
-            print(f"Threads: {len(psutil.Process().threads())}")
+            logging.debug("\nSystem Metrics:")
+            logging.debug(f"Memory Usage: {memory_mb} MB")
+            logging.debug(f"CPU Usage: {cpu_pct}%")
+            logging.debug(f"Disk Read: {disk_read} MB")
+            logging.debug(f"Disk Write: {disk_write} MB")
+            logging.debug(f"Threads: {len(psutil.Process().threads())}")
             
             # Get analysis metrics
             reads_processed = len(methnice_instance.robin.processed_files) if hasattr(methnice_instance.robin, 'processed_files') else 0
             sample_count = len(methnice_instance.robin.samples) if hasattr(methnice_instance.robin, 'samples') else 0
             queue_size = len(methnice_instance.robin.file_queue) if hasattr(methnice_instance.robin, 'file_queue') else 0
             
-            print("\nAnalysis Status:")
-            print(f"Reads Processed: {reads_processed}")
-            print(f"Samples: {sample_count}")
-            print(f"Queue Size: {queue_size}")
-            print(f"Active Modules: {[m for m in ['sturgeon', 'forest', 'nanodx', 'pannanodx', 'cnv', 'fusion', 'coverage', 'mgmt'] if m not in methnice_instance.exclude]}")
+            logging.debug("\nAnalysis Status:")
+            logging.debug(f"Reads Processed: {reads_processed}")
+            logging.debug(f"Samples: {sample_count}")
+            logging.debug(f"Queue Size: {queue_size}")
+            logging.debug(f"Active Modules: {[m for m in ['sturgeon', 'forest', 'nanodx', 'pannanodx', 'cnv', 'fusion', 'coverage', 'mgmt'] if m not in methnice_instance.exclude]}")
 
             # Create the telemetry data in the format expected by the API
             inner_data = {
@@ -478,10 +475,10 @@ class Telemetry:
                 }
             }
 
-            print("\nComplete Telemetry Data:")
-            print("=" * 40)
-            print(json.dumps(inner_data, indent=2))
-            print("=" * 40)
+            logging.debug("\nComplete Telemetry Data:")
+            logging.debug("=" * 40)
+            logging.debug(json.dumps(inner_data, indent=2))
+            logging.debug("=" * 40)
 
             # Wrap in body field for Lambda
             telemetry_data = {
@@ -497,25 +494,22 @@ class Telemetry:
             )
             
             if response.status_code != 200:
-                print("\nFailed to send telemetry!")
-                print(f"Status code: {response.status_code}")
-                print(f"Response: {response.text}")
-                logging.warning(f"Failed to send run telemetry. Status code: {response.status_code}, Response: {response.text}")
+                logging.warning("\nFailed to send telemetry!")
+                logging.warning(f"Status code: {response.status_code}")
+                logging.warning(f"Response: {response.text}")
                 return False
 
             # Parse the response
             response_data = response.json()
             if response_data.get('statusCode') == 400:
-                print("\nServer rejected telemetry data!")
-                print(f"Error: {response_data.get('body')}")
-                logging.warning(f"Failed to process run telemetry. Response: {response.text}")
+                logging.warning("\nServer rejected telemetry data!")
+                logging.warning(f"Error: {response_data.get('body')}")
                 return False
 
-            print("\nTelemetry update sent successfully!")
-            print("=" * 40 + "\n")
+            logging.info("Telemetry update sent successfully!")
+            logging.debug("=" * 40 + "\n")
             return True
             
         except Exception as e:
-            print(f"\nError sending telemetry: {str(e)}")
-            logging.warning(f"Failed to send run telemetry: {str(e)}")
+            logging.warning(f"Error sending telemetry: {str(e)}")
             return False
