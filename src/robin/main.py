@@ -412,6 +412,16 @@ class Methnice:
                 bed_file=self.bed_file,
                 readfish_toml=self.readfish_toml,
             )
+            
+            # Set up periodic telemetry updates if telemetry is enabled
+            if self.telemetry:
+                def send_telemetry_update():
+                    logging.info("Sending periodic telemetry update")
+                    self.telemetry.send_run_telemetry(self)
+                
+                ui.timer(60.0, send_telemetry_update, active=True)  # Send update every minute
+                logging.info("Telemetry update timer initialized (1-minute interval)")
+                
         except Exception as e:
             logging.error(f"Error initializing BrainMeth: {str(e)}")
             raise
