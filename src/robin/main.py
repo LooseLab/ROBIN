@@ -5,6 +5,7 @@ import sys
 import signal
 import logging
 from datetime import datetime
+import asyncio
 
 from typing import Optional, List, Tuple
 from pathlib import Path
@@ -18,6 +19,7 @@ from configparser import ConfigParser
 from robin.brain_class import BrainMeth
 from robin.minknow_info.minknow_panel import MinKNOWFish
 from robin.utilities.telemetry import Telemetry
+from robin.utilities.news_feed import NewsFeed
 
 from robin.__about__ import __version__
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
@@ -491,52 +493,56 @@ class Methnice:
             smalltitle=self.smalltitle,
             batphone=self.batphone,
         ):
-            self.frontpage = ui.card().classes("w-full")
-            with self.frontpage:
-                # Main content row
-                with ui.row().classes('w-full items-start justify-between'):
-                    # Left column with welcome text and buttons
-                    with ui.column().classes('flex-grow'):
-                        ui.label("Welcome to R.O.B.I.N").classes(
-                            "text-sky-600 dark:text-white"
-                        ).style("font-size: 150%; font-weight: 300").tailwind(
-                            "drop-shadow", "font-bold"
-                        )
-                        ui.label(
-                            "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
-                        ).classes("text-black-600 dark:text-white").style(
-                            "font-size: 100%; font-weight: 300"
-                        ).tailwind(
-                            "drop-shadow", "font-bold"
-                        )
-                        with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
+            ui.label("Welcome to R.O.B.I.N").classes(
+                        "text-sky-600 dark:text-white"
+                    ).style("font-size: 150%; font-weight: 300").tailwind(
+                        "drop-shadow", "font-bold"
+                    )
+            ui.label(
+                    "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
+                ).classes("text-black-600 dark:text-white").style(
+                    "font-size: 100%; font-weight: 300"
+                ).tailwind(
+                    "drop-shadow", "font-bold"
+                )
+            with ui.row().classes('w-full no-wrap'):
+                with ui.column().classes('w-1/4'):
+                    with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
                             "color=green"
                         ):
-                            ui.label("View Live Data")
-                            ui.image(
-                                os.path.join(
-                                    os.path.dirname(os.path.abspath(images.__file__)),
-                                    "ROBIN_logo_small.png",
-                                )
-                            ).classes("rounded-full w-16 h-16 ml-4")
-                        with ui.button(on_click=lambda: ui.navigate.to("/browse")).props(
+                        ui.label("View Live Data")
+                        ui.image(
+                            os.path.join(
+                                os.path.dirname(os.path.abspath(images.__file__)),
+                                "ROBIN_logo_small.png",
+                            )
+                        ).classes("rounded-full w-16 h-16 ml-4")
+                    with ui.button(on_click=lambda: ui.navigate.to("/browse")).props(
                             "color=green"
                         ):
-                            ui.label("Browse Historic Data")
-                            ui.image(
-                                os.path.join(
-                                    os.path.dirname(os.path.abspath(images.__file__)),
-                                    "ROBIN_logo_small.png",
-                                )
-                            ).classes("rounded-full w-16 h-16 ml-4")
+                        ui.label("Browse Historic Data")
+                        ui.image(
+                            os.path.join(
+                                os.path.dirname(os.path.abspath(images.__file__)),
+                                "ROBIN_logo_small.png",
+                            )
+                        ).classes("rounded-full w-16 h-16 ml-4")
+                with ui.column().classes('w-2/4'):
+                    if not hasattr(self, 'news_feed'):
+                        self.news_feed = NewsFeed()
+                        # Initial fetch of news
+                        await self.news_feed.fetch_news()
+                        # Start the update timer
+                        asyncio.create_task(self.news_feed.start_update_timer())
                     
-                    # Right column with location map
+                    self.news_feed.create_news_element()
+                with ui.column().classes('w-1/4'):
                     if self.telemetry:
                         logging.info("Adding telemetry map to splash screen")
-                        with ui.column().classes('flex-none ml-4 w-96'):  # Fixed width for map container
-                            self.telemetry.create_map_element()
+                        self.telemetry.create_map_element()
                     else:
                         logging.warning("No telemetry instance available for map display")
+        
 
     async def index_page(self) -> None:
         """
