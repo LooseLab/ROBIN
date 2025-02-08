@@ -516,19 +516,21 @@ class Minknow_Info:
                                     ),
                                 ).props("color=primary")
 
+                                # Create a radio group with the position and enable the run button immediately
+                                # since we only have one position
                                 ui.radio(
-                                    [self.position.name], value=self.position.name
-                                ).on(
-                                    "update:model-value", lambda: run_button.enable()
-                                ).classes(
-                                    "q-mt-md"
-                                )
+                                    [self.position.name], 
+                                    value=self.position.name,
+                                    on_change=lambda: run_button.enable()
+                                ).classes("q-mt-md")
+                                
+                                # Enable the run button by default since we only have one position
+                                run_button.enable()
 
                                 with ui.stepper_navigation():
                                     ui.button("Back", on_click=stepper.previous).props(
                                         "flat"
                                     )
-                                    run_button.disable()
 
                         # Settings Summary
                         with ui.expansion("Fixed Settings", icon="settings").classes(

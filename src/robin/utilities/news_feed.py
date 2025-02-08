@@ -52,6 +52,7 @@ class NewsFeed:
             'User-Agent': 'ROBIN-Client/1.0',
             'Accept': 'application/json'
         }
+        self._update_timer = None
 
     async def fetch_news(self) -> bool:
         """
@@ -130,22 +131,28 @@ class NewsFeed:
     def create_news_element(self) -> None:
         """Create the news feed UI element."""
         try:
-            with ui.card().classes('w-full'):
-                with ui.row().classes('w-full items-center justify-between p-4'):
-                    ui.label('ROBIN News').classes('text-xl font-bold')
+            with ui.card().classes('w-full shadow-lg rounded-xl'):
+                # Header section with title and last update
+                with ui.row().classes('w-full items-center justify-between p-4 border-b border-gray-200'):
+                    with ui.row().classes('items-center gap-2'):
+                        ui.icon('feed', color='primary').classes('text-xl')
+                        ui.label('ROBIN News').classes('text-xl font-bold text-primary')
                     if self.last_update:
-                        ui.label(f'Last updated: {self.last_update.strftime("%H:%M %d/%m/%Y")}').classes('text-sm text-gray-600')
+                        with ui.row().classes('items-center gap-1'):
+                            ui.icon('update', color='gray').classes('text-sm')
+                            ui.label(f'Updated {self.last_update.strftime("%H:%M %d/%m/%Y")}').classes('text-sm text-gray-600')
 
-                # Scrollable container for news items
-                with ui.scroll_area().classes('w-full h-[calc(100vh-300px)]'):
+                # Scrollable news container with elegant styling
+                with ui.scroll_area().classes('w-full h-[calc(100vh-350px)]'):
                     self._news_container = ui.column().classes('w-full gap-4 p-4')
                     self._update_news_display()
 
         except Exception as e:
             logging.error(f"Error creating news element: {str(e)}")
-            with ui.card().classes('w-full'):
-                ui.label('ROBIN News').classes('text-xl font-bold')
-                ui.label('Error displaying news feed').classes('text-red-600')
+            with ui.card().classes('w-full shadow-lg rounded-xl p-4'):
+                with ui.row().classes('items-center gap-2'):
+                    ui.icon('error', color='negative')
+                    ui.label('Error Loading News').classes('text-xl font-bold text-negative')
 
     def _update_news_display(self) -> None:
         """Update the news display with current items."""
@@ -157,39 +164,99 @@ class NewsFeed:
             
             with self._news_container:
                 if not self.is_available:
-                    ui.label('News feed unavailable - please check your network connection').classes('text-red-600 p-4')
+                    with ui.card().classes('w-full bg-red-50 border border-red-200 rounded-lg p-4'):
+                        with ui.row().classes('items-center gap-2'):
+                            ui.icon('wifi_off', color='negative')
+                            ui.label('News feed unavailable - please check your network connection').classes('text-red-600')
                     return
 
                 if not self.news_items:
-                    ui.label('No news items available').classes('text-gray-600 p-4')
+                    with ui.card().classes('w-full bg-gray-50 border border-gray-200 rounded-lg p-4'):
+                        with ui.row().classes('items-center gap-2'):
+                            ui.icon('inbox', color='gray')
+                            ui.label('No news items available').classes('text-gray-600')
                     return
 
                 for item in self.news_items:
-                    with ui.card().classes('w-full bg-gray-50 hover:bg-gray-100 transition-colors'):
-                        with ui.column().classes('w-full p-4 gap-4'):
-                            ui.label(item.headline).classes('font-bold text-lg text-sky-600')
-                            ui.label(item.content).classes('text-gray-700 text-sm')
+                    with ui.card().classes('w-full bg-white hover:bg-gray-50 transition-colors duration-200 rounded-lg shadow-sm border border-gray-100'):
+                        with ui.column().classes('w-full p-4 gap-3'):
+                            # Headline with icon based on message type
+                            with ui.row().classes('items-center gap-2'):
+                                # Choose icon based on message type
+                                icon_name = {
+                                    'news': 'newspaper',
+                                    'update': 'system_update',
+                                    'alert': 'warning',
+                                }.get(item.message_type, 'info')
+                                ui.icon(icon_name, color='primary').classes('text-lg')
+                                ui.label(item.headline).classes('font-bold text-lg text-primary')
                             
-                            if item.image_url:
-                                ui.image(item.image_url).classes('rounded-lg mx-auto').style('max-width: 200px; max-height: 200px; object-fit: contain;')
-                            
-                            if item.link:
-                                with ui.row().classes('w-full justify-end'):
-                                    ui.link(
-                                        'Read more →', 
-                                        item.link,
-                                        new_tab=True
-                                    ).classes('text-blue-600 hover:text-blue-800')
+                            # Main content with proper spacing and formatting
+                            with ui.column().classes('gap-3 pl-8'): # Indent content under headline
+                                ui.label(item.content).classes('text-gray-700 text-sm leading-relaxed')
+                                
+                                # Image handling with better presentation
+                                if item.image_url:
+                                    try:
+                                        # Verify image URL is valid
+                                        if not item.image_url.startswith(('http://', 'https://')):
+                                            raise ValueError("Invalid image URL")
+
+                                        # Create a full-width container with fixed dimensions
+                                        with ui.card().classes('w-full overflow-hidden rounded-lg my-1'):
+                                            with ui.row().classes('justify-center items-center'):
+                                                # Create image with fixed dimensions and proper scaling
+                                                img = ui.image(item.image_url).style('width: 600px; height: 300px; object-fit: contain;')
+                                            
+                                            # Add error handling for image load failure
+                                            def on_error(e):
+                                                img.set_visibility(False)
+                                                with ui.row().classes('items-center justify-center gap-2 p-2'):
+                                                    ui.icon('broken_image', color='gray')
+                                                    ui.label('Image unavailable').classes('text-gray-500 text-sm')
+                                            
+                                            img.on('error', on_error)
+                                    except Exception as e:
+                                        logging.warning(f"Error displaying image: {str(e)}")
+                                        with ui.row().classes('items-center justify-center gap-2 p-2'):
+                                            ui.icon('broken_image', color='gray')
+                                            ui.label('Image unavailable').classes('text-gray-500 text-sm')
+                                
+                                # Link handling with improved styling
+                                if item.link:
+                                    with ui.row().classes('w-full justify-end mt-2'):
+                                        with ui.link(
+                                            target=item.link,
+                                            new_tab=True
+                                        ).classes('flex items-center gap-1 text-primary hover:text-primary-dark transition-colors'):
+                                            ui.label('Read more')
+                                            ui.icon('arrow_forward', size='text-sm')
+
+                            # Add date information if available
+                            if hasattr(item, 'start_date'):
+                                with ui.row().classes('w-full justify-end mt-2 pt-2 border-t border-gray-100'):
+                                    ui.label(f'Posted: {item.start_date}').classes('text-xs text-gray-500')
 
         except Exception as e:
             logging.error(f"Error updating news display: {str(e)}")
             with self._news_container:
-                ui.label('Error updating news feed').classes('text-red-600 p-4')
+                with ui.card().classes('w-full bg-red-50 border border-red-200 rounded-lg p-4'):
+                    with ui.row().classes('items-center gap-2'):
+                        ui.icon('error', color='negative')
+                        ui.label('Error updating news feed').classes('text-red-600')
 
-    async def start_update_timer(self) -> None:
-        """Start the periodic update timer."""
-        while True:
-            if self.should_update():
-                if await self.fetch_news():
-                    self._update_news_display()
-            await asyncio.sleep(3600)  # Check every hour 
+    async def _check_and_update_news(self) -> None:
+        """Check if update is needed and fetch news if necessary."""
+        if self.should_update():
+            if await self.fetch_news():
+                self._update_news_display()
+
+    def start_update_timer(self) -> None:
+        """Start the periodic update timer using ui.timer."""
+        # Only create a new timer if one doesn't exist
+        if self._update_timer is None:
+            # Update immediately on start
+            asyncio.create_task(self._check_and_update_news())
+            # Then set up hourly updates
+            self._update_timer = ui.timer(3600, lambda: asyncio.create_task(self._check_and_update_news()))
+            logging.info("News feed update timer initialized") 

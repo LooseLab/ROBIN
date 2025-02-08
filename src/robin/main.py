@@ -339,6 +339,8 @@ class Methnice:
         self.bed_file = bed_file
         self.readfish_toml = readfish_toml
         self.telemetry = telemetry_instance
+        # Initialize news feed as a class variable
+        self.news_feed = None
         if self.readfish_toml:
             self.title = "<strong><font color='#FFFFFF'>R</font></strong>apid nanop<strong><font color='#FFFFFF'>O</font></strong>re <strong><font color='#FFFFFF'>B</font></strong>rain intraoperat<strong><font color='#FFFFFF'>I</font></strong>ve classificatio<strong><font color='#FFFFFF'>N</font></strong>"
             self.smalltitle = (
@@ -421,7 +423,7 @@ class Methnice:
                     logging.info("Sending periodic telemetry update")
                     self.telemetry.send_run_telemetry(self)
                 
-                ui.timer(60.0, send_telemetry_update, active=True)  # Send update every minute
+                ui.timer(120.0, send_telemetry_update, active=True)  # Send update every minute
                 logging.info("Telemetry update timer initialized (1-minute interval)")
                 
         except Exception as e:
@@ -528,15 +530,14 @@ class Methnice:
                             )
                         ).classes("rounded-full w-16 h-16 ml-4")
                 with ui.column().classes('w-2/4'):
-                    if not hasattr(self, 'news_feed'):
+                    # Initialize news feed only if it hasn't been initialized yet
+                    if self.news_feed is None:
                         self.news_feed = NewsFeed()
-                        # Initial fetch of news
-                        await self.news_feed.fetch_news()
-                        # Start the update timer
-                        asyncio.create_task(self.news_feed.start_update_timer())
-                    
+                        self.news_feed.start_update_timer()
+                    # Create the news element
                     self.news_feed.create_news_element()
                 with ui.column().classes('w-1/4'):
+                    # Initialize telemetry if enabled
                     if self.telemetry:
                         logging.info("Adding telemetry map to splash screen")
                         self.telemetry.create_map_element()

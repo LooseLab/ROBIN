@@ -82,6 +82,7 @@ import tempfile
 from alive_progress import alive_bar
 from nicegui import ui, app, run
 import subprocess
+import time
 
 from robin import resources
 
@@ -369,13 +370,65 @@ def check_bam(bamfile):
     :param bamfile: Path to the BAM file.
     :return: Tuple containing baminfo and bamdata.
     """
+    import time
+    import os
+
     logging.info(f"Checking BAM file: {bamfile}")
-    pysam.index(bamfile)
-    bam = ReadBam(bamfile)
-    baminfo = bam.process_reads()
-    bamdata = bam.summary()
-    logging.info(f"BAM file processed: {bamfile}")
-    return baminfo, bamdata
+    
+    # Check if file exists and is accessible
+    if not os.path.exists(bamfile):
+        logging.error(f"BAM file does not exist: {bamfile}")
+        raise FileNotFoundError(f"BAM file not found: {bamfile}")
+
+    # Check if file is being written to
+    try:
+        file_size = os.path.getsize(bamfile)
+        time.sleep(0.1)  # Brief pause
+        if os.path.getsize(bamfile) != file_size:
+            logging.warning(f"BAM file is still being written: {bamfile}")
+            raise IOError("BAM file is still being written")
+    except OSError as e:
+        logging.error(f"Error checking BAM file size: {str(e)}")
+        raise
+
+    # Try to index the BAM file with retries
+    max_retries = 3
+    retry_delay = 1  # seconds
+    
+    for attempt in range(max_retries):
+        try:
+            # Check if index exists and is newer than BAM file
+            bai_file = f"{bamfile}.bai"
+            if os.path.exists(bai_file) and os.path.getmtime(bai_file) > os.path.getmtime(bamfile):
+                logging.info(f"Using existing index for {bamfile}")
+            else:
+                logging.info(f"Indexing BAM file (attempt {attempt + 1}/{max_retries}): {bamfile}")
+                pysam.index(bamfile)
+            break
+        except pysam.utils.SamtoolsError as e:
+            if "Resource temporarily unavailable" in str(e):
+                if attempt < max_retries - 1:
+                    logging.warning(f"BAM indexing failed (attempt {attempt + 1}), retrying in {retry_delay}s: {str(e)}")
+                    time.sleep(retry_delay)
+                    retry_delay *= 2  # Exponential backoff
+                    continue
+                else:
+                    logging.error(f"Failed to index BAM file after {max_retries} attempts: {bamfile}")
+                    raise
+            else:
+                logging.error(f"Error indexing BAM file: {str(e)}")
+                raise
+
+    try:
+        # Read BAM file
+        bam = ReadBam(bamfile)
+        baminfo = bam.process_reads()
+        bamdata = bam.summary()
+        logging.info(f"BAM file processed successfully: {bamfile}")
+        return baminfo, bamdata
+    except Exception as e:
+        logging.error(f"Error processing BAM file {bamfile}: {str(e)}")
+        raise
 
 
 def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
@@ -550,28 +603,83 @@ class BrainMeth:
         :param counter_name: Name of the counter to update
         :param value: Value to add to the counter
         """
-        current = app.storage.general[self.mainuuid]["samples"][sample_id][
-            "file_counters"
-        ][counter_name]
-        new_value = max(0, current + value)  # Ensure we don't go below 0
-        app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][
-            counter_name
-        ] = new_value
-        logging.debug(
-            f"Counter {counter_name} updated for sample {sample_id}: {current} -> {new_value}"
-        )
+        try:
+            # Ensure sample exists in storage
+            if sample_id not in app.storage.general[self.mainuuid]["samples"]:
+                app.storage.general[self.mainuuid]["samples"][sample_id] = {}
+                self.configure_storage(sample_id)
+                app.storage.general[self.mainuuid]["sample_list"].append(sample_id)
+                logging.info(f"Initialized storage for new sample: {sample_id}")
+
+            # Ensure file_counters exists
+            if "file_counters" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
+                app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"] = {
+                    "bam_passed": 0,
+                    "bam_failed": 0,
+                    "mapped_count": 0,
+                    "pass_mapped_count": 0,
+                    "fail_mapped_count": 0,
+                    "unmapped_count": 0,
+                    "pass_unmapped_count": 0,
+                    "fail_unmapped_count": 0,
+                    "pass_bases_count": 0,
+                    "fail_bases_count": 0,
+                    "bases_count": 0,
+                    "mapped_reads_num": 0,
+                    "unmapped_reads_num": 0,
+                    "pass_mapped_reads_num": 0,
+                    "fail_mapped_reads_num": 0,
+                    "pass_unmapped_reads_num": 0,
+                    "fail_unmapped_reads_num": 0,
+                    "mapped_bases": 0,
+                    "unmapped_bases": 0,
+                    "pass_mapped_bases": 0,
+                    "fail_mapped_bases": 0,
+                    "pass_unmapped_bases": 0,
+                    "fail_unmapped_bases": 0,
+                }
+                logging.info(f"Initialized file_counters for sample: {sample_id}")
+
+            # Ensure counter exists
+            if counter_name not in app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"]:
+                app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][counter_name] = 0
+                logging.info(f"Initialized counter {counter_name} for sample: {sample_id}")
+
+            current = app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][counter_name]
+            new_value = max(0, current + value)  # Ensure we don't go below 0
+            app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][counter_name] = new_value
+            logging.debug(f"Counter {counter_name} updated for sample {sample_id}: {current} -> {new_value}")
+
+        except Exception as e:
+            logging.error(f"Error updating counter {counter_name} for sample {sample_id}: {str(e)}", exc_info=True)
+            # Re-raise the exception to ensure we don't silently fail
+            raise
 
     async def start_background(self):
         """
         Start background tasks for BAM processing and analysis.
         """
         logging.info(f"Starting background tasks for UUID: {self.mainuuid}")
-        app.storage.general[self.mainuuid]["bam_count"] = {}
+        
+        # Ensure storage directory exists
+        storage_dir = os.path.join(os.path.expanduser("~"), ".nicegui")
+        os.makedirs(storage_dir, exist_ok=True)
+        
+        # Initialize storage if it doesn't exist
+        if not hasattr(app.storage, "general"):
+            app.storage.general = {}
+        
+        if self.mainuuid not in app.storage.general:
+            app.storage.general[self.mainuuid] = {}
+        
         app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
         app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
-        app.storage.general[self.mainuuid]["bam_count"][
-            "total_files"
-        ] = 0  # Add total files counter
+        app.storage.general[self.mainuuid]["bam_count"]["total_files"] = 0
+        app.storage.general[self.mainuuid]["samples"] = {}
+        app.storage.general[self.mainuuid]["sample_list"] = []
+
+        # Initialize queues
+        logging.info("Initializing processing queues")
         self.bam_tracking = Queue()
         self.bamforcns = Queue()
         self.bamforsturgeon = Queue()
@@ -582,9 +690,10 @@ class BrainMeth:
         self.bamformgmt = Queue()
         self.bamforfusions = Queue()
         self.bamforbigbadmerge = Queue()
-        self.mergecounter = 0  # This is the queue for the big bad merge
+        self.mergecounter = 0
+
         if self.watchfolder:
-            logging.info(f"Adding a watchfolder: {self.watchfolder}")
+            logging.info(f"Adding watchfolder: {self.watchfolder}")
             await self.add_watchfolder(self.watchfolder)
 
         common_args = {
@@ -596,7 +705,9 @@ class BrainMeth:
             "force_sampleid": self.force_sampleid,
         }
 
+        # Initialize analysis objects with batch processing
         if "sturgeon" not in self.exclude:
+            logging.info("Initializing Sturgeon analysis with batch processing")
             self.Sturgeon = Sturgeon_object(
                 analysis_name="STURGEON",
                 batch=True,
@@ -606,6 +717,7 @@ class BrainMeth:
             self.Sturgeon.process_data()
 
         if "nanodx" not in self.exclude:
+            logging.info("Initializing NanoDX analysis with batch processing")
             self.NanoDX = NanoDX_object(
                 analysis_name="NANODX",
                 batch=True,
@@ -613,7 +725,9 @@ class BrainMeth:
                 **common_args,
             )
             self.NanoDX.process_data()
+
         if "pannanodx" not in self.exclude:
+            logging.info("Initializing PanNanoDX analysis with batch processing")
             self.panNanoDX = NanoDX_object(
                 analysis_name="PANNANODX",
                 batch=True,
@@ -622,7 +736,9 @@ class BrainMeth:
                 **common_args,
             )
             self.panNanoDX.process_data()
+
         if "forest" not in self.exclude:
+            logging.info("Initializing RandomForest analysis with batch processing")
             self.RandomForest = RandomForest_object(
                 analysis_name="FOREST",
                 batch=True,
@@ -633,6 +749,7 @@ class BrainMeth:
             self.RandomForest.process_data()
 
         if "cnv" not in self.exclude:
+            logging.info("Initializing CNV analysis")
             self.CNV = CNVAnalysis(
                 analysis_name="CNV",
                 bamqueue=self.bamforcnv,
@@ -646,6 +763,7 @@ class BrainMeth:
             self.CNV.process_data()
 
         if "coverage" not in self.exclude:
+            logging.info("Initializing Coverage analysis")
             self.Target_Coverage = TargetCoverage(
                 analysis_name="COVERAGE",
                 showerrors=self.showerrors,
@@ -657,12 +775,16 @@ class BrainMeth:
             self.Target_Coverage.process_data()
 
         if "mgmt" not in self.exclude:
+            logging.info("Initializing MGMT analysis")
             self.MGMT_panel = MGMT_Object(
-                analysis_name="MGMT", bamqueue=self.bamformgmt, **common_args
+                analysis_name="MGMT",
+                bamqueue=self.bamformgmt,
+                **common_args,
             )
             self.MGMT_panel.process_data()
 
         if "fusion" not in self.exclude:
+            logging.info("Initializing Fusion analysis")
             self.Fusion_panel = FusionObject(
                 analysis_name="FUSION",
                 bamqueue=self.bamforfusions,
@@ -2185,7 +2307,6 @@ class BrainMeth:
                             "output": self.output,
                             "progress": True,
                             "browse": self.browse,
-                            "bamqueue": None,
                             "uuid": self.mainuuid,
                             "force_sampleid": self.force_sampleid,
                             "sample_id": self.sampleID,
@@ -2740,249 +2861,110 @@ class BrainMeth:
         if "file" in app.storage.general[self.mainuuid]["bam_count"]:
             while self.watchdogbamqueue.qsize() > 0:
                 filename, timestamp = self.watchdogbamqueue.get()
-                app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
-                app.storage.general[self.mainuuid]["bam_count"][
-                    "total_files"
-                ] += 1  # Increment total files
-                app.storage.general[self.mainuuid]["bam_count"]["file"][
-                    filename
-                ] = timestamp
+                logging.info(f"Processing new BAM file from watchdog queue: {filename}")
+                # First check the BAM file to get its sample ID
+                baminfo, bamdata = await run.cpu_bound(check_bam, filename)
+                sample_id = baminfo["sample_id"] if not self.force_sampleid else self.force_sampleid
+                logging.info(f"BAM file {filename} belongs to sample: {sample_id}")
 
-            while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
-                self.nofiles = False
-                file = (
-                    k := next(
-                        iter(app.storage.general[self.mainuuid]["bam_count"]["file"])
-                    ),
-                    app.storage.general[self.mainuuid]["bam_count"]["file"].pop(k),
-                )
-                baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
-                sample_id = baminfo["sample_id"]
+                # Initialize sample-specific counters if they don't exist
                 if sample_id not in app.storage.general[self.mainuuid]["samples"]:
+                    logging.info(f"Initializing new sample storage for: {sample_id}")
                     app.storage.general[self.mainuuid]["samples"][sample_id] = {}
                     self.configure_storage(sample_id)
                     app.storage.general[self.mainuuid]["sample_list"].append(sample_id)
+                    # Initialize sample-specific BAM tracking
+                    if "bam_tracking" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"] = {
+                            "counter": 0,
+                            "total_files": 0,
+                            "files": {}
+                        }
+
+                # Update sample-specific counters
+                app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["counter"] += 1
+                app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["total_files"] += 1
+                app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["files"][filename] = timestamp
+
+                # Also update global counters for overall tracking
+                app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
+                app.storage.general[self.mainuuid]["bam_count"]["total_files"] += 1
+                app.storage.general[self.mainuuid]["bam_count"]["file"][filename] = timestamp
+
+            # Process the files
+            while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
+                self.nofiles = False
+                file = (k := next(iter(app.storage.general[self.mainuuid]["bam_count"]["file"])),
+                       app.storage.general[self.mainuuid]["bam_count"]["file"].pop(k))
+                
+                logging.info(f"Processing BAM file from global queue: {file[0]}")
+                baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
+                sample_id = baminfo["sample_id"] if not self.force_sampleid else self.force_sampleid
+                logging.info(f"BAM file {file[0]} belongs to sample: {sample_id}")
+
+                # Remove from sample-specific tracking as well
+                if sample_id in app.storage.general[self.mainuuid]["samples"]:
+                    if "bam_tracking" in app.storage.general[self.mainuuid]["samples"][sample_id]:
+                        if file[0] in app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["files"]:
+                            app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["files"].pop(file[0])
+
+                # Process state and update counters
                 if baminfo["state"] == "pass":
+                    logging.info(f"BAM file {file[0]} passed quality checks")
                     self.update_counter(sample_id, "bam_passed", 1)
-                    self.update_counter(
-                        sample_id, "pass_mapped_count", bamdata["mapped_reads"]
-                    )
-                    self.update_counter(
-                        sample_id, "pass_unmapped_count", bamdata["unmapped_reads"]
-                    )
-                    self.update_counter(
-                        sample_id, "pass_bases_count", bamdata["yield_tracking"]
-                    )
-                    # Add pass read numbers and bases
-                    self.update_counter(
-                        sample_id, "pass_mapped_reads_num", bamdata["mapped_reads_num"]
-                    )
-                    self.update_counter(
-                        sample_id,
-                        "pass_unmapped_reads_num",
-                        bamdata["unmapped_reads_num"],
-                    )
-                    self.update_counter(
-                        sample_id, "pass_mapped_bases", bamdata["mapped_bases"]
-                    )
-                    self.update_counter(
-                        sample_id, "pass_unmapped_bases", bamdata["unmapped_bases"]
-                    )
+                    self.update_counter(sample_id, "pass_mapped_count", bamdata["mapped_reads"])
+                    self.update_counter(sample_id, "pass_unmapped_count", bamdata["unmapped_reads"])
+                    self.update_counter(sample_id, "pass_bases_count", bamdata["yield_tracking"])
+                    self.update_counter(sample_id, "pass_mapped_reads_num", bamdata["mapped_reads_num"])
+                    self.update_counter(sample_id, "pass_unmapped_reads_num", bamdata["unmapped_reads_num"])
+                    self.update_counter(sample_id, "pass_mapped_bases", bamdata["mapped_bases"])
+                    self.update_counter(sample_id, "pass_unmapped_bases", bamdata["unmapped_bases"])
                 else:
+                    logging.info(f"BAM file {file[0]} failed quality checks")
                     self.update_counter(sample_id, "bam_failed", 1)
-                    self.update_counter(
-                        sample_id, "fail_mapped_count", bamdata["mapped_reads"]
-                    )
-                    self.update_counter(
-                        sample_id, "fail_unmapped_count", bamdata["unmapped_reads"]
-                    )
-                    self.update_counter(
-                        sample_id, "fail_bases_count", bamdata["yield_tracking"]
-                    )
-                    # Add fail read numbers and bases
-                    self.update_counter(
-                        sample_id, "fail_mapped_reads_num", bamdata["mapped_reads_num"]
-                    )
-                    self.update_counter(
-                        sample_id,
-                        "fail_unmapped_reads_num",
-                        bamdata["unmapped_reads_num"],
-                    )
-                    self.update_counter(
-                        sample_id, "fail_mapped_bases", bamdata["mapped_bases"]
-                    )
-                    self.update_counter(
-                        sample_id, "fail_unmapped_bases", bamdata["unmapped_bases"]
-                    )
+                    self.update_counter(sample_id, "fail_mapped_count", bamdata["mapped_reads"])
+                    self.update_counter(sample_id, "fail_unmapped_count", bamdata["unmapped_reads"])
+                    self.update_counter(sample_id, "fail_bases_count", bamdata["yield_tracking"])
+                    self.update_counter(sample_id, "fail_mapped_reads_num", bamdata["mapped_reads_num"])
+                    self.update_counter(sample_id, "fail_unmapped_reads_num", bamdata["unmapped_reads_num"])
+                    self.update_counter(sample_id, "fail_mapped_bases", bamdata["mapped_bases"])
+                    self.update_counter(sample_id, "fail_unmapped_bases", bamdata["unmapped_bases"])
 
-                # Update total counts
-                self.update_counter(
-                    sample_id,
-                    "mapped_count",
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_mapped_count"]
-                    + app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_mapped_count"],
-                )
-                self.update_counter(
-                    sample_id,
-                    "unmapped_count",
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_unmapped_count"]
-                    + app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_unmapped_count"],
-                )
-                self.update_counter(
-                    sample_id,
-                    "bases_count",
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_bases_count"]
-                    + app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_bases_count"],
-                )
-
-                # Update total read numbers and bases
-                self.update_counter(
-                    sample_id,
-                    "mapped_reads_num",
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_mapped_reads_num"]
-                    + app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_mapped_reads_num"],
-                )
-                self.update_counter(
-                    sample_id,
-                    "unmapped_reads_num",
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_unmapped_reads_num"]
-                    + app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_unmapped_reads_num"],
-                )
-                self.update_counter(
-                    sample_id,
-                    "mapped_bases",
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_mapped_bases"]
-                    + app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_mapped_bases"],
-                )
-                self.update_counter(
-                    sample_id,
-                    "unmapped_bases",
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["pass_unmapped_bases"]
-                    + app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "file_counters"
-                    ]["fail_unmapped_bases"],
-                )
-
-                if (
-                    baminfo["device_position"]
-                    not in app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "devices"
-                    ]
-                ):
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "devices"
-                    ].append(baminfo["device_position"])
-                if (
-                    baminfo["basecall_model"]
-                    not in app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "basecall_models"
-                    ]
-                ):
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "basecall_models"
-                    ].append(baminfo["basecall_model"])
-                if not self.force_sampleid:
-                    if (
-                        baminfo["sample_id"]
-                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
-                            "sample_ids"
-                        ]
-                    ):
-                        app.storage.general[self.mainuuid]["samples"][sample_id][
-                            "sample_ids"
-                        ].append(baminfo["sample_id"])
-                else:
-                    if (
-                        self.force_sampleid
-                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
-                            "sample_ids"
-                        ]
-                    ):
-                        app.storage.general[self.mainuuid]["samples"][sample_id][
-                            "sample_ids"
-                        ].append(self.force_sampleid)
-                if (
-                    baminfo["flow_cell_id"]
-                    not in app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "flowcell_ids"
-                    ]
-                ):
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "flowcell_ids"
-                    ].append(baminfo["flow_cell_id"])
-                if (
-                    baminfo["time_of_run"]
-                    not in app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "run_time"
-                    ]
-                ):
-                    app.storage.general[self.mainuuid]["samples"][sample_id][
-                        "run_time"
-                    ].append(baminfo["time_of_run"])
-
-                mydf = pd.DataFrame.from_dict(app.storage.general)
-                if not self.force_sampleid:
-                    sample_id = baminfo["sample_id"]
-                else:
-                    sample_id = self.force_sampleid
-                mydf.to_csv(
-                    os.path.join(
-                        self.check_and_create_folder(self.output, sample_id),
-                        "master.csv",
-                    )
-                )
-
-                counter += 1
+                # Route to analysis queues
                 analyses = ["forest", "sturgeon", "nanodx", "pannanodx"]
                 if any(analysis.lower() not in self.exclude for analysis in analyses):
+                    logging.info(f"Routing {file[0]} to bigbadmerge queue for batch processing")
                     self.bamforbigbadmerge.put([file[0], file[1], sample_id])
 
+                # Individual analysis queue routing
                 if "forest" not in self.exclude:
+                    logging.info(f"Routing {file[0]} to forest analysis queue")
                     self.bamforcns.put([file[0], file[1], sample_id])
                 if "sturgeon" not in self.exclude:
+                    logging.info(f"Routing {file[0]} to sturgeon analysis queue")
                     self.bamforsturgeon.put([file[0], file[1], sample_id])
                 if "nanodx" not in self.exclude:
+                    logging.info(f"Routing {file[0]} to nanodx analysis queue")
                     self.bamfornanodx.put([file[0], file[1], sample_id])
                 if "pannanodx" not in self.exclude:
+                    logging.info(f"Routing {file[0]} to pannanodx analysis queue")
                     self.bamforpannanodx.put([file[0], file[1], sample_id])
                 if "cnv" not in self.exclude:
+                    logging.info(f"Routing {file[0]} to cnv analysis queue")
                     self.bamforcnv.put([file[0], file[1], sample_id])
                 if "coverage" not in self.exclude:
+                    logging.info(f"Routing {file[0]} to coverage analysis queue")
                     self.bamfortargetcoverage.put([file[0], file[1], sample_id])
                 if "mgmt" not in self.exclude:
+                    logging.info(f"Routing {file[0]} to mgmt analysis queue")
                     self.bamformgmt.put([file[0], file[1], sample_id])
                 if "fusion" not in self.exclude:
+                    logging.info(f"Routing {file[0]} to fusion analysis queue")
                     self.bamforfusions.put([file[0], file[1], sample_id])
 
-            self.nofiles = True
-        logging.info("Process Bam Finishing")
-        self.process_bams_tracker.active = True
+                self.nofiles = True
+            logging.info("Process Bam Finishing")
+            self.process_bams_tracker.active = True
 
     async def check_existing_bams(self, sequencing_summary=None):
         """
