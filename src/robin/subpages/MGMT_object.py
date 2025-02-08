@@ -118,7 +118,7 @@ def run_bedtools(bamfile: str, MGMT_BED: str, tempbamfile: str) -> None:
         raise
 
 
-def run_modkit(tempmgmtdir: str, MGMTbamfile: str, threads: int) -> None:
+def run_modkit(tempmgmtdir: str, MGMTbamfile: str, threads: int, output_mgmt_bed: str) -> None:
     """
     Processes the BAM file with modkit and runs an R script for MGMT prediction.
 
@@ -135,10 +135,11 @@ def run_modkit(tempmgmtdir: str, MGMTbamfile: str, threads: int) -> None:
         pysam.index(
             os.path.join(tempmgmtdir, "mgmt.bam"), f"{tempmgmtdir}/mgmt.bam.bai"
         )
-        cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods --mixed-delim {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress >/dev/null 2>&1"
+        #cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods --mixed-delim {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress >/dev/null 2>&1"
+        cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods --mixed-delim {os.path.join(tempmgmtdir, 'mgmt.bam')} {output_mgmt_bed} --suppress-progress >/dev/null 2>&1"
         os.system(cmd)
-        if os.path.exists(os.path.join(tempmgmtdir, "mgmt.bed")):
-            cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={os.path.join(tempmgmtdir, 'mgmt.bed')} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
+        if os.path.exists(output_mgmt_bed):
+            cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={output_mgmt_bed} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
             os.system(cmd)
     except Exception:
         raise
@@ -267,11 +268,17 @@ class MGMT_Object(BaseAnalysis):
                     dir=self.check_and_create_folder(self.output, self.sampleID)
                 )
 
+                output_mgmt_bed = os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID),
+                            f"{self.counter}_mgmt.bed",
+                        )
+
                 await run.cpu_bound(
                     run_modkit,
                     tempmgmtdir.name,
                     self.MGMTbamfile[self.sampleID],
                     self.threads,
+                    output_mgmt_bed,
                 )
 
                 try:
@@ -356,6 +363,52 @@ class MGMT_Object(BaseAnalysis):
             },
         ).classes("w-full").style("height: 200px")
 
+    def display_bed_data(self, bed_file: str) -> None:
+        """
+        Displays the modkit pileup bed file data in a table format.
+
+        Args:
+            bed_file (str): Path to the bed file.
+
+        Returns:
+            None
+        """
+        try:
+            # Read bed file with pandas
+            bed_data = pd.read_csv(bed_file, sep='\t', 
+                                 names=['Chromosome', 'Start', 'End', 'Name', 'Score', 'Strand',
+                                       'Coverage', 'Modified', 'Unmodified', 'Modified_Fraction'])
+            
+            # Calculate percentage methylation
+            bed_data['Methylation_Percentage'] = (bed_data['Modified_Fraction'] * 100).round(2)
+            
+            # Display the data in an AG Grid table
+            ui.aggrid.from_pandas(
+                bed_data,
+                theme="material",
+                options={
+                    "defaultColDef": {
+                        "sortable": True,
+                        "resizable": True,
+                        "filter": True,
+                    },
+                    "columnDefs": [
+                        {"headerName": "Chr", "field": "Chromosome", "width": 80},
+                        {"headerName": "Start", "field": "Start", "width": 100},
+                        {"headerName": "End", "field": "End", "width": 100},
+                        {"headerName": "Coverage", "field": "Coverage", "width": 100},
+                        {"headerName": "Modified", "field": "Modified", "width": 100},
+                        {"headerName": "Unmodified", "field": "Unmodified", "width": 100},
+                        {"headerName": "% Methylation", "field": "Methylation_Percentage", "width": 120},
+                    ],
+                    "pagination": True,
+                    "paginationPageSize": 10,
+                },
+            ).classes("w-full").style("height: 400px")
+        except Exception as e:
+            logger.error(f"Error displaying bed file data: {e}")
+            ui.label(f"Error reading bed file: {str(e)}").classes("text-red-500")
+
     def get_report(self, watchfolder: str) -> Tuple[pd.DataFrame, str, str]:
         """
         Generates a report from the analysis results.
@@ -383,9 +436,6 @@ class MGMT_Object(BaseAnalysis):
         """
         Displays previously analyzed data from the specified watch folder.
 
-        Args:
-            watchfolder (str): Path to the folder containing previous analysis results.
-
         Returns:
             None
         """
@@ -404,9 +454,17 @@ class MGMT_Object(BaseAnalysis):
                 if count > self.last_seen:
                     results = pd.read_csv(os.path.join(output, file))
                     plot_out = os.path.join(output, file.replace(".csv", ".png"))
+                    bed_file = os.path.join(output, file.replace(".csv", "_mgmt.bed"))
+                    
                     self.mgmtable.clear()
                     with self.mgmtable:
                         self.tabulate(results)
+                        
+                        # Add bed file visualization if it exists
+                        if os.path.exists(bed_file):
+                            ui.label("MGMT CpG Site Methylation Data").classes("text-lg font-medium mt-4 mb-2")
+                            self.display_bed_data(bed_file)
+                            
                     if os.path.exists(plot_out):
                         self.mgmtplot.clear()
                     with self.mgmtplot.classes("w-full"):

@@ -495,40 +495,54 @@ class Methnice:
             smalltitle=self.smalltitle,
             batphone=self.batphone,
         ):
-            ui.label("Welcome to R.O.B.I.N").classes(
-                        "text-sky-600 dark:text-white"
-                    ).style("font-size: 150%; font-weight: 300").tailwind(
+            with ui.card().classes('w-full shadow-lg rounded-xl'):
+                with ui.row().classes('w-full items-center justify-between p-4 border-b border-gray-200'):
+                    with ui.row().classes('items-center gap-2'):
+                        #ui.icon('feed', color='primary').classes('text-xl')
+                        ui.label("Welcome to R.O.B.I.N").classes(
+                            "text-sky-600 dark:text-white"
+                        ).style("font-size: 150%; font-weight: 300").tailwind(
+                            "drop-shadow", "font-bold"
+                        )
+                with ui.row().classes('w-full items-center justify-between p-4 border-b border-gray-200'):
+                    ui.label(
+                        "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
+                    ).classes("text-black-600 dark:text-white").style(
+                        "font-size: 100%; font-weight: 300"
+                    ).tailwind(
                         "drop-shadow", "font-bold"
                     )
-            ui.label(
-                    "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
-                ).classes("text-black-600 dark:text-white").style(
-                    "font-size: 100%; font-weight: 300"
-                ).tailwind(
-                    "drop-shadow", "font-bold"
-                )
             with ui.row().classes('w-full no-wrap'):
                 with ui.column().classes('w-1/4'):
-                    with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
-                            "color=green"
-                        ):
-                        ui.label("View Live Data")
-                        ui.image(
-                            os.path.join(
-                                os.path.dirname(os.path.abspath(images.__file__)),
-                                "ROBIN_logo_small.png",
-                            )
-                        ).classes("rounded-full w-16 h-16 ml-4")
-                    with ui.button(on_click=lambda: ui.navigate.to("/browse")).props(
-                            "color=green"
-                        ):
-                        ui.label("Browse Historic Data")
-                        ui.image(
-                            os.path.join(
-                                os.path.dirname(os.path.abspath(images.__file__)),
-                                "ROBIN_logo_small.png",
-                            )
-                        ).classes("rounded-full w-16 h-16 ml-4")
+                    with ui.card().classes('w-full shadow-lg rounded-xl'):
+                        with ui.row().classes('w-full items-center justify-between p-4 border-b border-gray-200'):
+                            with ui.row().classes('items-center gap-2'):
+                                #ui.icon('feed', color='primary').classes('text-xl')
+                                ui.label("View Data").classes(
+                                    "text-sky-600 dark:text-white"
+                                ).style("font-size: 150%; font-weight: 300").tailwind(
+                                    "drop-shadow", "font-bold"
+                                )
+                        with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
+                                "color=green"
+                            ):
+                            ui.label("View Live Data")
+                            ui.image(
+                                os.path.join(
+                                    os.path.dirname(os.path.abspath(images.__file__)),
+                                    "ROBIN_logo_small.png",
+                                )
+                            ).classes("rounded-full w-16 h-16 ml-4")
+                        with ui.button(on_click=lambda: ui.navigate.to("/browse")).props(
+                                "color=green"
+                            ):
+                            ui.label("Browse Historic Data")
+                            ui.image(
+                                os.path.join(
+                                    os.path.dirname(os.path.abspath(images.__file__)),
+                                    "ROBIN_logo_small.png",
+                                )
+                            ).classes("rounded-full w-16 h-16 ml-4")
                 with ui.column().classes('w-2/4'):
                     # Initialize news feed only if it hasn't been initialized yet
                     if self.news_feed is None:

@@ -343,7 +343,11 @@ class Telemetry:
             logging.info(f"Location info: {self._location_info}")
             
             with ui.card().classes('w-192'):  # Double the width from w-96 to w-192
-                ui.label('Your Location').classes('text-xl font-bold')
+                ui.label('Your Location').classes(
+                                    "text-sky-600 dark:text-white"
+                                ).style("font-size: 150%; font-weight: 300").tailwind(
+                                    "drop-shadow", "font-bold"
+                                )#.classes('text-xl font-bold')
                 ui.label(location_desc)
                 
                 if coords and len(coords) == 2 and all(isinstance(x, (int, float)) for x in coords):

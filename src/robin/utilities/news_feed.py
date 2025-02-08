@@ -136,7 +136,11 @@ class NewsFeed:
                 with ui.row().classes('w-full items-center justify-between p-4 border-b border-gray-200'):
                     with ui.row().classes('items-center gap-2'):
                         ui.icon('feed', color='primary').classes('text-xl')
-                        ui.label('ROBIN News').classes('text-xl font-bold text-primary')
+                        ui.label('ROBIN News').classes(
+                                    "text-sky-600 dark:text-white"
+                                ).style("font-size: 150%; font-weight: 300").tailwind(
+                                    "drop-shadow", "font-bold"
+                                )#.classes('text-xl font-bold text-primary')
                     if self.last_update:
                         with ui.row().classes('items-center gap-1'):
                             ui.icon('update', color='gray').classes('text-sm')
@@ -189,7 +193,11 @@ class NewsFeed:
                                     'alert': 'warning',
                                 }.get(item.message_type, 'info')
                                 ui.icon(icon_name, color='primary').classes('text-lg')
-                                ui.label(item.headline).classes('font-bold text-lg text-primary')
+                                ui.label(item.headline).classes(
+                                    "text-sky-600 dark:text-white"
+                                ).style("font-size: 150%; font-weight: 300").tailwind(
+                                    "drop-shadow", "font-bold"
+                                )#.classes('font-bold text-lg text-primary')
                             
                             # Main content with proper spacing and formatting
                             with ui.column().classes('gap-3 pl-8'): # Indent content under headline

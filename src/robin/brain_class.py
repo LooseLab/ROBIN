@@ -2881,6 +2881,31 @@ class BrainMeth:
                             "files": {}
                         }
 
+                # Update run information from BAM file
+                if "run_info" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"] = {}
+                
+                # Update both the run_info dictionary and the arrays
+                if baminfo.get("time_of_run"):
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["run_time"] = baminfo["time_of_run"]
+                    if baminfo["time_of_run"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"].append(baminfo["time_of_run"])
+                
+                if baminfo.get("device_position"):
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["device"] = baminfo["device_position"]
+                    if baminfo["device_position"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["devices"]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["devices"].append(baminfo["device_position"])
+                
+                if baminfo.get("basecall_model"):
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["model"] = baminfo["basecall_model"]
+                    if baminfo["basecall_model"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"].append(baminfo["basecall_model"])
+                
+                if baminfo.get("flow_cell_id"):
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["flow_cell"] = baminfo["flow_cell_id"]
+                    if baminfo["flow_cell_id"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"].append(baminfo["flow_cell_id"])
+
                 # Update sample-specific counters
                 app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["counter"] += 1
                 app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["total_files"] += 1
@@ -2907,6 +2932,45 @@ class BrainMeth:
                     if "bam_tracking" in app.storage.general[self.mainuuid]["samples"][sample_id]:
                         if file[0] in app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["files"]:
                             app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["files"].pop(file[0])
+
+                # Initialize sample storage if it doesn't exist
+                if sample_id not in app.storage.general[self.mainuuid]["samples"]:
+                    logging.info(f"Initializing new sample storage for: {sample_id}")
+                    app.storage.general[self.mainuuid]["samples"][sample_id] = {}
+                    self.configure_storage(sample_id)
+                    app.storage.general[self.mainuuid]["sample_list"].append(sample_id)
+                    # Initialize sample-specific BAM tracking
+                    if "bam_tracking" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"] = {
+                            "counter": 0,
+                            "total_files": 0,
+                            "files": {}
+                        }
+
+                # Update run information from BAM file
+                if "run_info" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"] = {}
+                
+                # Update both the run_info dictionary and the arrays
+                if baminfo.get("time_of_run"):
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["run_time"] = baminfo["time_of_run"]
+                    if baminfo["time_of_run"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"].append(baminfo["time_of_run"])
+                
+                if baminfo.get("device_position"):
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["device"] = baminfo["device_position"]
+                    if baminfo["device_position"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["devices"]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["devices"].append(baminfo["device_position"])
+                
+                if baminfo.get("basecall_model"):
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["model"] = baminfo["basecall_model"]
+                    if baminfo["basecall_model"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"].append(baminfo["basecall_model"])
+                
+                if baminfo.get("flow_cell_id"):
+                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["flow_cell"] = baminfo["flow_cell_id"]
+                    if baminfo["flow_cell_id"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"]:
+                        app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"].append(baminfo["flow_cell_id"])
 
                 # Process state and update counters
                 if baminfo["state"] == "pass":
