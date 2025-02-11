@@ -297,8 +297,11 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
             try:
                 # Read existing data
                 existing_df = pd.read_csv(sv_store)
-                # Append new data
-                combined_df = pd.concat([existing_df, df], ignore_index=True)
+                if len(df) > 0:  # Only concatenate if we have new data
+                    # Append new data
+                    combined_df = pd.concat([existing_df, df], ignore_index=True)
+                else:
+                    combined_df = existing_df
             except pd.errors.EmptyDataError:
                 # If the file exists but is empty, just use the new data
                 combined_df = df
@@ -306,9 +309,10 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
             # If file doesn't exist or is empty, use new data
             combined_df = df
 
-        # Save combined data
-        combined_df.to_csv(sv_store, index=False)
-        df = label_reads_with_svs(combined_df)
+        # Only save if we have data to save
+        if len(combined_df) > 0:
+            combined_df.to_csv(sv_store, index=False)
+            df = label_reads_with_svs(combined_df)
     except Exception as e:
         logger.error(f"Error saving structural variants: {str(e)}")
         # Continue processing even if save fails
@@ -896,6 +900,7 @@ class FusionObject(BaseAnalysis):
         self, *args, target_panel=None, NewBed: Optional[BedTree] = None, **kwargs
     ):
         self.target_panel = target_panel
+        self.sampleID = None  # Initialize sampleID
         self.fusion_candidates = {}
         self.fusion_candidates_all = {}
         self.structural_variants = {}  # Store structural variants
@@ -1770,6 +1775,10 @@ class FusionObject(BaseAnalysis):
             bamfile (str): Path to the BAM file to process.
             timestamp (str): Timestamp for the analysis.
         """
+        if not hasattr(self, 'sampleID') or not self.sampleID:
+            logger.error("No sample ID set, cannot process BAM file")
+            return
+
         tempreadfile = tempfile.NamedTemporaryFile(
             dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
         )
@@ -1809,6 +1818,11 @@ class FusionObject(BaseAnalysis):
                 bamfile,
                 sv_csv_file,
             )
+
+            # Check if sv_reads is empty before proceeding
+            if sv_reads is None or sv_reads.empty:
+                logger.info("No structural variants found in BAM file")
+                return
 
             bed_lines = await run.cpu_bound(
                 build_breakpoint_graph, sv_reads, max_proximity=50000, group_by_sv=True

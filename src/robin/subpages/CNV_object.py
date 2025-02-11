@@ -743,7 +743,7 @@ class CNVAnalysis(BaseAnalysis):
                 self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
                 approx_chrom_length = 0
                 if len(r_cnv[key]) > 3:
-                    penalty_value = 5
+                    penalty_value = 3
                     if (
                         self.map_tracker[key] > 2000
                     ):  # Make sure we have this number of new reads at least on a chromosome before updating.
@@ -2792,21 +2792,13 @@ class CNVAnalysis(BaseAnalysis):
 
                     # Determine cytoband state relative to whole chromosome state
                     if whole_chr_event:
-                        # For whole chromosome events, only report significant deviations in opposite direction
-                        if whole_chr_state == "GAIN":
-                            if mean_cnv < chr_mean - (
-                                2.0 * chr_std
-                            ):  # More stringent threshold for opposite changes
-                                state = "LOSS"  # Only report significant losses within gained chromosomes
-                            else:
-                                state = "NORMAL"  # Don't duplicate gains
-                        elif whole_chr_state == "LOSS":
-                            if mean_cnv > chr_mean + (
-                                2.0 * chr_std
-                            ):  # More stringent threshold for opposite changes
-                                state = "GAIN"  # Only report significant gains within lost chromosomes
-                            else:
-                                state = "NORMAL"  # Don't duplicate losses
+                        # For whole chromosome events, use more stringent thresholds relative to chromosome mean
+                        if mean_cnv > chr_mean + (2.0 * chr_std):  # More stringent threshold for additional gains
+                            state = "HIGH_GAIN"  # Report significant additional gains
+                        elif mean_cnv < chr_mean - (2.0 * chr_std):  # More stringent threshold for additional losses
+                            state = "DEEP_LOSS"  # Report significant additional losses
+                        else:
+                            state = whole_chr_state  # Maintain the whole chromosome state
                     else:
                         # Normal threshold-based state determination
                         if mean_cnv > cytoband_gain_threshold:
@@ -2859,10 +2851,8 @@ class CNVAnalysis(BaseAnalysis):
                         current_group["end_pos"] - current_group["start_pos"]
                     )
 
-                    # Only add significant changes relative to whole chromosome state
-                    if (not whole_chr_event) or (
-                        current_group["cnv_state"] != whole_chr_state
-                    ):
+                    # Add all significant changes, including those on chromosomes with whole chromosome events
+                    if current_group["cnv_state"] in ["GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"]:
                         merged_cytobands.append(current_group)
 
                     # Start new group
@@ -2901,10 +2891,8 @@ class CNVAnalysis(BaseAnalysis):
                     current_group["end_pos"] - current_group["start_pos"]
                 )
 
-                # Only add significant changes relative to whole chromosome state
-                if (not whole_chr_event) or (
-                    current_group["cnv_state"] != whole_chr_state
-                ):
+                # Add all significant changes, including those on chromosomes with whole chromosome events
+                if current_group["cnv_state"] in ["GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"]:
                     merged_cytobands.append(current_group)
 
         # Convert results to DataFrame and sort
