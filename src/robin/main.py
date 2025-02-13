@@ -423,7 +423,7 @@ class Methnice:
                     logging.info("Sending periodic telemetry update")
                     self.telemetry.send_run_telemetry(self)
                 
-                ui.timer(120.0, send_telemetry_update, active=True)  # Send update every minute
+                ui.timer(1800.0, send_telemetry_update, active=True)  # Send update every minute
                 logging.info("Telemetry update timer initialized (1-minute interval)")
                 
         except Exception as e:
