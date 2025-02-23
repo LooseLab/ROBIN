@@ -78,6 +78,7 @@ from dateutil import parser
 import pytz
 import os
 import shutil
+import psutil
 import tempfile
 from alive_progress import alive_bar
 from nicegui import ui, app, run
@@ -2531,6 +2532,9 @@ class BrainMeth:
         logging.info("Starting background BAM processing")
         self.process_bams_tracker = app.timer(10, self.process_bams)
         self.process_bigbadmerge_tracker = app.timer(10, self.process_bigbadmerge)
+        otherprocs = ['dorado', 'minknow', 'docker']
+        self.check_and_log_memory = app.timer(5, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs))
+        
 
     def check_and_create_folder(self, path, folder_name=None):
         """
@@ -2557,6 +2561,125 @@ class BrainMeth:
             return full_path
         else:
             return path
+        
+    def get_memory_usage(self, process_names_to_monitor=None):
+        """
+        Get memory usage statistics for the current process and optionally other specified processes.
+        
+        Args:
+            process_names_to_monitor (list): Optional list of process names to monitor (e.g., ['modkit', 'samtools'])
+            
+        Returns:
+            dict: Dictionary containing memory usage statistics
+        """
+        try:
+            # Get the current process
+            current_process = psutil.Process(os.getpid())
+            memory = psutil.virtual_memory()
+            available_memory_gb = memory.available / (1024 ** 3)
+            total_memory_gb = memory.total / (1024 ** 3)
+            mem_info = current_process.memory_info()
+            rss = mem_info.rss / (1024 ** 3)
+            vms = mem_info.vms / (1024 ** 3)
+            
+            # Create memory usage data dictionary for current process
+            memory_data = {
+                'system': {
+                    'total': total_memory_gb,
+                    'avail': available_memory_gb,
+                },
+                'main_process': {
+                    'name': current_process.name(),
+                    'pid': current_process.pid,
+                    'rss': rss,  # Resident Set Size (physical memory)
+                    'vms': vms,  # Virtual Memory Size
+                    'cpu_percent': current_process.cpu_percent(),
+                },
+                'monitored_processes': {}
+            }
+            
+            # Monitor other processes if specified
+            if process_names_to_monitor:
+                for proc in psutil.process_iter(['pid', 'name', 'memory_info', 'cpu_percent']):
+                    try:
+                        if proc.info['name'] in process_names_to_monitor:
+                            proc_mem = proc.info['memory_info']
+                            proc_rss = proc_mem.rss / (1024 ** 3)
+                            proc_vms = proc_mem.vms / (1024 ** 3)
+                            
+                            # Add or append to process list in memory data
+                            if proc.info['name'] not in memory_data['monitored_processes']:
+                                memory_data['monitored_processes'][proc.info['name']] = []
+                            
+                            memory_data['monitored_processes'][proc.info['name']].append({
+                                'pid': proc.info['pid'],
+                                'rss': proc_rss,
+                                'vms': proc_vms,
+                                'cpu_percent': proc.info['cpu_percent']
+                            })
+                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                        continue
+            
+            # Create memory log file path
+            memory_log_file = os.path.join(self.output, f"memory_usage_{self.mainuuid}.csv")
+            
+            # Get current timestamp
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            # Create header if file doesn't exist
+            if not os.path.exists(memory_log_file):
+                header = ["timestamp", "total_memory_gb", "available_memory_gb", 
+                         "main_process_name", "main_process_pid", "main_process_rss_gb", 
+                         "main_process_vms_gb", "main_process_cpu_percent"]
+                
+                if process_names_to_monitor:
+                    for proc_name in process_names_to_monitor:
+                        header.extend([f"{proc_name}_pid", f"{proc_name}_rss_gb", 
+                                    f"{proc_name}_vms_gb", f"{proc_name}_cpu_percent"])
+                
+                with open(memory_log_file, 'w') as f:
+                    f.write(','.join(header) + '\n')
+            
+            # Prepare log entry
+            log_data = [
+                timestamp,
+                f"{total_memory_gb:.2f}",
+                f"{available_memory_gb:.2f}",
+                current_process.name(),
+                str(current_process.pid),
+                f"{rss:.2f}",
+                f"{vms:.2f}",
+                f"{current_process.cpu_percent():.1f}"
+            ]
+            
+            # Add monitored processes data
+            if process_names_to_monitor:
+                for proc_name in process_names_to_monitor:
+                    if proc_name in memory_data['monitored_processes'] and memory_data['monitored_processes'][proc_name]:
+                        # Use the first instance if multiple processes with same name
+                        proc_data = memory_data['monitored_processes'][proc_name][0]
+                        log_data.extend([
+                            str(proc_data['pid']),
+                            f"{proc_data['rss']:.2f}",
+                            f"{proc_data['vms']:.2f}",
+                            f"{proc_data['cpu_percent']:.1f}"
+                        ])
+                    else:
+                        # If process not found, add placeholder values
+                        log_data.extend(['NA', '0.00', '0.00', '0.0'])
+            
+            # Append memory data with timestamp
+            with open(memory_log_file, 'a') as f:
+                f.write(','.join(log_data) + '\n')
+            
+            return memory_data
+            
+        except psutil.NoSuchProcess:
+            logging.error("Error: Process not found.")
+            return None
+        except Exception as e:
+            logging.error(f"Error getting memory usage: {str(e)}")
+            return None
 
     async def process_bigbadmerge(self):
         # Dictionary to store files by sample ID
@@ -2565,6 +2688,8 @@ class BrainMeth:
 
         # Process queue and organize files by sample ID
         while self.bamforbigbadmerge.qsize() > 0:
+            #memory = self.get_memory_usage()
+            #if memory: print (memory)
             file, filetime, sampleID = self.bamforbigbadmerge.get()
 
             # Initialize containers for new sample IDs
@@ -2858,6 +2983,8 @@ class BrainMeth:
         logging.info("Process Bam Starting")
         self.process_bams_tracker.active = False
         counter = 0
+        #memory = self.get_memory_usage()
+        #if memory: print (memory)
         if "file" in app.storage.general[self.mainuuid]["bam_count"]:
             while self.watchdogbamqueue.qsize() > 0:
                 filename, timestamp = self.watchdogbamqueue.get()

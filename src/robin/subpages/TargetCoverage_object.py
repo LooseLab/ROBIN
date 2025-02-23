@@ -501,6 +501,7 @@ def get_covdfs(bamfile):
     except Exception as e:
         # print(e)
         logger.error(f"Error in get_covdfs: {e}")
+        logger.error(f"BAM file: {bamfile}")
         return None
     return newcovdf, bedcovdf
 
@@ -1855,6 +1856,7 @@ class TargetCoverage(BaseAnalysis):
 
             js_clear_track = f"""
                                 igv.browser.removeTrackByName("{self.sampleID}");
+                                console.log("Track removed: " + "{self.sampleID}");
                                 return 1;
             """
 
@@ -1867,8 +1869,8 @@ class TargetCoverage(BaseAnalysis):
             async def data_load():
                 ui.notify("Data Loading")
                 await ui.context.client.connected()
-                ui.run_javascript(js_clear_track, timeout=30)
-                ui.run_javascript(js_code_track, timeout=100)
+                await ui.run_javascript(js_clear_track, timeout=30)
+                await ui.run_javascript(js_code_track, timeout=100)
                 ui.notify("Data Loaded")
 
         if not self.mybutton:
