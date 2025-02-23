@@ -156,7 +156,8 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
         navtitle = f"BATMAN & {navtitle}"
     # Add custom HTML and CSS to the head of the page
     ui.add_head_html(
-        '<script src="https://cdn.jsdelivr.net/npm/igv@2.15.13/dist/igv.min.js"></script>'
+        #'<script src="https://cdn.jsdelivr.net/npm/igv@2.15.13/dist/igv.min.js"></script>'
+        '<script src="https://cdn.jsdelivr.net/npm/igv@3.2.0/dist/igv.min.js"></script>'
     )
     ui.add_head_html(HEADER_HTML + f"<style>{STYLE_CSS}</style>")
     ui.add_head_html(
