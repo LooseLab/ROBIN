@@ -2474,7 +2474,11 @@ class BrainMeth:
                                     ),
                                 ).props("color=primary")
 
-                        result, report_type = await dialog
+                        dialog_result = await dialog
+                        if dialog_result is None:
+                            return  # Dialog was closed without submitting
+                        
+                        result, report_type = dialog_result
                         if result == "Yes":
                             await download_report(report_type)
 
