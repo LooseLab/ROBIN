@@ -1877,23 +1877,13 @@ class TargetCoverage(BaseAnalysis):
                     async def data_load():
                         ui.notify("Data Loading")
                         await ui.context.client.connected()
-                        await ui.run_javascript(js_clear_track, timeout=30)
-                        await ui.run_javascript(js_code_track, timeout=100)
+                        ui.run_javascript(js_clear_track, timeout=30)
+                        ui.run_javascript(js_code_track, timeout=100)
                         ui.notify("Data Loaded")
 
                     # Now bind the click handlers
                     dataload.on("click", data_load)
                     self.mybutton.on("click", clear_and_reload)
-
-        #if not self.mybutton:
-        #    with self.igvvizcard:
-         #       # ui.button('Load IGV').on('click', lambda: ui.run_javascript(js_code))
-        #        self.mybutton = ui.button("Load IGV").on(
-        #            "click", lambda: clear_and_reload(dataload)
-        #        )
-        #        dataload = ui.button("Re/Load Data").on("click", lambda: data_load())
-        #        dataload.disable()
-                # ui.link('AI interface', '/output_files/sorted_targets_exceeding.bam.bai')
 
         # ToDo: This function needs to run in background threads.
         if self.check_file_time(os.path.join(output, "coverage_main.csv")):

@@ -2606,23 +2606,26 @@ class BrainMeth:
             if process_names_to_monitor:
                 for proc in psutil.process_iter(['pid', 'name', 'memory_info', 'cpu_percent']):
                     try:
-                        if proc.info['name'] in process_names_to_monitor:
-                            proc_mem = proc.info['memory_info']
-                            proc_rss = proc_mem.rss / (1024 ** 3)
-                            proc_vms = proc_mem.vms / (1024 ** 3)
-                            
-                            # Add or append to process list in memory data
-                            if proc.info['name'] not in memory_data['monitored_processes']:
-                                memory_data['monitored_processes'][proc.info['name']] = []
-                            
-                            memory_data['monitored_processes'][proc.info['name']].append({
-                                'pid': proc.info['pid'],
-                                'rss': proc_rss,
-                                'vms': proc_vms,
-                                'cpu_percent': proc.info['cpu_percent']
-                            })
+                        for monitor_name in process_names_to_monitor:
+                            if monitor_name.lower() in proc.info['name'].lower():
+                                if proc.info['memory_info'] is not None:
+                                    proc_mem = proc.info['memory_info']
+                                    proc_rss = proc_mem.rss / (1024 ** 3)
+                                    proc_vms = proc_mem.vms / (1024 ** 3)
+                                    
+                                    # Add or append to process list in memory data
+                                    if monitor_name not in memory_data['monitored_processes']:
+                                        memory_data['monitored_processes'][monitor_name] = []
+                                    
+                                    memory_data['monitored_processes'][monitor_name].append({
+                                        'pid': proc.info['pid'],
+                                        'rss': proc_rss,
+                                        'vms': proc_vms,
+                                        'cpu_percent': proc.info['cpu_percent']
+                                    })
                     except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
                         continue
+            
             
             # Create memory log file path
             memory_log_file = os.path.join(self.output, f"memory_usage_{self.mainuuid}.csv")
