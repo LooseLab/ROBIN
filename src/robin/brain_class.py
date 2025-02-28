@@ -157,21 +157,22 @@ def merge_modkit_files(
         "n_nocall",
     ]
 
-    numeric_cols = [
-        "chromStart",
-        "chromEnd",
-        "score_bed",
-        "valid_cov",
-        "percent_modified",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
+    categorical_cols = ["chrom", "mod_code", "strand", "color"]
+    int_cols = ["thickStart", "thickEnd"]
+    unsigned_int_cols = [
+        "chromStart", 
+        "chromEnd", 
+        "valid_cov", 
+        "n_mod", 
+        "n_canonical", 
+        "n_othermod", 
+        "n_delete", 
+        "n_fail", 
+        "n_diff", 
+        "n_nocall"
     ]
-
+    float_cols = ["score_bed", "percent_modified"]
+    
     # Determine if the filter BED file is gzipped
     compression_type = "gzip" if filter_bed_file.endswith(".gz") else None
 
@@ -193,6 +194,25 @@ def merge_modkit_files(
     if os.path.exists(existing_file):
         logging.debug(f"🔹 Loading existing dataset: {existing_file}")
         existing_df = pd.read_parquet(existing_file)
+        
+        # Ensure efficient dtypes for existing data
+        for col in categorical_cols:
+            if col in existing_df.columns:
+                existing_df[col] = existing_df[col].astype("category")
+                
+        for col in int_cols:
+            if col in existing_df.columns:
+                existing_df[col] = existing_df[col].astype("int64")
+                
+        if all(col in existing_df.columns for col in unsigned_int_cols):
+            existing_df[unsigned_int_cols] = existing_df[unsigned_int_cols].apply(
+                pd.to_numeric, downcast="unsigned"
+            )
+            
+        if all(col in existing_df.columns for col in float_cols):
+            existing_df[float_cols] = existing_df[float_cols].apply(
+                pd.to_numeric, downcast="float"
+            )
     else:
         logging.debug("🔹 No existing dataset found. Creating a new dataset.")
         existing_df = pd.DataFrame(columns=column_names)
@@ -202,15 +222,27 @@ def merge_modkit_files(
     for file in new_files:
         logging.debug(f"📂 Processing file: {file}")
 
-        # Read file efficiently
+        # Read file efficiently with appropriate dtypes
+        dtype_dict = {col: str for col in categorical_cols}
         modkit_df = pd.read_csv(
-            file, sep="\s+", header=None, names=column_names, dtype=str
+            file, sep="\s+", header=None, names=column_names, dtype=dtype_dict
         )
 
-        # Convert numeric columns properly
-        modkit_df[numeric_cols] = modkit_df[numeric_cols].apply(
-            pd.to_numeric, errors="coerce"
+        # Convert numeric columns properly with efficient dtypes
+        for col in int_cols:
+            modkit_df[col] = pd.to_numeric(modkit_df[col], errors="coerce").astype("int64")
+            
+        modkit_df[unsigned_int_cols] = modkit_df[unsigned_int_cols].apply(
+            pd.to_numeric, errors="coerce", downcast="unsigned"
         )
+        
+        modkit_df[float_cols] = modkit_df[float_cols].apply(
+            pd.to_numeric, errors="coerce", downcast="float"
+        )
+        
+        # Convert categorical columns
+        for col in categorical_cols:
+            modkit_df[col] = modkit_df[col].astype("category")
 
         # Convert to pyranges format for fast overlap filtering
         modkit_ranges = pr.PyRanges(
@@ -231,6 +263,11 @@ def merge_modkit_files(
             columns={"Chromosome": "chrom", "Start": "chromStart", "End": "chromEnd"}
         )
 
+        # Reapply efficient dtypes after filtering
+        for col in categorical_cols:
+            if col in modkit_filtered.columns:
+                modkit_filtered[col] = modkit_filtered[col].astype("category")
+                
         # Append to list (avoids multiple DataFrame copies)
         new_data.append(modkit_filtered)
 
@@ -240,12 +277,31 @@ def merge_modkit_files(
 
     # Combine new data into a single DataFrame
     new_df = pd.concat(new_data, ignore_index=True)
+    
+    # Apply efficient dtypes to the combined new data
+    for col in categorical_cols:
+        if col in new_df.columns:
+            new_df[col] = new_df[col].astype("category")
+            
+    for col in int_cols:
+        if col in new_df.columns:
+            new_df[col] = pd.to_numeric(new_df[col], errors="coerce").astype("int64")
+            
+    if all(col in new_df.columns for col in unsigned_int_cols):
+        new_df[unsigned_int_cols] = new_df[unsigned_int_cols].apply(
+            pd.to_numeric, errors="coerce", downcast="unsigned"
+        )
+        
+    if all(col in new_df.columns for col in float_cols):
+        new_df[float_cols] = new_df[float_cols].apply(
+            pd.to_numeric, errors="coerce", downcast="float"
+        )
 
     # If existing dataset is empty, save new data and exit
     if existing_df.empty:
         logging.debug("✅ No previous data found. Saving only new filtered data.")
         new_df.to_parquet(output_file, index=False)
-        return new_df
+        return
 
     # Identify unique positions for faster merging
     existing_positions = set(
@@ -257,7 +313,7 @@ def merge_modkit_files(
     unique_positions = new_positions - existing_positions
     if not unique_positions:
         logging.debug("⚠️ All new data already exists. No updates needed.")
-        return existing_df
+        return 
 
     # Filter only truly new data
     new_df = new_df[
@@ -310,10 +366,29 @@ def merge_modkit_files(
         .reset_index(drop=True)
     )  # Ensure index is reset correctly
 
+    # Apply efficient dtypes to the final merged dataframe
+    for col in categorical_cols:
+        if col in merged_df.columns:
+            merged_df[col] = merged_df[col].astype("category")
+            
+    for col in int_cols:
+        if col in merged_df.columns:
+            merged_df[col] = merged_df[col].astype("int64")
+            
+    if all(col in merged_df.columns for col in unsigned_int_cols):
+        merged_df[unsigned_int_cols] = merged_df[unsigned_int_cols].apply(
+            pd.to_numeric, downcast="unsigned"
+        )
+        
+    if all(col in merged_df.columns for col in float_cols):
+        merged_df[float_cols] = merged_df[float_cols].apply(
+            pd.to_numeric, downcast="float"
+        )
+
     # Save updated dataset
     merged_df.to_parquet(output_file, index=False)
     logging.debug(f"✅ Incremental update saved to: {output_file}")
-    return merged_df
+    return
 
 
 def run_modkit(sortfile: str, temp: str, threads: int) -> None:
@@ -2906,7 +2981,8 @@ class BrainMeth:
                 )
 
                 # Merge modkit files for this sample
-                merged_df = await run.cpu_bound(
+                #merged_df = await run.cpu_bound(
+                await run.cpu_bound(
                     merge_modkit_files,
                     [temp.name],
                     parquet_path,  # Use the parquet_path for the existing file
