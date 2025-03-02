@@ -399,8 +399,9 @@ class CNVAnalysis(BaseAnalysis):
         self.readfish_toml = readfish_toml
         self.XYestimate = "Unknown"
         self.dtype = [("name", "U10"), ("start", "i8"), ("end", "i8")]
-        self.DATA_ARRAY = np.empty(0, dtype=self.dtype)
-
+        
+        
+        
         # self.len_tracker = defaultdict(lambda: 0)
         self.map_tracker = Counter()
         self.load_data = False
@@ -452,10 +453,11 @@ class CNVAnalysis(BaseAnalysis):
             header=None,
             sep="\s+",
         )
+        
         self.NewBed = NewBed
         super().__init__(*args, **kwargs)
-        # Only initialize BedTree if reference file is provided
-
+        
+        
         self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
         # Add target_table as instance variable
         self.target_table = None
@@ -694,6 +696,22 @@ class CNVAnalysis(BaseAnalysis):
             self.update_cnv_dict[self.sampleID] = {}
 
         bamdata = pysam.AlignmentFile(bamfile, "rb")
+        
+        self.data_array_path = os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID), "cnv_data_array.npy"
+            )
+        
+        if not os.path.exists(self.data_array_path):
+            # Initialize memory-mapped array with minimal size
+            self.DATA_ARRAY = np.memmap(
+                self.data_array_path,
+                dtype=self.dtype,
+                mode='w+',
+                shape=(1,)  # Start with minimal size instead of empty
+            )
+            # Set initial size to 0 (logical size)
+            self.data_array_size = 0
+
 
         self.map_tracker.update(
             Counter(
@@ -3054,6 +3072,28 @@ class CNVAnalysis(BaseAnalysis):
                 self.target_table.rows = message_df.to_dict("records")
                 ui.update(self.target_table)
 
+    def resize_data_array(self, new_data):
+        """Resize the memory-mapped array to accommodate new data."""
+        # Create a new memory-mapped array with the required size
+        new_size = self.data_array_size + len(new_data)
+        new_array = np.memmap(
+            self.data_array_path,
+            dtype=self.dtype,
+            mode='w+',
+            shape=(new_size,)
+        )
+        
+        # Copy existing data
+        if self.data_array_size > 0:
+            new_array[:self.data_array_size] = self.DATA_ARRAY[:self.data_array_size]
+        
+        # Add new data
+        new_array[self.data_array_size:] = new_data
+        
+        # Update references
+        self.DATA_ARRAY = new_array
+        self.data_array_size = new_size
+
 
 def test_me(
     port: int,
@@ -3184,3 +3224,4 @@ def main(
 if __name__ in {"__main__", "__mp_main__"}:
     print("GUI launched by auto-reload function.")
     main()
+
