@@ -139,10 +139,10 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
                 pass
                 # logger.warning(f"R script stderr: {result.stderr}")
         except subprocess.CalledProcessError as e:
-            # logger.error(f"R script failed with return code {e.returncode}")
-            # logger.error(f"stdout: {e.stdout}")
-            # logger.error(f"stderr: {e.stderr}")
-            # raise
+            logger.error(f"R script failed with return code {e.returncode}")
+            logger.error(f"stdout: {e.stdout}")
+            logger.error(f"stderr: {e.stderr}")
+            raise
             pass
 
         # Check if output file was created
