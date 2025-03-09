@@ -608,6 +608,12 @@ class Sturgeon_object(BaseAnalysis):
             "include/static",
             "probes_{}.bed".format(reference_genome),
         )
+        
+        # Set Sturgeon-specific confidence thresholds
+        # Sturgeon typically gives higher confidence scores, so adjust thresholds accordingly
+        kwargs['high_confidence_threshold'] = 0.8  # Sturgeon-specific high confidence threshold
+        kwargs['medium_confidence_threshold'] = 0.6  # Sturgeon-specific medium confidence threshold
+        
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):

@@ -292,6 +292,12 @@ class RandomForest_object(BaseAnalysis):
         self.dataDir = {}
         self.bedDir = {}
         self.merged_bed_file = {}
+        
+        # Set RandomForest-specific confidence thresholds
+        # RandomForest confidence is reported as percentage (0-100) but converted to 0-1 in create_summary_card
+        kwargs['high_confidence_threshold'] = 0.85  # RandomForest-specific high confidence threshold
+        kwargs['medium_confidence_threshold'] = 0.65  # RandomForest-specific medium confidence threshold
+        
         super().__init__(*args, **kwargs)
 
     def setup_ui(self):
