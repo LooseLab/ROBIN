@@ -256,6 +256,12 @@ class NanoDX_object(BaseAnalysis):
         self.nanodx_df_store = {}  # pd.DataFrame()
         self.nanodxfile = {}
         self.merged_bed_file = {}
+        
+        # Set NanoDX-specific confidence thresholds
+        # NanoDX typically produces lower confidence scores, so adjust thresholds accordingly
+        kwargs['high_confidence_threshold'] = 0.5  # NanoDX-specific high confidence threshold
+        kwargs['medium_confidence_threshold'] = 0.25  # NanoDX-specific medium confidence threshold
+        
         super().__init__(*args, **kwargs)
         if self.model != "Capper_et_al_NN.pkl":
             self.storefile = "PanNanoDX_scores.csv"

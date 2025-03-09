@@ -112,6 +112,8 @@ class BaseAnalysis:
         uuid: Optional[str] = None,
         force_sampleid: Optional[str] = None,
         sampleID: Optional[str] = None,
+        high_confidence_threshold: float = 0.9,
+        medium_confidence_threshold: float = 0.7,
         *args,
         **kwargs,
     ) -> None:
@@ -129,6 +131,8 @@ class BaseAnalysis:
         self.running = False
         self.force_sampleid = force_sampleid
         self.threads = max(1, threads // 2)
+        self.high_confidence_threshold = high_confidence_threshold
+        self.medium_confidence_threshold = medium_confidence_threshold
         if sampleID:
             self.sampleID = sampleID
             logger.debug(f"SampleID: {self.sampleID}")
@@ -718,18 +722,18 @@ class BaseAnalysis:
 
     def _get_confidence_color(self, confidence):
         """Get color based on confidence level."""
-        if confidence >= 0.9:
+        if confidence >= self.high_confidence_threshold:
             return "#34C759"  # Green for high confidence
-        elif confidence >= 0.7:
+        elif confidence >= self.medium_confidence_threshold:
             return "#007AFF"  # Blue for medium confidence
         else:
             return "#FF9500"  # Orange for low confidence
 
     def _get_confidence_text(self, confidence):
         """Get descriptive text based on confidence level."""
-        if confidence >= 0.9:
+        if confidence >= self.high_confidence_threshold:
             return "High confidence"
-        elif confidence >= 0.7:
+        elif confidence >= self.medium_confidence_threshold:
             return "Medium confidence"
         else:
             return "Low confidence"
