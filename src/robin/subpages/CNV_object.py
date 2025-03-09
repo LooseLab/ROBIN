@@ -389,15 +389,29 @@ class CNVAnalysis(BaseAnalysis):
         **kwargs,
     ) -> None:
         # self.file_list = []
+        super().__init__(*args, **kwargs)
+        self.target_panel = target_panel
+        self.reference_file = reference_file
         self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.update_cnv_dict = {}
         self.result = None
-        self.result2 = None
         self.result3 = CNV_Difference()
-        self.reference_file = reference_file
+        self.ref_result = None
+        self.working_dir = None
         self.bed_file = bed_file
+        self.chromosome_events = {}
+        self.sex_estimate = None
+        self.timer1 = None
+        self.bin_width = 1_000_000
+        self.total_reads = 0
+        self.current_file = None
         self.readfish_toml = readfish_toml
-        self.XYestimate = "Unknown"
+        self.timest = 0
+        self.chrom_filter = "All"
+        self.NewBed = NewBed
+        # Color mode: "chromosome" for coloring by chromosome, "value" for red/blue based on values
+        self.color_mode = "chromosome"
+        # Define dtype for memmap
         self.dtype = [("name", "U10"), ("start", "i8"), ("end", "i8")]
         
         
@@ -413,7 +427,6 @@ class CNVAnalysis(BaseAnalysis):
             "rb",
         ) as f:
             self.ref_cnv_dict = pickle.load(f)
-        self.target_panel = target_panel
         if self.target_panel == "rCNS2":
             self.gene_bed_file = os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)),
@@ -534,99 +547,138 @@ class CNVAnalysis(BaseAnalysis):
         return stats
 
     def detect_chromosome_events(self, z_score_threshold=3.0):
-        """Detect significant chromosome-wide CNV events.
+        """
+        Detect whole chromosome copy number events.
 
         Args:
-            z_score_threshold: Number of standard deviations for significance
+            z_score_threshold (float): Z-score threshold for detecting events.
 
         Returns:
-            List of chromosome-wide CNV events
+            List[Dict]: List of detected chromosome events.
         """
-        if not self.chromosome_stats:
-            raise ValueError("Must call calculate_chromosome_stats first")
-
+        # Initialize list to store events
         events = []
-        global_stats = self.chromosome_stats["global"]
 
-        for chrom, stats in self.chromosome_stats.items():
-            if chrom == "global":
-                continue
+        # Get CNV data
+        cnv_data = self.result3.cnv
 
-            mean_cnv = stats["mean"]
-            baseline = stats["baseline"]
+        # Calculate means for all chromosomes
+        chromosome_means = {}
+        for chrom, data in cnv_data.items():
+            if chrom != "chrM" and re.match(r"^chr(\d+|X|Y)$", chrom):
+                # Exclude centromere region if present
+                mask = np.ones_like(data, dtype=bool)
+                cent = self.centromere_bed[self.centromere_bed["chrom"] == chrom]
+                if not cent.empty:
+                    cent_start = int(cent["start_pos"].iloc[0] / self.cnv_dict["bin_width"])
+                    cent_end = int(cent["end_pos"].iloc[0] / self.cnv_dict["bin_width"])
+                    if cent_start < len(mask) and cent_end <= len(mask):
+                        mask[cent_start:cent_end] = False
+                filtered_data = data[mask]
+                
+                # Handle empty arrays
+                if len(filtered_data) > 0:
+                    chromosome_means[chrom] = np.mean(filtered_data)
 
+        # Calculate mean and standard deviation of autosomal chromosomes
+        autosomal_means = [v for k, v in chromosome_means.items() if k.startswith("chr") and k[3:].isdigit()]
+        if autosomal_means:
+            mean_of_means = np.mean(autosomal_means)
+            std_of_means = np.std(autosomal_means)
+        else:
+            mean_of_means = 0
+            std_of_means = 0
+
+        # Detect events for each chromosome
+        for chrom, mean_cnv in chromosome_means.items():
+            # Handle sex chromosomes specially
             if chrom == "chrX":
-                if self.XYestimate == "XY":  # Male
-                    if mean_cnv > 0.3:
+                if self.sex_estimate in ["Female", "XX"]:  # Female
+                    # For females, X should be treated like autosomes
+                    z_score = (mean_cnv - mean_of_means) / std_of_means
+                    if z_score > z_score_threshold:
                         events.append(
                             {
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "GAIN",
-                                "description": "Potential XXY",
+                                "description": f"Chromosome X gain (z-score: {z_score:.2f})",
                             }
                         )
-                    elif mean_cnv < -0.3:
+                    elif z_score < -z_score_threshold:
                         events.append(
                             {
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "LOSS",
-                                "description": "X chromosome loss",
+                                "description": f"Chromosome X loss (z-score: {z_score:.2f})",
                             }
                         )
-                elif self.XYestimate == "XX":  # Female
-                    if mean_cnv >= 1.0:
+                elif self.sex_estimate in ["Male", "XY"]:  # Male
+                    # For males, X should have one copy
+                    if mean_cnv > 0.5:  # Threshold for X gain in males
                         events.append(
                             {
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "GAIN",
-                                "description": "Potential trisomy X",
+                                "description": f"Chromosome X gain (expected single copy in males)",
                             }
                         )
-                    elif mean_cnv < -0.75:
+                    elif mean_cnv < -0.5:  # Threshold for X loss in males
                         events.append(
                             {
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "LOSS",
-                                "description": "X chromosome loss",
+                                "description": f"Chromosome X loss (expected single copy in males)",
                             }
                         )
             elif chrom == "chrY":
-                if self.XYestimate == "XY":  # Male
-                    if mean_cnv > 0.5:
+                if self.sex_estimate in ["Male", "XY"]:  # Male
+                    # For males, Y should have one copy
+                    if mean_cnv > 0.5:  # Threshold for Y gain in males
                         events.append(
                             {
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "GAIN",
-                                "description": "Y chromosome gain",
+                                "description": f"Chromosome Y gain (expected single copy in males)",
                             }
                         )
-                    elif mean_cnv < -0.5:
+                    elif mean_cnv < -0.5:  # Threshold for Y loss in males
                         events.append(
                             {
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "LOSS",
-                                "description": "Y chromosome loss",
+                                "description": f"Chromosome Y loss (expected single copy in males)",
                             }
                         )
-                elif mean_cnv > -0.2 and self.XYestimate == "XX":
-                    events.append(
-                        {
-                            "chromosome": chrom,
-                            "mean_cnv": mean_cnv,
-                            "type": "PRESENT",
-                            "description": "Y chromosome material detected",
-                        }
-                    )
-            else:  # Autosomes
-                adjusted_mean = mean_cnv - baseline
-                z_score = (adjusted_mean - global_stats["mean"]) / global_stats["std"]
-
+                elif self.sex_estimate in ["Female", "XX"]:  # Female
+                    # For females, Y should not be present
+                    if mean_cnv > 0.3:  # Threshold for Y presence in females
+                        events.append(
+                            {
+                                "chromosome": chrom,
+                                "mean_cnv": mean_cnv,
+                                "type": "GAIN",
+                                "description": f"Unexpected Y chromosome presence (expected absent in females)",
+                            }
+                        )
+                    elif mean_cnv > -0.2 and self.sex_estimate in ["Female", "XX"]:
+                        # Not quite a Y gain but stronger signal than expected for females
+                        events.append(
+                            {
+                                "chromosome": chrom,
+                                "mean_cnv": mean_cnv,
+                                "type": "NORMAL",
+                                "description": f"Slight Y chromosome signal (check sample quality)",
+                            }
+                        )
+            else:  # Autosomal chromosomes
+                # Calculate z-score relative to other chromosomes
+                z_score = (mean_cnv - mean_of_means) / std_of_means
                 if z_score > z_score_threshold:
                     events.append(
                         {
@@ -655,11 +707,11 @@ class CNVAnalysis(BaseAnalysis):
         X = round(np.average([i for i in self.result3.cnv["chrX"] if i != 0]), 2)
         Y = round(np.average([i for i in self.result3.cnv["chrY"] if i != 0]), 2)
         if X >= 0.1 and Y <= 0.1:
-            self.XYestimate = "XX"
+            self.sex_estimate = "Female"
         elif X <= 0.1 and Y >= -0.2:
-            self.XYestimate = "XY"
+            self.sex_estimate = "Male"
         else:
-            self.XYestimate = "Unknown"
+            self.sex_estimate = "Unknown"
         with open(
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
@@ -667,7 +719,7 @@ class CNVAnalysis(BaseAnalysis):
             ),
             "wb",
         ) as file:
-            pickle.dump(self.XYestimate, file)
+            pickle.dump(self.sex_estimate, file)
 
     async def process_bam(self, bamfile: BinaryIO, timestamp: float) -> None:
         """
@@ -1062,6 +1114,24 @@ class CNVAnalysis(BaseAnalysis):
             ui.label().bind_text_from(
                 self.cnv_dict, "variance", backward=lambda n: f"Variance: {round(n, 3)}"
             )
+            # Add a toggle switch for color mode
+            with ui.row().classes("items-center gap-2"):
+                ui.label("Color by:").classes("text-sm")
+                
+                # Define callback function before creating the toggle
+                def toggle_color_mode(e):
+                    self.color_mode = e.value
+                    self.update_plots()
+                
+                # Create toggle with options as a dict and pass on_change in constructor
+                color_toggle = ui.toggle(
+                    options={"chromosome": "Chromosome", "value": "Up/Down"},
+                    value="chromosome",
+                    on_change=toggle_color_mode
+                ).classes("mt-1")
+                
+                # Add explanation of the value-based coloring
+                #ui.tooltip("In value mode: Blue = values ≥ expected ploidy, Red = values < expected ploidy. For difference plots: Blue = values ≥ 0, Red = values < 0.").classes("bg-blue-100 p-2 text-xs")
 
         self.scatter_echart = self.generate_chart(title="CNV Scatter Plot")
         self.difference_scatter_echart = self.generate_chart(
@@ -1887,6 +1957,12 @@ class CNVAnalysis(BaseAnalysis):
                 # Update the plot title to reflect that all chromosomes are being shown
                 plot_to_update.options["title"]["text"] = f"{title} - All Chromosomes"
                 plot_to_update.options["series"] = []
+                
+                # Set legend display based on color mode - always hide it
+                if "legend" not in plot_to_update.options:
+                    plot_to_update.options["legend"] = {"show": False, "right": "10%", "top": "10%"}
+                else:
+                    plot_to_update.options["legend"]["show"] = False
 
                 # Collect CNV analysis for all chromosomes
                 all_cytoband_analysis = []
@@ -1963,33 +2039,123 @@ class CNVAnalysis(BaseAnalysis):
                     plot_to_update.options["xAxis"]["min"] = min
 
                     # Append the current chromosome data as a scatter plot series
-                    plot_to_update.options["series"].append(
-                        {
-                            "type": "scatter",
-                            "name": contig,
-                            "data": data,
-                            "symbolSize": 5,  # Size of the scatter plot points
-                            "markLine": {
-                                "symbol": "none",
-                                "data": [
-                                    {
-                                        "lineStyle": {"width": 1},
-                                        "label": {"formatter": contig},
-                                        "name": contig,
-                                        "xAxis": (
-                                            (total - len(cnv) / 2)
-                                            * self.cnv_dict["bin_width"]
-                                        ),
+                    if self.color_mode == "chromosome":
+                        # Original coloring method (by chromosome)
+                        plot_to_update.options["series"].append(
+                            {
+                                "type": "scatter",
+                                "name": contig,
+                                "data": data,
+                                "symbolSize": 5,  # Size of the scatter plot points
+                                "markLine": {
+                                    "symbol": "none",
+                                    "data": [
+                                        {
+                                            "lineStyle": {"width": 1},
+                                            "label": {"formatter": contig},
+                                            "name": contig,
+                                            "xAxis": (
+                                                (total - len(cnv) / 2)
+                                                * self.cnv_dict["bin_width"]
+                                            ),
+                                        },
+                                        {
+                                            "lineStyle": {"width": 2},
+                                            "label": {"normal": {"show": False}},
+                                            "xAxis": ((total) * self.cnv_dict["bin_width"]),
+                                        },
+                                    ],
+                                },
+                            }
+                        )
+                    else:
+                        # Value-based coloring (red/blue)
+                        # Determine expected ploidy value based on chromosome
+                        expected_ploidy = 2  # Default for autosomes
+                        if contig in ["chrX", "chrY"] and self.sex_estimate and self.sex_estimate in ["Male", "XY"]:
+                            expected_ploidy = 1
+                            
+                        # For relative difference plot
+                        is_difference_plot = "Difference" in plot_to_update.options["title"]["text"]
+                        
+                        # Create two data arrays - one for values above threshold, one for below
+                        data_above = []
+                        data_below = []
+                        
+                        for pos, val in data:
+                            if is_difference_plot:
+                                if val >= 0:
+                                    data_above.append([pos, val])
+                                else:
+                                    data_below.append([pos, val])
+                            else:
+                                if val >= expected_ploidy:
+                                    data_above.append([pos, val])
+                                else:
+                                    data_below.append([pos, val])
+                        
+                        # Add a legend when in value mode - but actually hide it
+                        if "legend" not in plot_to_update.options:
+                            plot_to_update.options["legend"] = {"show": False, "right": "10%", "top": "10%"}
+                        else:
+                            plot_to_update.options["legend"]["show"] = False
+                        
+                        # Add blue points (values >= expected or >= 0)
+                        if data_above:
+                            plot_to_update.options["series"].append(
+                                {
+                                    "type": "scatter",
+                                    "name": "Values ≥ 0" if is_difference_plot else f"Values ≥ {expected_ploidy} ({contig})",
+                                    "data": data_above,
+                                    "symbolSize": 5,
+                                    "itemStyle": {
+                                        "color": "#007AFF"  # Blue color
                                     },
-                                    {
-                                        "lineStyle": {"width": 2},
-                                        "label": {"normal": {"show": False}},
-                                        "xAxis": ((total) * self.cnv_dict["bin_width"]),
+                                }
+                            )
+                        
+                        # Add red points (values < expected or < 0)
+                        if data_below:
+                            plot_to_update.options["series"].append(
+                                {
+                                    "type": "scatter",
+                                    "name": "Values < 0" if is_difference_plot else f"Values < {expected_ploidy} ({contig})",
+                                    "data": data_below,
+                                    "symbolSize": 5,
+                                    "itemStyle": {
+                                        "color": "#FF3B30"  # Red color
                                     },
-                                ],
-                            },
-                        }
-                    )
+                                }
+                            )
+                        
+                        # Add chromosome marker line
+                        plot_to_update.options["series"].append(
+                            {
+                                "type": "line",
+                                "name": f"{contig}_markLine",
+                                "data": [],
+                                "symbolSize": 0,
+                                "markLine": {
+                                    "symbol": "none",
+                                    "data": [
+                                        {
+                                            "lineStyle": {"width": 1},
+                                            "label": {"formatter": contig},
+                                            "name": contig,
+                                            "xAxis": (
+                                                (total - len(cnv) / 2)
+                                                * self.cnv_dict["bin_width"]
+                                            ),
+                                        },
+                                        {
+                                            "lineStyle": {"width": 2},
+                                            "label": {"normal": {"show": False}},
+                                            "xAxis": ((total) * self.cnv_dict["bin_width"]),
+                                        },
+                                    ],
+                                },
+                            }
+                        )
 
                     # Add gene information to the dropdown options for the current chromosome
                     for index, gene in self.gene_bed[
@@ -2099,40 +2265,134 @@ class CNVAnalysis(BaseAnalysis):
                 plot_to_update.options["xAxis"]["min"] = min
                 plot_to_update.options["dataZoom"][1]["endValue"] = ymax
 
+                # Set legend display based on color mode - always hide it
+                if "legend" not in plot_to_update.options:
+                    plot_to_update.options["legend"] = {"show": False, "right": "10%", "top": "10%"}
+                else:
+                    plot_to_update.options["legend"]["show"] = False
+                
                 # Now initialize the series after we have contig defined
-                plot_to_update.options["series"] = [
-                    {
-                        "type": "scatter",
-                        "name": contig,
-                        "data": data,
-                        "symbolSize": 3,
-                        "markArea": {
-                            "itemStyle": {"color": "rgba(255, 173, 177, 0.4)"},
-                            "data": [],
+                plot_to_update.options["series"] = []
+
+                # Prepare the data for plotting based on color mode
+                if self.color_mode == "chromosome":
+                    # Original coloring method
+                    plot_to_update.options["series"] = [
+                        {
+                            "type": "scatter",
+                            "name": contig,
+                            "data": data,
+                            "symbolSize": 3,
+                            "markArea": {
+                                "itemStyle": {"color": "rgba(255, 173, 177, 0.4)"},
+                                "data": [],
+                            },
                         },
-                    },
-                    {
-                        "type": "scatter",
-                        "name": "centromeres_highlight",
-                        "data": [],
-                        "symbolSize": 3,
-                        "markArea": {
-                            "itemStyle": {"color": "rgba(135, 206, 250, 0.4)"},
+                        {
+                            "type": "scatter",
+                            "name": "centromeres_highlight",
                             "data": [],
+                            "symbolSize": 3,
+                            "markArea": {
+                                "itemStyle": {"color": "rgba(135, 206, 250, 0.4)"},
+                                "data": [],
+                            },
                         },
-                    },
-                    {
-                        "type": "scatter",
-                        "name": "cytobands_highlight",
-                        "data": [],
-                        "symbolSize": 3,
-                        "markArea": {
-                            "itemStyle": {"color": "rgba(200, 200, 200, 0.4)"},
+                        {
+                            "type": "scatter",
+                            "name": "cytobands_highlight",
                             "data": [],
+                            "symbolSize": 3,
+                            "markArea": {
+                                "itemStyle": {"color": "rgba(200, 200, 200, 0.4)"},
+                                "data": [],
+                            },
+                            "markLine": {"symbol": "none", "data": []},
                         },
-                        "markLine": {"symbol": "none", "data": []},
-                    },
-                ]
+                    ]
+                else:
+                    # Value-based coloring (red/blue)
+                    # Determine expected ploidy value based on chromosome
+                    expected_ploidy = 2  # Default for autosomes
+                    if contig in ["chrX", "chrY"] and self.sex_estimate and self.sex_estimate in ["Male", "XY"]:
+                        expected_ploidy = 1
+                        
+                    # For relative difference plot
+                    is_difference_plot = "Difference" in plot_to_update.options["title"]["text"]
+                    
+                    # Create two data arrays - one for values above threshold, one for below
+                    data_above = []
+                    data_below = []
+                    
+                    for pos, val in data:
+                        if is_difference_plot:
+                            if val >= 0:
+                                data_above.append([pos, val])
+                            else:
+                                data_below.append([pos, val])
+                        else:
+                            if val >= expected_ploidy:
+                                data_above.append([pos, val])
+                            else:
+                                data_below.append([pos, val])
+                    
+                    # Add a legend when in value mode - but actually hide it
+                    if "legend" not in plot_to_update.options:
+                        plot_to_update.options["legend"] = {"show": False, "right": "10%", "top": "10%"}
+                    else:
+                        plot_to_update.options["legend"]["show"] = False
+                    
+                    # Initialize series with separate scatter plots for values above and below thresholds
+                    plot_to_update.options["series"] = [
+                        {
+                            "type": "scatter",
+                            "name": "Values ≥ 0" if is_difference_plot else f"Values ≥ {expected_ploidy} ({contig})",
+                            "data": data_above,
+                            "symbolSize": 3,
+                            "itemStyle": {
+                                "color": "#007AFF"  # Blue color
+                            },
+                            "markArea": {
+                                "itemStyle": {"color": "rgba(255, 173, 177, 0.4)"},
+                                "data": [],
+                            },
+                        },
+                        {
+                            "type": "scatter",
+                            "name": "Values < 0" if is_difference_plot else f"Values < {expected_ploidy} ({contig})",
+                            "data": data_below,
+                            "symbolSize": 3,
+                            "itemStyle": {
+                                "color": "#FF3B30"  # Red color
+                            },
+                            "markArea": {
+                                "itemStyle": {"color": "rgba(135, 206, 250, 0.4)"},
+                                "data": [],
+                            },
+                        },
+                        {
+                            "type": "scatter",
+                            "name": "centromeres_highlight",
+                            "data": [],
+                            "symbolSize": 3,
+                            "markArea": {
+                                "itemStyle": {"color": "rgba(135, 206, 250, 0.4)"},
+                                "data": [],
+                            },
+                            "markLine": {"symbol": "none", "data": []},
+                        },
+                        {
+                            "type": "scatter",
+                            "name": "cytobands_highlight",
+                            "data": [],
+                            "symbolSize": 3,
+                            "markArea": {
+                                "itemStyle": {"color": "rgba(200, 200, 200, 0.4)"},
+                                "data": [],
+                            },
+                            "markLine": {"symbol": "none", "data": []},
+                        },
+                    ]
 
                 # Add gene information to the dropdown options and highlight gene regions in the plot
                 for index, gene in self.gene_bed[
@@ -2144,132 +2404,157 @@ class CNVAnalysis(BaseAnalysis):
                 for _, row in self.gene_bed[
                     self.gene_bed["chrom"] == contig
                 ].iterrows():
-                    plot_to_update.options["series"][0]["markArea"]["data"].append(
-                        [
-                            {
-                                "name": row["gene"],
-                                "xAxis": row["start_pos"],
-                                "label": {
-                                    "position": "insideTop",
-                                    "distance": 0,  # Reduced from 25 to 15
-                                    "color": "#000000",
-                                    "fontSize": 12,
-                                    "show": True,
-                                    "emphasis": {
-                                        "show": True,
-                                        "distance": 0,  # Reduced from 40 to 25
+                    try:
+                        # Make sure we have a valid series with markArea property
+                        if len(plot_to_update.options["series"]) > 0 and "markArea" in plot_to_update.options["series"][0]:
+                            plot_to_update.options["series"][0]["markArea"]["data"].append(
+                                [
+                                    {
+                                        "name": row["gene"],
+                                        "xAxis": row["start_pos"],
+                                        "label": {
+                                            "position": "insideTop",
+                                            "distance": 0,  # Reduced from 25 to 15
+                                            "color": "#000000",
+                                            "fontSize": 12,
+                                            "show": True,
+                                            "emphasis": {
+                                                "show": True,
+                                                "distance": 0,  # Reduced from 40 to 25
+                                            },
+                                        },
                                     },
-                                },
-                            },
-                            {
-                                "xAxis": row["end_pos"],
-                            },
-                        ]
-                    )
+                                    {
+                                        "xAxis": row["end_pos"],
+                                    },
+                                ]
+                            )
+                    except (KeyError, IndexError) as e:
+                        logger.warning(f"Error highlighting gene region: {e}")
 
                 # Highlight the centromeres with shaded area:
                 for _, row in self.centromere_bed[
                     self.centromere_bed["chrom"] == contig
                 ].iterrows():
-                    plot_to_update.options["series"][1]["markArea"]["data"].append(
-                        [
-                            {
-                                "name": row["name"],
-                                "xAxis": row["start_pos"],
-                                "label": {"position": "insideBottom", "distance": 10},
-                            },
-                            {
-                                "xAxis": row["end_pos"],
-                            },
-                        ]
-                    )
+                    try:
+                        # Make sure we have a valid series with markArea property
+                        if len(plot_to_update.options["series"]) > 1 and "markArea" in plot_to_update.options["series"][1]:
+                            plot_to_update.options["series"][1]["markArea"]["data"].append(
+                                [
+                                    {
+                                        "name": row["name"],
+                                        "xAxis": row["start_pos"],
+                                        "itemStyle": {"color": "rgba(255, 173, 177, 0.4)"},
+                                        "label": {
+                                            "position": "insideBottom",
+                                            "distance": 10,
+                                        },
+                                    },
+                                    {
+                                        "xAxis": row["end_pos"],
+                                    },
+                                ]
+                            )
+                    except (KeyError, IndexError) as e:
+                        logger.warning(f"Error highlighting centromere: {e}")
 
                 # Add cytoband highlighting with CNV state colors
                 for _, row in self.cytobands_bed[
                     self.cytobands_bed["chrom"] == contig
                 ].iterrows():
-                    # Get CNV state for this region from analysis
-                    region_analysis = self.analyze_cytoband_cnv(
-                        self.result3.cnv, contig
-                    )
-                    matching_region = region_analysis[
-                        (region_analysis["start_pos"] <= row["start_pos"])
-                        & (region_analysis["end_pos"] >= row["end_pos"])
-                    ]
-
-                    # Set color based on CNV state
-                    if not matching_region.empty:
-                        cnv_state = matching_region.iloc[0]["cnv_state"]
-                        if cnv_state == "GAIN":
-                            color = "rgba(52, 199, 89, 0.15)"  # Green for gains
-                        elif cnv_state == "LOSS":
-                            color = "rgba(255, 45, 85, 0.15)"  # Red for losses
-                        else:
-                            color = "rgba(0, 0, 0, 0.02)"  # Very subtle gray for normal
-                    else:
-                        color = "rgba(0, 0, 0, 0.02)"  # Default subtle gray
-
-                    # Add colored regions to the plot
-                    plot_to_update.options["series"][2]["markArea"]["data"].append(
-                        [
-                            {
-                                "name": row[
-                                    "name"
-                                ],  # Just the cytoband name without state
-                                "xAxis": row["start_pos"],
-                                "itemStyle": {"color": color},
-                                "label": {
-                                    "position": "insideTop",
-                                    "distance": 25,
-                                    "color": cnv_state == "GAIN"
-                                    and "#34C759"  # Green for gains
-                                    or cnv_state == "LOSS"
-                                    and "#E0162B"  # Brighter, more saturated red for losses
-                                    or "#000000",  # Black for normal
-                                    "fontWeight": cnv_state in ["GAIN", "LOSS"]
-                                    and "bold"
-                                    or "normal",
-                                    "show": True,
-                                },
-                            },
-                            {
-                                "xAxis": row["end_pos"],
-                            },
+                    try:
+                        # Get CNV state for this region from analysis
+                        region_analysis = self.analyze_cytoband_cnv(
+                            self.result3.cnv, contig
+                        )
+                        matching_region = region_analysis[
+                            (region_analysis["start_pos"] <= row["start_pos"])
+                            & (region_analysis["end_pos"] >= row["end_pos"])
                         ]
-                    )
+
+                        # Set color based on CNV state
+                        if not matching_region.empty:
+                            cnv_state = matching_region.iloc[0]["cnv_state"]
+                            if cnv_state == "GAIN":
+                                color = "rgba(52, 199, 89, 0.15)"  # Green for gains
+                            elif cnv_state == "LOSS":
+                                color = "rgba(255, 45, 85, 0.15)"  # Red for losses
+                            else:
+                                color = "rgba(0, 0, 0, 0.02)"  # Very subtle gray for normal
+                        else:
+                            color = "rgba(0, 0, 0, 0.02)"  # Default subtle gray
+
+                        # Make sure we have a valid series with markArea property
+                        if len(plot_to_update.options["series"]) > 2 and "markArea" in plot_to_update.options["series"][2]:
+                            # Add colored regions to the plot
+                            plot_to_update.options["series"][2]["markArea"]["data"].append(
+                                [
+                                    {
+                                        "name": row[
+                                            "name"
+                                        ],  # Just the cytoband name without state
+                                        "xAxis": row["start_pos"],
+                                        "itemStyle": {"color": color},
+                                        "label": {
+                                            "position": "insideTop",
+                                            "distance": 25,
+                                            "color": cnv_state == "GAIN"
+                                            and "#34C759"  # Green for gains
+                                            or cnv_state == "LOSS"
+                                            and "#E0162B"  # Brighter, more saturated red for losses
+                                            or "#000000",  # Black for normal
+                                            "fontWeight": cnv_state in ["GAIN", "LOSS"]
+                                            and "bold"
+                                            or "normal",
+                                            "show": True,
+                                        },
+                                    },
+                                    {
+                                        "xAxis": row["end_pos"],
+                                    },
+                                ]
+                            )
+                    except (KeyError, IndexError) as e:
+                        logger.warning(f"Error highlighting cytoband: {e}")
 
                     # Add horizontal reference lines for CNV thresholds only on the difference plot
                     if "Difference" in plot_to_update.options["title"]["text"]:
-                        plot_to_update.options["series"][2]["markLine"]["data"].extend(
-                            [
-                                {
-                                    "name": "Gain Threshold",
-                                    "yAxis": 0.5,
-                                    "lineStyle": {
-                                        "color": "rgba(52, 199, 89, 0.5)",
-                                        "type": "dashed",
-                                    },
-                                    "label": {
-                                        "show": True,
-                                        "formatter": "Gain Threshold",
-                                        "position": "insideEndTop",
-                                    },
-                                },
-                                {
-                                    "name": "Loss Threshold",
-                                    "yAxis": -0.5,
-                                    "lineStyle": {
-                                        "color": "rgba(255, 45, 85, 0.5)",
-                                        "type": "dashed",
-                                    },
-                                    "label": {
-                                        "show": True,
-                                        "formatter": "Loss Threshold",
-                                        "position": "insideEndBottom",
-                                    },
-                                },
-                            ]
-                        )
+                        try:
+                            # Make sure we have a valid series with markLine property
+                            if (len(plot_to_update.options["series"]) > 2 and 
+                                "markLine" in plot_to_update.options["series"][2]):
+                                plot_to_update.options["series"][2]["markLine"]["data"].extend(
+                                    [
+                                        {
+                                            "name": "Gain Threshold",
+                                            "yAxis": 0.5,
+                                            "lineStyle": {
+                                                "color": "rgba(52, 199, 89, 0.5)",
+                                                "type": "dashed",
+                                            },
+                                            "label": {
+                                                "show": True,
+                                                "formatter": "Gain Threshold",
+                                                "position": "insideEndTop",
+                                            },
+                                        },
+                                        {
+                                            "name": "Loss Threshold",
+                                            "yAxis": -0.5,
+                                            "lineStyle": {
+                                                "color": "rgba(255, 45, 85, 0.5)",
+                                                "type": "dashed",
+                                            },
+                                            "label": {
+                                                "show": True,
+                                                "formatter": "Loss Threshold",
+                                                "position": "insideEndBottom",
+                                            },
+                                        },
+                                    ]
+                                )
+                        except (KeyError, IndexError) as e:
+                            logger.warning(f"Error adding reference lines: {e}")
 
             # Update the chromosome dropdown options in the UI
             try:
@@ -2340,12 +2625,22 @@ class CNVAnalysis(BaseAnalysis):
         Parameters
         ----------
         xy_estimate : str
-            Estimated genetic sex (XX, XY, or Unknown)
+            Estimated genetic sex (XX/Female, XY/Male, or Unknown)
         bin_width : int
             Current bin width used in the analysis
         variance : float
             Current variance value from the analysis
         """
+        # Convert old format to new if necessary
+        display_sex = xy_estimate
+        if xy_estimate == "XX":
+            display_sex = "Female (XX)"
+        elif xy_estimate == "XY":
+            display_sex = "Male (XY)"
+        
+        # Determine if male or female for icon and styling
+        is_male = xy_estimate in ["XY", "Male"]
+        
         with self.summary:
             self.summary.clear()
             with ui.card().classes("w-full p-4 mb-4"):
@@ -2359,19 +2654,19 @@ class CNVAnalysis(BaseAnalysis):
                             if xy_estimate != "Unknown":
                                 status_color = (
                                     "text-blue-600"
-                                    if xy_estimate == "XY"
+                                    if is_male
                                     else "text-pink-600"
                                 )
                                 status_bg = (
                                     "bg-blue-100"
-                                    if xy_estimate == "XY"
+                                    if is_male
                                     else "bg-pink-100"
                                 )
-                                if xy_estimate == "XY":
+                                if is_male:
                                     ui.icon("man").classes("text-4xl text-blue-500")
                                 else:
                                     ui.icon("woman").classes("text-4xl text-pink-500")
-                                ui.label(f"Genetic Sex: {xy_estimate}").classes(
+                                ui.label(f"Genetic Sex: {display_sex}").classes(
                                     f"{status_color} font-medium"
                                 )
                             else:
@@ -2539,6 +2834,7 @@ class CNVAnalysis(BaseAnalysis):
                     self.summary.clear()
                     with open(os.path.join(output, "XYestimate.pkl"), "rb") as file:
                         xy_estimate = pickle.load(file)
+                        self.sex_estimate = xy_estimate  # Store the loaded value in sex_estimate
                         self.create_summary_card(
                             xy_estimate=xy_estimate,
                             bin_width=self.cnv_dict["bin_width"],
@@ -2728,7 +3024,7 @@ class CNVAnalysis(BaseAnalysis):
                 cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
                 cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
             elif chromosome == "chrX":
-                if self.XYestimate == "XY":  # Male
+                if self.sex_estimate in ["Male", "XY"]:  # Male
                     gain_threshold = means_mean + (1.0 * means_std)
                     loss_threshold = means_mean - (1.0 * means_std)
                     cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
@@ -2739,7 +3035,7 @@ class CNVAnalysis(BaseAnalysis):
                     cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
                     cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
             elif chromosome == "chrY":
-                if self.XYestimate == "XY":  # Male
+                if self.sex_estimate in ["Male", "XY"]:  # Male
                     gain_threshold = means_mean + (1.0 * means_std)
                     loss_threshold = means_mean - (1.0 * means_std)
                     cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
