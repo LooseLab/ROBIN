@@ -1585,7 +1585,7 @@ class BrainMeth:
                                                                     ][
                                                                         "file_counters"
                                                                     ][
-                                                                        "mapped_count"
+                                                                        "mapped_bases"
                                                                     ]
                                                                 )
                                                                 unmapped = (
@@ -1596,7 +1596,7 @@ class BrainMeth:
                                                                     ][
                                                                         "file_counters"
                                                                     ][
-                                                                        "unmapped_count"
+                                                                        "unmapped_bases"
                                                                     ]
                                                                 )
                                                                 total = (
@@ -1644,7 +1644,7 @@ class BrainMeth:
                                                                     ][
                                                                         "file_counters"
                                                                     ][
-                                                                        "mapped_count"
+                                                                        "mapped_bases"
                                                                     ]
                                                                 )
                                                                 mapped.text = (
@@ -1684,7 +1684,7 @@ class BrainMeth:
                                                                     ][
                                                                         "file_counters"
                                                                     ][
-                                                                        "unmapped_count"
+                                                                        "unmapped_bases"
                                                                     ]
                                                                 )
                                                                 unmapped.text = (
@@ -3126,6 +3126,13 @@ class BrainMeth:
                 app.storage.general[self.mainuuid]["bam_count"]["total_files"] += 1
                 app.storage.general[self.mainuuid]["bam_count"]["file"][filename] = timestamp
 
+                # Inside the process_bams method, after updating pass_* or fail_* counters:
+                # Update the combined counters 
+                self.update_counter(sample_id, "mapped_bases", bamdata["mapped_bases"])
+                self.update_counter(sample_id, "unmapped_bases", bamdata["unmapped_bases"])
+                self.update_counter(sample_id, "mapped_reads_num", bamdata["mapped_reads_num"])
+                self.update_counter(sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"])
+
             # Process the files
             while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
                 self.nofiles = False
@@ -3184,7 +3191,7 @@ class BrainMeth:
 
                 # Process state and update counters
                 if baminfo["state"] == "pass":
-                    logging.info(f"BAM file {file[0]} passed quality checks")
+                    #logging.info(f"BAM file {filename} passed quality checks")
                     self.update_counter(sample_id, "bam_passed", 1)
                     self.update_counter(sample_id, "pass_mapped_count", bamdata["mapped_reads"])
                     self.update_counter(sample_id, "pass_unmapped_count", bamdata["unmapped_reads"])
@@ -3193,8 +3200,17 @@ class BrainMeth:
                     self.update_counter(sample_id, "pass_unmapped_reads_num", bamdata["unmapped_reads_num"])
                     self.update_counter(sample_id, "pass_mapped_bases", bamdata["mapped_bases"])
                     self.update_counter(sample_id, "pass_unmapped_bases", bamdata["unmapped_bases"])
+                    
+                    # Update the combined counters for pass files
+                    self.update_counter(sample_id, "mapped_bases", bamdata["mapped_bases"])
+                    self.update_counter(sample_id, "unmapped_bases", bamdata["unmapped_bases"])
+                    self.update_counter(sample_id, "mapped_reads_num", bamdata["mapped_reads_num"])
+                    self.update_counter(sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"])
+                    self.update_counter(sample_id, "mapped_count", bamdata["mapped_reads"])
+                    self.update_counter(sample_id, "unmapped_count", bamdata["unmapped_reads"])
+                    self.update_counter(sample_id, "bases_count", bamdata["yield_tracking"])
                 else:
-                    logging.info(f"BAM file {file[0]} failed quality checks")
+                    #logging.info(f"BAM file {filename} failed quality checks")
                     self.update_counter(sample_id, "bam_failed", 1)
                     self.update_counter(sample_id, "fail_mapped_count", bamdata["mapped_reads"])
                     self.update_counter(sample_id, "fail_unmapped_count", bamdata["unmapped_reads"])
@@ -3203,6 +3219,15 @@ class BrainMeth:
                     self.update_counter(sample_id, "fail_unmapped_reads_num", bamdata["unmapped_reads_num"])
                     self.update_counter(sample_id, "fail_mapped_bases", bamdata["mapped_bases"])
                     self.update_counter(sample_id, "fail_unmapped_bases", bamdata["unmapped_bases"])
+                    
+                    # Update the combined counters for fail files
+                    self.update_counter(sample_id, "mapped_bases", bamdata["mapped_bases"])
+                    self.update_counter(sample_id, "unmapped_bases", bamdata["unmapped_bases"])
+                    self.update_counter(sample_id, "mapped_reads_num", bamdata["mapped_reads_num"])
+                    self.update_counter(sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"])
+                    self.update_counter(sample_id, "mapped_count", bamdata["mapped_reads"])
+                    self.update_counter(sample_id, "unmapped_count", bamdata["unmapped_reads"])
+                    self.update_counter(sample_id, "bases_count", bamdata["yield_tracking"])
 
                 # Route to analysis queues
                 analyses = ["forest", "sturgeon", "nanodx", "pannanodx"]
