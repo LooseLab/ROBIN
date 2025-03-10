@@ -23,6 +23,7 @@ class MGMTSection(ReportSection):
         last_seen = 0
         mgmt_results = None
         plot_out = None
+        specific_sites_file = None
 
         for file in natsort.natsorted(os.listdir(self.report.output)):
             if file.endswith("_mgmt.csv"):
@@ -31,6 +32,9 @@ class MGMTSection(ReportSection):
                     mgmt_results = pd.read_csv(os.path.join(self.report.output, file))
                     plot_out = os.path.join(
                         self.report.output, file.replace(".csv", ".png")
+                    )
+                    specific_sites_file = os.path.join(
+                        self.report.output, f"{count}_specific_sites.csv"
                     )
                     last_seen = count
 
@@ -64,7 +68,7 @@ class MGMTSection(ReportSection):
             summary_data = []
             summary_data.append(
                 [
-                    Paragraph("Methylation Status:", self.styles.styles["Normal"]),
+                    Paragraph("Status:", self.styles.styles["Normal"]),
                     Paragraph(
                         methylation_status,
                         ParagraphStyle(
@@ -76,8 +80,8 @@ class MGMTSection(ReportSection):
                                 else HexColor("#d97706")
                             ),
                             fontName="Helvetica-Bold",
-                            fontSize=8,
-                            leading=10,
+                            fontSize=7,
+                            leading=9,
                         ),
                     ),
                 ]
@@ -86,9 +90,15 @@ class MGMTSection(ReportSection):
             if methylation_average is not None:
                 summary_data.append(
                     [
-                        Paragraph("Average Methylation:", self.styles.styles["Normal"]),
+                        Paragraph("Average:", self.styles.styles["Normal"]),
                         Paragraph(
-                            f"{methylation_average:.1f}%", self.styles.styles["Normal"]
+                            f"{methylation_average:.1f}%", 
+                            ParagraphStyle(
+                                "ValueStyle",
+                                parent=self.styles.styles["Normal"],
+                                fontSize=7,
+                                leading=9,
+                            ),
                         ),
                     ]
                 )
@@ -96,76 +106,218 @@ class MGMTSection(ReportSection):
             if prediction_score is not None:
                 summary_data.append(
                     [
-                        Paragraph("Prediction Score:", self.styles.styles["Normal"]),
+                        Paragraph("Score:", self.styles.styles["Normal"]),
                         Paragraph(
-                            f"{prediction_score:.1f}%", self.styles.styles["Normal"]
+                            f"{prediction_score:.1f}%", 
+                            ParagraphStyle(
+                                "ValueStyle",
+                                parent=self.styles.styles["Normal"],
+                                fontSize=7,
+                                leading=9,
+                            ),
                         ),
                     ]
                 )
 
-            # Create summary table with styling
-            summary_table = Table(summary_data, colWidths=[2 * inch, 1.5 * inch])
+            # Create summary table with more compact styling
+            summary_table = Table(summary_data, colWidths=[1 * inch, 1 * inch])
             summary_table.setStyle(
                 TableStyle(
                     [
                         # Inherit modern table style
                         *self.MODERN_TABLE_STYLE._cmds,
-                        # Preserve specific alignments
+                        # More compact styling
+                        ("FONTSIZE", (0, 0), (-1, -1), 7),  # Smaller font
+                        ("LEADING", (0, 0), (-1, -1), 9),  # Tighter line spacing
                         ("ALIGN", (0, 0), (0, -1), "LEFT"),  # Labels left-aligned
                         ("ALIGN", (1, 0), (1, -1), "RIGHT"),  # Values right-aligned
+                        # Reduce padding
+                        ("TOPPADDING", (0, 0), (-1, -1), 2),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
                     ]
                 )
             )
 
             self.elements.append(summary_table)
-            self.elements.append(Spacer(1, 12))
+            self.elements.append(Spacer(1, 6))  # Reduced spacing
 
-            # Add file sources information
+            # Add explanation text in a more compact format
+            self.elements.append(
+                Paragraph(
+                    "MGMT promoter methylation status is based on 137 predictive CpG sites (cutoff: 25%). "
+                    "Analysis includes strand-specific methylation levels for key CpG pairs.",
+                    ParagraphStyle(
+                        "Explanation",
+                        parent=self.styles.styles["Normal"],
+                        fontSize=6,
+                        leading=8,
+                        textColor=HexColor("#4B5563"),
+                    ),
+                )
+            )
+            self.elements.append(Spacer(1, 6))  # Reduced spacing
+
+            # Add specific CpG sites table if available
+            if specific_sites_file and os.path.exists(specific_sites_file):
+                specific_sites = pd.read_csv(specific_sites_file)
+                if not specific_sites.empty:
+                    self.elements.append(
+                        Paragraph("Key CpG Sites Analysis", self.styles.styles["Heading3"])
+                    )
+                    self.elements.append(Spacer(1, 6))
+
+                    # Create table header
+                    cpg_data = [
+                        [
+                            "Site",  # Shortened header
+                            "Position",
+                            "Fwd\nCov",  # Shortened headers
+                            "Rev\nCov",
+                            "Total\nCov",
+                            "Combined\nMeth %",
+                            "Fwd\nMeth %",
+                            "Rev\nMeth %",
+                        ]
+                    ]
+
+                    # Add data rows
+                    for _, row in specific_sites.iterrows():
+                        cpg_data.append([
+                            f"Site {row['Site_Label'].split(' ')[1]}",  # Just the number
+                            row['Position'].split('/')[0],  # Just first position
+                            str(row['Coverage_Forward']),
+                            str(row['Coverage_Reverse']),
+                            str(row['Total_Coverage']),
+                            f"{row['Methylation_Percentage']:.1f}",  # Removed % symbol
+                            f"{row['Forward_Methylation']:.1f}",
+                            f"{row['Reverse_Methylation']:.1f}",
+                        ])
+
+                    # Create the table with more compact column widths
+                    cpg_table = Table(
+                        cpg_data,
+                        colWidths=[
+                            0.5 * inch,  # Site (reduced)
+                            0.8 * inch,  # Position (reduced)
+                            0.5 * inch,  # Forward Coverage (reduced)
+                            0.5 * inch,  # Reverse Coverage (reduced)
+                            0.5 * inch,  # Total Coverage (reduced)
+                            0.6 * inch,  # Combined Methylation (reduced)
+                            0.6 * inch,  # Forward Methylation (reduced)
+                            0.6 * inch,  # Reverse Methylation (reduced)
+                        ],
+                        repeatRows=1,
+                    )
+
+                    # Style the table with more compact settings
+                    cpg_table.setStyle(
+                        TableStyle(
+                            [
+                                # Inherit modern table style
+                                *self.MODERN_TABLE_STYLE._cmds,
+                                # More compact styling
+                                ("FONTSIZE", (0, 0), (-1, -1), 6),  # Even smaller font
+                                ("LEADING", (0, 0), (-1, -1), 7),  # Tighter line spacing
+                                ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+                                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                                # Header styling
+                                ("BACKGROUND", (0, 0), (-1, 0), HexColor("#F3F4F6")),
+                                ("TEXTCOLOR", (0, 0), (-1, 0), HexColor("#374151")),
+                                ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                                # Add subtle gridlines
+                                ("GRID", (0, 0), (-1, -1), 0.25, HexColor("#E5E7EB")),
+                                # Reduce padding
+                                ("TOPPADDING", (0, 0), (-1, -1), 2),
+                                ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                                ("LEFTPADDING", (0, 0), (-1, -1), 2),
+                                ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+                            ]
+                        )
+                    )
+
+                    # Add a caption above the table
+                    self.elements.append(
+                        Paragraph(
+                            "Key CpG Sites - Strand-specific methylation analysis",
+                            ParagraphStyle(
+                                "TableCaption",
+                                parent=self.styles.styles["Caption"],
+                                fontSize=7,
+                                leading=8,
+                                spaceBefore=6,
+                                spaceAfter=2,
+                            ),
+                        )
+                    )
+                    self.elements.append(cpg_table)
+                    self.elements.append(Spacer(1, 6))  # Reduced spacing
+
+                    # Add average methylation in a more compact format
+                    avg_methylation = specific_sites['Methylation_Percentage'].mean()
+                    self.elements.append(
+                        Paragraph(
+                            f"Mean methylation: {avg_methylation:.1f}%",  # Shortened text
+                            ParagraphStyle(
+                                "SiteAverage",
+                                parent=self.styles.styles["Normal"],
+                                fontSize=7,
+                                leading=8,
+                                textColor=HexColor("#2563eb"),
+                            ),
+                        )
+                    )
+                    self.elements.append(Spacer(1, 6))  # Reduced spacing
+
+            # Add file sources information in a more compact format
             file_sources = [
-                ["Data Source", "File Location"],
+                ["Source", "Location"],  # Shorter headers
                 [
-                    "MGMT Results",
-                    os.path.join(self.report.output, f"{last_seen}_mgmt.csv"),
+                    "Results",  # Shorter labels
+                    os.path.basename(os.path.join(self.report.output, f"{last_seen}_mgmt.csv")),  # Just filename
                 ],
                 [
-                    "MGMT Plot",
-                    os.path.join(self.report.output, f"{last_seen}_mgmt.png"),
+                    "Plot",
+                    os.path.basename(os.path.join(self.report.output, f"{last_seen}_mgmt.png")),
                 ],
             ]
 
-            # Create file sources table
-            sources_table = Table(file_sources, colWidths=[2 * inch, 4 * inch])
+            if specific_sites_file and os.path.exists(specific_sites_file):
+                file_sources.append(
+                    [
+                        "CpG Sites",
+                        os.path.basename(specific_sites_file),
+                    ]
+                )
+
+            # Create file sources table with compact styling
+            sources_table = Table(file_sources, colWidths=[0.8 * inch, 2.5 * inch])
             sources_table.setStyle(
                 TableStyle(
                     [
                         # Inherit modern table style
                         *self.MODERN_TABLE_STYLE._cmds,
-                        # Preserve specific alignments
-                        ("ALIGN", (0, 0), (0, -1), "LEFT"),  # Labels left-aligned
-                        ("ALIGN", (1, 0), (1, -1), "LEFT"),  # Values left-aligned
+                        # Compact styling
+                        ("FONTSIZE", (0, 0), (-1, -1), 6),  # Smaller font
+                        ("LEADING", (0, 0), (-1, -1), 8),  # Tighter line spacing
+                        ("ALIGN", (0, 0), (0, -1), "LEFT"),
+                        ("ALIGN", (1, 0), (1, -1), "LEFT"),
+                        # Header styling
+                        ("BACKGROUND", (0, 0), (-1, 0), HexColor("#F3F4F6")),
+                        ("TEXTCOLOR", (0, 0), (-1, 0), HexColor("#374151")),
+                        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                        # Reduce padding
+                        ("TOPPADDING", (0, 0), (-1, -1), 2),
+                        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
                     ]
                 )
             )
 
             self.elements.append(sources_table)
-            self.elements.append(Spacer(1, 12))
-
-            # Add explanation text
-            self.elements.append(
-                Paragraph(
-                    "MGMT promoter methylation status is assessed based on a logistic regression prediction model "
-                    "that considers 137 most predictive CpG sites in the MGMT promoter region. "
-                    "The methylation cutoff is assigned as 25%.",
-                    ParagraphStyle(
-                        "Explanation",
-                        parent=self.styles.styles["Normal"],
-                        fontSize=8,
-                        leading=10,
-                        textColor=HexColor("#4B5563"),
-                    ),
-                )
-            )
-            self.elements.append(Spacer(1, 12))
+            self.elements.append(Spacer(1, 6))  # Reduced spacing
 
             # Add the methylation plot if it exists
             if plot_out and os.path.exists(plot_out):
