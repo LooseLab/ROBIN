@@ -210,7 +210,7 @@ class BaseAnalysis:
         """
         Set up a timer to periodically run the _worker method for processing BAM files.
         """
-        self.timer = ui.timer(1, self._worker)
+        self.timer = ui.timer(0.1, self._worker)
 
     async def _worker(self) -> None:
         """
@@ -250,7 +250,7 @@ class BaseAnalysis:
             app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                 "bam_processed"
             ] += 1
-        await asyncio.sleep(0.05)
+        #await asyncio.sleep(0.05)
         self.timer.active = True
 
     def add_bam(self, bamfile: BinaryIO, timestamp: Optional[float] = None) -> None:
@@ -328,7 +328,7 @@ class BaseAnalysis:
                     await self.process_bam(data_list)
                 except Exception as e:
                     logger.error(f"Error processing BAM files: {e}")
-        await asyncio.sleep(0.1)
+        await asyncio.sleep(0.01)
         self.timer.active = True
 
     @property

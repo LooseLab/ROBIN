@@ -459,7 +459,7 @@ def check_bam(bamfile):
     # Check if file is being written to
     try:
         file_size = os.path.getsize(bamfile)
-        time.sleep(0.1)  # Brief pause
+        #time.sleep(0.1)  # Brief pause
         if os.path.getsize(bamfile) != file_size:
             logging.warning(f"BAM file is still being written: {bamfile}")
             raise IOError("BAM file is still being written")
@@ -1422,7 +1422,7 @@ class BrainMeth:
                                                 )
 
                                     # Summary Statistics Section - Grid layout for BAM File Summary and Sequencing Statistics
-                                    with ui.grid().classes("grid-cols-4 gap-6 mt-6"):
+                                    with ui.grid().classes("grid-cols-6 gap-6 mt-6"):
                                         # BAM File Summary Card - Takes 1 column (1/4)
                                         with ui.card().classes(
                                             "col-span-1 p-4 bg-gray-50 rounded-lg"
