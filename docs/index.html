@@ -127,6 +127,16 @@
         footer a:hover {
             text-decoration: underline;
         }
+        
+        .challenge-list, .impact-list, .benefits-list {
+            margin-top: 1rem;
+            margin-left: 1.5rem;
+        }
+        
+        .challenge-list li, .impact-list li, .benefits-list li {
+            margin-bottom: 0.5rem;
+            line-height: 1.6;
+        }
     </style>
 </head>
 <body>
@@ -136,68 +146,69 @@
             <h1>ROBIN</h1>
             <p><b>R</b>apid nanop<b>O</b>re <b>B</b>rain intraoperat<b>I</b>ve classificatio<b>N</b></p>
             <div class="mission-statement">
-                <p>Currently in the UK, patients, families, and clinicians wait on average 6 weeks for a complete molecular profile of a CNS tumour, delaying treatment decisions and causing significant uncertainty. 
-                <p>ROBIN, and other related approaches, provide a solution that can reduce that wait time down to mere hours, enabling equitable access to rapid CNS tumour diagnostics for all patients, regardless of their location or circumstances.
-                <p>This results in faster access to appropriate treatments and trials, reduces uncertainity for patients, families and clinicians, and would dramatically reduce the overall cost of care.</p>
+                <p>Currently in the UK, patients, families, and clinicians wait on average 6 weeks for a complete molecular profile of a CNS tumour, delaying treatment decisions and causing significant uncertainty.</p>
+                <p>ROBIN is a breakthrough solution that cuts that wait time down to mere hours, enabling equitable access to rapid CNS tumour diagnostics for all patients, regardless of their location or circumstances.</p>
             </div>
-            <!---<div class="badges">
+            <div class="badges">
                 <img src="https://img.shields.io/pypi/v/methnicegui.svg" alt="PyPI Version">
                 <img src="https://img.shields.io/pypi/pyversions/methnicegui.svg" alt="Python Version">
-            </div>--->
+            </div>
         </div>
     </header>
 
     <main class="container">
         <section class="content-section">
-            <h2>About ROBIN</h2>
-            <p>ROBIN is a powerful real-time bioinformatics interface designed for oncology applications utilising <a href="https://nanoporetech.com/" target="_blank" rel="noopener noreferrer">Oxford Nanopore Technologies</a> (ONT) sequencers.</p>
-            <p>It provides a comprehensive suite of tools for analyzing genomic data, with a focus on real-time analysis during DNA sequencing runs.</p>
-            <p>This approach allows pathologists to reports results to surgeons and clinicians in the shortest possible time, allowing for faster treatment decisions and reducing uncertainty for patients, families and clinicians.</p>
-            <p>In many cases, surgeons can have confirmation of the tumour type and grade before the patient has even left the operating theatre.</p>
-            <p>Currently ROBIN is research use only, but working closely with clinicians and surgeons in the UK we hope to be able to make these methods available across the UK and beyond as soon as possible.</p>
-            <p>The preprint describing the initial implementation of the platform can be found <a href="https://www.medrxiv.org/content/10.1101/2024.09.10.24313398v1" target="_blank" rel="noopener noreferrer">here</a>.</p>
-            <p>Protocols associated with the methods are available from <a href="https://www.protocols.io/view/robin-a-unified-nanopore-based-sequencing-assay-in-bp2l6xepklqe/v3?version_warning=no" target="_blank" rel="noopener noreferrer">here</a>.</p>
+            <h2>The Challenge</h2>
+            <p>Every year, thousands of patients in the UK undergo surgery for suspected brain tumours. The molecular classification of these tumours is crucial for determining the most effective treatment strategy. However, the current process of obtaining this vital information is far from ideal:</p>
+            <ul class="challenge-list">
+                <li>Patients and families endure weeks of anxiety waiting for results</li>
+                <li>Treatment decisions are delayed, potentially impacting patient outcomes</li>
+                <li>Additional surgical procedures may be required if initial molecular results are inconclusive</li>
+                <li>Limited access to rapid diagnostics creates inequalities in care delivery</li>
+            </ul>
         </section>
 
         <section class="features">
             <div class="feature-card">
-                <h3>Real-time Analysis</h3>
-                <p>Monitor and analyze sequencing data as it's being generated, providing immediate insights into your samples.</p>
+                <h3>Rapid Results</h3>
+                <p>Complete molecular profiling available within hours of surgery, enabling immediate treatment planning.</p>
             </div>
             <div class="feature-card">
-                <h3>Interactive Visualization</h3>
-                <p>View detailed visualizations of methylation patterns, copy number variations, and gene fusions through an intuitive web interface.</p>
+                <h3>Better Patient Experience</h3>
+                <p>Reduced anxiety and uncertainty for patients and families by providing same-day results.</p>
             </div>
             <div class="feature-card">
-                <h3>Comprehensive Tools</h3>
-                <p>Includes tools for methylation classification, copy number analysis, coverage tracking, and fusion gene detection.</p>
+                <h3>Improved Care Delivery</h3>
+                <p>Enable clinicians to make informed treatment decisions quickly, potentially improving patient outcomes.</p>
             </div>
         </section>
 
         <section class="content-section">
-            <h2>Key Features</h2>
-            <ul>
-                <li>Methylation classification and analysis</li>
-                <li>Copy number variation detection</li>
-                <li>Target coverage monitoring</li>
-                <li>MGMT promoter methylation status</li>
-                <li>Fusion gene detection</li>
-                <li>Real-time data visualization</li>
-                <li>Interactive genome browser</li>
+            <h2>The Impact</h2>
+            <p>By providing rapid molecular profiling, ROBIN has the potential to transform the patient journey:</p>
+            <ul class="impact-list">
+                <li>Same-day molecular diagnosis following surgery</li>
+                <li>Immediate treatment planning and faster access to appropriate therapies</li>
+                <li>Reduced need for additional surgical procedures</li>
+                <li>Equal access to rapid diagnostics across different healthcare settings</li>
+                <li>Improved patient and family experience through reduced waiting times</li>
             </ul>
         </section>
 
-        <!--
         <section class="content-section">
-            <h2>Interface Preview</h2>
-            <img src="images/home_page.png" alt="ROBIN Interface" class="screenshot">
-            <p>The ROBIN interface provides a clean, intuitive way to monitor and analyze your sequencing data in real-time.</p>
+            <h2>Join Us in Transforming CNS Tumour Diagnostics</h2>
+            <p>We're working to make rapid molecular diagnostics the standard of care for all CNS tumour patients. By implementing ROBIN, healthcare providers can offer their patients:</p>
+            <ul class="benefits-list">
+                <li>Faster time to appropriate treatment</li>
+                <li>Reduced anxiety during the diagnostic process</li>
+                <li>More efficient use of healthcare resources</li>
+                <li>Improved patient outcomes through rapid molecular classification</li>
+            </ul>
         </section>
-        --->
 
         <section class="content-section">
             <h2>Getting Started</h2>
-            <p>ROBIN requires Docker and can be installed using Conda. For detailed installation instructions and documentation, visit our <a href="https://github.com/LooseLab/robin">GitHub repository</a>.</p>
+            <p>If you're interested in implementing rapid molecular diagnostics at your institution, please visit our <a href="https://github.com/LooseLab/robin">GitHub repository</a> or contact the Loose Lab team.</p>
         </section>
     </main>
 
