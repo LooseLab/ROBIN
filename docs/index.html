@@ -69,6 +69,49 @@
             margin-top: 1rem;
         }
         
+        .patient-info {
+            margin: 2rem auto;
+            max-width: 800px;
+            background-color: #fff;
+            border-left: 4px solid var(--secondary-color);
+        }
+        
+        .patient-resources ul {
+            margin: 1rem 0 1.5rem 1.5rem;
+            list-style-type: none;
+        }
+        
+        .patient-resources li {
+            margin-bottom: 0.8rem;
+            position: relative;
+            padding-left: 1.5rem;
+        }
+        
+        .patient-resources li:before {
+            content: "→";
+            position: absolute;
+            left: 0;
+            color: var(--secondary-color);
+        }
+        
+        .patient-resources .emphasis {
+            font-style: italic;
+            color: #666;
+            border-top: 1px solid #eee;
+            padding-top: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .patient-resources a {
+            color: var(--secondary-color);
+            text-decoration: none;
+            border-bottom: 1px dotted var(--secondary-color);
+        }
+        
+        .patient-resources a:hover {
+            border-bottom-style: solid;
+        }
+        
         .content-section {
             background: white;
             padding: 2rem;
@@ -147,8 +190,24 @@
             <p><b>R</b>apid nanop<b>O</b>re <b>B</b>rain intraoperat<b>I</b>ve classificatio<b>N</b></p>
             <div class="mission-statement">
                 <p>Currently in the UK, patients, families, and clinicians wait on average 6 weeks for a complete molecular profile of a CNS tumour, delaying treatment decisions and causing significant uncertainty.</p>
-                <p>ROBIN is a breakthrough solution that cuts that wait time down to mere hours, enabling equitable access to rapid CNS tumour diagnostics for all patients, regardless of their location or circumstances.</p>
+                <p>ROBIN, and other related approaches, provide a solution that can reduce that wait time down to mere hours, enabling equitable access to rapid CNS tumour diagnostics for all patients, regardless of their location or circumstances.</p>
+                <p>This results in faster access to appropriate treatments and trials, reduces uncertainity for patients, families and clinicians, and would dramatically reduce the overall cost of care.</p>
+                <p>We are working with clinicians and surgeons in the UK and beyond to make this a reality as soon as possible.</p>
             </div>
+            
+            <section class="content-section patient-info">
+                <h2>Information for Patients and Families</h2>
+                <div class="patient-resources">
+                    <p>If you or a family member are concerned about symptoms that might indicate a brain tumour, we recommend:</p>
+                    <ul>
+                        <li>Contact your GP immediately to discuss your symptoms</li>
+                        <li>Visit <a href="https://www.thebraintumourcharity.org/" target="_blank" rel="noopener noreferrer">The Brain Tumour Charity</a> for comprehensive support and information</li>
+                        <li>Access support through <a href="https://www.brainstrust.org.uk/" target="_blank" rel="noopener noreferrer">brainstrust</a>, a specialist brain tumour support charity</li>
+                    </ul>
+                    <p class="emphasis">Early diagnosis and access to appropriate care are crucial. While ROBIN is still being implemented across healthcare settings, these organizations can provide immediate support and guidance for your journey.</p>
+                </div>
+            </section>
+            
             <div class="badges">
                 <img src="https://img.shields.io/pypi/v/methnicegui.svg" alt="PyPI Version">
                 <img src="https://img.shields.io/pypi/pyversions/methnicegui.svg" alt="Python Version">
