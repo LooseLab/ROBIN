@@ -666,12 +666,22 @@ class MGMT_Object(BaseAnalysis):
                 },
             ).classes("w-full")#.style("height: 200px")
             
-            # Calculate and display average methylation for these specific sites
+            # Calculate and display both simple and weighted averages
             if 'Methylation_Percentage' in specific_sites.columns and not specific_sites['Methylation_Percentage'].isna().all():
-                avg_methylation = specific_sites['Methylation_Percentage'].mean()
-                ui.label(f"Average methylation across CpG pairs: {avg_methylation:.2f}%").classes(
-                    "text-blue-600 font-medium mt-2"
+                # Simple arithmetic mean
+                simple_avg = specific_sites['Methylation_Percentage'].mean()
+                
+                # Coverage-weighted mean
+                total_coverage = specific_sites['Total_Coverage'].sum()
+                weighted_avg = (
+                    (specific_sites['Methylation_Percentage'] * specific_sites['Total_Coverage']).sum() 
+                    / total_coverage if total_coverage > 0 else 0
                 )
+                
+                ui.label("Methylation Summary:").classes("text-blue-600 font-medium mt-2")
+                ui.label(f"• Simple average across CpG pairs: {simple_avg:.2f}%").classes("text-gray-600 ml-2")
+                ui.label(f"• Coverage-weighted average: {weighted_avg:.2f}%").classes("text-gray-600 ml-2")
+                ui.label(f"• Total read coverage: {total_coverage}").classes("text-gray-600 ml-2")
             else:
                 ui.label("Unable to calculate average methylation (no data)").classes("text-amber-500 mt-2")
             
