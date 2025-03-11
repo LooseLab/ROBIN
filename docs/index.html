@@ -6,8 +6,9 @@
     <title>ROBIN - Rapid nanopOre Brain intraoperatIve classificatioN</title>
     <style>
         :root {
-            --primary-color: #2c3e50;
-            --secondary-color: #3498db;
+            --primary-color: #2E7D32;  /* Dark green */
+            --secondary-color: #4CAF50;  /* Medium green */
+            --accent-color: #81C784;  /* Light green */
             --background-color: #f8f9fa;
             --text-color: #333;
         }
@@ -25,6 +26,16 @@
             background-color: var(--background-color);
         }
         
+        a {
+            color: var(--primary-color);
+            text-decoration: none;
+            transition: color 0.2s ease;
+        }
+        
+        a:hover {
+            color: var(--secondary-color);
+        }
+        
         .container {
             max-width: 1200px;
             margin: 0 auto;
@@ -35,7 +46,7 @@
             text-align: center;
             padding: 3rem 0;
             background-color: white;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px rgba(46, 125, 50, 0.1);
         }
         
         .logo {
@@ -59,10 +70,10 @@
             background-color: var(--primary-color);
             color: white;
             border-radius: 8px;
-            font-size: 1.1rem;
+            font-size: 1.15rem;
             line-height: 1.8;
             text-align: left;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            box-shadow: 0 4px 6px rgba(46, 125, 50, 0.2);
         }
         
         .mission-statement p + p {
@@ -97,7 +108,14 @@
             background: white;
             padding: 1.5rem;
             border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            box-shadow: 0 2px 4px rgba(46, 125, 50, 0.1);
+            border: 1px solid rgba(76, 175, 80, 0.1);
+            transition: transform 0.2s ease, box-shadow 0.2s ease;
+        }
+        
+        .feature-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(46, 125, 50, 0.2);
         }
         
         .feature-card h3 {
@@ -137,6 +155,96 @@
             margin-bottom: 0.5rem;
             line-height: 1.6;
         }
+        
+        .patient-info {
+            margin: 2rem auto;
+            max-width: 800px;
+            background-color: #fff;
+            border-left: 4px solid var(--accent-color);
+            box-shadow: 0 2px 4px rgba(46, 125, 50, 0.1);
+        }
+        
+        .patient-resources ul {
+            margin: 1rem 0 1.5rem 1.5rem;
+            list-style-type: none;
+        }
+        
+        .patient-resources .emphasis {
+            font-style: italic;
+            color: #666;
+            border-top: 1px solid #eee;
+            padding-top: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .patient-resources a {
+            color: var(--secondary-color);
+            text-decoration: none;
+            border-bottom: 1px dotted var(--accent-color);
+            transition: all 0.2s ease;
+        }
+        
+        .patient-resources a:hover {
+            border-bottom-style: solid;
+            color: var(--primary-color);
+        }
+        
+        .statistics {
+            margin: 3rem auto;
+            max-width: 1000px;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 2rem;
+            margin: 2rem 0;
+        }
+        
+        .stat-card {
+            background: white;
+            padding: 2rem;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(46, 125, 50, 0.1);
+            border: 1px solid rgba(76, 175, 80, 0.1);
+            transition: transform 0.2s ease;
+        }
+        
+        .stat-card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .stat-number {
+            font-size: 3rem;
+            font-weight: bold;
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+            line-height: 1;
+        }
+        
+        .stat-description {
+            color: var(--text-color);
+            font-size: 1.1rem;
+            line-height: 1.4;
+        }
+        
+        .stats-source {
+            text-align: right;
+            font-size: 0.9rem;
+            color: #666;
+            margin-top: 1rem;
+        }
+        
+        .stats-source a {
+            color: var(--primary-color);
+            text-decoration: none;
+            border-bottom: 1px dotted var(--primary-color);
+        }
+        
+        .stats-source a:hover {
+            border-bottom-style: solid;
+        }
     </style>
 </head>
 <body>
@@ -151,10 +259,32 @@
                 <p>This results in faster access to appropriate treatments and trials, reduces uncertainity for patients, families and clinicians, and would dramatically reduce the overall cost of care.</p>
                 <p>We are working with clinicians and surgeons in the UK and beyond to make this a reality as soon as possible.</p>
             </div>
+            
+            <section class="content-section statistics">
+                <h2>The Scale of the Challenge</h2>
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <div class="stat-number">12,700</div>
+                        <div class="stat-description">New cases of brain, other CNS and intracranial tumours every year in the UK (2017-2019)</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">35</div>
+                        <div class="stat-description">People diagnosed every day</div>
+                    </div>
+                    <div class="stat-card">
+                        <div class="stat-number">6</div>
+                        <div class="stat-description">Weeks average wait time for molecular results</div>
+                    </div>
+                </div>
+                <p class="stats-source">Source: <a href="https://www.cancerresearchuk.org/health-professional/cancer-statistics/statistics-by-cancer-type/brain-other-cns-and-intracranial-tumours" target="_blank" rel="noopener noreferrer">Cancer Research UK Brain, other CNS and intracranial tumours statistics</a> (2017-2019)</p>
+            </section>
+            
+            <!--
             <div class="badges">
                 <img src="https://img.shields.io/pypi/v/methnicegui.svg" alt="PyPI Version">
                 <img src="https://img.shields.io/pypi/pyversions/methnicegui.svg" alt="Python Version">
             </div>
+            -->
         </div>
     </header>
 
