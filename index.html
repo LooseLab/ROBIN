@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ROBIN - Real-time Oncology Bioinformatics Interface</title>
+    <style>
+        :root {
+            --primary-color: #2c3e50;
+            --secondary-color: #3498db;
+            --background-color: #f8f9fa;
+            --text-color: #333;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            line-height: 1.6;
+            color: var(--text-color);
+            background-color: var(--background-color);
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+        
+        header {
+            text-align: center;
+            padding: 3rem 0;
+            background-color: white;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .logo {
+            max-width: 300px;
+            margin-bottom: 1rem;
+        }
+        
+        h1 {
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+        }
+        
+        .badges {
+            margin: 1rem 0;
+        }
+        
+        .content-section {
+            background: white;
+            padding: 2rem;
+            margin: 2rem 0;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        h2 {
+            color: var(--primary-color);
+            margin-bottom: 1rem;
+        }
+        
+        .features {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin: 2rem 0;
+        }
+        
+        .feature-card {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .feature-card h3 {
+            color: var(--secondary-color);
+            margin-bottom: 1rem;
+        }
+        
+        .screenshot {
+            max-width: 100%;
+            border-radius: 8px;
+            margin: 1rem 0;
+        }
+        
+        footer {
+            text-align: center;
+            padding: 2rem;
+            background-color: var(--primary-color);
+            color: white;
+            margin-top: 3rem;
+        }
+        
+        footer a {
+            color: white;
+            text-decoration: none;
+        }
+        
+        footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="container">
+            <img src="src/robin/images/ROBIN_logo_small.png" alt="ROBIN Logo" class="logo">
+            <h1>ROBIN</h1>
+            <p>Real-time Oncology Bioinformatics Interface</p>
+            <div class="badges">
+                <img src="https://img.shields.io/pypi/v/methnicegui.svg" alt="PyPI Version">
+                <img src="https://img.shields.io/pypi/pyversions/methnicegui.svg" alt="Python Version">
+            </div>
+        </div>
+    </header>
+
+    <main class="container">
+        <section class="content-section">
+            <h2>About ROBIN</h2>
+            <p>ROBIN is a powerful real-time bioinformatics interface designed for oncology applications. It provides a comprehensive suite of tools for analyzing genomic data, with a focus on real-time analysis during DNA sequencing runs.</p>
+        </section>
+
+        <section class="features">
+            <div class="feature-card">
+                <h3>Real-time Analysis</h3>
+                <p>Monitor and analyze sequencing data as it's being generated, providing immediate insights into your samples.</p>
+            </div>
+            <div class="feature-card">
+                <h3>Interactive Visualization</h3>
+                <p>View detailed visualizations of methylation patterns, copy number variations, and gene fusions through an intuitive web interface.</p>
+            </div>
+            <div class="feature-card">
+                <h3>Comprehensive Tools</h3>
+                <p>Includes tools for methylation classification, copy number analysis, coverage tracking, and fusion gene detection.</p>
+            </div>
+        </section>
+
+        <section class="content-section">
+            <h2>Key Features</h2>
+            <ul>
+                <li>Methylation classification and analysis</li>
+                <li>Copy number variation detection</li>
+                <li>Target coverage monitoring</li>
+                <li>MGMT promoter methylation status</li>
+                <li>Fusion gene detection</li>
+                <li>Real-time data visualization</li>
+                <li>Interactive genome browser</li>
+            </ul>
+        </section>
+
+        <section class="content-section">
+            <h2>Interface Preview</h2>
+            <img src="images/home_page.png" alt="ROBIN Interface" class="screenshot">
+            <p>The ROBIN interface provides a clean, intuitive way to monitor and analyze your sequencing data in real-time.</p>
+        </section>
+
+        <section class="content-section">
+            <h2>Getting Started</h2>
+            <p>ROBIN requires Docker and can be installed using Conda. For detailed installation instructions and documentation, visit our <a href="https://github.com/LooseLab/robin">GitHub repository</a>.</p>
+        </section>
+    </main>
+
+    <footer>
+        <div class="container">
+            <p>ROBIN is developed by the Loose Lab. View the project on <a href="https://github.com/LooseLab/robin">GitHub</a>.</p>
+        </div>
+    </footer>
+</body>
+</html> 
