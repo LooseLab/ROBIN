@@ -65,12 +65,20 @@
             box-shadow: 0 4px 6px rgba(0,0,0,0.1);
         }
         
+        .mission-statement p + p {
+            margin-top: 1rem;
+        }
+        
         .content-section {
             background: white;
             padding: 2rem;
             margin: 2rem 0;
             border-radius: 8px;
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .content-section p + p {
+            margin-top: 1rem;
         }
         
         h2 {
@@ -128,7 +136,8 @@
             <h1>ROBIN</h1>
             <p><b>R</b>apid nanop<b>O</b>re <b>B</b>rain intraoperat<b>I</b>ve classificatio<b>N</b></p>
             <div class="mission-statement">
-                <p>Currently in the UK, patients, families, and clinicians wait on average 6 weeks for a complete molecular profile of a CNS tumour, delaying treatment decisions and causing significant uncertainty. ROBIN, and other related approaches, provide a solution that can reduce that wait time down to mere hours, enabling equitable access to rapid CNS tumour diagnostics for all patients, regardless of their location or circumstances. This results in faster access to appropriate treatments and trials, reduces uncertainity for patients, families and clinicians, and would dramatically reduce the overall cost of care.</p>
+                <p>Currently in the UK, patients, families, and clinicians wait on average 6 weeks for a complete molecular profile of a CNS tumour, delaying treatment decisions and causing significant uncertainty.</p>
+                <p>ROBIN is a breakthrough solution that cuts that wait time down to mere hours, enabling equitable access to rapid CNS tumour diagnostics for all patients, regardless of their location or circumstances.</p>
             </div>
             <!---<div class="badges">
                 <img src="https://img.shields.io/pypi/v/methnicegui.svg" alt="PyPI Version">
@@ -140,11 +149,10 @@
     <main class="container">
         <section class="content-section">
             <h2>About ROBIN</h2>
-            <p>ROBIN is a powerful real-time bioinformatics interface designed for classification of CNS tumours and providing a complete molecular profile to clinicians in the shortest possible time using  <a href="https://nanoporetech.com/" target="_blank" rel="noopener noreferrer">Oxford Nanopore Technologies</a> (ONT) sequencers. 
-                Exploiting the real time nature of the platform, it provides a comprehensive suite of tools for analyzing genomic data, with a focus on real-time analysis during DNA sequencing runs.
-                This approach allows pathologists to reports results to surgeons and clinicians in the shortest possible time, allowing for faster treatment decisions and reducing uncertainty for patients, families and clinicians.
-                In many cases, surgeons can have confirmation of the tumour type and grade before the patient has even left the operating theatre.
-            </p>
+            <p>ROBIN is a powerful real-time bioinformatics interface designed for oncology applications utilising <a href="https://nanoporetech.com/" target="_blank" rel="noopener noreferrer">Oxford Nanopore Technologies</a> (ONT) sequencers.</p>
+            <p>It provides a comprehensive suite of tools for analyzing genomic data, with a focus on real-time analysis during DNA sequencing runs.</p>
+            <p>This approach allows pathologists to reports results to surgeons and clinicians in the shortest possible time, allowing for faster treatment decisions and reducing uncertainty for patients, families and clinicians.</p>
+            <p>In many cases, surgeons can have confirmation of the tumour type and grade before the patient has even left the operating theatre.</p>
             <p>Currently ROBIN is research use only, but working closely with clinicians and surgeons in the UK we hope to be able to make these methods available across the UK and beyond as soon as possible.</p>
             <p>The preprint describing the initial implementation of the platform can be found <a href="https://www.medrxiv.org/content/10.1101/2024.09.10.24313398v1" target="_blank" rel="noopener noreferrer">here</a>.</p>
             <p>Protocols associated with the methods are available from <a href="https://www.protocols.io/view/robin-a-unified-nanopore-based-sequencing-assay-in-bp2l6xepklqe/v3?version_warning=no" target="_blank" rel="noopener noreferrer">here</a>.</p>
