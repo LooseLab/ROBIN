@@ -599,6 +599,8 @@ class TargetCoverage(BaseAnalysis):
         Name of the target panel to use (e.g., "rCNS2", "AML")
     reference : str, optional
         Path to the reference genome for variant calling
+    simtime : bool, optional
+        Whether to use simulation time instead of real time for timestamps
 
     Attributes
     ----------
@@ -618,7 +620,7 @@ class TargetCoverage(BaseAnalysis):
     """
 
     def __init__(
-        self, *args, showerrors=False, target_panel=None, reference=None, **kwargs
+        self, *args, showerrors=False, target_panel=None, reference=None, simtime=False, **kwargs
     ):
         """
         Initialize the TargetCoverage analysis object.
@@ -633,6 +635,8 @@ class TargetCoverage(BaseAnalysis):
             Name of the target panel to use
         reference : str, optional
             Path to the reference genome
+        simtime : bool, optional
+            Whether to use simulation time instead of real time for timestamps
         **kwargs
             Arbitrary keyword arguments.
         """
@@ -648,6 +652,7 @@ class TargetCoverage(BaseAnalysis):
         self.SNPqueue = queue.Queue()
         self.reference = reference
         self.showerrors = showerrors
+        self.simtime = simtime
         if self.reference:
             self.snp_calling = True
         else:
@@ -1132,16 +1137,45 @@ class TargetCoverage(BaseAnalysis):
                         "backgroundColor": "rgba(255, 255, 255, 0.9)",
                         "borderColor": "#E5E5EA",
                         "textStyle": {"color": "#1D1D1F"},
-                        ":formatter": """
-                            (params) => {
-                                let tooltip = '';
-                                tooltip += params[0].name + '<br>';
-                                params.forEach(item => {
-                                    tooltip += item.marker + ' ' + item.seriesName + ': ' + item.value.toFixed(2) + '<br>';
-                                });
-                                return tooltip;
-                            }
-                        """,
+                        
+                        #"formatter": """
+                        #    function(params) {
+                        #        var date = new Date(params[0].value[0]);
+                        #        var timeStr = date.toLocaleTimeString();
+                        #        var coverage = params[0].value[1].toFixed(2);
+                                
+                        #        // Determine quality level and color
+                        #        var quality = '';
+                        #        var color = '';
+                        #        if (coverage >= 30) {
+                        #            quality = 'Excellent';
+                        #            color = '#34C759';  // iOS green
+                        #        } else if (coverage >= 20) {
+                        #            quality = 'Good';
+                        #            color = '#007AFF';  // iOS blue
+                        #        } else if (coverage >= 10) {
+                        #            quality = 'Moderate';
+                        #            color = '#FF9500';  // iOS orange
+                        #        } else {
+                        #            quality = 'Insufficient';
+                        #            color = '#FF3B30';  // iOS red
+                        #        }
+                                
+                        #        return '<div style="padding: 3px;">' +
+                        #               '<div style="margin-bottom: 4px;">' +
+                        #               '<span style="font-weight: 500;">Time:</span> ' + timeStr +
+                        #               '</div>' +
+                        #               '<div style="margin-bottom: 4px;">' +
+                        #               '<span style="font-weight: 500;">Coverage:</span> ' +
+                        #               '<span style="color: ' + color + '; font-weight: 500;">' + coverage + 'x</span>' +
+                        #               '</div>' +
+                        #               '<div>' +
+                        #               '<span style="font-weight: 500;">Quality:</span> ' +
+                        #               '<span style="color: ' + color + '; font-weight: 500;">' + quality + '</span>' +
+                        #               '</div>' +
+                        #               '</div>';
+                        #    }
+                        #""",
                     },
                     "xAxis": {
                         "type": "time",
@@ -1614,6 +1648,16 @@ class TargetCoverage(BaseAnalysis):
             self.covtable.update_rows(self.target_coverage_df.to_dict(orient="records"))
 
     async def process_bam(self, bamfile, timestamp):
+        """
+        Process a BAM file and update coverage statistics.
+
+        Parameters
+        ----------
+        bamfile : str
+            Path to the BAM file to process
+        timestamp : float
+            Timestamp when the BAM file was generated
+        """
         # loop = asyncio.get_event_loop()
         # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
         newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
@@ -1679,10 +1723,13 @@ class TargetCoverage(BaseAnalysis):
         bases = self.cov_df_main[self.sampleID]["covbases"].sum()
         genome = self.cov_df_main[self.sampleID]["endpos"].sum()
         coverage = bases / genome
-        if timestamp:
+
+        # Handle timestamp based on simulation time setting
+        if self.simtime and timestamp:
             currenttime = timestamp * 1000
         else:
             currenttime = time.time() * 1000
+
         if self.sampleID not in self.coverage_over_time.keys():
             self.coverage_over_time[self.sampleID] = np.empty((0, 2))
         self.coverage_over_time[self.sampleID] = np.vstack(
@@ -2145,10 +2192,11 @@ def test_me(
     output: str,
     reload: bool = False,
     browse: bool = False,
+    simtime: bool = False,
 ):
     my_connection = None
     with theme.frame("Target Coverage Data", my_connection):
-        TestObject = TargetCoverage(threads, output, progress=True)
+        TestObject = TargetCoverage(threads, output, progress=True, simtime=simtime)
         # TestObject = MGMT_Object(threads, output, progress=True)
     if not browse:
         path = watchfolder
@@ -2194,7 +2242,14 @@ def test_me(
     default=False,
     help="Browse Historic Data.",
 )
-def run_main(port, threads, watchfolder, output, browse):
+@click.option(
+    "--simtime",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Use simulation time instead of real time for timestamps.",
+)
+def run_main(port, threads, watchfolder, output, browse, simtime):
     """
     Helper function to run the app.
     :param port: The port to serve the app on.
@@ -2208,12 +2263,13 @@ def run_main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,
+            # simtime=simtime,  # commented out
             watchfolder=None,
             output=watchfolder,
             # sequencing_summary=sequencing_summary,
             # showerrors=showerrors,
             browse=browse,
+            simtime=simtime,
             # exclude=exclude,
         )
         # Your logic for browse mode
@@ -2227,12 +2283,13 @@ def run_main(port, threads, watchfolder, output, browse):
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,
+            # simtime=simtime,  # commented out
             watchfolder=watchfolder,
             output=output,
             # sequencing_summary=sequencing_summary,
             # showerrors=showerrors,
             browse=browse,
+            simtime=simtime,
             # exclude=exclude,
         )
 
