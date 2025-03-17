@@ -392,27 +392,27 @@ class CNVAnalysis(BaseAnalysis):
         super().__init__(*args, **kwargs)
         self.target_panel = target_panel
         self.reference_file = reference_file
+        self.bed_file = bed_file
+        self.readfish_toml = readfish_toml
+        self.NewBed = NewBed
+        # Define dtype for memmap - using numpy dtype
+        self.dtype = np.dtype([("name", "U10"), ("start", "i8"), ("end", "i8")])
         self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.update_cnv_dict = {}
         self.result = None
         self.result3 = CNV_Difference()
         self.ref_result = None
         self.working_dir = None
-        self.bed_file = bed_file
         self.chromosome_events = {}
         self.sex_estimate = None
         self.timer1 = None
         self.bin_width = 1_000_000
         self.total_reads = 0
         self.current_file = None
-        self.readfish_toml = readfish_toml
         self.timest = 0
         self.chrom_filter = "All"
-        self.NewBed = NewBed
         # Color mode: "chromosome" for coloring by chromosome, "value" for red/blue based on values
         self.color_mode = "chromosome"
-        # Define dtype for memmap
-        self.dtype = [("name", "U10"), ("start", "i8"), ("end", "i8")]
         
         # Initialize data array related attributes
         self.DATA_ARRAY = None
@@ -2810,17 +2810,23 @@ class CNVAnalysis(BaseAnalysis):
                 # Initialize data array for existing data
                 self.data_array_path = os.path.join(output, "cnv_data_array.npy")
                 if os.path.exists(self.data_array_path):
-                    # Load existing data array
+                    # Get file size first
+                    file_size = os.path.getsize(self.data_array_path)
+                    # Calculate maximum possible shape based on file size
+                    max_shape = file_size // self.dtype.itemsize
+                    
+                    # Load existing data array with safe initial shape
                     self.DATA_ARRAY = np.memmap(
                         self.data_array_path,
                         dtype=self.dtype,
                         mode='r',
-                        shape=(1,)  # Shape will be adjusted when needed
+                        shape=(min(1, max_shape),)  # Start with safe shape
                     )
+                    
                     # Count total number of entries across all chromosomes
                     total_entries = sum(len(chrom_data.get("bed_data", [])) for chrom_data in self.CNVResults.values())
-                    if total_entries > 0:
-                        # Resize array to match total entries
+                    if total_entries > 0 and total_entries <= max_shape:
+                        # Only resize if the new size is valid
                         self.DATA_ARRAY = np.memmap(
                             self.data_array_path,
                             dtype=self.dtype,
@@ -2828,6 +2834,9 @@ class CNVAnalysis(BaseAnalysis):
                             shape=(total_entries,)
                         )
                         self.data_array_size = total_entries
+                    else:
+                        # If invalid size, keep original shape
+                        self.data_array_size = max_shape
                 else:
                     # Initialize empty array if no existing data
                     self.DATA_ARRAY = np.memmap(

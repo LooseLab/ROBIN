@@ -1246,24 +1246,27 @@ class BrainMeth:
                                 )
 
                 # Results Summary Section
-                with ui.column().classes("space-y-4"):
+                with ui.column().classes("w-full space-y-4"):
                     # Classification Results - Single row with equal width columns
-                    with ui.card().classes("w-full p-3 sm:p-4 bg-gray-50 rounded-lg"):
-                        ui.label("Classification Summary").classes(
-                            "font-medium text-gray-900 mb-3"
-                        )
-                        with ui.grid().classes(
-                            "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
-                        ):
-                            if "sturgeon" not in self.exclude:
-                                sturgeonsummary = ui.column().classes("space-y-2")
-                            if "nanodx" not in self.exclude:
-                                nanodxsummary = ui.column().classes("space-y-2")
-                            if "pannanodx" not in self.exclude:
-                                pannanodxsummary = ui.column().classes("space-y-2")
-                            if "forest" not in self.exclude:
-                                forestsummary = ui.column().classes("space-y-2")
-
+                    # Only show if at least one classifier is not excluded
+                    if not all(classifier in self.exclude for classifier in ["sturgeon", "nanodx", "pannanodx", "forest"]):
+                        with ui.card().classes("w-full p-3 sm:p-4 bg-gray-50 rounded-lg"):
+                            ui.label("Classification Summary").classes(
+                                "font-medium text-gray-900 mb-3"
+                            )
+                            with ui.grid().classes(
+                                "grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4"
+                            ):
+                                if "sturgeon" not in self.exclude:
+                                    sturgeonsummary = ui.column().classes("space-y-2")
+                                if "nanodx" not in self.exclude:
+                                    nanodxsummary = ui.column().classes("space-y-2")
+                                if "pannanodx" not in self.exclude:
+                                    pannanodxsummary = ui.column().classes("space-y-2")
+                                if "forest" not in self.exclude:
+                                    forestsummary = ui.column().classes("space-y-2")
+                
+                with ui.column().classes("w-full space-y-4"):
                     # Analysis Results - Two columns grid
                     with ui.grid().classes(
                         "grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4"
@@ -3228,6 +3231,50 @@ class BrainMeth:
                     self.update_counter(sample_id, "mapped_count", bamdata["mapped_reads"])
                     self.update_counter(sample_id, "unmapped_count", bamdata["unmapped_reads"])
                     self.update_counter(sample_id, "bases_count", bamdata["yield_tracking"])
+
+                # Save master data to CSV
+                try:
+                    # Create a flattened dictionary for the DataFrame
+                    sample_data = app.storage.general[self.mainuuid]["samples"][sample_id]
+                    flattened_data = {}
+                    
+                    # Handle counters
+                    if "file_counters" in sample_data:
+                        for key, value in sample_data["file_counters"].items():
+                            flattened_data[f"counter_{key}"] = value
+                    
+                    # Handle arrays - convert to comma-separated strings
+                    array_fields = ["devices", "basecall_models", "run_time", "flowcell_ids"]
+                    for field in array_fields:
+                        if field in sample_data:
+                            flattened_data[field] = ",".join(map(str, sample_data[field]))
+                    
+                    # Handle run_info dictionary
+                    if "run_info" in sample_data:
+                        for key, value in sample_data["run_info"].items():
+                            flattened_data[f"run_info_{key}"] = value
+                    
+                    # Handle bam_tracking
+                    if "bam_tracking" in sample_data:
+                        for key, value in sample_data["bam_tracking"].items():
+                            if key == "files":
+                                # Convert files dictionary to comma-separated string
+                                flattened_data["bam_files"] = ",".join(sample_data["bam_tracking"]["files"].keys())
+                            else:
+                                flattened_data[f"bam_tracking_{key}"] = value
+                    
+                    # Create DataFrame from flattened data
+                    mydf = pd.DataFrame([flattened_data])
+                    
+                    # Save to CSV
+                    master_csv_path = os.path.join(
+                        self.check_and_create_folder(self.output, sample_id),
+                        "master.csv"
+                    )
+                    mydf.to_csv(master_csv_path, index=False)
+                    logging.info(f"Updated master.csv for sample {sample_id}")
+                except Exception as e:
+                    logging.error(f"Error writing master.csv for sample {sample_id}: {str(e)}")
 
                 # Route to analysis queues
                 analyses = ["forest", "sturgeon", "nanodx", "pannanodx"]
