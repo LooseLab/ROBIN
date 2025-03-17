@@ -407,6 +407,10 @@ def run_modkit(sortfile: str, temp: str, threads: int) -> None:
         str(threads),  # Ensure threads is a string
         "--filter-threshold",
         "0.73",
+        "--chunk-size",
+        "48", 
+        "--interval-size", 
+        "10000000",
         "--combine-mods",
         sortfile,
         temp,
@@ -1302,21 +1306,26 @@ class BrainMeth:
                                                     "text-sm text-gray-600"
                                                 )
 
+                                                total_files = ui.label().classes(
+                                                        "font-medium text-gray-900"
+                                                )
+
                                                 def update_total_files():
-                                                    total = (
-                                                        app.storage.general[
-                                                            self.mainuuid
-                                                        ]["bam_count"]["total_files"]
-                                                        or 0
-                                                    )
+                                                    total = app.storage.general[
+                                                        self.mainuuid
+                                                    ]["bam_count"]["total_files"]
                                                     total_files.text = (
-                                                        f"{total:,} files"
+                                                        f"{total:,}"
+                                                        if total > 0
+                                                        else "--"
                                                     )
 
                                                 app.storage.general[self.mainuuid][
                                                     "bam_count"
                                                 ].on_change(update_total_files)
                                                 update_total_files()
+                                                
+                                                
 
                                             with ui.row().classes("items-center gap-1"):
                                                 ui.icon("check_circle").classes(
