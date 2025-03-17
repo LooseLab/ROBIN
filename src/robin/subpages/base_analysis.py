@@ -270,11 +270,7 @@ class BaseAnalysis:
         self.timer = ui.timer(5, self._batch_worker)
 
     async def _batch_worker(self) -> None:
-        """
-        Process BAM files from the queue in batches in the background.
-
-        This function takes BAM files from a queue in batches and adds them to a background thread for processing.
-        """
+        """Process BAM files from the queue in batches in the background."""
         self.timer.active = False
         count = 0
 
@@ -325,9 +321,20 @@ class BaseAnalysis:
                     }
 
                 try:
-                    await self.process_bam(data_list)
+                    # Sort the data_list by timestamp if timestamps exist
+                    sorted_data = sorted(data_list, key=lambda x: x[1] if x[1] is not None else float('inf'))
+                    
+                    # Extract just the bamfiles while preserving order
+                    bamfiles = [item[0] for item in sorted_data]
+                    # Get the latest timestamp
+                    latest_timestamp = sorted_data[-1][1] if sorted_data else None
+                    
+                    # Process the batch with the latest timestamp
+                    await self.process_bam(bamfiles, latest_timestamp)
+                        
                 except Exception as e:
                     logger.error(f"Error processing BAM files: {e}")
+                
         await asyncio.sleep(0.01)
         self.timer.active = True
 

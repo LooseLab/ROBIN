@@ -420,7 +420,7 @@ class RandomForest_object(BaseAnalysis):
             logger.error(f"Error in show_previous_data: {str(e)}", exc_info=True)
             raise
 
-    async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
+    async def process_bam(self, bamfile: List[Tuple[str, float]], timestamp: float = None) -> None:
         """
         Process BAM files and perform Random Forest analysis.
 
@@ -428,6 +428,9 @@ class RandomForest_object(BaseAnalysis):
         ----------
         bamfile : List[Tuple[str, float]]
             List of tuples containing BAM file paths and their timestamps
+            Each tuple contains (file_path, timestamp)
+        timestamp : float, optional
+            Optional timestamp override for the current processing batch
         """
         sampleID = self.sampleID
         # Initialize directories for each sampleID if not already present
@@ -438,24 +441,24 @@ class RandomForest_object(BaseAnalysis):
             self.bedDir[sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
-        tomerge = []
-        latest_file = 0
+        
+        # Get latest timestamp from input files or use provided timestamp
+        if timestamp is not None:
+            currenttime = timestamp * 1000
+        else:
+            latest_file = max(timestamp for _, timestamp in bamfile) if bamfile else 0
+            currenttime = latest_file * 1000 if latest_file else time.time() * 1000
+
         if (
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bam_count"
             ]
             > 0
         ):
-            if latest_file:
-                currenttime = latest_file * 1000
-            else:
-                currenttime = time.time() * 1000
-
             parquet_path = os.path.join(
                 self.check_and_create_folder(self.output, sampleID),
                 f"{sampleID}.parquet",
             )
-            logger.info(f"Processing parquet file: {parquet_path}")
 
             try:
                 if self.check_file_time(parquet_path):
