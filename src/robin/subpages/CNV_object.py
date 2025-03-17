@@ -414,7 +414,11 @@ class CNVAnalysis(BaseAnalysis):
         # Define dtype for memmap
         self.dtype = [("name", "U10"), ("start", "i8"), ("end", "i8")]
         
-        
+        # Initialize data array related attributes
+        self.DATA_ARRAY = None
+        self.data_array_size = 0
+        self.data_array_path = None
+        self.local_data_array = None
         
         # self.len_tracker = defaultdict(lambda: 0)
         self.map_tracker = Counter()
@@ -753,8 +757,9 @@ class CNVAnalysis(BaseAnalysis):
                 self.check_and_create_folder(self.output, self.sampleID), "cnv_data_array.npy"
             )
         
+        # Initialize or load memory-mapped array
         if not os.path.exists(self.data_array_path):
-            # Initialize memory-mapped array with minimal size
+            # Initialize new memory-mapped array with minimal size
             self.DATA_ARRAY = np.memmap(
                 self.data_array_path,
                 dtype=self.dtype,
@@ -763,7 +768,16 @@ class CNVAnalysis(BaseAnalysis):
             )
             # Set initial size to 0 (logical size)
             self.data_array_size = 0
-
+        else:
+            # Load existing memory-mapped array
+            self.DATA_ARRAY = np.memmap(
+                self.data_array_path,
+                dtype=self.dtype,
+                mode='r+',  # Read-write mode for existing file
+                shape=(1,)  # Initial shape, will be adjusted when needed
+            )
+            # Count existing entries
+            self.data_array_size = len(self.DATA_ARRAY)
 
         self.map_tracker.update(
             Counter(
@@ -2792,6 +2806,37 @@ class CNVAnalysis(BaseAnalysis):
                 self.CNVResults = np.load(
                     os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
                 ).item()
+                
+                # Initialize data array for existing data
+                self.data_array_path = os.path.join(output, "cnv_data_array.npy")
+                if os.path.exists(self.data_array_path):
+                    # Load existing data array
+                    self.DATA_ARRAY = np.memmap(
+                        self.data_array_path,
+                        dtype=self.dtype,
+                        mode='r',
+                        shape=(1,)  # Shape will be adjusted when needed
+                    )
+                    # Count total number of entries across all chromosomes
+                    total_entries = sum(len(chrom_data.get("bed_data", [])) for chrom_data in self.CNVResults.values())
+                    if total_entries > 0:
+                        # Resize array to match total entries
+                        self.DATA_ARRAY = np.memmap(
+                            self.data_array_path,
+                            dtype=self.dtype,
+                            mode='r',
+                            shape=(total_entries,)
+                        )
+                        self.data_array_size = total_entries
+                else:
+                    # Initialize empty array if no existing data
+                    self.DATA_ARRAY = np.memmap(
+                        self.data_array_path,
+                        dtype=self.dtype,
+                        mode='w+',
+                        shape=(1,)
+                    )
+                    self.data_array_size = 0
 
             self.update_plots()
 

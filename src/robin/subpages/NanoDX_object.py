@@ -349,21 +349,17 @@ class NanoDX_object(BaseAnalysis):
                 self.nanodx_df_store.iloc[-1]["number_probes"],
             )
 
-    async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
+    async def process_bam(self, bamfile: List[Tuple[str, float]], timestamp: float = None) -> None:
         """
         Process BAM files and perform NanoDX analysis.
-
-        This method handles the complete workflow of processing BAM files:
-        1. Merging BAM files
-        2. Extracting methylation data using modkit
-        3. Converting to BED format
-        4. Running Sturgeon predictions
-        5. Updating visualizations
 
         Parameters
         ----------
         bamfile : List[Tuple[str, float]]
             List of tuples containing BAM file paths and their timestamps
+            Each tuple contains (file_path, timestamp)
+        timestamp : float, optional
+            Optional timestamp override for the current processing batch
 
         Notes
         -----
@@ -379,19 +375,20 @@ class NanoDX_object(BaseAnalysis):
             self.bedDir[sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
-        tomerge = []
-        latest_file = 0
+        
+        # Get latest timestamp from input files or use provided timestamp
+        if timestamp is not None:
+            currenttime = timestamp * 1000
+        else:
+            latest_file = max(timestamp for _, timestamp in bamfile) if bamfile else 0
+            currenttime = latest_file * 1000 if latest_file else time.time() * 1000
+
         if (
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bam_count"
             ]
             > 0
         ):
-            if latest_file:
-                currenttime = latest_file * 1000
-            else:
-                currenttime = time.time() * 1000
-
             parquet_path = os.path.join(
                 self.check_and_create_folder(self.output, sampleID),
                 f"{sampleID}.parquet",

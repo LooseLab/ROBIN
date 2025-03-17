@@ -703,29 +703,19 @@ class Sturgeon_object(BaseAnalysis):
                 self.sturgeon_df_store.iloc[-1]["number_probes"],
             )
 
-    async def process_bam(self, bamfile: List[Tuple[str, float]]) -> None:
-        """
-        Process BAM files and perform Sturgeon analysis.
-
-        This method handles the complete workflow of processing BAM files:
-        1. Merging BAM files
-        2. Extracting methylation data using modkit
-        3. Converting to BED format
-        4. Running Sturgeon predictions
-        5. Updating visualizations
-
+    async def process_bam(self, bamfile, timestamp):
+        """Process BAM files and perform Sturgeon analysis.
+        
         Parameters
         ----------
-        bamfile : List[Tuple[str, float]]
-            List of tuples containing BAM file paths and their timestamps
-
-        Notes
-        -----
-        The method processes files in batches and updates progress trackers.
-        Results are stored in temporary directories and visualized in real-time.
+        bamfile : str or List[str]
+            Either a single BAM file path or a list of BAM file paths
+        timestamp : float
+            Timestamp for the data point
         """
         sampleID = self.sampleID
-        # Initialize directories for each sampleID if not already present
+        
+        # Initialize directories if needed
         if sampleID not in self.dataDir.keys():
             self.dataDir[sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
@@ -733,18 +723,21 @@ class Sturgeon_object(BaseAnalysis):
             self.bedDir[sampleID] = tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             )
+
         tomerge = []
         latest_file = 0
-        if (
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bam_count"
-            ]
-            > 0
-        ):
+
+        # Handle both single files and lists of files
+        if isinstance(bamfile, list):
+            tomerge = bamfile  # Use the list directly
+        else:
+            tomerge = [bamfile]  # Make a single-item list
+
+        if app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_count"] > 0:
             if latest_file:
                 currenttime = latest_file * 1000
             else:
-                currenttime = time.time() * 1000
+                currenttime = timestamp * 1000 if timestamp else time.time() * 1000
 
             parquet_path = os.path.join(
                 self.check_and_create_folder(self.output, sampleID),
