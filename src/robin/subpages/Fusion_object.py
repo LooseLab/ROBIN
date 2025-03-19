@@ -203,6 +203,22 @@ def label_reads_with_svs(df):
     return df_labeled
 
 
+def has_supplementary(bam_file_path):
+    """
+    Quickly checks if a BAM file has any supplementary alignments.
+
+    Parameters:
+        bam_file_path (str): Path to the BAM file.
+
+    Returns:
+        bool: True if supplementary alignment is found, else False.
+    """
+    with pysam.AlignmentFile(bam_file_path, "rb", check_sq=False) as bam:
+        for read in bam.fetch(until_eof=True):
+            if read.is_supplementary:
+                return True
+    return False
+
 def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
     """
     Function that, for a single BAM file, returns a DataFrame
@@ -1770,192 +1786,196 @@ class FusionObject(BaseAnalysis):
             bamfile (str): Path to the BAM file to process.
             timestamp (str): Timestamp for the analysis.
         """
-        tempreadfile = tempfile.NamedTemporaryFile(
-            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
-        )
-        tempbamfile = tempfile.NamedTemporaryFile(
-            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
-        )
-        tempmappings = tempfile.NamedTemporaryFile(
-            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
-        )
-        tempallmappings = tempfile.NamedTemporaryFile(
-            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
-        )
-
-        try:
-            # Process fusion candidates
-            logger.info(f"Processing BAM file for fusions: {bamfile}")
-            fusion_candidates, fusion_candidates_all = await run.cpu_bound(
-                fusion_work,
-                self.threads,
-                bamfile,
-                self.gene_bed,
-                self.all_gene_bed,
-                tempreadfile.name,
-                tempbamfile.name,
-                tempmappings.name,
-                tempallmappings.name,
+        if has_supplementary(bamfile):
+            tempreadfile = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
+            )
+            tempbamfile = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+            )
+            tempmappings = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
+            )
+            tempallmappings = tempfile.NamedTemporaryFile(
+                dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
             )
 
-            # Process genome-wide structural variants
-            logger.info(f"Processing BAM file for structural variants: {bamfile}")
-            sv_csv_file = os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID),
-                "sv_master.csv",
-            )
-            sv_reads = await run.cpu_bound(
-                process_bam_file_svs,
-                bamfile,
-                sv_csv_file,
-            )
+            try:
+                # Process fusion candidates
+                logger.info(f"Processing BAM file for fusions: {bamfile}")
+                fusion_candidates, fusion_candidates_all = await run.cpu_bound(
+                    fusion_work,
+                    self.threads,
+                    bamfile,
+                    self.gene_bed,
+                    self.all_gene_bed,
+                    tempreadfile.name,
+                    tempbamfile.name,
+                    tempmappings.name,
+                    tempallmappings.name,
+                )
 
-            bed_lines = await run.cpu_bound(
-                build_breakpoint_graph, sv_reads, max_proximity=50000, group_by_sv=True
-            )
+                # Process genome-wide structural variants
+                logger.info(f"Processing BAM file for structural variants: {bamfile}")
+                sv_csv_file = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "sv_master.csv",
+                )
+                sv_reads = await run.cpu_bound(
+                    process_bam_file_svs,
+                    bamfile,
+                    sv_csv_file,
+                )
 
-            if len(bed_lines) > 0:
-                # Convert bed lines to DataFrame for visualization
-                sv_data = []
+                bed_lines = await run.cpu_bound(
+                    build_breakpoint_graph, sv_reads, max_proximity=50000, group_by_sv=True
+                )
 
-                # First, create a mapping of read pairs from sv_reads
-                read_pairs = {}
-                if not sv_reads.empty:
-                    for _, row in sv_reads.iterrows():
-                        qname = row["QNAME"]
-                        if qname not in read_pairs:
-                            read_pairs[qname] = []
-                        read_pairs[qname].append(
+                if len(bed_lines) > 0:
+                    # Convert bed lines to DataFrame for visualization
+                    sv_data = []
+
+                    # First, create a mapping of read pairs from sv_reads
+                    read_pairs = {}
+                    if not sv_reads.empty:
+                        for _, row in sv_reads.iterrows():
+                            qname = row["QNAME"]
+                            if qname not in read_pairs:
+                                read_pairs[qname] = []
+                            read_pairs[qname].append(
+                                {
+                                    "chrom": row["RNAME"],
+                                    "start": row["REF_START"],
+                                    "end": row["REF_END"],
+                                    "type": row["TYPE"],
+                                    "strand": row["STRAND"],
+                                }
+                            )
+
+                    for line in bed_lines:
+                        chrom, start, end, sv_type, _, strand = line.split("\t")
+                        # Format coordinates with commas for readability
+                        formatted_start = f"{int(start):,}"
+                        formatted_end = f"{int(end):,}"
+                        # Calculate size of the variant
+                        size = int(end) - int(start)
+                        formatted_size = f"{size:,}"
+
+                        # Find matching reads in sv_reads for this region
+                        matching_reads = sv_reads[
+                            (sv_reads["RNAME"] == chrom)
+                            & (sv_reads["REF_START"].astype(int) >= int(start) - 1000)
+                            & (sv_reads["REF_END"].astype(int) <= int(end) + 1000)
+                        ]
+
+                        # Get partner chromosomes and positions
+                        partner_info = ""
+                        if not matching_reads.empty:
+                            for _, read in matching_reads.iterrows():
+                                qname = read["QNAME"]
+                                if qname in read_pairs:
+                                    pairs = read_pairs[qname]
+                                    if len(pairs) > 1:
+                                        # Find the partner alignment
+                                        for pair in pairs:
+                                            if pair["chrom"] != chrom:
+                                                partner_chrom = pair["chrom"]
+                                                partner_pos = f"{int(pair['start']):,}"
+                                                partner_info = (
+                                                    f"{partner_chrom}:{partner_pos}"
+                                                )
+                                                break
+
+                        event_location = f"{chrom}:{formatted_start}-{formatted_end}"
+                        if partner_info:
+                            event_location += f" ⟷ {partner_info}"
+
+                        sv_data.append(
                             {
-                                "chrom": row["RNAME"],
-                                "start": row["REF_START"],
-                                "end": row["REF_END"],
-                                "type": row["TYPE"],
-                                "strand": row["STRAND"],
+                                "Event Type": sv_type,
+                                "Primary Location": f"{chrom}:{formatted_start}-{formatted_end}",
+                                "Partner Location": partner_info if partner_info else "N/A",
+                                "Size (bp)": formatted_size,
+                                "Strand": strand,
+                                "Full Location": event_location,
                             }
                         )
 
-                for line in bed_lines:
-                    chrom, start, end, sv_type, _, strand = line.split("\t")
-                    # Format coordinates with commas for readability
-                    formatted_start = f"{int(start):,}"
-                    formatted_end = f"{int(end):,}"
-                    # Calculate size of the variant
-                    size = int(end) - int(start)
-                    formatted_size = f"{size:,}"
+                    sv_df = pd.DataFrame(sv_data)
 
-                    # Find matching reads in sv_reads for this region
-                    matching_reads = sv_reads[
-                        (sv_reads["RNAME"] == chrom)
-                        & (sv_reads["REF_START"].astype(int) >= int(start) - 1000)
-                        & (sv_reads["REF_END"].astype(int) <= int(end) + 1000)
-                    ]
+                    # Sort by event type and location
+                    sv_df = sv_df.sort_values(["Event Type", "Primary Location"])
 
-                    # Get partner chromosomes and positions
-                    partner_info = ""
-                    if not matching_reads.empty:
-                        for _, read in matching_reads.iterrows():
-                            qname = read["QNAME"]
-                            if qname in read_pairs:
-                                pairs = read_pairs[qname]
-                                if len(pairs) > 1:
-                                    # Find the partner alignment
-                                    for pair in pairs:
-                                        if pair["chrom"] != chrom:
-                                            partner_chrom = pair["chrom"]
-                                            partner_pos = f"{int(pair['start']):,}"
-                                            partner_info = (
-                                                f"{partner_chrom}:{partner_pos}"
-                                            )
-                                            break
-
-                    event_location = f"{chrom}:{formatted_start}-{formatted_end}"
-                    if partner_info:
-                        event_location += f" ⟷ {partner_info}"
-
-                    sv_data.append(
-                        {
-                            "Event Type": sv_type,
-                            "Primary Location": f"{chrom}:{formatted_start}-{formatted_end}",
-                            "Partner Location": partner_info if partner_info else "N/A",
-                            "Size (bp)": formatted_size,
-                            "Strand": strand,
-                            "Full Location": event_location,
-                        }
+                    # Save structural variants to CSV
+                    sv_df.to_csv(
+                        os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID),
+                            "structural_variants.csv",
+                        ),
+                        index=False,
                     )
 
-                sv_df = pd.DataFrame(sv_data)
+                    # Update structural variant count and visualization
+                    self.sv_count = len(sv_df)
 
-                # Sort by event type and location
-                sv_df = sv_df.sort_values(["Event Type", "Primary Location"])
+                    # Only update UI elements if they exist
+                    if hasattr(self, "sv_plot") and self.sv_plot is not None:
+                        self.sv_plot.clear()
+                        with self.sv_plot:
+                            self.create_sv_plot(sv_df, self.sampleID)
 
-                # Save structural variants to CSV
-                sv_df.to_csv(
-                    os.path.join(
-                        self.check_and_create_folder(self.output, self.sampleID),
-                        "structural_variants.csv",
-                    ),
-                    index=False,
-                )
+                    if (
+                        hasattr(self, "sv_table_container")
+                        and self.sv_table_container is not None
+                    ):
+                        self.update_sv_table(sv_df)
 
-                # Update structural variant count and visualization
-                self.sv_count = len(sv_df)
+                    # Add to BedTree if needed
+                    self.NewBed.load_from_string(
+                        "\n".join(bed_lines),
+                        merge=False,
+                        write_files=True,
+                        output_location=os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID)
+                        ),
+                        source_type="FUSION",
+                    )
+                logger.info(f"We found {len(bed_lines)} possible events.")
 
-                # Only update UI elements if they exist
-                if hasattr(self, "sv_plot") and self.sv_plot is not None:
-                    self.sv_plot.clear()
-                    with self.sv_plot:
-                        self.create_sv_plot(sv_df, self.sampleID)
+                # Update fusion candidates
+                if fusion_candidates is not None:
+                    logger.info("Processing fusion candidates")
+                    if self.sampleID not in self.fusion_candidates.keys():
+                        self.fusion_candidates[self.sampleID] = fusion_candidates
+                    else:
+                        self.fusion_candidates[self.sampleID] = pd.concat(
+                            [self.fusion_candidates[self.sampleID], fusion_candidates]
+                        ).reset_index(drop=True)
 
-                if (
-                    hasattr(self, "sv_table_container")
-                    and self.sv_table_container is not None
-                ):
-                    self.update_sv_table(sv_df)
+                if fusion_candidates_all is not None:
+                    logger.info("Processing all fusion candidates")
+                    if self.sampleID not in self.fusion_candidates_all.keys():
+                        self.fusion_candidates_all[self.sampleID] = fusion_candidates_all
+                    else:
+                        self.fusion_candidates_all[self.sampleID] = pd.concat(
+                            [
+                                self.fusion_candidates_all[self.sampleID],
+                                fusion_candidates_all,
+                            ]
+                        ).reset_index(drop=True)
 
-                # Add to BedTree if needed
-                self.NewBed.load_from_string(
-                    "\n".join(bed_lines),
-                    merge=False,
-                    write_files=True,
-                    output_location=os.path.join(
-                        self.check_and_create_folder(self.output, self.sampleID)
-                    ),
-                    source_type="FUSION",
-                )
-            logger.info(f"We found {len(bed_lines)} possible events.")
+                # Update fusion tables
+                self.fusion_table()
+                self.fusion_table_all()
 
-            # Update fusion candidates
-            if fusion_candidates is not None:
-                logger.info("Processing fusion candidates")
-                if self.sampleID not in self.fusion_candidates.keys():
-                    self.fusion_candidates[self.sampleID] = fusion_candidates
-                else:
-                    self.fusion_candidates[self.sampleID] = pd.concat(
-                        [self.fusion_candidates[self.sampleID], fusion_candidates]
-                    ).reset_index(drop=True)
-
-            if fusion_candidates_all is not None:
-                logger.info("Processing all fusion candidates")
-                if self.sampleID not in self.fusion_candidates_all.keys():
-                    self.fusion_candidates_all[self.sampleID] = fusion_candidates_all
-                else:
-                    self.fusion_candidates_all[self.sampleID] = pd.concat(
-                        [
-                            self.fusion_candidates_all[self.sampleID],
-                            fusion_candidates_all,
-                        ]
-                    ).reset_index(drop=True)
-
-            # Update fusion tables
-            self.fusion_table()
-            self.fusion_table_all()
-
-        except Exception as e:
-            logger.error(f"Error processing BAM file: {str(e)}")
-            logger.error("Exception details:", exc_info=True)
-            raise
-        finally:
+            except Exception as e:
+                logger.error(f"Error processing BAM file: {str(e)}")
+                logger.error("Exception details:", exc_info=True)
+                raise
+            finally:
+                self.running = False
+        else:
+            logger.info("BAM file has no supplementary alignments, skipping.")
             self.running = False
 
     def show_previous_data(self) -> None:

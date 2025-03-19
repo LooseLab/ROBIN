@@ -154,7 +154,8 @@ def run_modkit(tempmgmtdir: str, MGMTbamfile: str, threads: int, output_mgmt_bed
             os.path.join(tempmgmtdir, "mgmt.bam"), f"{tempmgmtdir}/mgmt.bam.bai"
         )
         #cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods --mixed-delim {os.path.join(tempmgmtdir, 'mgmt.bam')} {os.path.join(tempmgmtdir, 'mgmt.bed')} --suppress-progress >/dev/null 2>&1"
-        cmd = f"modkit pileup -t {threads} --filter-threshold 0.73 --combine-mods --mixed-delim {os.path.join(tempmgmtdir, 'mgmt.bam')} {output_mgmt_bed} --suppress-progress >/dev/null 2>&1"
+        # hard code to a single thread.
+        cmd = f"modkit pileup -t 1 --filter-threshold 0.73 --combine-mods --mixed-delim --interval-size 20000000 --chunk-size 1 {os.path.join(tempmgmtdir, 'mgmt.bam')} {output_mgmt_bed} --suppress-progress >/dev/null 2>&1"
         os.system(cmd)
         if os.path.exists(output_mgmt_bed):
             cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={output_mgmt_bed} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"

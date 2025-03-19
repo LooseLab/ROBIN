@@ -50,6 +50,7 @@ import os
 import psutil
 import platform
 
+
 async def check_version():
     """
     Check the current version against the remote version on GitHub.

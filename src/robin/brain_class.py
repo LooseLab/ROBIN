@@ -404,11 +404,11 @@ def run_modkit(sortfile: str, temp: str, threads: int) -> None:
         "modkit",
         "pileup",
         "-t",
-        str(threads),  # Ensure threads is a string
+        str(threads),  # Ensure threads is a string 
         "--filter-threshold",
         "0.73",
         "--chunk-size",
-        "48", 
+        "1", 
         "--interval-size", 
         "10000000",
         "--combine-mods",
@@ -419,10 +419,7 @@ def run_modkit(sortfile: str, temp: str, threads: int) -> None:
 
     # Run the command
     result = subprocess.run(cmd, capture_output=True, text=True)
-    # print("STDOUT:", result.stdout)
-    # print("STDERR:", result.stderr)
-
-
+    
 def run_samtools_sort(
     file: str, tomerge: List[str], sortfile: str, threads: int
 ) -> None:
@@ -1286,7 +1283,7 @@ class BrainMeth:
 
                     # Add monitoring information panel - Now positioned after diagnosis cards
                     # Only show in live mode
-                    if not self.browse:
+                    if not self.browse:                    
                         with ui.card().classes("w-full bg-white rounded-lg shadow-sm"):
                             with ui.expansion(
                                 "Monitoring Information", icon="folder"
@@ -2359,7 +2356,7 @@ class BrainMeth:
                                                                 update_mean_fail_unmapped
                                                             )
                                                             update_mean_fail_unmapped()
-
+                            
                 # Detailed Analysis Tabs
                 if sample_id:
                     selectedtab = None
@@ -2838,7 +2835,7 @@ class BrainMeth:
 
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
-                if len(files_by_sample[sample_id]) >= 50:
+                if len(files_by_sample[sample_id]) >= 10:
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
                         f"Processing batch of {files_to_process} files for sample {sample_id}"
@@ -3329,59 +3326,7 @@ class BrainMeth:
         :return: None
         """
         file_endings = {".bam"}
-        """
-        if sequencing_summary:
-            logging.info("Using sequencing summary for existing BAM files")
-            df = pd.read_csv(
-                sequencing_summary,
-                delimiter="\t",
-                usecols=["filename_bam", "template_start", "template_duration"],
-            )
-            df["template_end"] = df["template_start"] + df["template_duration"]
-
-            df.drop(columns=["template_start", "template_duration"], inplace=True)
-            latest_timestamps = (
-                df.groupby("filename_bam")["template_end"]
-                .max()
-                .reset_index()
-                .sort_values(by="template_end")
-                .reset_index(drop=True)
-            )
-
-            latest_timestamps["full_path"] = ""
-            latest_timestamps["file_produced"] = latest_timestamps["template_end"]
-            for path, dirs, files in os.walk(self.watchfolder):
-                for f in files:
-                    if "".join(Path(f).suffixes) in file_endings:
-                        latest_timestamps.loc[
-                            latest_timestamps["filename_bam"] == f, "full_path"
-                        ] = os.path.join(path, f)
-
-            step_size = 20
-
-            if "sturgeon" not in self.exclude:
-                self.Sturgeon.playback(latest_timestamps, step_size=step_size)
-            if "nanodx" not in self.exclude:
-                self.NanoDX.playback(latest_timestamps, step_size=step_size)
-            if "forest" not in self.exclude:
-                self.RandomForest.playback(latest_timestamps, step_size=step_size)
-            if "cnv" not in self.exclude:
-                self.CNV.playback(latest_timestamps, step_size=step_size)
-            if "coverage" not in self.exclude:
-                self.Target_Coverage.playback(
-                    latest_timestamps, step_size=step_size, start_time=self.run_time
-                )
-            if "fusion" not in self.exclude:
-                self.Fusion_panel.playback(latest_timestamps, step_size=step_size)
-            if "mgmt" not in self.exclude:
-                self.MGMT_panel.playback(latest_timestamps, step_size=step_size)
-
-            for index, row in latest_timestamps.iterrows():
-                if len(row["full_path"]) > 0:
-                    self.check_bam(row["full_path"])
-            self.runfinished = True
-        else:
-        """
+        
         files_and_timestamps = []
         files_and_timestamps = await run.cpu_bound(
             sort_bams,
@@ -3404,6 +3349,6 @@ class BrainMeth:
                 f
             ] = timestamp.timestamp()
             if self.simtime:
-                await asyncio.sleep(1)
+                await asyncio.sleep(0.1)
             else:
                 await asyncio.sleep(0)
