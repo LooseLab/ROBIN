@@ -246,7 +246,7 @@ class NanoDX_object(BaseAnalysis):
         self.model = model
         self.dataDir = {}
         self.bedDir = {}
-        self.threshold = 0.05
+        self.threshold = 0.01
         self.nanodx_bam_count = {}
         self.not_first_run = {}  # False
         self.modelfile = os.path.join(

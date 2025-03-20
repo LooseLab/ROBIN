@@ -258,22 +258,30 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                     cpu_activity = ui.circular_progress(max=100).classes(
                         f"max-[{MENU_BREAKPOINT}px]:hidden"
                     )
-                    ui.timer(
-                        1.0,
-                        lambda: cpu_activity.set_value(
-                            f"{psutil.getloadavg()[1] / os.cpu_count() * 100:.1f}"
-                        ),
-                    )
                     ui.label("RAM").classes(f"max-[{MENU_BREAKPOINT}px]:hidden")
                     ram_utilisation = ui.circular_progress(max=100).classes(
                         f"max-[{MENU_BREAKPOINT}px]:hidden"
                     )
-                    ui.timer(
-                        1.0,
-                        lambda: ram_utilisation.set_value(
-                            f"{psutil.virtual_memory()[2]:.1f}"
-                        ),
-                    )
+
+                    # Create a data model for system metrics
+                    class SystemMetrics:
+                        def __init__(self):
+                            self.cpu = 0
+                            self.ram = 0
+
+                    metrics = SystemMetrics()
+                    
+                    # Bind the progress indicators to the model
+                    cpu_activity.bind_value_from(metrics, 'cpu')
+                    ram_utilisation.bind_value_from(metrics, 'ram')
+
+                    # Single timer to update both metrics
+                    def update_metrics():
+                        metrics.cpu = round(psutil.getloadavg()[1] / os.cpu_count() * 100, 1)
+                        metrics.ram = round(psutil.virtual_memory()[2], 1)
+
+                    ui.timer(1.0, update_metrics)  # Reduced frequency to 2 seconds
+
                     with ui.button(icon="menu"):
                         with ui.menu() as menu:
                             ui.menu_item("Home", lambda: ui.navigate.to("/"))
