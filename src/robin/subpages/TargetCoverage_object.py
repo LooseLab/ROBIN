@@ -276,9 +276,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
     -------
     None
     """
-    showerrors = True
-    print(f"Running Clair3 with showerrors = {showerrors}")
-
+    
     # Debug: Log input file paths for verification.
     if showerrors:
         logger.info(f"Input BAM file: {bamfile}")
@@ -363,8 +361,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
                 f"/opt/bin/run_clairs_to "
                 f"--tumor_bam_fn {container_bamfile} "
                 f"--ref_fn {container_reference} "
-                #f"--threads {threads} "
-                f"--threads 1 "
+                f"--threads {threads} "
                 f"--remove_intermediate_dir "
                 f"--platform ont_r10_guppy_hac_5khz "
                 f"--output_dir {container_output} "
