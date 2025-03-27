@@ -11,7 +11,7 @@ dependencies:
   - bioconda::snpeff
   - bioconda::samtools
   - bioconda::bedtools
-  - bioconda::ont-modkit==4.3.0
+  - bioconda::ont-modkit==0.4.3
   - r-optparse
   - r-data.table
   - conda-forge::r-ranger
