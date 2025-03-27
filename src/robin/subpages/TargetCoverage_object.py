@@ -276,8 +276,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
     -------
     None
     """
-    # print("Running Clair3")
-
+    
     # Debug: Log input file paths for verification.
     if showerrors:
         logger.info(f"Input BAM file: {bamfile}")
@@ -404,26 +403,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             logger.error(f"Error: {e}")
             return
 
-        try:
-            # Copy the output VCF files from the work output directory.
-            shutil.copy2(
-                os.path.join(workdirout, "snv.vcf.gz"),
-                os.path.join(workdirout, "output_done.vcf.gz"),
-            )
-            shutil.copy2(
-                os.path.join(workdirout, "indel.vcf.gz"),
-                os.path.join(workdirout, "output_indel_done.vcf.gz"),
-            )
-        except Exception as e:
-            logger.error(f"Error copying output files: {e}")
-            return
-
-        # Run snpEff and SnpSift locally to annotate the VCF outputs.
-        snpeff_cmd_snv = (
-            f"snpEff -q hg38 {os.path.join(workdirout, 'output_done.vcf.gz')} "
-            f"> {os.path.join(workdirout, 'snpeff_output.vcf')}"
-        )
-        os.system(snpeff_cmd_snv)
+        
 
         snpsift_cmd_snv = (
             f"SnpSift annotate "
@@ -581,6 +561,15 @@ def run_bedtools(bamfile, bedfile, tempbamfile):
         pysam.index(tempbamfile)
     except Exception as e:
         logger.error(f"Error in run_bedtools: {e}")
+
+
+class StatusLabel(ui.label):
+    def _handle_text_change(self, text: str) -> None:
+        super()._handle_text_change(text)
+        if text == "Clair3 Running":
+            self.classes(replace="px-2 py-1 rounded bg-blue-100 text-blue-600")
+        else:
+            self.classes(replace="px-2 py-1 rounded bg-gray-100 text-gray-600")
 
 
 class TargetCoverage(BaseAnalysis):
@@ -750,6 +739,11 @@ class TargetCoverage(BaseAnalysis):
                                 )
                                 ui.label("--").classes(
                                     "px-2 py-1 rounded bg-gray-100 text-gray-600"
+                                )
+                                # Add Clair3 status indicator
+                                StatusLabel().bind_text_from(
+                                    self, "clair3running",
+                                    backward=lambda v: "Clair3 Running" if v else "Clair3 Idle"
                                 )
 
                         # Right side - Coverage metrics
@@ -1949,8 +1943,16 @@ class TargetCoverage(BaseAnalysis):
             )
             self.update_target_coverage_table()
             self.update_coverage_time_plot()
+            
+            # Initialize targetbamfile if it exists in the clair3 directory
+            if os.path.exists(os.path.join(output, "clair3", "sorted_targets_exceeding.bam")):
+                self.targetbamfile[self.sampleID] = os.path.join(output, "clair3", "sorted_targets_exceeding.bam")
+            
             if self.summary:
                 with self.summary:
+                    # Store the current Clair3 status
+                    clair3_status = self.clair3running
+                    
                     self.summary.clear()
                     with ui.card().classes("w-full p-4 mb-4"):
                         with ui.row().classes("w-full items-center justify-between"):
@@ -1992,6 +1994,11 @@ class TargetCoverage(BaseAnalysis):
                                         )
                                         ui.label(f"{target_coverage:.2f}x").classes(
                                             f"px-2 py-1 rounded {quality_bg} {quality_color}"
+                                        )
+                                        # Add Clair3 status indicator back
+                                        StatusLabel().bind_text_from(
+                                            self, "clair3running",
+                                            backward=lambda v: "Clair3 Running" if v else "Clair3 Idle"
                                         )
 
                             # Right side - Coverage metrics
@@ -2050,9 +2057,13 @@ class TargetCoverage(BaseAnalysis):
             # vcf = df[df.map(contains_pathogenic).any(axis=1)]
             vcf = df
 
-            if len(vcf) > 0:
-                self.SNPplaceholder.clear()
-                with self.SNPplaceholder:
+            self.SNPplaceholder.clear()
+            with self.SNPplaceholder:
+                with ui.row().classes("w-full justify-between items-center mb-4"):
+                    ui.label("Candidate SNPs").classes("text-lg font-medium")
+                    ui.button("Rerun SNP Analysis", on_click=lambda: self.rerun_snp_analysis()).props("color=primary")
+                
+                if len(vcf) > 0:
                     self.snptable = (
                         ui.table.from_pandas(vcf, pagination=25)
                         .props("dense")
@@ -2183,6 +2194,63 @@ class TargetCoverage(BaseAnalysis):
                             "type=search"
                         ).bind_value(self.indeltable, "filter").add_slot("append"):
                             ui.icon("search")
+
+    async def rerun_snp_analysis(self):
+        """
+        Rerun the SNP calling analysis for the current sample.
+        
+        This function triggers a new SNP analysis by adding the current target regions
+        to the SNP queue for processing.
+        """
+        if not self.reference:
+            ui.notify("Reference genome not provided. SNP calling is disabled.", type="warning")
+            return
+            
+        if self.clair3running:
+            ui.notify("SNP analysis is already running. Please wait.", type="warning")
+            return
+            
+        output = self.check_and_create_folder(self.output, self.sampleID)
+        clair3workdir = os.path.join(output, "clair3")
+        
+        if not os.path.exists(clair3workdir):
+            os.mkdir(clair3workdir)
+            
+        # Get the current target regions that exceed threshold
+        run_list = self.target_coverage_df[
+            self.target_coverage_df["coverage"].ge(self.callthreshold)
+        ]
+        
+        if len(run_list) == 0:
+            ui.notify("No regions currently exceed the coverage threshold.", type="warning")
+            return
+            
+        # Check if we have access to the BAM file
+        if self.sampleID not in self.targetbamfile or not os.path.exists(self.targetbamfile[self.sampleID]):
+            ui.notify("Target BAM file not found. Cannot rerun analysis.", type="error")
+            return
+            
+        # Save the target regions to a new BED file
+        bed_file = os.path.join(output, "targets_exceeding_threshold.bed")
+        run_list[["chrom", "startpos", "endpos"]].to_csv(
+            bed_file,
+            sep="\t",
+            header=None,
+            index=None,
+        )
+        
+        # Sort the BAM file
+        sorted_bam = os.path.join(clair3workdir, "sorted_targets_exceeding_rerun.bam")
+        await run.cpu_bound(
+            sort_bam,
+            self.targetbamfile[self.sampleID],
+            sorted_bam,
+            self.threads,
+        )
+        
+        # Add to SNP queue
+        self.SNPqueue.put([run_list, sorted_bam, bed_file])
+        ui.notify("SNP analysis rerun initiated", type="info")
 
 
 def test_me(
