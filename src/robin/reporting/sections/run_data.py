@@ -112,126 +112,45 @@ class RunDataSection(ReportSection):
             return
 
         try:
-            # Get sample-specific data
-            sample_id = self.report.sample_id
-            masterdf_dict = eval(masterdf[masterdf.index == "samples"][1]["samples"])[
-                sample_id
-            ]
+            # Debug logging
+            logger.debug(f"Master data columns: {masterdf.columns.tolist()}")
+            logger.debug(f"Master data shape: {masterdf.shape}")
+
+            # Get the first row of data (since master.csv has all data in one row)
+            master_data = masterdf.iloc[0]
 
             # Sample Information
             sample_info = [
-                ("Sample ID", sample_id),
-                ("Run Start", self._format_timestamp(masterdf_dict["run_time"])),
-                (
-                    "Target Panel",
-                    " ".join(
-                        masterdf.loc[(masterdf.index == "target_panel")][1].values
-                    ),
-                ),
+                ("Sample ID", self.report.sample_id),
+                ("Run Start", self._format_timestamp(master_data["run_time"])),
+                ("Sequencing Device", master_data["devices"]),
+                ("Flowcell ID", master_data["flowcell_ids"]),
+                ("Basecalling Model", master_data["basecall_models"]),
             ]
             self.elements.append(
                 self._create_info_table(sample_info, "Sample Information")
             )
             self.elements.append(Spacer(1, 12))
 
-            # Device Details
-            device_info = [
-                (
-                    "Sequencing Device",
-                    self._convert_to_space_separated_string(masterdf_dict["devices"]),
-                ),
-                (
-                    "Flowcell ID",
-                    self._convert_to_space_separated_string(
-                        masterdf_dict["flowcell_ids"]
-                    ),
-                ),
-                (
-                    "Basecalling Model",
-                    self._convert_to_space_separated_string(
-                        masterdf_dict["basecall_models"]
-                    ),
-                ),
+            # Run Statistics
+            stats_info = [
+                ("Total Files", self._format_number(master_data["counter_bam_passed"] + master_data["counter_bam_failed"])),
+                ("Passed Files", self._format_number(master_data["counter_bam_passed"])),
+                ("Failed Files", self._format_number(master_data["counter_bam_failed"])),
+                ("Total Bases", self._format_number(master_data["counter_bases_count"])),
+                ("Mapped Reads", self._format_number(master_data["counter_mapped_reads_num"])),
+                ("Unmapped Reads", self._format_number(master_data["counter_unmapped_reads_num"])),
             ]
-            self.elements.append(self._create_info_table(device_info, "Device Details"))
-            self.elements.append(Spacer(1, 12))
-
-            # File Locations
-            file_info = [
-                (
-                    "Run Directory",
-                    " ".join(masterdf.loc[(masterdf.index == "watchfolder")][1].values),
-                ),
-                (
-                    "Output Directory",
-                    " ".join(masterdf.loc[(masterdf.index == "output")][1].values),
-                ),
-                (
-                    "Reference",
-                    " ".join(masterdf.loc[(masterdf.index == "reference")][1].values),
-                ),
-            ]
-            self.elements.append(self._create_info_table(file_info, "File Locations"))
-            self.elements.append(Spacer(1, 12))
-
-            # File Sources
-            file_sources = [
-                ("Master Data", os.path.join(self.report.output, "master.csv")),
-            ]
-            self.elements.append(self._create_info_table(file_sources, "File Sources"))
-            self.elements.append(Spacer(1, 12))
-
-            # Sequencing Statistics
-            if "file_counters" in masterdf_dict:
-                counters = masterdf_dict["file_counters"]
-                seq_stats = [
-                    (
-                        "BAM Files",
-                        f"{self._format_number(counters.get('bam_passed', 0))} passed, "
-                        f"{self._format_number(counters.get('bam_failed', 0))} failed",
-                    ),
-                    (
-                        "Mapped Reads",
-                        f"{self._format_number(counters.get('mapped_count', 0))} total "
-                        f"({self._format_number(counters.get('pass_mapped_count', 0))} passed, "
-                        f"{self._format_number(counters.get('fail_mapped_count', 0))} failed)",
-                    ),
-                    (
-                        "Unmapped Reads",
-                        f"{self._format_number(counters.get('unmapped_count', 0))} total "
-                        f"({self._format_number(counters.get('pass_unmapped_count', 0))} passed, "
-                        f"{self._format_number(counters.get('fail_unmapped_count', 0))} failed)",
-                    ),
-                    (
-                        "Total Bases",
-                        f"{self._format_number(counters.get('bases_count', 0))} "
-                        f"({self._format_number(counters.get('pass_bases_count', 0))} passed, "
-                        f"{self._format_number(counters.get('fail_bases_count', 0))} failed)",
-                    ),
-                ]
-                self.elements.append(
-                    self._create_info_table(seq_stats, "Sequencing Statistics")
-                )
-                self.elements.append(Spacer(1, 12))
-
-            # Add summary to summary section
-            summary_text = (
-                f"Sample {sample_id} was sequenced using {self._convert_to_space_separated_string(masterdf_dict['devices'])} "
-                f"with flowcell {self._convert_to_space_separated_string(masterdf_dict['flowcell_ids'])}.<br/> "
-                f"Run started {self._format_timestamp(masterdf_dict['run_time'])}.<br/>"
+            self.elements.append(
+                self._create_info_table(stats_info, "Run Statistics")
             )
-            self.summary_elements.append(
-                Paragraph("Run Information", self.styles.styles["Heading3"])
-            )
-            self.summary_elements.append(
-                Paragraph(summary_text, self.styles.styles["Normal"])
-            )
+            self.elements.append(Spacer(1, 12))
 
         except Exception as e:
             logger.error(f"Error generating run data section: {str(e)}")
-            logger.debug("Exception details:", exc_info=True)
             self.elements.append(
                 Paragraph(
-                    "Error generating run data section", self.styles.styles["Normal"]
+                    f"Error generating run data: {str(e)}",
+                    self.styles.styles["Normal"],
                 )
             )

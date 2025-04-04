@@ -240,7 +240,7 @@ def parse_vcf(vcf_file):
 
             try:
                 vcf.to_csv(f"{vcf_file}.csv", index=False)
-                # print(f"VCF file saved as {vcf_file}.csv")
+                print(f"VCF file saved as {vcf_file}.csv")
             except Exception as e:
                 print(e)
                 sys.exit(1)
@@ -361,11 +361,14 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
                 f"/opt/bin/run_clairs_to "
                 f"--tumor_bam_fn {container_bamfile} "
                 f"--ref_fn {container_reference} "
-                f"--threads {threads} "
+                #f"--threads {threads} "
+                f"--threads 1 "
                 f"--remove_intermediate_dir "
                 f"--platform ont_r10_guppy_hac_5khz "
                 f"--output_dir {container_output} "
-                f"-b {container_bedfile}"
+                f"-b {container_bedfile} "
+                f"--chunk_size 20000000 "
+                f" --disable_intermediate_phasing "
             )
             if showerrors:
                 logger.info(f"Running command: {command}")
@@ -385,7 +388,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             ):
                 if showerrors:
                     logger.info(f"Container log: {line.decode()}")
-                # else:
+                #else:
                 #    print(line.decode().strip())
 
             # Wait for container process to complete.
@@ -396,40 +399,28 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
                 )
 
             # Cleanup the container.
-            client.api.remove_container(container=container.get("Id"))
+            #client.api.remove_container(container=container.get("Id"))
+            shutil.copy2(f"{workdirout}/snv.vcf.gz", f"{workdirout}/output_done.vcf.gz")
+            shutil.copy2(
+                f"{workdirout}/indel.vcf.gz", f"{workdirout}/output_indel_done.vcf.gz"
+            )
+            command = f"snpEff -q hg38 {workdirout}/output_done.vcf.gz > {workdirout}/snpeff_output.vcf"
+            os.system(command)
+            command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf"
+            os.system(command)
+            command = f"snpEff -q hg38 {workdirout}/output_indel_done.vcf.gz > {workdirout}/snpeff_indel_output.vcf"
+            os.system(command)
+            command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} {workdirout}/snpeff_indel_output.vcf > {workdirout}/snpsift_indel_output.vcf"
+            os.system(command)
+            
+            # Parse the annotated VCF files.
+            parse_vcf(os.path.join(workdirout, "snpsift_output.vcf"))
+            parse_vcf(os.path.join(workdirout, "snpsift_indel_output.vcf"))
 
         except Exception as e:
             logger.error("Error running Clair3")
             logger.error(f"Error: {e}")
             return
-
-        
-
-        snpsift_cmd_snv = (
-            f"SnpSift annotate "
-            f"{os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} "
-            f"{os.path.join(workdirout, 'snpeff_output.vcf')} "
-            f"> {os.path.join(workdirout, 'snpsift_output.vcf')}"
-        )
-        os.system(snpsift_cmd_snv)
-
-        snpeff_cmd_indel = (
-            f"snpEff -q hg38 {os.path.join(workdirout, 'output_indel_done.vcf.gz')} "
-            f"> {os.path.join(workdirout, 'snpeff_indel_output.vcf')}"
-        )
-        os.system(snpeff_cmd_indel)
-
-        snpsift_cmd_indel = (
-            f"SnpSift annotate "
-            f"{os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} "
-            f"{os.path.join(workdirout, 'snpeff_indel_output.vcf')} "
-            f"> {os.path.join(workdirout, 'snpsift_indel_output.vcf')}"
-        )
-        os.system(snpsift_cmd_indel)
-
-        # Parse the annotated VCF files.
-        parse_vcf(os.path.join(workdirout, "snpsift_output.vcf"))
-        parse_vcf(os.path.join(workdirout, "snpsift_indel_output.vcf"))
 
 
 def get_covdfs(bamfile):
@@ -689,13 +680,14 @@ class TargetCoverage(BaseAnalysis):
             logger.info("Docker image pulled.")
 
     def SNP_timer_run(self):
-        self.snp_timer = ui.timer(0.1, self._snp_worker)
+        self.snp_timer = ui.timer(10, self._snp_worker)
 
     async def _snp_worker(self):
         """
         This function takes reads from the queue and adds them to the background thread for processing.
         """
         self.snp_timer.active = False
+        self.clair3running = True
         if not self.SNPqueue.empty():
             while not self.SNPqueue.empty():
                 gene_list, bamfile, bedfile = self.SNPqueue.get()
@@ -706,19 +698,36 @@ class TargetCoverage(BaseAnalysis):
             if not os.path.exists(workdirout):
                 os.mkdir(workdirout)
             # bamfile, bedfile, workdir, workdirout, threads
-            self.clair3running = True
-            # shutil.copy2(bedfile, f"{bedfile}2")
-            await run.cpu_bound(
-                run_clair3,
-                f"{bamfile}",
-                f"{bedfile}",
-                self.check_and_create_folder(self.output, self.sampleID),
-                workdirout,
-                self.threads,
-                self.reference,
-                self.showerrors,
-            )
-            self.clair3running = False
+            
+            # Wait for BAM file to exist with timeout
+            timeout = 300  # 5 minutes timeout
+            start_time = time.time()
+            while not os.path.exists(f"{bamfile}"):
+                await asyncio.sleep(1)
+                if time.time() - start_time > timeout:
+                    logger.error(f"Timeout waiting for BAM file: {bamfile}")
+                    return
+                
+            if os.path.exists(f"{bamfile}"):
+                shutil.copy2(bamfile, f"{bamfile}2.bam")
+                shutil.copy2(f"{bamfile}.bai", f"{bamfile}2.bam.bai")
+                
+                # shutil.copy2(bedfile, f"{bedfile}2")
+                await run.cpu_bound(
+                    run_clair3,
+                    f"{bamfile}2.bam",
+                    f"{bedfile}",
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    workdirout,
+                    self.threads,
+                    self.reference,
+                    self.showerrors,
+                )
+                
+                os.remove(f"{bamfile}2.bam")
+                os.remove(f"{bamfile}2.bam.bai")
+                
+        self.clair3running = False
         # else:
         #    await asyncio.sleep(1)
         self.snp_timer.active = True
@@ -1791,9 +1800,10 @@ class TargetCoverage(BaseAnalysis):
         if self.sampleID not in self.targets_exceeding_threshold.keys():
             self.targets_exceeding_threshold[self.sampleID] = 0
         if self.reference:
+            # This code assumes that the number of targets exceeding the threshold will always change - but it is not guaranteed to. We need to run this each time (surely?)
             if (
-                len(run_list) > self.targets_exceeding_threshold[self.sampleID]
-                and not self.clair3running
+                len(run_list) > 0
+                #and not self.clair3running
             ):
                 self.targets_exceeding_threshold[self.sampleID] = len(run_list)
                 run_list[["chrom", "startpos", "endpos"]].to_csv(

@@ -60,7 +60,7 @@ class RobinReport:
         """Load the master data file if it exists."""
         master_path = os.path.join(self.output, "master.csv")
         if os.path.exists(master_path):
-            return pd.read_csv(master_path, index_col=0, header=None)
+            return pd.read_csv(master_path)
         return None
 
     def _get_centre_id(self):
