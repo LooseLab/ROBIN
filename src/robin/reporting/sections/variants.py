@@ -148,6 +148,7 @@ class VariantAnalysis:
                             "reference": fields[3],
                             "alternate": fields[4],
                             "type": variant_type,
+                            "filter": fields[6],
                         }
 
                         # Extract additional annotations
@@ -157,6 +158,9 @@ class VariantAnalysis:
                                 variant_data["gene"] = gene
                                 result.affected_genes.add(gene)
                                 logger.debug("Variant affects gene: %s", gene)
+                            elif field.startswith("CLNHGVS="):
+                                variant_data["hgvs_c"] = field.split("=")[1]
+                                logger.debug("HGVS.c: %s", variant_data["hgvs_c"])
                             elif field.startswith("CLNSIG="):
                                 variant_data["significance"] = field.split("=")[1]
                                 logger.debug(
@@ -341,7 +345,8 @@ class VariantsSection(ReportSection):
                     Paragraph("Position", header_style),
                     Paragraph("Gene", header_style),
                     Paragraph("Change", header_style),
-                    Paragraph("Disease", header_style),
+                    Paragraph("Filter", header_style),
+                    Paragraph("HGVS.c", header_style),
                 ]
             ]
 
@@ -352,9 +357,7 @@ class VariantsSection(ReportSection):
             ]:
                 for variant in variant_list:
                     change = f"{variant['reference']}>{variant['alternate']}"
-                    disease = self._format_disease_name(
-                        variant.get("disease", "Not specified")
-                    )
+                    hgvs_c = variant.get("hgvs_c", "Not available")
 
                     row = [
                         Paragraph(variant["type"], cell_style),
@@ -362,12 +365,13 @@ class VariantsSection(ReportSection):
                         Paragraph(str(variant["position"]), cell_style),
                         Paragraph(variant.get("gene", "Unknown"), cell_style),
                         Paragraph(change, cell_style),
-                        Paragraph(disease, cell_style),
+                        Paragraph(variant.get("filter", "PASS"), cell_style),
+                        Paragraph(hgvs_c, cell_style),
                     ]
                     table_data.append(row)
 
             # Adjust column widths (total should be around 7 inches for A4 paper)
-            col_widths = [inch * x for x in [0.5, 0.4, 0.8, 0.8, 0.7, 3.0]]
+            col_widths = [inch * x for x in [0.5, 0.4, 0.8, 0.8, 0.7, 1.2, 2.0]]
 
             # Create and style the table
             table = Table(table_data, colWidths=col_widths, repeatRows=1)
@@ -379,20 +383,11 @@ class VariantsSection(ReportSection):
                         # Preserve specific alignments
                         ("ALIGN", (0, 0), (0, -1), "CENTER"),  # Type column centered
                         ("ALIGN", (1, 0), (1, -1), "CENTER"),  # Chr column centered
-                        (
-                            "ALIGN",
-                            (2, 0),
-                            (2, -1),
-                            "RIGHT",
-                        ),  # Position column right-aligned
+                        ("ALIGN", (2, 0), (2, -1), "RIGHT"),  # Position column right-aligned
                         ("ALIGN", (3, 0), (3, -1), "LEFT"),  # Gene column left-aligned
                         ("ALIGN", (4, 0), (4, -1), "CENTER"),  # Change column centered
-                        (
-                            "ALIGN",
-                            (5, 0),
-                            (5, -1),
-                            "LEFT",
-                        ),  # Disease column left-aligned
+                        ("ALIGN", (5, 0), (5, -1), "CENTER"),  # Filter column centered
+                        ("ALIGN", (6, 0), (6, -1), "LEFT"),  # HGVS.c column left-aligned
                     ]
                 )
             )
