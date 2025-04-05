@@ -235,16 +235,37 @@ class ClassificationSection(ReportSection):
                         else raw_confidence
                     )
 
-                    # Determine confidence level
-                    if confidence_value >= 0.75:
-                        confidence_status = "High"
-                        status_color = "#059669"  # Green
-                    elif confidence_value >= 0.5:
-                        confidence_status = "Medium"
-                        status_color = "#D97706"  # Amber
-                    else:
-                        confidence_status = "Low"
-                        status_color = "#DC2626"  # Red
+                    # Determine confidence level based on classifier
+                    if name == "Sturgeon":
+                        if confidence_value >= 0.85:
+                            confidence_status = "High"
+                            status_color = "#059669"  # Green
+                        elif confidence_value >= 0.65:
+                            confidence_status = "Medium"
+                            status_color = "#D97706"  # Amber
+                        else:
+                            confidence_status = "Low"
+                            status_color = "#DC2626"  # Red
+                    elif name == "NanoDX" or name == "PanNanoDX":
+                        if confidence_value >= 0.5:
+                            confidence_status = "High"
+                            status_color = "#059669"  # Green
+                        elif confidence_value >= 0.25:
+                            confidence_status = "Medium"
+                            status_color = "#D97706"  # Amber
+                        else:
+                            confidence_status = "Low"
+                            status_color = "#DC2626"  # Red
+                    elif name == "Random Forest":
+                        if confidence_value >= 0.85:
+                            confidence_status = "High"
+                            status_color = "#059669"  # Green
+                        elif confidence_value >= 0.65:
+                            confidence_status = "Medium"
+                            status_color = "#D97706"  # Amber
+                        else:
+                            confidence_status = "Low"
+                            status_color = "#DC2626"  # Red
 
                     # Add to summary table with HTML-like color formatting
                     summary_data.append(
@@ -262,9 +283,10 @@ class ClassificationSection(ReportSection):
 
         # Add explanation text
         Explanation_text = Paragraph(
-            "Note: Classification confidence levels are defined as High (>75%), "
-            "Medium (>50%), and Low (<50%). Multiple classifiers may provide different "
-            "results based on their training data and methodology.",
+            "Note: Classification confidence levels are defined as follows:\n"
+            "- Sturgeon and Random Forest: High (>85%), Medium (>65%), Low (<65%)\n"
+            "- NanoDX and PanNanoDX: High (>50%), Medium (>25%), Low (<25%)\n"
+            "Multiple classifiers may provide different results based on their training data and methodology.",
             ParagraphStyle(
                 "Explanation",
                 parent=self.styles.styles["Normal"],

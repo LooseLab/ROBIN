@@ -161,6 +161,13 @@ class VariantAnalysis:
                             elif field.startswith("CLNHGVS="):
                                 variant_data["hgvs_c"] = field.split("=")[1]
                                 logger.debug("HGVS.c: %s", variant_data["hgvs_c"])
+                            elif field.startswith("ANN="):
+                                # Extract HGVS.c and HGVS.p from ANN field
+                                ann_fields = field.split("=")[1].split(",")[0].split("|")
+                                if len(ann_fields) >= 10:  # Ensure we have enough fields
+                                    variant_data["hgvs_c"] = ann_fields[9]  # HGVS.c is at index 9
+                                    variant_data["hgvs_p"] = ann_fields[10]  # HGVS.p is at index 10
+                                    logger.debug("HGVS.c: %s, HGVS.p: %s", variant_data["hgvs_c"], variant_data["hgvs_p"])
                             elif field.startswith("CLNSIG="):
                                 variant_data["significance"] = field.split("=")[1]
                                 logger.debug(
@@ -347,6 +354,7 @@ class VariantsSection(ReportSection):
                     Paragraph("Change", header_style),
                     Paragraph("Filter", header_style),
                     Paragraph("HGVS.c", header_style),
+                    Paragraph("HGVS.p", header_style),
                 ]
             ]
 
@@ -358,6 +366,7 @@ class VariantsSection(ReportSection):
                 for variant in variant_list:
                     change = f"{variant['reference']}>{variant['alternate']}"
                     hgvs_c = variant.get("hgvs_c", "Not available")
+                    hgvs_p = variant.get("hgvs_p", "Not available")
 
                     row = [
                         Paragraph(variant["type"], cell_style),
@@ -367,11 +376,12 @@ class VariantsSection(ReportSection):
                         Paragraph(change, cell_style),
                         Paragraph(variant.get("filter", "PASS"), cell_style),
                         Paragraph(hgvs_c, cell_style),
+                        Paragraph(hgvs_p, cell_style),
                     ]
                     table_data.append(row)
 
             # Adjust column widths (total should be around 7 inches for A4 paper)
-            col_widths = [inch * x for x in [0.5, 0.4, 0.8, 0.8, 0.7, 1.2, 2.0]]
+            col_widths = [inch * x for x in [0.5, 0.4, 0.8, 0.8, 0.7, 1.2, 1.5, 1.5]]
 
             # Create and style the table
             table = Table(table_data, colWidths=col_widths, repeatRows=1)
@@ -388,6 +398,7 @@ class VariantsSection(ReportSection):
                         ("ALIGN", (4, 0), (4, -1), "CENTER"),  # Change column centered
                         ("ALIGN", (5, 0), (5, -1), "CENTER"),  # Filter column centered
                         ("ALIGN", (6, 0), (6, -1), "LEFT"),  # HGVS.c column left-aligned
+                        ("ALIGN", (7, 0), (7, -1), "LEFT"),  # HGVS.p column left-aligned
                     ]
                 )
             )
