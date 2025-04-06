@@ -387,9 +387,9 @@ class CoverageSection(ReportSection):
 
         legend_text = """
         Coverage Quality Thresholds:
-        • Excellent: ≥30x coverage
-        • Good: ≥20x coverage
-        • Moderate: ≥10x coverage
+        • Excellent: >30x coverage
+        • Good: >20x coverage
+        • Moderate: >10x coverage
         • Insufficient: <10x coverage
         """
         legend = Paragraph(legend_text, legend_style)
