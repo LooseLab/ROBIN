@@ -312,7 +312,7 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
         if os.path.exists(sv_store) and os.path.getsize(sv_store) > 0:
             try:
                 # Read existing data
-                existing_df = pd.read_csv(sv_store)
+                existing_df = pd.read_csv(sv_store, low_memory=False)
                 # Append new data
                 combined_df = pd.concat([existing_df, df], ignore_index=True)
             except pd.errors.EmptyDataError:
@@ -830,7 +830,7 @@ def fusion_work(
                 # Process all gene mappings if available
                 if os.path.getsize(tempallmappings) > 0:
                     fusion_candidates_all = pd.read_csv(
-                        tempallmappings, sep="\t", header=None
+                        tempallmappings, sep="\t", header=None, low_memory=False
                     )
                     fusion_candidates_all.columns = [
                         "col1",
@@ -1014,6 +1014,7 @@ class FusionObject(BaseAnalysis):
         """
         Sets up the user interface for the Fusion Panel and Structural Variant Analysis.
         """
+        app.config.request_timeout = 10  # Increase timeout to 10 seconds
         if self.summary:
             with self.summary:
                 with ui.card().classes("w-full p-4 mb-4"):
@@ -1854,18 +1855,18 @@ class FusionObject(BaseAnalysis):
 
                     for line in bed_lines:
                         chrom, start, end, sv_type, _, strand = line.split("\t")
-                        # Format coordinates with commas for readability
-                        formatted_start = f"{int(start):,}"
-                        formatted_end = f"{int(end):,}"
+                        # Format coordinates with commas for readability, handling float values
+                        formatted_start = f"{int(float(start)):,}"
+                        formatted_end = f"{int(float(end)):,}"
                         # Calculate size of the variant
-                        size = int(end) - int(start)
+                        size = int(float(end)) - int(float(start))
                         formatted_size = f"{size:,}"
 
                         # Find matching reads in sv_reads for this region
                         matching_reads = sv_reads[
                             (sv_reads["RNAME"] == chrom)
-                            & (sv_reads["REF_START"].astype(int) >= int(start) - 1000)
-                            & (sv_reads["REF_END"].astype(int) <= int(end) + 1000)
+                            & (sv_reads["REF_START"].astype(float).astype(int) >= float(start) - 1000)
+                            & (sv_reads["REF_END"].astype(float).astype(int) <= float(end) + 1000)
                         ]
 
                         # Get partner chromosomes and positions
