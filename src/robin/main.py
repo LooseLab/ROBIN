@@ -24,6 +24,7 @@ from robin.utilities.news_feed import NewsFeed
 from robin.__about__ import __version__
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
+DEV_TESTING: bool = False
 
 DEFAULT_CFG: str = "config.ini"
 UNIQUE_ID: str = str(uuid.uuid4())
@@ -776,6 +777,12 @@ def run_class(
         Start data processing in the main application loop.
         """
         logging.info(f"Setting up {UNIQUE_ID}.")
+        
+        if DEV_TESTING:
+            loop = asyncio.get_running_loop()
+            loop.set_debug(True)
+            loop.slow_callback_duration = 0.05
+
         await global_methnice.start_analysis()
 
     app.on_startup(startup_with_methnice)
