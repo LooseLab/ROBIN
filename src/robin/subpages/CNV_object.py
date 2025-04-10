@@ -723,7 +723,7 @@ class CNVAnalysis(BaseAnalysis):
         else:
             self.sex_estimate = "Unknown"
             
-        print(X,Y, self.sex_estimate)
+        #print(X,Y, self.sex_estimate)
         with open(
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
