@@ -93,7 +93,7 @@ import pysam
 from cnv_from_bam import iterate_bam_file
 from robin.subpages.base_analysis import BaseAnalysis
 from robin.utilities.break_point_detector import CNVChangeDetectorTracker
-from robin.utilities.bed_file import BedTree
+from robin.utilities.bed_file import BedTree, MasterBedTree
 import natsort
 from robin import theme, resources
 import pandas as pd
@@ -385,7 +385,8 @@ class CNVAnalysis(BaseAnalysis):
         reference_file: Optional[str] = None,
         bed_file: Optional[str] = None,
         readfish_toml: Optional[Path] = None,
-        NewBed: Optional[BedTree] = None,
+        #NewBed: Optional[BedTree] = None,
+        master_bed_tree: Optional[MasterBedTree] = None,
         **kwargs,
     ) -> None:
         # self.file_list = []
@@ -470,7 +471,7 @@ class CNVAnalysis(BaseAnalysis):
             sep="\s+",
         )
         
-        self.NewBed = NewBed
+        self.master_bed_tree = master_bed_tree
         super().__init__(*args, **kwargs)
         
         
@@ -757,6 +758,14 @@ class CNVAnalysis(BaseAnalysis):
         # main_start_time = time.time()
         if self.sampleID not in self.update_cnv_dict.keys():
             self.update_cnv_dict[self.sampleID] = {}
+            # If we don't have a master bed tree, we need to create one.
+            if self.master_bed_tree[self.sampleID] is None:
+                self.master_bed_tree.add_bed_tree(
+                    sample_id=self.sampleID,
+                    preserve_original_tree=True,
+                    reference_file=f"{self.reference_file}.fai",
+                )
+        NewBed = self.master_bed_tree.bed_trees[self.sampleID]
 
         bamdata = pysam.AlignmentFile(bamfile, "rb")
         
@@ -915,7 +924,7 @@ class CNVAnalysis(BaseAnalysis):
                     bedcontent2 += "\n"
 
             if len(bedcontent2) > 0:
-                self.NewBed.load_from_string(
+                NewBed.load_from_string(
                     bedcontent2,
                     merge=False,
                     write_files=True,
@@ -2866,7 +2875,7 @@ class CNVAnalysis(BaseAnalysis):
                     bedcontent += f'{self.CNVResults[chrom]["bed_data_breakpoints"]}\n'
                     local_update = True
 
-            self.NewBed.load_from_string(bedcontent, merge=False, source_type="CNV")
+            #self.NewBed.load_from_string(bedcontent, merge=False, source_type="CNV")
 
             if self.check_file_time(os.path.join(output, "bedranges.csv")):
                 self.proportions_df_store = pd.read_csv(
