@@ -394,7 +394,6 @@ class CNVAnalysis(BaseAnalysis):
         self.reference_file = reference_file
         self.bed_file = bed_file
         self.readfish_toml = readfish_toml
-        self.NewBed = NewBed
         # Define dtype for memmap - using numpy dtype
         self.dtype = np.dtype([("name", "U10"), ("start", "i8"), ("end", "i8")])
         self.cnv_dict = {"bin_width": 0, "variance": 0}

@@ -30,6 +30,37 @@ from pathlib import Path
 
 
 class BedTree:
+    """
+    A class for managing and processing BED (Browser Extensible Data) files.
+
+    This class provides functionality for:
+    - Loading and processing BED files
+    - Managing target regions and their metadata
+    - Tracking proportions and statistics
+    - Writing updated BED files
+    - Preserving original tree structures
+
+    Attributes:
+        total_count (int): Total number of target regions
+        total_range_sum (int): Total number of bases covered by targets
+        tree_data (dict): Hierarchical data structure for targets
+        tree_dict (dict): Dictionary representation of the tree structure
+        preserve_original_tree (bool): Whether to preserve the original tree structure
+        reference_tree (dict): Copy of the original tree structure
+        file_counter (int): Counter for file naming
+        previous_targets_hash (str): Hash of previous targets for change detection
+        proportions_df (pd.DataFrame): DataFrame storing proportions and timestamps
+        output_location (str): Location for output files
+        readfish_toml (Optional[Path]): Path to readfish TOML configuration
+        toml_dict (dict): Parsed TOML configuration
+        chromosome_lengths (dict): Dictionary of chromosome lengths
+        total_length (int): Total length of all chromosomes
+
+    Example:
+        >>> bed_tree = BedTree(preserve_original_tree=True, reference_file="reference.fa.fai")
+        >>> bed_tree.load_from_file("targets.bed")
+    """
+
     def __init__(
         self,
         preserve_original_tree=False,
@@ -37,6 +68,25 @@ class BedTree:
         output_location=None,
         readfish_toml: Optional[Path] = None,
     ):
+        """
+        Initialize a new BedTree instance.
+
+        Args:
+            preserve_original_tree (bool, optional): Whether to preserve the original tree structure. Defaults to False.
+            reference_file (str, optional): Path to reference genome FASTA index file. Defaults to None.
+            output_location (str, optional): Directory for output files. Defaults to None.
+            readfish_toml (Optional[Path], optional): Path to readfish TOML configuration. Defaults to None.
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_tree = BedTree(
+            ...     preserve_original_tree=True,
+            ...     reference_file="reference.fa.fai",
+            ...     output_location="output/"
+            ... )
+        """
         self.total_count = 0
         self.total_range_sum = 0
         self.tree_data = {
@@ -60,7 +110,6 @@ class BedTree:
         if self.readfish_toml:
             with open(self.readfish_toml, "rb") as f:
                 self.toml_dict = tomli.load(f)
-                # print(self.toml_dict)
         else:
             self.toml_dict = None
         if reference_file:
@@ -71,7 +120,16 @@ class BedTree:
             self.total_length = None
 
     def _hash_current_targets(self):
-        """Generates a hash for the current targets to detect changes."""
+        """
+        Generate a hash for the current targets to detect changes.
+
+        Returns:
+            str: MD5 hash of the current target structure
+
+        Example:
+            >>> hash_value = bed_tree._hash_current_targets()
+            >>> print(f"Current hash: {hash_value}")
+        """
         m = hashlib.md5()
         for chromosome, chromosome_data in sorted(self.tree_dict.items()):
             m.update(chromosome.encode())
@@ -84,6 +142,23 @@ class BedTree:
         return m.hexdigest()
 
     def _check_and_create_folder(self, path, folder_name=None):
+        """
+        Check if a path exists and optionally create a subfolder.
+
+        Args:
+            path (str): Base path to check
+            folder_name (str, optional): Name of subfolder to create. Defaults to None.
+
+        Returns:
+            str: Full path to the folder
+
+        Raises:
+            FileNotFoundError: If the base path does not exist
+
+        Example:
+            >>> folder_path = bed_tree._check_and_create_folder("/output", "results")
+            >>> print(f"Created folder at: {folder_path}")
+        """
         # Check if the path exists
         if not os.path.exists(path):
             raise FileNotFoundError(f"The specified path does not exist: {path}")
@@ -94,13 +169,26 @@ class BedTree:
             # Create the folder if it doesn't exist
             if not os.path.exists(full_path):
                 os.makedirs(full_path)
-                # logger.info(f"Folder created: {full_path}")
             return full_path
         else:
             return path
 
     def _write_bed_file(self):
-        """Writes the current targets to a new BED file if they have changed."""
+        """
+        Write the current targets to a new BED file if they have changed.
+
+        This method:
+        1. Checks if targets have changed using hash comparison
+        2. Creates a new BED file with updated targets
+        3. Updates the readfish TOML configuration if present
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_tree._write_bed_file()
+            >>> # A new BED file will be created if targets have changed
+        """
         current_hash = self._hash_current_targets()
         if current_hash != self.previous_targets_hash:
             self.file_counter += 1
@@ -153,15 +241,25 @@ class BedTree:
                 self.previous_targets_hash = current_hash
                 self._update_proportions_df()
                 if self.toml_dict:
-                    # print(self.toml_dict["regions"])
                     for region in self.toml_dict["regions"]:
-                        # print(region)
                         region["targets"] = filename
                     with open(f"{self.readfish_toml}_live", "wb") as f:
                         tomli_w.dump(self.toml_dict, f)
-            # print(f"Wrote new BED file: {filename}")
 
     def _get_chromosome_lengths(self, fai_file):
+        """
+        Read chromosome lengths from a FASTA index file.
+
+        Args:
+            fai_file (str): Path to the FASTA index file
+
+        Returns:
+            dict: Dictionary mapping chromosome names to their lengths
+
+        Example:
+            >>> lengths = bed_tree._get_chromosome_lengths("reference.fa.fai")
+            >>> print(f"Chromosome lengths: {lengths}")
+        """
         chromosome_lengths = {}
         with open(fai_file, "r") as f:
             for line in f:
@@ -174,8 +272,19 @@ class BedTree:
     def _merge_ranges(self, existing_ranges, new_range):
         """
         Merge ranges while preserving those with different names.
-        existing_ranges: list of tuples (start, end, name)
-        new_range: tuple (start, end, name)
+
+        Args:
+            existing_ranges (list): List of tuples (start, end, name)
+            new_range (tuple): Tuple (start, end, name)
+
+        Returns:
+            list: List of merged ranges sorted by start position
+
+        Example:
+            >>> existing = [(100, 200, "gene1"), (300, 400, "gene2")]
+            >>> new = (150, 250, "gene1")
+            >>> merged = bed_tree._merge_ranges(existing, new)
+            >>> print(f"Merged ranges: {merged}")
         """
         start, end, name = new_range
         merged_ranges = []
@@ -203,6 +312,20 @@ class BedTree:
         return merged_ranges
 
     def _process_bed_data(self, reader):
+        """
+        Process BED data from a CSV reader.
+
+        Args:
+            reader (csv.reader): CSV reader containing BED data
+
+        Returns:
+            None
+
+        Example:
+            >>> with open("targets.bed") as f:
+            ...     reader = csv.reader(f, delimiter="\t")
+            ...     bed_tree._process_bed_data(reader)
+        """
         for row in reader:
             if len(row) > 0:
                 chromosome = row[0]
@@ -270,7 +393,26 @@ class BedTree:
         self.total_range_sum = sum(v["range_sum"] for v in self.tree_dict.values())
 
     def _add_if_not_exists(self, entries, new_item, description, chromosome):
-        """Add a new entry if it doesn't already exist in the entries list."""
+        """
+        Add a new entry if it doesn't already exist in the entries list.
+
+        Args:
+            entries (list): List of existing entries
+            new_item (str): ID of the new item
+            description (str): Description of the new item
+            chromosome (str): Chromosome name
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_tree._add_if_not_exists(
+            ...     entries=existing_entries,
+            ...     new_item="chr1",
+            ...     description="Chromosome 1",
+            ...     chromosome="chr1"
+            ... )
+        """
         if not any(entry["id"] == new_item for entry in entries):
             entries.append(
                 {
@@ -285,12 +427,24 @@ class BedTree:
             )
 
     def _propagate_values(self, node):
+        """
+        Recursively propagate count and range sum values through the tree.
+
+        Args:
+            node (dict): Current node in the tree
+
+        Returns:
+            tuple: (total_count, total_range_sum) for the node
+
+        Example:
+            >>> count, range_sum = bed_tree._propagate_values(root_node)
+            >>> print(f"Total count: {count}, Total range: {range_sum}")
+        """
         if (
             "children" not in node or not node["children"]
         ):  # Here we are looking at an individual target on a chromosome.
             node["count"] = node.get("count", 1)
             node["range_sum"] = node.get("range_sum", 0)
-            # node['proportion'] = node['range_sum'] / self.total_length if self.total_length else 0
             return node["count"], node["range_sum"]
 
         total_count = 0
@@ -329,6 +483,22 @@ class BedTree:
         return node["count"], node["range_sum"]
 
     def _build_tree(self):
+        """
+        Build the hierarchical tree structure from the tree dictionary.
+
+        This method:
+        1. Adds chromosomes to the tree
+        2. Sorts strand groups and their children
+        3. Updates strands and targets
+        4. Propagates values through the tree
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_tree._build_tree()
+            >>> # The tree structure will be built and values propagated
+        """
         for chromosome_data in self.tree_dict.values():
             self._add_if_not_exists(
                 self.tree_data["children"],
@@ -338,9 +508,17 @@ class BedTree:
             )
 
             for strand_group in natsorted(chromosome_data["children"]):
-                strand_group["children"] = natsorted(
-                    strand_group["children"], key=lambda x: int(x["id"].split("-")[0])
-                )
+                try:
+                    strand_group["children"] = natsorted(
+                        strand_group["children"], 
+                        key=lambda x: int(x["id"].split("-")[0]) if x["id"] and "-" in x["id"] else 0
+                    )
+                except (ValueError, IndexError):
+                    # If conversion fails, sort by the original ID
+                    strand_group["children"] = natsorted(
+                        strand_group["children"], 
+                        key=lambda x: x["id"]
+                    )
                 self._update_strands(chromosome_data["id"], strand_group["id"])
                 self._update_targets(
                     chromosome_data["id"], strand_group["id"], strand_group
@@ -353,6 +531,19 @@ class BedTree:
         self._propagate_values(self.tree_data)
 
     def _update_strands(self, chromosome, strand):
+        """
+        Update the strands for a given chromosome.
+
+        Args:
+            chromosome (str): Chromosome name
+            strand (str): Strand identifier
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_tree._update_strands("chr1", "chr1 +")
+        """
         chromosome_entry = next(
             item for item in self.tree_data["children"] if item["id"] == chromosome
         )
@@ -361,6 +552,20 @@ class BedTree:
         )
 
     def _update_targets(self, chromosome, strand, strand_group):
+        """
+        Update the targets for a given chromosome and strand.
+
+        Args:
+            chromosome (str): Chromosome name
+            strand (str): Strand identifier
+            strand_group (dict): Strand group data
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_tree._update_targets("chr1", "chr1 +", strand_data)
+        """
         chromosome_entry = next(
             item for item in self.tree_data["children"] if item["id"] == chromosome
         )
@@ -377,6 +582,20 @@ class BedTree:
         )  # Add chromosome length
 
     def load_from_file(self, file_path, merge=False):
+        """
+        Load BED data from a file.
+
+        Args:
+            file_path (str): Path to the BED file
+            merge (bool, optional): Whether to merge with existing data. Defaults to False.
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_tree.load_from_file("targets.bed")
+            >>> # The BED file will be loaded and processed
+        """
         if not merge:
             if "children" in self.tree_data.keys():
                 self.tree_data["children"] = []
@@ -389,7 +608,6 @@ class BedTree:
         if self.preserve_original_tree:
             self.reference_tree = copy.deepcopy(self.tree_dict)
         self._propagate_values(self.tree_data)
-        # self._write_bed_file()
 
     def load_from_string(
         self,
@@ -403,17 +621,23 @@ class BedTree:
         Load BED data from a string while preserving entries from other sources.
 
         Args:
-            bed_string: The BED format string to load
-            merge: Whether to merge with existing data
-            write_files: Whether to write output files
-            output_location: Where to write output files
-            source_type: The type of source updating the BED ("CNV", "FUSION", etc.)
+            bed_string (str): The BED format string to load
+            merge (bool, optional): Whether to merge with existing data. Defaults to False.
+            write_files (bool, optional): Whether to write output files. Defaults to False.
+            output_location (str, optional): Where to write output files. Defaults to None.
+            source_type (str, optional): The type of source updating the BED ("CNV", "FUSION", etc.). Defaults to None.
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_data = "chr1\t100\t200\tgene1\t.\t+\nchr1\t300\t400\tgene2\t.\t-"
+            >>> bed_tree.load_from_string(bed_data, source_type="FUSION")
         """
         if output_location:
             self.output_location = output_location
 
         if not merge:
-            # rint(self.tree_data)
             if "children" in self.tree_data.keys():
                 if source_type:
                     # First pass: Remove all entries of the type we're updating
@@ -427,8 +651,6 @@ class BedTree:
                                 ):
                                     if target.get("name") != "CNV_detected":
                                         to_remove.append(i)
-                                        # print(i)
-                                        # print(target)
                                 # Remove entries in reverse order to maintain correct indices
                                 for i in reversed(to_remove):
                                     del strand_group["children"][i]
@@ -441,8 +663,6 @@ class BedTree:
                                 ):
                                     if target.get("name") == "CNV_detected":
                                         to_remove.append(i)
-                                        # print(i)
-                                        # print(target)
                                 # Remove entries in reverse order to maintain correct indices
                                 for i in reversed(to_remove):
                                     del strand_group["children"][i]
@@ -528,7 +748,21 @@ class BedTree:
             self._write_bed_file()
 
     def _update_proportions_df(self):
-        """Updates the proportions DataFrame with the current data and timestamp."""
+        """
+        Update the proportions DataFrame with the current data and timestamp.
+
+        This method:
+        1. Creates a new DataFrame with current proportions
+        2. Appends it to the existing DataFrame
+        3. Writes the updated DataFrame to a CSV file if output_location is set
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_tree._update_proportions_df()
+            >>> # The proportions DataFrame will be updated and written to file
+        """
         timestamp = datetime.now()
 
         # Top-level (genome-wide) proportion
@@ -561,7 +795,21 @@ class BedTree:
             )
 
     def update_target_table(self) -> None:
-        """Update the target panel information table with current BedTree data."""
+        """
+        Update the target panel information table with current BedTree data.
+
+        This method:
+        1. Checks if gene_bed data is available
+        2. Updates the target table with current status and source information
+        3. Updates the UI if a target_table exists
+
+        Returns:
+            None
+
+        Example:
+            >>> bed_tree.update_target_table()
+            >>> # The target table will be updated with current information
+        """
         print("Updating target table")  # Basic debug print
         logger.debug("Starting target table update")
         if not hasattr(self, "gene_bed") or self.gene_bed.empty:
@@ -620,6 +868,12 @@ class BedTree:
                 - total_targets: Total number of unique target regions
                 - by_chromosome: Dictionary of counts per chromosome
                 - by_source: Dictionary of counts by source type (Panel, CNV_detected, etc.)
+
+        Example:
+            >>> counts = bed_tree.get_unique_entries_count()
+            >>> print(f"Total targets: {counts['total_targets']}")
+            >>> print(f"By chromosome: {counts['by_chromosome']}")
+            >>> print(f"By source: {counts['by_source']}")
         """
         if not self.tree_dict:
             return {"total_targets": 0, "by_chromosome": {}, "by_source": {}}
