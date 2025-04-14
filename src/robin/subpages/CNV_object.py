@@ -394,7 +394,6 @@ class CNVAnalysis(BaseAnalysis):
         self.reference_file = reference_file
         self.bed_file = bed_file
         self.readfish_toml = readfish_toml
-        self.NewBed = NewBed
         # Define dtype for memmap - using numpy dtype
         self.dtype = np.dtype([("name", "U10"), ("start", "i8"), ("end", "i8")])
         self.cnv_dict = {"bin_width": 0, "variance": 0}
@@ -710,12 +709,20 @@ class CNVAnalysis(BaseAnalysis):
         """
         X = round(np.average([i for i in self.result3.cnv["chrX"] if i != 0]), 2)
         Y = round(np.average([i for i in self.result3.cnv["chrY"] if i != 0]), 2)
-        if X >= 0.1 and Y <= 0.1:
+        if X >= 0.1 and Y <= -0.1:
             self.sex_estimate = "Female"
         elif X <= 0.1 and Y >= -0.2:
             self.sex_estimate = "Male"
+        elif X >= 0.1 and Y >= -0.1:
+            self.sex_estimate = "Male (query X/Y copy number changes)"
+        elif X > 0.1 and Y > 0.1:
+            self.sex_estimate = "Male (query X/Y copy number changes)"
+        elif X < 0.1 and Y < -0.2:
+            self.sex_estimate = "Unknown (Query XY copy number changes)"
         else:
             self.sex_estimate = "Unknown"
+            
+        #print(X,Y, self.sex_estimate)
         with open(
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
@@ -2651,9 +2658,12 @@ class CNVAnalysis(BaseAnalysis):
             display_sex = "Female (XX)"
         elif xy_estimate == "XY":
             display_sex = "Male (XY)"
+        else:
+            display_sex = xy_estimate
+        
         
         # Determine if male or female for icon and styling
-        is_male = xy_estimate in ["XY", "Male"]
+        is_male = xy_estimate.split(" ")[0] in ["XY", "Male"]
         
         with self.summary:
             self.summary.clear()

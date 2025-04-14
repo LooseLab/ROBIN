@@ -245,11 +245,18 @@ class BaseAnalysis:
                 timestamp = time.time()
             try:
                 await self.process_bam(bamfile, timestamp)
+            except ValueError as e:
+                if "invalid literal for int() with base 10" in str(e):
+                    logger.error(f"Error processing BAM file: {e}. Skipping this file and continuing.")
+                else:
+                    logger.error(f"Error processing BAM files: {e}")
             except Exception as e:
                 logger.error(f"Error processing BAM files: {e}")
-            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
-                "bam_processed"
-            ] += 1
+            finally:
+                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
+                    "bam_processed"
+                ] += 1
+                self.running = False
         #await asyncio.sleep(0.05)
         self.timer.active = True
 

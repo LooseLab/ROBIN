@@ -1,41 +1,126 @@
+:root {
+  --font-primary: "Fira Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "Fira Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  --color-primary: #4F9153;
+  --color-primary-dark: #3d7240;
+  --color-text: #2c3e50;
+  --color-text-light: #7f8c8d;
+  --color-background: #f8f8f8;
+  --color-background-dark: #222;
+  --transition-base: 0.3s ease;
+  
+  /* Paper texture patterns */
+  --paper-base: radial-gradient(circle at 50% 50%, rgba(0,0,0,0.03) 1px, transparent 1px);
+  --paper-fibers: repeating-linear-gradient(0deg, rgba(0,0,0,0.02) 0px, rgba(0,0,0,0.02) 1px, transparent 1px, transparent 2px);
+  --paper-noise: repeating-radial-gradient(circle at 50% 50%, rgba(0,0,0,0.01) 0px, rgba(0,0,0,0.01) 1px, transparent 1px, transparent 2px);
+  --paper-size: 20px;
+}
+
 html,
 body {
   max-width: 100%;
   overflow-x: hidden;
-  background-color: #f8f8f8;
-  font-family: "Fira Sans", Roboto, -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
-  --q-dark-page: #222;
+  background-color: var(--color-background);
+  background-image: var(--paper-base), var(--paper-fibers), var(--paper-noise);
+  background-size: var(--paper-size) var(--paper-size), 100% 100%, 100% 100%;
+  background-position: 0 0, 0 0, 0 0;
+  font-family: var(--font-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  color: var(--color-text);
+  line-height: 1.6;
+  position: relative;
 }
+
+/* Add subtle paper-like shadows */
+html::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.1) 0%, transparent 100%);
+  pointer-events: none;
+  z-index: 1;
+}
+
 html:has(.body--dark) {
-  background-color: #222;
+  background-color: var(--color-background-dark);
+  background-image: var(--paper-base), var(--paper-fibers), var(--paper-noise);
+  background-size: var(--paper-size) var(--paper-size), 100% 100%, 100% 100%;
+  color: #f8f8f8;
 }
+
+/* Dark mode paper texture adjustments */
+.body--dark {
+  --paper-base: radial-gradient(circle at 50% 50%, rgba(255,255,255,0.03) 1px, transparent 1px);
+  --paper-fibers: repeating-linear-gradient(0deg, rgba(255,255,255,0.02) 0px, rgba(255,255,255,0.02) 1px, transparent 1px, transparent 2px);
+  --paper-noise: repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,0.01) 0px, rgba(255,255,255,0.01) 1px, transparent 1px, transparent 2px);
+}
+
+/* Paper texture variations */
+.paper-texture {
+  background-image: var(--paper-base), var(--paper-fibers), var(--paper-noise);
+  background-size: var(--paper-size) var(--paper-size), 100% 100%, 100% 100%;
+  position: relative;
+}
+
+.paper-texture::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: linear-gradient(180deg, rgba(255,255,255,0.1) 0%, transparent 100%);
+  pointer-events: none;
+}
+
+/* Dark mode paper texture variations */
+.body--dark .paper-texture::before {
+  background: linear-gradient(180deg, rgba(0,0,0,0.1) 0%, transparent 100%);
+}
+
 html:not(.has-dialog) {
   scroll-behavior: smooth;
 }
+
 .browser-window {
-  font-family: "Fira Sans", -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+  font-family: var(--font-primary);
 }
+
 .bash-window code,
 .python-window code {
-  font-family: "Fira Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New",
-    monospace;
+  font-family: var(--font-mono);
+  font-size: 0.95em;
+  line-height: 1.5;
 }
+
 .fancy-em em {
   font-style: normal;
   color: #5898d4;
+  font-weight: 500;
 }
+
 a:link:not(.browser-window *),
 a:visited:not(.browser-window *) {
-  color: inherit !important;
+  color: var(--color-primary);
   text-decoration: none;
+  transition: color var(--transition-base);
 }
+
 a:hover:not(.browser-window *),
 a:active:not(.browser-window *) {
-  opacity: 0.85;
+  color: var(--color-primary-dark);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
 }
+
 .bold-links a:link {
   font-weight: 500;
 }
+
 .arrow-links a:link:not(.auto-link)::after {
   content: "north_east";
   font-family: "Material Icons";
@@ -47,28 +132,30 @@ a:active:not(.browser-window *) {
   text-align: left;
   table-layout: auto;
 }
+
 .rst-param-tables table th,
 .rst-param-tables table td {
   border-width: 0;
   padding: 0;
 }
+
 .rst-param-tables table th {
   padding-right: 1em;
 }
 
 .q-header {
   height: 60px;
-  background-color: #4F9153;
+  background-color: var(--color-primary);
+  transition: background-color var(--transition-base);
 }
+
 .q-header.fade {
-  background-color: #4F9153d0;
+  background-color: rgba(79, 145, 83, 0.8);
   backdrop-filter: blur(5px);
 }
+
 .body--dark .q-header {
-  background-color: #4F9153;
-}
-.body--dark .q-header.fade {
-  background-color: #4F9153d0;
+  background-color: var(--color-primary-dark);
 }
 
 .q-header.batphone {
@@ -76,33 +163,40 @@ a:active:not(.browser-window *) {
   height: 60px;
   background-color: #000000;
 }
+
 .q-header.batphone.fade {
   color: #FDE311 !important;  /* Sets text color to bright yellow for all elements inside batphone header */
   background-color: #000000d0;
   backdrop-filter: blur(5px);
 }
+
 .body--dark .q-header.batphone {
   color: #FDE311 !important;  /* Sets text color to bright yellow for all elements inside batphone header */
   background-color: #000000;
 }
+
 .body--dark .q-header.batphone.fade {
   color: #FDE311 !important;  /* Sets text color to bright yellow for all elements inside batphone header */
   background-color: #000000d0;
 }
 
 .q-footer {
-  background-color: #4F9153;
-  transition: background-color 0.3s ease;
+  background-color: var(--color-primary);
+  transition: background-color var(--transition-base);
 }
+
 .q-footer.fade {
-  background-color: #4F9153d0;
+  background-color: rgba(79, 145, 83, 0.8);
   backdrop-filter: blur(5px);
 }
+
 .body--dark .q-footer {
-  background-color: #4F9153;
+  background-color: var(--color-primary-dark);
 }
+
 .body--dark .q-footer.fade {
-  background-color: #4F9153d0;
+  background-color: rgba(79, 145, 83, 0.8);
+  backdrop-filter: blur(5px);
 }
 
 .q-footer.batphone {
@@ -110,15 +204,18 @@ a:active:not(.browser-window *) {
   background-color: #000000;
   transition: background-color 0.3s ease; 
 }
+
 .q-footer.batphone.fade {
   color: #FDE311 !important; 
   background-color: #000000d0;
   backdrop-filter: blur(5px);
 }
+
 .body--dark .q-footer.batphone {
   color: #FDE311 !important; 
   background-color: #000000;
 }
+
 .body--dark .q-footer.batphone.fade {
   color: #FDE311 !important; 
   background-color: #000000d0;
@@ -139,10 +236,12 @@ a:active:not(.browser-window *) {
   animation: sdb04 1.5s infinite;
   transition-timing-function: ease;
 }
+
 .body--dark .scroll-indicator:after {
   border-left: 3px solid #bbb;
   border-bottom: 3px solid #bbb;
 }
+
 @-webkit-keyframes sdb04 {
   0% {
     -webkit-transform: rotate(-45deg) translate(0, 0);
@@ -154,6 +253,7 @@ a:active:not(.browser-window *) {
     -webkit-transform: rotate(-45deg) translate(0, 0);
   }
 }
+
 @keyframes sdb04 {
   0% {
     transform: rotate(-45deg) translate(0, 0);
@@ -172,16 +272,19 @@ dl.docinfo {
   grid-template-columns: max-content auto;
   margin: 1em 0;
 }
+
 dl.field-list dt,
 dl.docinfo dt {
   grid-column-start: 1;
   margin-right: 1em;
   font-weight: 500;
 }
+
 dl.field-list dd,
 dl.docinfo dd {
   grid-column-start: 2;
 }
+
 dl.field-list p,
 dl.docinfo p {
   margin: 0;
@@ -191,6 +294,7 @@ dl.docinfo p {
   background-color: #5898d4;
   width: 100%;
 }
+
 .body--dark .dark-box {
   background-color: #3e6a94;
 }
@@ -208,6 +312,7 @@ dl.docinfo p {
     /* Modern Browsers */ url("../fonts/fira-sans-v16-latin-regular.ttf") format("truetype"),
     /* Safari, Android, iOS */ url("../fonts/fira-sans-v16-latin-regular.svg#FiraSans") format("svg"); /* Legacy iOS */
 }
+
 /* fira-sans-500 - latin */
 @font-face {
   font-family: "Fira Sans";
@@ -220,6 +325,7 @@ dl.docinfo p {
     /* Modern Browsers */ url("../fonts/fira-sans-v16-latin-500.ttf") format("truetype"),
     /* Safari, Android, iOS */ url("../fonts/fira-sans-v16-latin-500.svg#FiraSans") format("svg"); /* Legacy iOS */
 }
+
 /* fira-sans-regular - latin */
 @font-face {
   font-family: "Fira Sans";
@@ -232,6 +338,7 @@ dl.docinfo p {
     /* Modern Browsers */ url("../fonts/fira-sans-v16-latin-regular.ttf") format("truetype"),
     /* Safari, Android, iOS */ url("../fonts/fira-sans-v16-latin-regular.svg#FiraSans") format("svg"); /* Legacy iOS */
 }
+
 /* fira-sans-700 - latin */
 @font-face {
   font-family: "Fira Sans";
@@ -244,6 +351,7 @@ dl.docinfo p {
     /* Modern Browsers */ url("../fonts/fira-sans-v16-latin-700.ttf") format("truetype"),
     /* Safari, Android, iOS */ url("../fonts/fira-sans-v16-latin-700.svg#FiraSans") format("svg"); /* Legacy iOS */
 }
+
 /* fira-mono-regular - latin */
 @font-face {
   font-family: "Fira Mono";
@@ -255,4 +363,51 @@ dl.docinfo p {
     /* Super Modern Browsers */ url("../fonts/fira-mono-v14-latin-regular.woff") format("woff"),
     /* Modern Browsers */ url("../fonts/fira-mono-v14-latin-regular.ttf") format("truetype"),
     /* Safari, Android, iOS */ url("../fonts/fira-mono-v14-latin-regular.svg#FiraMono") format("svg"); /* Legacy iOS */
+}
+
+/* Typography improvements */
+h1, h2, h3, h4, h5, h6 {
+  font-weight: 600;
+  line-height: 1.3;
+  margin-bottom: 0.5em;
+}
+
+p {
+  margin-bottom: 1em;
+}
+
+/* Modern link styling */
+a:link:not(.browser-window *),
+a:visited:not(.browser-window *) {
+  color: var(--color-primary);
+  text-decoration: none;
+  transition: color var(--transition-base);
+}
+
+a:hover:not(.browser-window *),
+a:active:not(.browser-window *) {
+  color: var(--color-primary-dark);
+  text-decoration: underline;
+  text-underline-offset: 0.2em;
+}
+
+/* Alternative texture classes */
+.texture-lines {
+  background-image: var(--texture-lines);
+  background-size: var(--texture-size) var(--texture-size);
+}
+
+.texture-grid {
+  background-image: var(--texture-grid);
+  background-size: var(--texture-size) var(--texture-size);
+}
+
+/* Dark mode texture adjustments */
+.body--dark .texture-lines {
+  --texture-lines: repeating-linear-gradient(45deg, rgba(255,255,255,0.05) 0px, rgba(255,255,255,0.05) 1px, transparent 1px, transparent 5px);
+}
+
+.body--dark .texture-grid {
+  --texture-grid: linear-gradient(rgba(255,255,255,0.05) 1px, transparent 1px),
+                 linear-gradient(90deg, rgba(255,255,255,0.05) 1px, transparent 1px);
 }
