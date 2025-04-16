@@ -298,35 +298,40 @@ class BedTree:
                         for target in sorted(
                             strand_group["children"], key=lambda x: x["id"]
                         ):
-                            start, end = map(int, target["id"].split("-"))
-                            # Check if this target is from the original preserved tree
-                            is_preserved = (
-                                self.preserve_original_tree
-                                and self.reference_tree
-                                and any(
-                                    any(
-                                        any(
-                                            t["id"] == target["id"]
-                                            for t in sg["children"]
+                            try:
+                                if target["id"] and "-" in target["id"]:
+                                    start, end = map(int, target["id"].split("-"))
+                                    # Check if this target is from the original preserved tree
+                                    is_preserved = (
+                                        self.preserve_original_tree
+                                        and self.reference_tree
+                                        and any(
+                                            any(
+                                                any(
+                                                    t["id"] == target["id"]
+                                                    for t in sg["children"]
+                                                )
+                                                for sg in chrom["children"]
+                                            )
+                                            for chrom in self.reference_tree.values()
+                                            if chrom["id"] == chromosome
                                         )
-                                        for sg in chrom["children"]
                                     )
-                                    for chrom in self.reference_tree.values()
-                                    if chrom["id"] == chromosome
-                                )
-                            )
-                            # Use "fixed_target" for preserved targets, keep original name for others
-                            name = (
-                                "fixed_target"
-                                if is_preserved
-                                else target.get("name", "unknown")
-                            )
-                            strand = strand_group["id"].split()[
-                                -1
-                            ]  # Get the strand from the group ID
-                            f.write(
-                                f"{chromosome}\t{start}\t{end}\t{name}\t.\t{strand}\n"
-                            )
+                                    # Use "fixed_target" for preserved targets, keep original name for others
+                                    name = (
+                                        "fixed_target"
+                                        if is_preserved
+                                        else target.get("name", "unknown")
+                                    )
+                                    strand = strand_group["id"].split()[
+                                        -1
+                                    ]  # Get the strand from the group ID
+                                    f.write(
+                                        f"{chromosome}\t{start}\t{end}\t{name}\t.\t{strand}\n"
+                                    )
+                            except (ValueError, IndexError):
+                                # Skip invalid entries
+                                continue
                 self.previous_targets_hash = current_hash
                 self._update_proportions_df()
                 if self.toml_dict:
@@ -451,10 +456,16 @@ class BedTree:
                     self.tree_dict[chromosome]["children"].append(strand_group)
 
                 # Include name in the range information
-                existing_ranges = [
-                    (int(r["id"].split("-")[0]), int(r["id"].split("-")[1]), r["name"])
-                    for r in strand_group["children"]
-                ]
+                existing_ranges = []
+                for r in strand_group.get("children", []):
+                    try:
+                        if r["id"] and "-" in r["id"]:
+                            start_pos, end_pos = map(int, r["id"].split("-"))
+                            existing_ranges.append((start_pos, end_pos, r["name"]))
+                    except (ValueError, IndexError):
+                        # Skip invalid entries
+                        continue
+
                 merged_ranges = self._merge_ranges(existing_ranges, (start, end, name))
 
                 strand_group["children"] = [

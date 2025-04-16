@@ -385,7 +385,6 @@ class CNVAnalysis(BaseAnalysis):
         reference_file: Optional[str] = None,
         bed_file: Optional[str] = None,
         readfish_toml: Optional[Path] = None,
-        #NewBed: Optional[BedTree] = None,
         master_bed_tree: Optional[MasterBedTree] = None,
         **kwargs,
     ) -> None:
@@ -759,12 +758,12 @@ class CNVAnalysis(BaseAnalysis):
         if self.sampleID not in self.update_cnv_dict.keys():
             self.update_cnv_dict[self.sampleID] = {}
             # If we don't have a master bed tree, we need to create one.
-            if self.master_bed_tree[self.sampleID] is None:
-                self.master_bed_tree.add_bed_tree(
-                    sample_id=self.sampleID,
-                    preserve_original_tree=True,
-                    reference_file=f"{self.reference_file}.fai",
-                )
+        if self.master_bed_tree[self.sampleID] is None:
+            self.master_bed_tree.add_bed_tree(
+                sample_id=self.sampleID,
+                preserve_original_tree=True,
+                reference_file=f"{self.reference_file}.fai",
+            )
         NewBed = self.master_bed_tree.bed_trees[self.sampleID]
 
         bamdata = pysam.AlignmentFile(bamfile, "rb")

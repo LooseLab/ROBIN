@@ -496,16 +496,16 @@ def check_bam(bamfile):
                 logging.error(f"Error indexing BAM file: {str(e)}")
                 raise
 
-    try:
+    #try:
         # Read BAM file
-        bam = ReadBam(bamfile)
-        baminfo = bam.process_reads()
-        bamdata = bam.summary()
-        logging.info(f"BAM file processed successfully: {bamfile}")
-        return baminfo, bamdata
-    except Exception as e:
-        logging.error(f"Error processing BAM file {bamfile}: {str(e)}")
-        raise
+    bam = ReadBam(bamfile)
+    baminfo = bam.process_reads()
+    bamdata = bam.summary()
+    logging.info(f"BAM file processed successfully: {bamfile}")
+    return baminfo, bamdata
+    #except Exception as e:
+    #    logging.error(f"Error processing BAM file {bamfile}: {str(e)}")
+    #    raise
 
 
 def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
@@ -627,15 +627,17 @@ class BrainMeth:
                 default_readfish_toml=self.readfish_toml,
             )
             
-            self.NewBed = BedTree(
-                preserve_original_tree=True,
-                reference_file=f"{self.reference}.fai",
-                readfish_toml=self.readfish_toml,
-            )
-            if self.bed_file:
-                self.NewBed.load_from_file(self.bed_file)
+            #self.NewBed = BedTree(
+            #    preserve_original_tree=True,
+            #    reference_file=f"{self.reference}.fai",
+            #     readfish_toml=self.readfish_toml,
+            #)
+            #if self.bed_file:
+            #    self.NewBed.load_from_file(self.bed_file)
         else:
-            self.NewBed = None
+            self.master_bed_tree = MasterBedTree(
+                default_preserve_original_tree=True,
+            )
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
 
@@ -874,7 +876,10 @@ class BrainMeth:
                 analysis_name="FUSION",
                 bamqueue=self.bamforfusions,
                 target_panel=self.target_panel,
-                NewBed=self.NewBed,
+                reference_file=self.reference,
+                bed_file=self.bed_file,
+                readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
+                #NewBed=self.NewBed,
                 master_bed_tree=self.master_bed_tree,
                 **common_args,
             )
@@ -2510,7 +2515,9 @@ class BrainMeth:
                                         analysis_name="FUSION",
                                         summary=fusions,
                                         target_panel=self.target_panel,
-                                        NewBed=self.NewBed,
+                                        reference_file=self.reference,
+                                        bed_file=self.bed_file,
+                                        #NewBed=self.NewBed,
                                         master_bed_tree=self.master_bed_tree,
                                         **display_args,
                                     )

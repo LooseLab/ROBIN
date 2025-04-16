@@ -223,6 +223,7 @@ class BaseAnalysis:
         if not self.bamqueue.empty() and not self.running:
             self.running = True
             bamfile, timestamp, sampleID = self.bamqueue.get()
+            logger.debug(f"Processing BAM file: {bamfile} with timestamp: {timestamp} and sampleID: {sampleID}")
             self.sampleID = sampleID
             if self.sampleID not in app.storage.general[self.mainuuid]:
                 app.storage.general[self.mainuuid][self.sampleID] = {}
@@ -244,19 +245,26 @@ class BaseAnalysis:
             if not timestamp:
                 timestamp = time.time()
             try:
+                logger.debug(f"Calling process_bam with bamfile: {bamfile}, timestamp: {timestamp}")
                 await self.process_bam(bamfile, timestamp)
             except ValueError as e:
                 if "invalid literal for int() with base 10" in str(e):
                     logger.error(f"Error processing BAM file: {e}. Skipping this file and continuing.")
+                    logger.debug(f"BAM file that caused error: {bamfile}")
+                    logger.debug(f"Timestamp that caused error: {timestamp}")
+                    logger.debug(f"SampleID that caused error: {sampleID}")
                 else:
                     logger.error(f"Error processing BAM files: {e}")
             except Exception as e:
                 logger.error(f"Error processing BAM files: {e}")
+                logger.debug(f"Unexpected error occurred while processing BAM file: {bamfile}")
+                logger.debug(f"Error details: {str(e)}")
+                logger.debug(f"Error type: {type(e)}")
             finally:
                 app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
                     "bam_processed"
                 ] += 1
-                self.running = False
+            self.running = False
         #await asyncio.sleep(0.05)
         self.timer.active = True
 
@@ -345,6 +353,28 @@ class BaseAnalysis:
         await asyncio.sleep(0.01)
         self.timer.active = True
 
+    def _initialize_counters(self, sample_id: str) -> None:
+        """
+        Initialize counters for a specific sample if they don't exist.
+        
+        Args:
+            sample_id (str): The ID of the sample to initialize counters for.
+        """
+        if self.mainuuid not in app.storage.general:
+            app.storage.general[self.mainuuid] = {}
+            
+        if sample_id not in app.storage.general[self.mainuuid]:
+            app.storage.general[self.mainuuid][sample_id] = {}
+            
+        if self.name not in app.storage.general[self.mainuuid][sample_id]:
+            app.storage.general[self.mainuuid][sample_id][self.name] = {
+                "counters": Counter(
+                    bam_count=0,
+                    bam_processed=0,
+                    bams_in_processing=0
+                )
+            }
+
     @property
     def _progress(self) -> float:
         """
@@ -353,12 +383,14 @@ class BaseAnalysis:
         Returns:
             float: The progress as a fraction of processed files over total files.
         """
-        counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
-            "counters"
-        ]
-        if counters["bam_count"] == 0:
+        try:
+            self._initialize_counters(self.sampleID)
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]
+            if counters.get("bam_count", 0) == 0:
+                return 0.0
+            return counters.get("bam_processed", 0) / counters.get("bam_count", 1)
+        except (KeyError, TypeError):
             return 0.0
-        return counters["bam_processed"] / counters["bam_count"]
 
     @property
     def _progress2(self) -> float:
@@ -368,12 +400,14 @@ class BaseAnalysis:
         Returns:
             float: The progress as a fraction of files being processed over total files.
         """
-        counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
-            "counters"
-        ]
-        if counters["bam_count"] == 0:
+        try:
+            self._initialize_counters(self.sampleID)
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]
+            if counters.get("bam_count", 0) == 0:
+                return 0.0
+            return counters.get("bams_in_processing", 0) / counters.get("bam_count", 1)
+        except (KeyError, TypeError):
             return 0.0
-        return counters["bams_in_processing"] / counters["bam_count"]
 
     @property
     def _not_analysed(self) -> float:
@@ -383,16 +417,18 @@ class BaseAnalysis:
         Returns:
             float: The fraction of files not yet processed over total files.
         """
-        counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
-            "counters"
-        ]
-        if counters["bam_count"] == 0:
+        try:
+            self._initialize_counters(self.sampleID)
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]
+            if counters.get("bam_count", 0) == 0:
+                return 0.0
+            return (
+                counters.get("bam_count", 0)
+                - counters.get("bams_in_processing", 0)
+                - counters.get("bam_processed", 0)
+            ) / counters.get("bam_count", 1)
+        except (KeyError, TypeError):
             return 0.0
-        return (
-            counters["bam_count"]
-            - counters["bams_in_processing"]
-            - counters["bam_processed"]
-        ) / counters["bam_count"]
 
     def progress_bars(self) -> None:
         """
