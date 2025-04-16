@@ -298,17 +298,8 @@ class BaseAnalysis:
             self.bams[sampleID].append((bamfile, timestamp))
             count += 1
 
-            if sampleID not in app.storage.general[self.mainuuid]:
-                app.storage.general[self.mainuuid][sampleID] = {}
-
-            if self.name not in app.storage.general[self.mainuuid].get(sampleID, {}):
-                app.storage.general[self.mainuuid].setdefault(sampleID, {})[
-                    self.name
-                ] = {
-                    "counters": Counter(
-                        bam_count=0, bam_processed=0, bams_in_processing=0
-                    )
-                }
+            # Initialize counters for this sampleID if they don't exist
+            self._initialize_counters(sampleID)
 
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bam_count"
@@ -321,19 +312,9 @@ class BaseAnalysis:
             if not self.running and len(data_list) > 0:
                 self.running = True
                 self.sampleID = sample_id
-                if self.sampleID not in app.storage.general[self.mainuuid]:
-                    app.storage.general[self.mainuuid][self.sampleID] = {}
-
-                if self.name not in app.storage.general[self.mainuuid].get(
-                    self.sampleID, {}
-                ):
-                    app.storage.general[self.mainuuid].setdefault(self.sampleID, {})[
-                        self.name
-                    ] = {
-                        "counters": Counter(
-                            bam_count=0, bam_processed=0, bams_in_processing=0
-                        )
-                    }
+                
+                # Initialize counters for this sampleID if they don't exist
+                self._initialize_counters(self.sampleID)
 
                 try:
                     # Sort the data_list by timestamp if timestamps exist
