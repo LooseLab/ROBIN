@@ -10,6 +10,7 @@ from __future__ import annotations
 from nicegui import ui, app
 
 from robin import theme
+from collections import defaultdict
 import numpy as np
 import os
 
@@ -27,6 +28,94 @@ from typing import Optional
 import tomli
 import tomli_w
 from pathlib import Path
+
+
+
+class MasterBedTree:
+    """
+    A class for managing and processing BED (Browser Extensible Data) files.
+    
+    This class is used to manage multiple BedTree instances.
+    It provides functionality to:
+    - Create and add a new BedTree instances
+    - Remove BedTree instances
+    - Get the results from a specific BedTree instance for a specific sample
+    """
+    def __init__(
+        self,
+        default_preserve_original_tree: bool = False,
+        default_reference_file: str = None,
+        default_output_location: str = None,
+        default_readfish_toml: Optional[Path] = None,
+    ):
+        """
+        Initialize a new MasterBedTree instance.
+
+        Args:
+            default_preserve_original_tree (bool, optional): Default value for preserve_original_tree. Defaults to False.
+            default_reference_file (str, optional): Default path to reference genome FASTA index file. Defaults to None.
+            default_output_location (str, optional): Default directory for output files. Defaults to None.
+            default_readfish_toml (Optional[Path], optional): Default path to readfish TOML configuration. Defaults to None.
+        """
+        self.bed_trees = defaultdict(lambda: None, key=None)
+        self.default_preserve_original_tree = default_preserve_original_tree
+        self.default_reference_file = default_reference_file
+        self.default_output_location = default_output_location
+        self.default_readfish_toml = default_readfish_toml
+
+    def __getitem__(self, sample_id: str) -> Optional[BedTree]:
+        """
+        Get a BedTree instance for a specific sample.
+
+        Args:
+            sample_id (str): The ID of the sample to get the BedTree for
+
+        Returns:
+            Optional[BedTree]: The BedTree instance if found, None otherwise
+        """
+        return self.bed_trees[sample_id]
+
+    def add_bed_tree(
+        self,
+        sample_id: str,
+        preserve_original_tree: bool = None,
+        reference_file: str = None,
+        output_location: str = None,
+        readfish_toml: Optional[Path] = None,
+    ):
+        """
+        Add a new BedTree instance for a specific sample.
+
+        Args:
+            sample_id (str): The ID of the sample to create the BedTree for
+            preserve_original_tree (bool, optional): Whether to preserve the original tree structure. 
+                If None, uses the default from MasterBedTree initialization. Defaults to None.
+            reference_file (str, optional): Path to reference genome FASTA index file. 
+                If None, uses the default from MasterBedTree initialization. Defaults to None.
+            output_location (str, optional): Directory for output files. 
+                If None, uses the default from MasterBedTree initialization. Defaults to None.
+            readfish_toml (Optional[Path], optional): Path to readfish TOML configuration. 
+                If None, uses the default from MasterBedTree initialization. Defaults to None.
+        """
+        # Use provided values or fall back to defaults
+        preserve_original_tree = preserve_original_tree if preserve_original_tree is not None else self.default_preserve_original_tree
+        reference_file = reference_file if reference_file is not None else self.default_reference_file
+        output_location = output_location if output_location is not None else self.default_output_location
+        readfish_toml = readfish_toml if readfish_toml is not None else self.default_readfish_toml
+
+        bed_tree = BedTree(
+            preserve_original_tree=preserve_original_tree,
+            reference_file=reference_file,
+            output_location=output_location,
+            readfish_toml=readfish_toml,
+        )
+        bed_tree.sample_id = sample_id
+        self.bed_trees[sample_id] = bed_tree
+
+    def remove_bed_tree(self, sample_id: str):
+        del self.bed_trees[sample_id]
+
+
 
 
 class BedTree:
@@ -209,35 +298,40 @@ class BedTree:
                         for target in sorted(
                             strand_group["children"], key=lambda x: x["id"]
                         ):
-                            start, end = map(int, target["id"].split("-"))
-                            # Check if this target is from the original preserved tree
-                            is_preserved = (
-                                self.preserve_original_tree
-                                and self.reference_tree
-                                and any(
-                                    any(
-                                        any(
-                                            t["id"] == target["id"]
-                                            for t in sg["children"]
+                            try:
+                                if target["id"] and "-" in target["id"]:
+                                    start, end = map(int, target["id"].split("-"))
+                                    # Check if this target is from the original preserved tree
+                                    is_preserved = (
+                                        self.preserve_original_tree
+                                        and self.reference_tree
+                                        and any(
+                                            any(
+                                                any(
+                                                    t["id"] == target["id"]
+                                                    for t in sg["children"]
+                                                )
+                                                for sg in chrom["children"]
+                                            )
+                                            for chrom in self.reference_tree.values()
+                                            if chrom["id"] == chromosome
                                         )
-                                        for sg in chrom["children"]
                                     )
-                                    for chrom in self.reference_tree.values()
-                                    if chrom["id"] == chromosome
-                                )
-                            )
-                            # Use "fixed_target" for preserved targets, keep original name for others
-                            name = (
-                                "fixed_target"
-                                if is_preserved
-                                else target.get("name", "unknown")
-                            )
-                            strand = strand_group["id"].split()[
-                                -1
-                            ]  # Get the strand from the group ID
-                            f.write(
-                                f"{chromosome}\t{start}\t{end}\t{name}\t.\t{strand}\n"
-                            )
+                                    # Use "fixed_target" for preserved targets, keep original name for others
+                                    name = (
+                                        "fixed_target"
+                                        if is_preserved
+                                        else target.get("name", "unknown")
+                                    )
+                                    strand = strand_group["id"].split()[
+                                        -1
+                                    ]  # Get the strand from the group ID
+                                    f.write(
+                                        f"{chromosome}\t{start}\t{end}\t{name}\t.\t{strand}\n"
+                                    )
+                            except (ValueError, IndexError):
+                                # Skip invalid entries
+                                continue
                 self.previous_targets_hash = current_hash
                 self._update_proportions_df()
                 if self.toml_dict:
@@ -362,10 +456,16 @@ class BedTree:
                     self.tree_dict[chromosome]["children"].append(strand_group)
 
                 # Include name in the range information
-                existing_ranges = [
-                    (int(r["id"].split("-")[0]), int(r["id"].split("-")[1]), r["name"])
-                    for r in strand_group["children"]
-                ]
+                existing_ranges = []
+                for r in strand_group.get("children", []):
+                    try:
+                        if r["id"] and "-" in r["id"]:
+                            start_pos, end_pos = map(int, r["id"].split("-"))
+                            existing_ranges.append((start_pos, end_pos, r["name"]))
+                    except (ValueError, IndexError):
+                        # Skip invalid entries
+                        continue
+
                 merged_ranges = self._merge_ranges(existing_ranges, (start, end, name))
 
                 strand_group["children"] = [
@@ -907,19 +1007,50 @@ def index_page() -> None:
     # initial_ip = "127.0.0.1"
     # my_connection = ConnectionDialog(initial_ip)
     # my_connection = None
-    existing_bed = "/Users/mattloose/GIT/niceGUI/cnsmeth/panel_adaptive_nogenenames_20122021_hg38_VGL_CHD7_5kb_pad.bed"
+    existing_bed = "/Users/mattloose/GIT/robin_dev/robin/src/robin/resources/panel_11092024_5kb_pad.bed"
+    existing_bed2 = "/Users/mattloose/GIT/robin_dev/robin/src/robin/resources/AML_panel_name_uniq.bed"
 
-    original_bed_tree = BedTree(
+    master_bed_tree = MasterBedTree()
+
+    master_bed_tree.add_bed_tree(
+        sample_id="ds1305_CNVDetection_0048_a",
+        preserve_original_tree=True,
+        reference_file="/Users/mattloose/references/hg38_simple.fa.fai",
+    )
+    
+    master_bed_tree.add_bed_tree(
+        sample_id="ds1305_CNVDetection_40_b",
         preserve_original_tree=True,
         reference_file="/Users/mattloose/references/hg38_simple.fa.fai",
     )
 
+
+    #original_bed_tree = BedTree(
+    #    preserve_original_tree=True,
+    #    reference_file="/Users/mattloose/references/hg38_simple.fa.fai",
+    #)
+    original_bed_tree = master_bed_tree.bed_trees["ds1305_CNVDetection_0048_a"]
+
     original_bed_tree.load_from_file(existing_bed)
+    
+    original_bed_tree2 = master_bed_tree.bed_trees["ds1305_CNVDetection_40_b"]
+    original_bed_tree2.load_from_file(existing_bed2)
+    
+    original_bed_tree3 = master_bed_tree.bed_trees["camel"]
 
-    output = "/Users/mattloose/GIT/niceGUI/cnsmeth/robin_output_test/_ds1305_Intraop0051_c_ULK_2_highFRA"
+    if original_bed_tree3:
+        print("original_bed_tree3 is not None")
+    else:
+        print("original_bed_tree3 is None")
 
+    output = "/Users/mattloose/GIT/robin_dev/robin/single_sample_results/ds1305_CNVDetection_0048_a/"
+    output2 = "/Users/mattloose/GIT/robin_dev/robin/single_sample_results/ds1305_CNVDetection_40_b/"
     CNVResults = np.load(
         os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
+    ).item()
+    
+    CNVResults2 = np.load(
+        os.path.join(output2, "ruptures.npy"), allow_pickle="TRUE"
     ).item()
 
     with theme.frame(
@@ -929,11 +1060,42 @@ def index_page() -> None:
         with ui.card().classes("w-full"):
 
             ui.label("New Target Information")
+            ui.label(f"Sample:ID = {original_bed_tree.sample_id}")
             orig_tree = ui.tree(
                 [original_bed_tree.tree_data],
                 label_key="id",
             )
             orig_tree.add_slot(
+                "default-body",
+                """
+                <div v-if="props.node.description">
+                        <span class="text-weight-bold">{{ props.node.description }}</span>
+                    </div>
+                <div v-if="props.node.range_sum">
+                        <span class="text-weight-bold">{{props.node.range_sum}} bases</span>
+                </div>
+                <div v-if="props.node.count">
+                        <span class="text-weight-bold">{{ props.node.count }} targets</span>
+                </div>
+                <div v-if="props.node.proportion">
+                        <span class="text-weight-bold">{{ props.node.proportion }} proportion</span>
+                </div>
+                <div v-if="props.node.chromosome_length">
+                        <span class="text-weight-bold">{{ props.node.chromosome_length }} chromosome length</span>
+                </div>
+        
+            """,
+            )
+            
+        with ui.card().classes("w-full"):
+
+            ui.label("New Target Information")
+            ui.label(f"Sample:ID = {original_bed_tree2.sample_id}")
+            orig_tree2 = ui.tree(
+                [original_bed_tree2.tree_data],
+                label_key="id",
+            )
+            orig_tree2.add_slot(
                 "default-body",
                 """
                 <div v-if="props.node.description">

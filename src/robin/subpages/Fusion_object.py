@@ -67,7 +67,7 @@ from matplotlib.ticker import FuncFormatter
 from matplotlib import font_manager
 from robin.subpages.base_analysis import BaseAnalysis
 from robin.utilities.decompress import decompress_gzip_file
-from robin.utilities.bed_file import BedTree
+from robin.utilities.bed_file import BedTree, MasterBedTree
 from collections import Counter, defaultdict
 from datetime import datetime
 
@@ -229,7 +229,8 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
         bam_path: Path to the BAM file
         sv_store: Path to store the structural variant data (as string)
     """
-
+    logger.debug(f"Starting process_bam_file_svs for {bam_path}")
+    
     reads_with_supp = set()
 
     # First pass: identify read IDs that have supplementary alignments
@@ -244,8 +245,11 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
             elif aln.has_tag("SA"):
                 reads_with_supp.add(aln.query_name)
 
+    logger.debug(f"Found {len(reads_with_supp)} reads with supplementary alignments")
+
     # If none found, just return empty
     if not reads_with_supp:
+        logger.debug("No reads with supplementary alignments found")
         return pd.DataFrame()
 
     # Second pass: gather alignment data for these reads
@@ -300,33 +304,44 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
             )
 
     df = pd.DataFrame(rows)
+    logger.debug(f"Created DataFrame with {len(df)} rows")
+    
     # Possibly sort or reset index
     df.sort_values(["QNAME", "TYPE", "REF_START"], inplace=True)
     df.reset_index(drop=True, inplace=True)
 
     if len(df) > 0:
+        logger.debug(f"Filtering DataFrame - initial size: {len(df)}")
         df = df[~df["QNAME"].isin(df[df["MQ"] < 55]["QNAME"])]
+        logger.debug(f"After MQ filter: {len(df)}")
         df = df[~df["RNAME"].eq("chrM")]
+        logger.debug(f"After chrM filter: {len(df)}")
         # Save or append to sv_store
     try:
         if os.path.exists(sv_store) and os.path.getsize(sv_store) > 0:
             try:
                 # Read existing data
                 existing_df = pd.read_csv(sv_store, low_memory=False)
+                logger.debug(f"Read existing data with {len(existing_df)} rows")
                 # Append new data
                 combined_df = pd.concat([existing_df, df], ignore_index=True)
+                logger.debug(f"Combined DataFrame size: {len(combined_df)}")
             except pd.errors.EmptyDataError:
+                logger.debug("Existing file was empty")
                 # If the file exists but is empty, just use the new data
                 combined_df = df
         else:
+            logger.debug("No existing file found")
             # If file doesn't exist or is empty, use new data
             combined_df = df
 
         # Save combined data
         combined_df.to_csv(sv_store, index=False)
+        logger.debug(f"Saved {len(combined_df)} rows to {sv_store}")
         df = label_reads_with_svs(combined_df)
     except Exception as e:
         logger.error(f"Error saving structural variants: {str(e)}")
+        logger.error("Exception details:", exc_info=True)
         # Continue processing even if save fails
         pass
 
@@ -581,8 +596,19 @@ def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
         "tag",
         "color",
     ]
-    df["start"] = df["start"].astype(int)
-    df["end"] = df["end"].astype(int)
+    
+    # Add logging for start and end columns before conversion
+    logger.debug(f"Converting start column to int. First few values: {df['start'].head()}")
+    logger.debug(f"Converting end column to int. First few values: {df['end'].head()}")
+    
+    try:
+        df["start"] = df["start"].astype(int)
+        df["end"] = df["end"].astype(int)
+    except ValueError as e:
+        logger.error(f"Error converting start/end to int: {str(e)}")
+        logger.error(f"Problematic values in start: {df[df['start'].apply(lambda x: not str(x).isdigit())]['start'].tolist()}")
+        logger.error(f"Problematic values in end: {df[df['end'].apply(lambda x: not str(x).isdigit())]['end'].tolist()}")
+        raise
 
     # Sort the DataFrame by chromosome, start, and end positions
     df = df.sort_values(by=["chromosome", "start", "end"])
@@ -595,7 +621,6 @@ def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
         .apply(lambda x: collapse_ranges(x, 10000))
         .reset_index(drop=True)
     )
-    # return reads[reads[3].eq(gene)]
     return result
 
 
@@ -909,9 +934,19 @@ class FusionObject(BaseAnalysis):
     """
 
     def __init__(
-        self, *args, target_panel=None, NewBed: Optional[BedTree] = None, **kwargs
+        self, 
+        *args, 
+        target_panel=None, 
+        reference_file: Optional[str] = None,
+        bed_file: Optional[str] = None,
+        readfish_toml: Optional[Path] = None,
+        master_bed_tree: Optional[MasterBedTree] = None, 
+        **kwargs
     ):
         self.target_panel = target_panel
+        self.reference_file = reference_file
+        self.bed_file = bed_file
+        self.readfish_toml = readfish_toml
         self.fusion_candidates = {}
         self.fusion_candidates_all = {}
         self.structural_variants = {}  # Store structural variants
@@ -1007,7 +1042,8 @@ class FusionObject(BaseAnalysis):
             )
             self.gene_table = self.gene_table_small
 
-        self.NewBed = NewBed
+        #self.NewBed = NewBed
+        self.master_bed_tree = master_bed_tree
         super().__init__(*args, **kwargs)
 
     def setup_ui(self) -> None:
@@ -1587,8 +1623,19 @@ class FusionObject(BaseAnalysis):
 
                 return ranks
 
-            df["start2"] = df["start2"].astype(int)
-            df["end2"] = df["end2"].astype(int)
+            # Add logging for start2 and end2 columns before conversion
+            logger.debug(f"Converting start2 column to int. First few values: {df['start2'].head()}")
+            logger.debug(f"Converting end2 column to int. First few values: {df['end2'].head()}")
+            
+            try:
+                df["start2"] = df["start2"].astype(int)
+                df["end2"] = df["end2"].astype(int)
+            except ValueError as e:
+                logger.error(f"Error converting start2/end2 to int: {str(e)}")
+                logger.error(f"Problematic values in start2: {df[df['start2'].apply(lambda x: not str(x).isdigit())]['start2'].tolist()}")
+                logger.error(f"Problematic values in end2: {df[df['end2'].apply(lambda x: not str(x).isdigit())]['end2'].tolist()}")
+                raise
+
             df = df.sort_values(by=["gene", "start2", "end2"])
 
             df["rank"] = rank_overlaps(df, "start2", "end2")
@@ -1932,7 +1979,16 @@ class FusionObject(BaseAnalysis):
                         self.update_sv_table(sv_df)
 
                     # Add to BedTree if needed
-                    self.NewBed.load_from_string(
+                    if self.master_bed_tree[self.sampleID] is None:
+                        self.master_bed_tree.add_bed_tree(
+                            sample_id=self.sampleID,
+                            preserve_original_tree=True,
+                            reference_file=f"{self.reference_file}.fai",
+                        )
+                    bedfile = self.master_bed_tree.bed_trees[self.sampleID]
+                    
+                    
+                    bedfile.load_from_string(
                         "\n".join(bed_lines),
                         merge=False,
                         write_files=True,
@@ -1941,6 +1997,7 @@ class FusionObject(BaseAnalysis):
                         ),
                         source_type="FUSION",
                     )
+                
                 logger.info(f"We found {len(bed_lines)} possible events.")
 
                 # Update fusion candidates

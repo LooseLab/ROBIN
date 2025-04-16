@@ -104,7 +104,7 @@ from robin.subpages.TargetCoverage_object import TargetCoverage
 from robin.subpages.Fusion_object import FusionObject
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.ReadBam import ReadBam
-from robin.utilities.bed_file import BedTree
+from robin.utilities.bed_file import BedTree, MasterBedTree
 from robin.reporting.report import create_pdf
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
@@ -496,16 +496,16 @@ def check_bam(bamfile):
                 logging.error(f"Error indexing BAM file: {str(e)}")
                 raise
 
-    try:
+    #try:
         # Read BAM file
-        bam = ReadBam(bamfile)
-        baminfo = bam.process_reads()
-        bamdata = bam.summary()
-        logging.info(f"BAM file processed successfully: {bamfile}")
-        return baminfo, bamdata
-    except Exception as e:
-        logging.error(f"Error processing BAM file {bamfile}: {str(e)}")
-        raise
+    bam = ReadBam(bamfile)
+    baminfo = bam.process_reads()
+    bamdata = bam.summary()
+    logging.info(f"BAM file processed successfully: {bamfile}")
+    return baminfo, bamdata
+    #except Exception as e:
+    #    logging.error(f"Error processing BAM file {bamfile}: {str(e)}")
+    #    raise
 
 
 def sort_bams(files_and_timestamps, watchfolder, file_endings, simtime):
@@ -620,15 +620,24 @@ class BrainMeth:
             "sturg_nanodx_cpgs_0125.bed.gz",
         )
         if self.reference:
-            self.NewBed = BedTree(
-                preserve_original_tree=True,
-                reference_file=f"{self.reference}.fai",
-                readfish_toml=self.readfish_toml,
+            #ToDo: We need to pass through an instance of the MasterBedTree class here.
+            self.master_bed_tree = MasterBedTree(
+                default_preserve_original_tree=True,
+                default_reference_file=f"{self.reference}.fai",
+                default_readfish_toml=self.readfish_toml,
             )
-            if self.bed_file:
-                self.NewBed.load_from_file(self.bed_file)
+            
+            #self.NewBed = BedTree(
+            #    preserve_original_tree=True,
+            #    reference_file=f"{self.reference}.fai",
+            #     readfish_toml=self.readfish_toml,
+            #)
+            #if self.bed_file:
+            #    self.NewBed.load_from_file(self.bed_file)
         else:
-            self.NewBed = None
+            self.master_bed_tree = MasterBedTree(
+                default_preserve_original_tree=True,
+            )
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
 
@@ -833,8 +842,9 @@ class BrainMeth:
                 target_panel=self.target_panel,
                 reference_file=self.reference,
                 bed_file=self.bed_file,
-                readfish_toml=self.readfish_toml,
-                NewBed=self.NewBed,
+                readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
+                #NewBed=self.NewBed, #ToDo: This assumes a single sample per CNV analysis.
+                master_bed_tree=self.master_bed_tree,
                 **common_args,
             )
             self.CNV.process_data()
@@ -866,7 +876,11 @@ class BrainMeth:
                 analysis_name="FUSION",
                 bamqueue=self.bamforfusions,
                 target_panel=self.target_panel,
-                NewBed=self.NewBed,
+                reference_file=self.reference,
+                bed_file=self.bed_file,
+                readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
+                #NewBed=self.NewBed,
+                master_bed_tree=self.master_bed_tree,
                 **common_args,
             )
             self.Fusion_panel.process_data()
@@ -2462,7 +2476,8 @@ class BrainMeth:
                                         target_panel=self.target_panel,
                                         reference_file=self.reference,
                                         bed_file=self.bed_file,
-                                        NewBed=self.NewBed,
+                                        #NewBed=self.NewBed,
+                                        master_bed_tree=self.master_bed_tree,
                                         **display_args,
                                     )
                                     await self.CNV.render_ui(sample_id=self.sampleID)
@@ -2500,7 +2515,10 @@ class BrainMeth:
                                         analysis_name="FUSION",
                                         summary=fusions,
                                         target_panel=self.target_panel,
-                                        NewBed=self.NewBed,
+                                        reference_file=self.reference,
+                                        bed_file=self.bed_file,
+                                        #NewBed=self.NewBed,
+                                        master_bed_tree=self.master_bed_tree,
                                         **display_args,
                                     )
                                     await self.Fusion_panel.render_ui(

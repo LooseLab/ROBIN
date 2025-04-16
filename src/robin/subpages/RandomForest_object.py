@@ -173,27 +173,6 @@ def run_samtools_sort(file, tomerge, sortfile, threads, regions):
     logger.debug(command2)
     os.system(command2)
 
-
-def run_modkit(bamfile, outbed, cpgs, threads, showerrors):
-    """
-    This function runs modkit on a bam file and extracts the methylation data.
-    """
-    try:
-        command = (
-            f"modkit pileup -t {threads} --include-bed {cpgs} --filter-threshold 0.73 --combine-mods {bamfile} "
-            f"{outbed} "
-        )
-        if not showerrors:
-            command += "--suppress-progress  >/dev/null 2>&1"
-        logger.debug(command)
-        os.system(command)
-        # self.log("Done processing bam file")
-    except Exception as e:
-        logger.error(e)
-        # self.log(e)
-        pass
-
-
 def load_modkit_data(parquet_path):
     for attempt in range(5):  # Retry up to 5 times
         try:
