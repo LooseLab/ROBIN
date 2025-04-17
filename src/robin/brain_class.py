@@ -2853,7 +2853,7 @@ class BrainMeth:
 
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
-                if len(files_by_sample[sample_id]) >= 10:
+                if len(files_by_sample[sample_id]) >= 25:
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
                         f"Processing batch of {files_to_process} files for sample {sample_id}"
