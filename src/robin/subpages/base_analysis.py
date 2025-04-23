@@ -74,6 +74,8 @@ import os
 import logging
 import asyncio
 
+from robin.core.state import state
+
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
@@ -129,6 +131,7 @@ class BaseAnalysis:
         self.file_mod_times = {}
         self.MENU_BREAKPOINT = 1200
         self.running = False
+        self.terminate = False
         self.force_sampleid = force_sampleid
         self.threads = max(1, threads // 2)
         self.high_confidence_threshold = high_confidence_threshold
@@ -196,10 +199,28 @@ class BaseAnalysis:
         if self.progress and not self.browse:
             self.progress_bars()
 
+
+    async def stop_analysis(self):
+        """
+        This function is called to stop the analysis.
+        It should be called from the main thread.
+        It will stop running timers.
+        """
+        
+        self.terminate = True
+        
+        while self.running:
+            await asyncio.sleep(0.1)
+        state.stop_process(self.name)
+        print(f"Analysis stopped for {self.name} and {self.sampleID}. Running processes: {state.running_processes}")
+        
+        
+        
     def process_data(self) -> None:
         """
         Start processing BAM files either in batch mode or in a continuous timer mode.
         """
+        state.start_process(self.name)
         if self.batch:
             self.bams: Dict[str, List[Tuple[BinaryIO, Optional[float]]]] = {}
             self.batch_timer_run()
@@ -219,6 +240,10 @@ class BaseAnalysis:
         This function takes reads from the queue and adds them to the background thread for processing.
         """
         self.timer.active = False
+        if state.shutdown_event:
+            print(f"shutdown_event is True, stopping _worker in {self.name}")
+            await self.stop_analysis()
+            return
 
         if not self.bamqueue.empty() and not self.running:
             self.running = True
@@ -266,7 +291,9 @@ class BaseAnalysis:
                 ] += 1
             self.running = False
         #await asyncio.sleep(0.05)
-        self.timer.active = True
+        if not self.terminate:
+            self.timer.active = True
+
 
     def add_bam(self, bamfile: BinaryIO, timestamp: Optional[float] = None) -> None:
         """
@@ -287,8 +314,11 @@ class BaseAnalysis:
     async def _batch_worker(self) -> None:
         """Process BAM files from the queue in batches in the background."""
         self.timer.active = False
+        if state.shutdown_event:
+            print(f"shutdown_event is True, stopping _batch_worker in {self.name}")
+            await self.stop_analysis()
+            return
         count = 0
-
         while self.bamqueue.qsize() > 0:
             bamfile, timestamp, sampleID = self.bamqueue.get()
 

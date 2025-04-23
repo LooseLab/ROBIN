@@ -6,6 +6,7 @@ import signal
 import logging
 from datetime import datetime
 import asyncio
+from time import sleep
 
 from typing import Optional, List, Tuple
 from pathlib import Path
@@ -15,7 +16,6 @@ from robin import theme
 from robin import images
 from configparser import ConfigParser
 
-
 from robin.brain_class import BrainMeth
 from robin.minknow_info.minknow_panel import MinKNOWFish
 from robin.utilities.telemetry import Telemetry
@@ -23,6 +23,7 @@ from robin.utilities.news_feed import NewsFeed
 
 from robin.__about__ import __version__
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
+from .core.state import state
 
 DEV_TESTING: bool = False
 
@@ -247,17 +248,7 @@ async def test() -> None:
     GUI_browse.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI_browse))
     await GUI_browse.browse_page()
-
-
-def clean_up() -> None:
-    """
-    Clean up stored data at the end of a run.
-    """
-    logging.info("App shutdown detected.")
-    logging.info("Resetting Storage.")
-    app.storage.general.pop(UNIQUE_ID)
-    app.shutdown()
-
+    
 
 async def startup() -> None:
     """
@@ -286,12 +277,10 @@ async def startup() -> None:
     )
     MAINPAGE.setup()
     await MAINPAGE.start_analysis()
+    
 
-    def handler(*args):
-        clean_up()
 
-    signal.signal(signal.SIGINT, handler=handler)
-
+    
 
 class Methnice:
     """
@@ -655,11 +644,20 @@ class Methnice:
                         await self.robin.render_ui(sample_id=self.sample_id)
                     except Exception as e:
                         logging.error(f"Error rendering analysis UI: {str(e)}")
-                        ui.notify("Failed to render analysis UI", color="negative")
+                        ui.notify("Failed to render analysis UI", type="negative")
 
         except Exception as e:
             logging.error(f"Error rendering index page: {str(e)}")
-            ui.notify("An error occurred while loading the page", color="negative")
+            ui.notify("An error occurred while loading the page", type="negative")
+            
+    async def shutdown(self):
+        """
+        Shutdown the application.
+        """
+        ui.notify("Shutting down ROBIN...", type='warning')
+        print("Shutting down ROBIN... from methnice?")
+        self.robin.shutdown_background()
+        print("Shutting down ROBIN... from methnice? done")
 
 
 def run_class(
@@ -707,7 +705,9 @@ def run_class(
     # Store the telemetry instance in a module-level variable
     global TELEMETRY_INSTANCE
     TELEMETRY_INSTANCE = telemetry
-
+    
+    
+        
     app.storage.general[UNIQUE_ID] = {
         "threads": threads,
         "force_sampleid": force_sampleid,
@@ -784,8 +784,21 @@ def run_class(
             loop.slow_callback_duration = 0.05
 
         await global_methnice.start_analysis()
-
+    
+    """
+    async def shutdown_with_methnice():
+        ```
+        Shutdown the application and Methnice instance.
+        ```
+        print("Shutting down ROBIN... from ctrl-c")
+        print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
+        ui.notify("Shutting down ROBIN from command line...", type='warning')
+        state.shutdown_event = True
+        print(f"Value of shutdown_event: {state.shutdown_event}")
+    """
+     
     app.on_startup(startup_with_methnice)
+    #app.on_shutdown(shutdown_with_methnice)
 
     try:
         ui.run(
@@ -1028,6 +1041,37 @@ def package_run(
     Main entry point for the ROBIN package.
     """
     
+    def handler(*args):
+        print("Shutting down ROBIN... from ctrl-c")
+        print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
+        print("Please shut down ROBIN from the command line.")
+        state.shutdown_event = True
+        
+        # Get the current event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Schedule the shutdown task in the existing loop
+                async def shutdown_task():
+                    while state.get_running_process_count() > 0:
+                        await asyncio.sleep(1)
+                        print(f"Waiting for {state.get_running_process_count()} processes to finish")
+                        print(f"Running processes: {state.running_processes}")
+                    # Don't exit, just keep running
+                    while True:
+                        await asyncio.sleep(1)
+                        print(state.running_processes)
+                
+                loop.create_task(shutdown_task())
+        except Exception as e:
+            print(f"Error during shutdown: {e}")
+            # Don't exit, keep running
+            while True:
+                sleep(1)
+                print(state.running_processes)
+        
+    signal.signal(signal.SIGINT, handler=handler)
+    
     # Initialize telemetry based on opt-out setting
     if not no_telemetry:
         print("Telemetry collection enabled.")
@@ -1121,6 +1165,8 @@ def package_run(
             experiment_duration=experiment_duration,
             telemetry=telemetry,
         )
+        
+    print("ROBIN has been launched and closed.")
 
 
 if __name__ in {"__main__", "__mp_main__"}:

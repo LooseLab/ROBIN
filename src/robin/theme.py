@@ -37,6 +37,7 @@ from contextlib import contextmanager
 from packaging import version
 import requests
 import asyncio
+import logging
 
 from nicegui import ui, app, events, core
 import nicegui.air
@@ -45,11 +46,12 @@ from pathlib import Path
 
 from robin import images
 from robin import __about__
+from .core.state import state
 
 import os
 import psutil
 import platform
-
+import time
 
 async def check_version():
     """
@@ -363,7 +365,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
     yield
 
 
-def cleanup_and_exit():
+async def cleanup_and_exit():
     """
     Handle any necessary cleanup operations before exiting the application and then shut down the application.
 
@@ -374,7 +376,15 @@ def cleanup_and_exit():
         >>> cleanup_and_exit()
         None
     """
-    app.shutdown()
+    logging.info("User initiated shutdown via UI")
+    
+    print("Shutting down ROBIN... from theme.py")
+    print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
+    ui.notify("Shutting down ROBIN...", type='warning')
+    state.shutdown_event = True
+    print(f"Value of shutdown_event: {state.shutdown_event}")
+    #await asyncio.sleep(10)
+    #app.shutdown()
 
 
 def use_on_air(args: events.ValueChangeEventArguments):
@@ -409,6 +419,10 @@ def my_page():
         ui.label("Welcome to the Application")
 
 
+#ToDo: The shutdown should be handled in the main.py file. So a gui triggered shutdown needs to set a flag in the main.py file. 
+#      Then the main.py file can trigger the shutdown and handle the cleanup.
+#      The issue is that the nicegui shutdown event is immedately called when the app.shutdown() is called and I need to complete some running code first.
+
 def main():
     """
     Main function to test the theme by creating a simple page using the frame context manager.
@@ -429,7 +443,10 @@ def main():
     )
     # Register some fonts that we might need later on.
     app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
-
+    def hello_jelly():
+        print("Hello Jelly")
+        time.sleep(10)
+    app.on_shutdown(hello_jelly)
     ui.run(storage_secret="robin")
 
 

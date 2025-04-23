@@ -82,6 +82,8 @@ import psutil
 import tempfile
 from alive_progress import alive_bar
 from nicegui import ui, app, run
+from nicegui.run import process_pool
+
 import subprocess
 import time
 
@@ -118,6 +120,8 @@ from typing import List, Tuple, Optional, Dict, Any
 
 
 import pyranges as pr  # For fast interval-based filtering
+
+from .core.state import state
 
 
 def merge_modkit_files(
@@ -615,6 +619,8 @@ class BrainMeth:
         self.dataDir = {}
         self.bedDir = {}
         self.first_run = {}
+        self.terminate = False
+        self.finished = False
         self.cpgs_master_file = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "sturg_nanodx_cpgs_0125.bed.gz",
@@ -640,7 +646,8 @@ class BrainMeth:
             )
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
-
+        
+    
     def configure_storage(self, sample_id):
         """
         Configure storage for the application.
@@ -740,6 +747,43 @@ class BrainMeth:
             logging.error(f"Error updating counter {counter_name} for sample {sample_id}: {str(e)}", exc_info=True)
             # Re-raise the exception to ensure we don't silently fail
             raise
+
+    def shutdown_background(self):
+        """
+        Shutdown the application gracefully.
+        """
+        print("Shutting down ROBIN... from brainclas?")
+        print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
+        self.terminate = True
+        
+        # First stop all timers
+        print("Stop observer")
+        #self.observer.stop()
+        #self.observer.join()
+        print("Observer stopped")
+        
+        print("Stop check_existing_bams_timer")
+        #if hasattr(self, 'check_existing_bams_timer'):
+        #    self.check_existing_bams_timer.cancel()
+        print("check_existing_bams_timer stopped")
+        
+        print("Stop background_process_bams_timer")
+        #if hasattr(self, 'background_process_bams_timer'):
+        #    self.background_process_bams_timer.cancel()
+        print("background_process_bams_timer stopped")
+        
+        # Wait for any pending tasks to complete
+        while not self.finished:
+            print("Waiting for finished")
+            print(f"Value of terminate: {self.terminate}")
+            print(f"Value of finished: {self.finished}")
+            time.sleep(0.1)
+            
+        if self.mainuuid in app.storage.general:
+            app.storage.general.pop(self.mainuuid)
+        print("Shutdown complete")
+        
+        app.shutdown()
 
     async def start_background(self):
         """
@@ -918,10 +962,10 @@ class BrainMeth:
             )
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
-            ui.timer(1, callback=self.check_existing_bams, once=True)
+            self.check_existing_bams_timer = ui.timer(1, callback=self.check_existing_bams, once=True)
             self.observer.start()
 
-            ui.timer(1, callback=self.background_process_bams, once=True)
+            self.background_process_bams_timer = ui.timer(1, callback=self.background_process_bams, once=True)
 
             logging.info("Watchfolder setup and added")
 
@@ -2476,7 +2520,8 @@ class BrainMeth:
                                         target_panel=self.target_panel,
                                         reference_file=self.reference,
                                         bed_file=self.bed_file,
-                                        #NewBed=self.NewBed,
+                                        readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
+                                        #NewBed=self.NewBed, #ToDo: This assumes a single sample per CNV analysis.
                                         master_bed_tree=self.master_bed_tree,
                                         **display_args,
                                     )
@@ -2517,6 +2562,7 @@ class BrainMeth:
                                         target_panel=self.target_panel,
                                         reference_file=self.reference,
                                         bed_file=self.bed_file,
+                                        readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
                                         #NewBed=self.NewBed,
                                         master_bed_tree=self.master_bed_tree,
                                         **display_args,
@@ -2636,10 +2682,26 @@ class BrainMeth:
         :return: None
         """
         logging.info("Starting background BAM processing")
+        self.app_state_timer = app.timer(10, self.check_app_state)
         self.process_bams_tracker = app.timer(10, self.process_bams)
+        state.start_process("process_bams")
         self.process_bigbadmerge_tracker = app.timer(10, self.process_bigbadmerge)
+        state.start_process("process_bigbadmerge")
         otherprocs = ['dorado', 'minknow', 'docker']
         self.check_and_log_memory = app.timer(5, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs))
+        
+    
+    async def check_app_state(self):
+        if state.shutdown_event:
+            print("shutdown_event is True, stopping background processes")
+            while state.get_running_process_count() > 0:
+                await asyncio.sleep(1)
+                print(f"Waiting for {state.get_running_process_count()} processes to finish")
+                print(f"Running processes: {state.running_processes}")
+            self.finished = True
+            self.shutdown_background()
+            
+            
         
 
     def check_and_create_folder(self, path, folder_name=None):
@@ -2791,6 +2853,7 @@ class BrainMeth:
             return None
 
     async def process_bigbadmerge(self):
+        self.process_bigbadmerge_tracker.active = False
         # Dictionary to store files by sample ID
         files_by_sample = {}
         latest_files = {}  # Track latest file time per sample
@@ -2911,17 +2974,23 @@ class BrainMeth:
                     await self.process_sample_files(
                         sample_id, files, latest_files[sample_id]
                     )
+        if not state.shutdown_event:
+            self.process_bigbadmerge_tracker.active = True
+        else:
+            state.stop_process("process_bigbadmerge")
+            self.finished = True
 
     async def process_sample_files(self, sampleID, tomerge, latest_file):
         """
-        Process a batch of BAM files for a specific sample.
+        Process sample files and update the application's storage.
 
-        Args:
-            sampleID (str): The sample ID being processed
-            tomerge (list): List of BAM files to merge
-            latest_file (float): Timestamp of the latest file
+        :param sampleID: The sample ID to process.
+        :param tomerge: List of files to merge.
+        :param latest_file: The latest file to process.
+        :return: None
         """
-        if not tomerge:  # Skip if no files to process
+        if state.shutdown_event:
+            print("Terminate detected, stopping process_sample_files")
             return
 
         try:
@@ -3061,6 +3130,9 @@ class BrainMeth:
                             logging.error(
                                 f"Error updating counters for {analysis}: {str(e)}"
                             )
+                        if state.shutdown_event:
+                            print("Terminate detected, stopping process_sample_files")
+                            return    
 
         except Exception as e:
             logging.error(f"Error in process_sample_files: {str(e)}", exc_info=True)
@@ -3086,12 +3158,17 @@ class BrainMeth:
 
     async def process_bams(self) -> None:
         """
-        Process BAM files and update the application's storage.
-
-        :return: None
+        Process BAM files in the watch folder.
         """
         logging.info("Process Bam Starting")
         self.process_bams_tracker.active = False
+        if state.shutdown_event:
+            print("shutdown_event is True, stopping process_bams")
+            self.process_bams_tracker.active = False
+            state.stop_process("process_bams")
+            return
+            
+        
         counter = 0
         #memory = self.get_memory_usage()
         #if memory: print (memory)
@@ -3159,6 +3236,11 @@ class BrainMeth:
                 self.update_counter(sample_id, "unmapped_bases", bamdata["unmapped_bases"])
                 self.update_counter(sample_id, "mapped_reads_num", bamdata["mapped_reads_num"])
                 self.update_counter(sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"])
+                if state.shutdown_event:
+                    print("shutdown_event is True, stopping process_bams")
+                    self.process_bams_tracker.active = False
+                    state.stop_process("process_bams")
+                    return
 
             # Process the files
             while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
@@ -3333,8 +3415,18 @@ class BrainMeth:
                     self.bamforfusions.put([file[0], file[1], sample_id])
 
                 self.nofiles = True
+                
+                if state.shutdown_event:
+                    print("shutdown_event is True, stopping process_bams")
+                    self.process_bams_tracker.active = False
+                    state.stop_process("process_bams")
+                    return
+                
             logging.info("Process Bam Finishing")
-            self.process_bams_tracker.active = True
+            if not state.shutdown_event:
+                self.process_bams_tracker.active = True
+            else:
+                self.finished = True
 
     async def check_existing_bams(self, sequencing_summary=None):
         """
@@ -3357,6 +3449,9 @@ class BrainMeth:
         # Iterate through the sorted list
         for timestamp, f, elapsed_time in files_and_timestamps:
             logging.debug(f"Processing existing BAM file: {f} at {timestamp}")
+            if state.shutdown_event:
+                self.terminate = True
+                return
             app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
             app.storage.general[self.mainuuid]["bam_count"][
                 "total_files"
