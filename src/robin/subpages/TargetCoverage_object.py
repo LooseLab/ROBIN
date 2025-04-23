@@ -60,6 +60,8 @@ import asyncio
 from robin.utilities.decompress import decompress_gzip_file
 from robin.subpages.base_analysis import BaseAnalysis
 
+from robin.core.state import state
+
 os.environ["CI"] = "1"
 logger = logging.getLogger(__name__)
 
