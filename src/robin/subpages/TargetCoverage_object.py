@@ -276,7 +276,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
     -------
     None
     """
-    
+    state.start_process("clair3")
     # Debug: Log input file paths for verification.
     if showerrors:
         logger.info(f"Input BAM file: {bamfile}")
@@ -416,7 +416,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             # Parse the annotated VCF files.
             parse_vcf(os.path.join(workdirout, "snpsift_output.vcf"))
             parse_vcf(os.path.join(workdirout, "snpsift_indel_output.vcf"))
-
+            state.stop_process("clair3")
         except Exception as e:
             logger.error("Error running Clair3")
             logger.error(f"Error: {e}")
