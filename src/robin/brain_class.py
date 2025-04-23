@@ -83,7 +83,7 @@ import tempfile
 from alive_progress import alive_bar
 from nicegui import ui, app, run
 from nicegui.run import process_pool
-
+import concurrent.futures
 import subprocess
 import time
 
@@ -122,7 +122,7 @@ from typing import List, Tuple, Optional, Dict, Any
 import pyranges as pr  # For fast interval-based filtering
 
 from .core.state import state
-
+from .core.state import ProcessState
 
 def merge_modkit_files(
     new_files: List[str], existing_file: str, output_file: str, filter_bed_file: str
@@ -2684,9 +2684,11 @@ class BrainMeth:
         logging.info("Starting background BAM processing")
         self.app_state_timer = app.timer(10, self.check_app_state)
         self.process_bams_tracker = app.timer(10, self.process_bams)
-        state.start_process("process_bams")
+        state.start_process("Serial Bam Analysis")
+        state.set_process_state("Serial Bam Analysis", ProcessState.STARTING)
         self.process_bigbadmerge_tracker = app.timer(10, self.process_bigbadmerge)
-        state.start_process("process_bigbadmerge")
+        state.start_process("Merge Bam Analysis")
+        state.set_process_state("Merge Bam Analysis", ProcessState.STARTING)
         otherprocs = ['dorado', 'minknow', 'docker']
         self.check_and_log_memory = app.timer(5, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs))
         
@@ -2697,7 +2699,7 @@ class BrainMeth:
             while state.get_running_process_count() > 0:
                 await asyncio.sleep(1)
                 print(f"Waiting for {state.get_running_process_count()} processes to finish")
-                print(f"Running processes: {state.running_processes}")
+                print(f"Running processes: {[p for p, s in state.process_states.items() if s == ProcessState.RUNNING]}")
             self.finished = True
             self.shutdown_background()
             
@@ -2857,11 +2859,11 @@ class BrainMeth:
         # Dictionary to store files by sample ID
         files_by_sample = {}
         latest_files = {}  # Track latest file time per sample
+        state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
 
         # Process queue and organize files by sample ID
         while self.bamforbigbadmerge.qsize() > 0:
-            #memory = self.get_memory_usage()
-            #if memory: print (memory)
+            state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
             file, filetime, sampleID = self.bamforbigbadmerge.get()
 
             # Initialize containers for new sample IDs
@@ -2890,29 +2892,20 @@ class BrainMeth:
                             app.storage.general[self.mainuuid][sampleID][analysis] = {
                                 "counters": {
                                     "bams_in_processing": 0,
-                                    "bams_processed": 0,
+                                    "bam_processed": 0,
                                     "bams_failed": 0,
                                 }
                             }
-                        elif (
-                            "counters"
-                            not in app.storage.general[self.mainuuid][sampleID][
-                                analysis
-                            ]
-                        ):
-                            app.storage.general[self.mainuuid][sampleID][analysis][
-                                "counters"
-                            ] = {
+                        elif "counters" not in app.storage.general[self.mainuuid][sampleID][analysis]:
+                            app.storage.general[self.mainuuid][sampleID][analysis]["counters"] = {
                                 "bams_in_processing": 0,
-                                "bams_processed": 0,
+                                "bam_processed": 0,
                                 "bams_failed": 0,
                             }
 
-            # Update latest file time for this sample
-            if filetime > latest_files[sampleID]:
-                latest_files[sampleID] = filetime
-
+            # Add file to the list for this sample
             files_by_sample[sampleID].append(file)
+            latest_files[sampleID] = max(latest_files[sampleID], filetime or 0)
 
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
@@ -2927,13 +2920,27 @@ class BrainMeth:
                     for analysis in analyses:
                         if analysis.lower() not in self.exclude:
                             try:
-                                app.storage.general[self.mainuuid][sample_id][analysis][
-                                    "counters"
-                                ]["bams_in_processing"] += files_to_process
+                                # Ensure the counter structure exists
+                                if analysis not in app.storage.general[self.mainuuid][sample_id]:
+                                    app.storage.general[self.mainuuid][sample_id][analysis] = {
+                                        "counters": {
+                                            "bams_in_processing": 0,
+                                            "bam_processed": 0,
+                                            "bams_failed": 0,
+                                        }
+                                    }
+                                elif "counters" not in app.storage.general[self.mainuuid][sample_id][analysis]:
+                                    app.storage.general[self.mainuuid][sample_id][analysis]["counters"] = {
+                                        "bams_in_processing": 0,
+                                        "bam_processed": 0,
+                                        "bams_failed": 0,
+                                    }
+                                
+                                app.storage.general[self.mainuuid][sample_id][analysis]["counters"]["bams_in_processing"] += files_to_process
                                 logging.debug(
                                     f"Updated {analysis} counter for {sample_id} by {files_to_process}"
                                 )
-                            except KeyError as e:
+                            except Exception as e:
                                 logging.error(
                                     f"Failed to update counter for {analysis}: {str(e)}"
                                 )
@@ -2960,13 +2967,27 @@ class BrainMeth:
                     for analysis in analyses:
                         if analysis.lower() not in self.exclude:
                             try:
-                                app.storage.general[self.mainuuid][sample_id][analysis][
-                                    "counters"
-                                ]["bams_in_processing"] += files_to_process
+                                # Ensure the counter structure exists
+                                if analysis not in app.storage.general[self.mainuuid][sample_id]:
+                                    app.storage.general[self.mainuuid][sample_id][analysis] = {
+                                        "counters": {
+                                            "bams_in_processing": 0,
+                                            "bam_processed": 0,
+                                            "bams_failed": 0,
+                                        }
+                                    }
+                                elif "counters" not in app.storage.general[self.mainuuid][sample_id][analysis]:
+                                    app.storage.general[self.mainuuid][sample_id][analysis]["counters"] = {
+                                        "bams_in_processing": 0,
+                                        "bam_processed": 0,
+                                        "bams_failed": 0,
+                                    }
+                                
+                                app.storage.general[self.mainuuid][sample_id][analysis]["counters"]["bams_in_processing"] += files_to_process
                                 logging.debug(
                                     f"Updated {analysis} counter for {sample_id} by {files_to_process}"
                                 )
-                            except KeyError as e:
+                            except Exception as e:
                                 logging.error(
                                     f"Failed to update counter for {analysis}: {str(e)}"
                                 )
@@ -2974,23 +2995,20 @@ class BrainMeth:
                     await self.process_sample_files(
                         sample_id, files, latest_files[sample_id]
                     )
+
         if not state.shutdown_event:
             self.process_bigbadmerge_tracker.active = True
+            state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
         else:
-            state.stop_process("process_bigbadmerge")
+            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPING)
+            state.stop_process("Merge Bam Analysis")
             self.finished = True
 
     async def process_sample_files(self, sampleID, tomerge, latest_file):
-        """
-        Process sample files and update the application's storage.
-
-        :param sampleID: The sample ID to process.
-        :param tomerge: List of files to merge.
-        :param latest_file: The latest file to process.
-        :return: None
-        """
+        """Process sample files using modkit."""
         if state.shutdown_event:
-            print("Terminate detected, stopping process_sample_files")
+            logging.info("Shutdown event detected, skipping file processing")
+            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
             return
 
         try:
@@ -3008,7 +3026,7 @@ class BrainMeth:
                         app.storage.general[self.mainuuid][sampleID][analysis] = {
                             "counters": {
                                 "bams_in_processing": 0,
-                                "bams_processed": 0,
+                                "bam_processed": 0,
                                 "bams_failed": 0,
                             }
                         }
@@ -3020,7 +3038,7 @@ class BrainMeth:
                             "counters"
                         ] = {
                             "bams_in_processing": 0,
-                            "bams_processed": 0,
+                            "bam_processed": 0,
                             "bams_failed": 0,
                         }
 
@@ -3060,15 +3078,28 @@ class BrainMeth:
             )
             sortfile = sorttempbam.name
 
+            # Set process state to running
+            state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
+            
             # Sort and merge BAM files
-            await run.cpu_bound(
-                run_samtools_sort, file, tomerge, sortfile, self.threads
-            )
+            try:
+                await run.cpu_bound(
+                    run_samtools_sort, file, tomerge, sortfile, self.threads
+                )
+            except concurrent.futures.process.BrokenProcessPool:
+                logger.warning("Process pool was terminated. This is normal during shutdown.")
+                state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                return
 
             with tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             ) as temp2:
-                await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
+                try:
+                    await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
+                except concurrent.futures.process.BrokenProcessPool:
+                    logger.warning("Process pool was terminated. This is normal during shutdown.")
+                    state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                    return
 
                 # Create output path specific to this sample
                 parquet_path = os.path.join(
@@ -3077,14 +3108,18 @@ class BrainMeth:
                 )
 
                 # Merge modkit files for this sample
-                #merged_df = await run.cpu_bound(
-                await run.cpu_bound(
-                    merge_modkit_files,
-                    [temp.name],
-                    parquet_path,  # Use the parquet_path for the existing file
-                    parquet_path,
-                    self.cpgs_master_file,  # Use the parquet_path for the output file
-                )
+                try:
+                    await run.cpu_bound(
+                        merge_modkit_files,
+                        [temp.name],
+                        parquet_path,  # Use the parquet_path for the existing file
+                        parquet_path,
+                        self.cpgs_master_file,  # Use the parquet_path for the output file
+                    )
+                except concurrent.futures.process.BrokenProcessPool:
+                    logger.warning("Process pool was terminated. This is normal during shutdown.")
+                    state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                    return
 
                 # Log the number of BAM files processed
                 logging.info(
@@ -3097,59 +3132,60 @@ class BrainMeth:
                 for analysis in analyses:
                     if analysis.lower() not in self.exclude:
                         try:
-                            counters = app.storage.general[self.mainuuid][sampleID][
-                                analysis
-                            ]["counters"]
-                            if "bams_in_processing" not in counters:
-                                counters["bams_in_processing"] = 0
-                            if "bams_processed" not in counters:
-                                counters["bams_processed"] = 0
-
+                            if self.mainuuid not in app.storage.general:
+                                app.storage.general[self.mainuuid] = {}
+                            if sampleID not in app.storage.general[self.mainuuid]:
+                                app.storage.general[self.mainuuid][sampleID] = {}
+                            if analysis not in app.storage.general[self.mainuuid][sampleID]:
+                                app.storage.general[self.mainuuid][sampleID][analysis] = {
+                                    "counters": {
+                                        "bams_in_processing": 0,
+                                        "bam_processed": 0,
+                                        "bams_failed": 0,
+                                    }
+                                }
+                            
+                            counters = app.storage.general[self.mainuuid][sampleID][analysis]["counters"]
+                            
                             # Decrease the in_processing counter and increase the processed counter
                             counters["bams_in_processing"] = max(
                                 0, counters["bams_in_processing"] - num_bam_files_seen
                             )
-                            counters["bams_processed"] += num_bam_files_seen
+                            counters["bam_processed"] += num_bam_files_seen
 
                             logging.debug(
                                 f"Updated {analysis} processed counter for {sampleID} by {num_bam_files_seen}"
                             )
-                        except KeyError as e:
-                            logging.error(
-                                f"Failed to update processed counter for {analysis}: {str(e)}"
-                            )
-                            # Initialize counters if they don't exist
-                            app.storage.general[self.mainuuid][sampleID][analysis] = {
-                                "counters": {
-                                    "bams_in_processing": 0,
-                                    "bams_processed": num_bam_files_seen,
-                                    "bams_failed": 0,
-                                }
-                            }
                         except Exception as e:
                             logging.error(
                                 f"Error updating counters for {analysis}: {str(e)}"
                             )
                         if state.shutdown_event:
                             print("Terminate detected, stopping process_sample_files")
-                            return    
+                            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                            return
 
+        except concurrent.futures.process.BrokenProcessPool:
+            logger.warning("Process pool was terminated. This is normal during shutdown.")
+            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
         except Exception as e:
             logging.error(f"Error in process_sample_files: {str(e)}", exc_info=True)
+            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
             # Update the failed counters for each analysis type
             analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
             for analysis in analyses:
                 if analysis.lower() not in self.exclude:
                     try:
-                        app.storage.general[self.mainuuid][sampleID][analysis][
-                            "counters"
-                        ]["bams_in_processing"] -= num_bam_files_seen
-                        app.storage.general[self.mainuuid][sampleID][analysis][
-                            "counters"
-                        ]["bams_failed"] += num_bam_files_seen
-                        logging.debug(
-                            f"Updated {analysis} failed counter for {sampleID} by {num_bam_files_seen}"
-                        )
+                        if self.mainuuid in app.storage.general and sampleID in app.storage.general[self.mainuuid] and analysis in app.storage.general[self.mainuuid][sampleID]:
+                            app.storage.general[self.mainuuid][sampleID][analysis][
+                                "counters"
+                            ]["bams_in_processing"] -= num_bam_files_seen
+                            app.storage.general[self.mainuuid][sampleID][analysis][
+                                "counters"
+                            ]["bams_failed"] += num_bam_files_seen
+                            logging.debug(
+                                f"Updated {analysis} failed counter for {sampleID} by {num_bam_files_seen}"
+                            )
                     except Exception as nested_e:
                         logging.error(
                             f"Error updating failed counters for {analysis}: {str(nested_e)}"
@@ -3161,11 +3197,14 @@ class BrainMeth:
         Process BAM files in the watch folder.
         """
         logging.info("Process Bam Starting")
+        state.set_process_state("Serial Bam Analysis", ProcessState.WAITING_FOR_DATA)
         self.process_bams_tracker.active = False
         if state.shutdown_event:
             print("shutdown_event is True, stopping process_bams")
+            state.set_process_state("Serial Bam Analysis", ProcessState.STOPPING)
             self.process_bams_tracker.active = False
-            state.stop_process("process_bams")
+            state.stop_process("Serial Bam Analysis")
+            state.set_process_state("Serial Bam Analysis", ProcessState.STOPPED)
             return
             
         
@@ -3173,6 +3212,7 @@ class BrainMeth:
         #memory = self.get_memory_usage()
         #if memory: print (memory)
         if "file" in app.storage.general[self.mainuuid]["bam_count"]:
+            state.set_process_state("Serial Bam Analysis", ProcessState.RUNNING)
             while self.watchdogbamqueue.qsize() > 0:
                 filename, timestamp = self.watchdogbamqueue.get()
                 logging.info(f"Processing new BAM file from watchdog queue: {filename}")
@@ -3239,7 +3279,7 @@ class BrainMeth:
                 if state.shutdown_event:
                     print("shutdown_event is True, stopping process_bams")
                     self.process_bams_tracker.active = False
-                    state.stop_process("process_bams")
+                    state.stop_process("Serial Bam Analysis")
                     return
 
             # Process the files
@@ -3419,14 +3459,16 @@ class BrainMeth:
                 if state.shutdown_event:
                     print("shutdown_event is True, stopping process_bams")
                     self.process_bams_tracker.active = False
-                    state.stop_process("process_bams")
+                    state.stop_process("Serial Bam Analysis")
                     return
                 
             logging.info("Process Bam Finishing")
             if not state.shutdown_event:
                 self.process_bams_tracker.active = True
+                state.set_process_state("Serial Bam Analysis", ProcessState.WAITING_FOR_DATA)
             else:
                 self.finished = True
+                state.set_process_state("Serial Bam Analysis", ProcessState.STOPPING)
 
     async def check_existing_bams(self, sequencing_summary=None):
         """

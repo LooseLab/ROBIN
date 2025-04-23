@@ -60,7 +60,7 @@ import asyncio
 from robin.utilities.decompress import decompress_gzip_file
 from robin.subpages.base_analysis import BaseAnalysis
 
-from robin.core.state import state
+from robin.core.state import state, ProcessState
 
 os.environ["CI"] = "1"
 logger = logging.getLogger(__name__)
@@ -279,6 +279,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
     None
     """
     state.start_process("clair3")
+    state.set_process_state("clair3", ProcessState.RUNNING)
     # Debug: Log input file paths for verification.
     if showerrors:
         logger.info(f"Input BAM file: {bamfile}")
@@ -418,6 +419,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             # Parse the annotated VCF files.
             parse_vcf(os.path.join(workdirout, "snpsift_output.vcf"))
             parse_vcf(os.path.join(workdirout, "snpsift_indel_output.vcf"))
+            state.set_process_state("clair3", ProcessState.WAITING_FOR_DATA)
             state.stop_process("clair3")
         except Exception as e:
             logger.error("Error running Clair3")

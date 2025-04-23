@@ -46,7 +46,7 @@ from pathlib import Path
 
 from robin import images
 from robin import __about__
-from .core.state import state
+from .core.state import state, ProcessState
 
 import os
 import psutil
@@ -130,6 +130,8 @@ IMAGEFILE = os.path.join(
     os.path.dirname(os.path.abspath(images.__file__)), "ROBIN_logo_small.png"
 )
 
+# Module-level variables
+quitdialog = None
 
 MENU_BREAKPOINT = 1200
 
@@ -139,6 +141,84 @@ HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
 # Read the CSS styles for the application
 STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 
+def create_activity_monitor():
+    """
+    Creates an activity monitor component that shows the status of processes using a clean, streamlined layout.
+    Colors are chosen to be colorblind-friendly based on ColorBrewer and IBM accessibility guidelines.
+    
+    Returns:
+        ui.card: The activity monitor card component
+    """
+    with ui.card().classes("w-full shadow-lg rounded-xl") as monitor:
+        # Create a data model for process status
+        class ProcessStatus:
+            def __init__(self):
+                self.processes = {}
+        
+        status = ProcessStatus()
+        
+        # Create a single collapsible section for process status
+        with ui.expansion("Process Status").classes("w-full text-sky-600 dark:text-white").style("font-size: 120%; font-weight: 500") as process_details:
+            # Status key in a more compact format
+            with ui.row().classes("w-full px-4 pb-4 gap-2 justify-center items-center text-sm"):
+                # Using a colorblind-friendly palette
+                for status_type, color_class in [
+                    ("Running", "rgb(0, 114, 178)"),      # Blue
+                    ("Waiting", "rgb(230, 159, 0)"),      # Orange
+                    ("Starting", "rgb(86, 180, 233)"),    # Sky Blue
+                    ("Error", "rgb(213, 94, 0)"),         # Vermillion
+                    ("Finished", "rgb(0, 158, 115)"),     # Bluish Green
+                ]:
+                    with ui.row().classes("items-center gap-1"):
+                        ui.icon("circle").style(f"color: {color_class}; font-size: 0.75rem")
+                        ui.label(status_type).style("font-size: 0.75rem")
+        
+        # Function to update process status
+        def update_process_status():
+            try:
+                # Get all processes (running and finished)
+                all_processes = set(state.process_states.keys()) | set(state.finished_processes)
+                
+                # Update the status model
+                for process in all_processes:
+                    if process not in status.processes:
+                        # Create new process status if it doesn't exist
+                        with process_details:
+                            with ui.row().classes("items-center gap-2 min-w-[200px]") as row:
+                                # Convert process name to Title Case with spaces
+                                process_name = ' '.join(word.capitalize() for word in process.split('_'))
+                                ui.label(process_name).classes("text-sm")
+                                indicator = ui.icon("circle").classes("text-sm")
+                                status.processes[process] = indicator
+                
+                # Update status of all processes
+                for process, indicator in status.processes.items():
+                    try:
+                        if process in state.process_states:
+                            process_state = state.get_process_state(process)
+                            if process_state == ProcessState.RUNNING:
+                                indicator.style("color: rgb(0, 114, 178)")    # Blue
+                            elif process_state == ProcessState.WAITING_FOR_DATA:
+                                indicator.style("color: rgb(230, 159, 0)")    # Orange
+                            elif process_state == ProcessState.STARTING:
+                                indicator.style("color: rgb(86, 180, 233)")   # Sky Blue
+                            elif process_state == ProcessState.STOPPING:
+                                indicator.style("color: rgb(213, 94, 0)")     # Vermillion
+                            else:
+                                indicator.style("color: rgb(128, 128, 128)")  # Gray
+                        elif process in state.finished_processes:
+                            indicator.style("color: rgb(0, 158, 115)")        # Bluish Green
+                        else:
+                            indicator.style("color: rgb(213, 94, 0)")         # Vermillion
+                    except Exception as e:
+                        logging.error(f"Error updating status for process {process}: {str(e)}")
+            except Exception as e:
+                logging.error(f"Error in update_process_status: {str(e)}")
+        
+        # Update status every second
+        ui.timer(1.0, update_process_status)
+    
+    return monitor
 
 @contextmanager
 def frame(navtitle: str, batphone=False, smalltitle=None):
@@ -147,19 +227,18 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
 
     Args:
         navtitle (str): The title to display in the navigation header.
+        batphone (bool): Whether to show the BATMAN mode title.
+        smalltitle (str): The title to display on small screens.
 
     Yields:
         None
-
-    Example:
-        >>> with frame("Home"):
-        ...     ui.label("Welcome to the Application")
     """
+    global quitdialog
     if batphone:
         navtitle = f"BATMAN & {navtitle}"
+    
     # Add custom HTML and CSS to the head of the page
     ui.add_head_html(
-        #'<script src="https://cdn.jsdelivr.net/npm/igv@2.15.13/dist/igv.min.js"></script>'
         '<script src="https://cdn.jsdelivr.net/npm/igv@3.2.0/dist/igv.min.js"></script>'
     )
     ui.add_head_html(HEADER_HTML + f"<style>{STYLE_CSS}</style>")
@@ -218,7 +297,13 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
     ui.timer(1.0, check_version, once=True)
 
     # Create a persistent dialog for quitting the app
-    with ui.dialog().props("persistent") as quitdialog, ui.card():
+    quitdialog = ui.dialog().props("persistent")
+    
+    async def quit_app():
+        quitdialog.close()
+        await cleanup_and_exit()
+    
+    with quitdialog, ui.card():
         ui.label(
             "Quitting the app will stop running methylation analysis. Are you sure?"
         )
@@ -229,7 +314,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
         ui.button("Cancel", on_click=quitdialog.close).props("outline").classes(
             "shadow-lg"
         )
-        ui.button("Really Quit", icon="logout", on_click=cleanup_and_exit).props(
+        ui.button("Really Quit", icon="logout", on_click=quit_app).props(
             "outline"
         ).classes("shadow-lg")
 
@@ -241,7 +326,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
         with ui.grid(columns=2).style("width: 100%"):
             with ui.row().classes(
                 f"max-[{MENU_BREAKPOINT}px]:hidden items-center align-left"
-            ):  # .classes('items-left m-auto'):
+            ):
                 ui.html(navtitle).classes("shadows-into").style(
                     "font-size: 150%; font-weight: 300"
                 ).tailwind("drop-shadow", "font-bold")
@@ -282,7 +367,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                         metrics.cpu = round(psutil.getloadavg()[1] / os.cpu_count() * 100, 1)
                         metrics.ram = round(psutil.virtual_memory()[2], 1)
 
-                    ui.timer(1.0, update_metrics)  # Reduced frequency to 2 seconds
+                    ui.timer(1.0, update_metrics)
 
                     with ui.button(icon="menu"):
                         with ui.menu() as menu:
@@ -299,12 +384,6 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                                 app.storage.general, "use_on_air"
                             )
                             ui.separator()
-                            # ui.switch(
-                            #    "allow remote access", value=False, on_change=use_on_air
-                            # ).classes("ml-4 bg-transparent").props('color="black"')
-                            # ui.switch("Dark Mode", on_change=dark_mode).classes(
-                            #    "ml-4 bg-transparent"
-                            # ).props('color="black"')
                             ui.switch("Dark Mode").classes("ml-4 bg-transparent").props(
                                 'color="black"'
                             ).bind_value(app.storage.browser, "dark_mode")
@@ -314,14 +393,15 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                             ui.button("Quit", icon="logout", on_click=quitdialog.open)
                     ui.image(IMAGEFILE).style("width: 50px")
 
+    # Add the activity monitor to the main content area
+    with ui.column().classes("w-full p-4"):
+        create_activity_monitor()
+
     # Create a footer with useful information and quit button
-    # Create a header with navigation title and menu
     footer_classes = "items-center"
     if batphone:
         footer_classes += " batphone"
     with ui.footer().classes(footer_classes):
-        # ui.on('resize', lambda e: print(f'resize: {e.args}'))
-
         with ui.dialog() as dialog, ui.card():
             ui.label("Links").tailwind("text-2xl font-bold font-italic drop-shadow")
             ui.separator()
@@ -381,6 +461,8 @@ async def cleanup_and_exit():
     print("Shutting down ROBIN... from theme.py")
     print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
     ui.notify("Shutting down ROBIN...", type='warning')
+    if quitdialog:
+        quitdialog.close()
     state.shutdown_event = True
     print(f"Value of shutdown_event: {state.shutdown_event}")
     #await asyncio.sleep(10)

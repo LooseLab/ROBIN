@@ -1056,11 +1056,11 @@ def package_run(
                     while state.get_running_process_count() > 0:
                         await asyncio.sleep(1)
                         print(f"Waiting for {state.get_running_process_count()} processes to finish")
-                        print(f"Running processes: {state.running_processes}")
+                        print(f"Active processes: {list(state.process_states.keys())}")
                     # Don't exit, just keep running
                     while True:
                         await asyncio.sleep(1)
-                        print(state.running_processes)
+                        print(f"Active processes: {list(state.process_states.keys())}")
                 
                 loop.create_task(shutdown_task())
         except Exception as e:
@@ -1068,7 +1068,7 @@ def package_run(
             # Don't exit, keep running
             while True:
                 sleep(1)
-                print(state.running_processes)
+                print(f"Active processes: {list(state.process_states.keys())}")
         
     signal.signal(signal.SIGINT, handler=handler)
     
