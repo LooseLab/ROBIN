@@ -216,7 +216,7 @@ def create_activity_monitor():
                 logging.error(f"Error in update_process_status: {str(e)}")
         
         # Update status every second
-        ui.timer(1.0, update_process_status)
+        ui.timer(0.2, update_process_status)
     
     return monitor
 

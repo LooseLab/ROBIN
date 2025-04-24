@@ -124,9 +124,192 @@ import pyranges as pr  # For fast interval-based filtering
 from .core.state import state
 from .core.state import ProcessState
 
+
 def merge_modkit_files(
-    new_files: List[str], existing_file: str, output_file: str, filter_bed_file: str
-):
+    new_files: List[str],
+    existing_file: str,
+    output_file: str,
+    filter_bed_file: str
+) -> None:
+    """
+    Efficiently merges new modkit pileup files with an existing dataset using incremental updates.
+    Filters out any positions that do not overlap with the given BED file using pyranges for speed.
+
+    Parameters:
+        new_files: List of new input files (modkit format).
+        existing_file: Path to the previously merged dataset (Parquet format).
+        output_file: Path to save the updated merged dataset.
+        filter_bed_file: Path to BED file to filter positions (can be .gz).
+
+    Returns:
+        None (Saves the merged DataFrame to `output_file`).
+    """
+    # Define column schema
+    column_names = [
+        "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
+        "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
+        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall",
+    ]
+    categorical_cols = ["chrom", "mod_code", "strand", "color"]
+    int_cols = ["thickStart", "thickEnd"]
+    unsigned_int_cols = [
+        "chromStart", "chromEnd", "valid_cov", "n_mod", "n_canonical",
+        "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
+    ]
+    float_cols = ["score_bed"]  # percent_modified will be recalculated
+
+    # Load and index filter BED
+    compression = "gzip" if filter_bed_file.endswith('.gz') else None
+    filter_df = pd.read_csv(
+        filter_bed_file,
+        sep='\t',
+        header=None,
+        names=["Chromosome", "Start", "End", "cg_label"],
+        compression=compression,
+        dtype={"Chromosome": str}
+    )
+    filter_ranges = pr.PyRanges(filter_df[["Chromosome", "Start", "End"]])
+
+    # Load or initialize existing dataset
+    if os.path.exists(existing_file):
+        existing_df = pd.read_parquet(existing_file)
+        # Optimize dtypes
+        for col in categorical_cols:
+            if col in existing_df:
+                existing_df[col] = existing_df[col].astype('category')
+        for col in int_cols:
+            if col in existing_df:
+                existing_df[col] = existing_df[col].astype('int64')
+        if all(col in existing_df for col in unsigned_int_cols):
+            existing_df[unsigned_int_cols] = existing_df[unsigned_int_cols].apply(
+                pd.to_numeric, downcast='unsigned'
+            )
+        if float_cols[0] in existing_df:
+            existing_df[float_cols] = existing_df[float_cols].apply(
+                pd.to_numeric, downcast='float'
+            )
+    else:
+        existing_df = pd.DataFrame(columns=column_names)
+
+    # Read, filter, and collect new data
+    new_data = []
+    for bed in new_files:
+        modkit_df = pd.read_csv(
+            bed,
+            sep='\s+',
+            header=None,
+            names=column_names,
+            dtype={c: str for c in categorical_cols}
+        )
+        # Convert numeric types
+        for c in int_cols:
+            modkit_df[c] = pd.to_numeric(modkit_df[c], errors='coerce').astype('int64')
+        modkit_df[unsigned_int_cols] = modkit_df[unsigned_int_cols].apply(
+            pd.to_numeric, errors='coerce', downcast='unsigned'
+        )
+        modkit_df[float_cols] = modkit_df[float_cols].apply(
+            pd.to_numeric, errors='coerce', downcast='float'
+        )
+        for c in categorical_cols:
+            modkit_df[c] = modkit_df[c].astype('category')
+        # Filter intervals
+        gr = pr.PyRanges(
+            modkit_df.rename(
+                columns={'chrom': 'Chromosome', 'chromStart': 'Start', 'chromEnd': 'End'}
+            )
+        )
+        inter = gr.intersect(filter_ranges)
+        df_filt = inter.df.rename(
+            columns={'Chromosome': 'chrom', 'Start': 'chromStart', 'End': 'chromEnd'}
+        )
+        for c in categorical_cols:
+            if c in df_filt:
+                df_filt[c] = df_filt[c].astype('category')
+        new_data.append(df_filt)
+
+    if not new_data:
+        return
+
+    # Combine new data
+    new_df = pd.concat(new_data, ignore_index=True)
+    # Ensure types
+    for c in categorical_cols:
+        if c in new_df:
+            new_df[c] = new_df[c].astype('category')
+    for c in int_cols:
+        if c in new_df:
+            new_df[c] = pd.to_numeric(new_df[c], errors='coerce').astype('int64')
+    if all(c in new_df for c in unsigned_int_cols):
+        new_df[unsigned_int_cols] = new_df[unsigned_int_cols].apply(
+            pd.to_numeric, errors='coerce', downcast='unsigned'
+        )
+    if float_cols[0] in new_df:
+        new_df[float_cols] = new_df[float_cols].apply(
+            pd.to_numeric, errors='coerce', downcast='float'
+        )
+
+    # Avoid concatenating an empty DataFrame to prevent FutureWarning
+    frames = [df for df in (existing_df, new_df) if not df.empty]
+    combined = pd.concat(frames, ignore_index=True)
+
+    # Forward-fill metadata, preserving types to avoid downcast warnings
+    for c in ['mod_code', 'strand', 'thickStart', 'thickEnd', 'color']:
+        if c in combined:
+            filled = combined[c].ffill()
+            if c in categorical_cols:
+                combined[c] = filled.astype('category')
+            else:
+                combined[c] = filled.astype('int64')
+
+    # Define columns to sum
+    count_cols = [
+        'n_mod', 'n_canonical', 'n_othermod', 'n_delete',
+        'n_fail', 'n_diff', 'n_nocall', 'valid_cov'
+    ]
+
+    # Aggregate (excluding percent_modified)
+    agg = {
+        'mod_code': 'first',
+        'score_bed': 'mean',
+        'strand': 'first',
+        'thickStart': 'first',
+        'thickEnd': 'first',
+        'color': 'first',
+        **{c: 'sum' for c in count_cols}
+    }
+    merged_df = (
+        combined
+        .groupby(['chrom', 'chromStart', 'chromEnd'], as_index=False, observed=True)
+        .agg(agg)
+        .reset_index(drop=True)
+    )
+
+    # Recalculate percent_modified properly
+    merged_df['percent_modified'] = (
+        merged_df['n_mod'].astype(float) / merged_df['valid_cov']
+    ) * 100
+
+    # Optimize final dtypes
+    for c in categorical_cols:
+        if c in merged_df:
+            merged_df[c] = merged_df[c].astype('category')
+    for c in int_cols:
+        if c in merged_df:
+            merged_df[c] = merged_df[c].astype('int64')
+    if all(c in merged_df for c in unsigned_int_cols):
+        merged_df[unsigned_int_cols] = merged_df[unsigned_int_cols].apply(
+            pd.to_numeric, downcast='unsigned'
+        )
+    merged_df['score_bed'] = pd.to_numeric(merged_df['score_bed'], downcast='float')
+
+    # Save output
+    merged_df.to_parquet(output_file, index=False)
+    logging.debug(f"✅ Incremental update (with correct percent) saved to: {output_file}")
+    return
+
+def merge_modkit_files_old(
+        new_files: List[str], existing_file: str, output_file: str, filter_bed_file: str
+    ):
     """
     Efficiently merges new modkit pileup files with an existing dataset using incremental updates.
     Filters out any positions that do not overlap with the given BED file using pyranges for speed.
