@@ -46,7 +46,7 @@ from pathlib import Path
 
 from robin import images
 from robin import __about__
-from .core.state import state, ProcessState, ProcessType
+from robin.core.state import state, ProcessState, ProcessType
 
 import os, sys
 import psutil
@@ -567,7 +567,8 @@ async def cleanup_and_exit():
     print("Shutting down ROBIN... from theme.py")
     print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
     
-    while state.shutdown_event:# Wait for cleanup to complete
+    # Wait for cleanup to complete
+    while state.shutdown_event and state.get_running_process_count() > 0:
         await asyncio.sleep(3.0)
     logging.info("Cleanup wait complete")
     
@@ -576,9 +577,9 @@ async def cleanup_and_exit():
     logging.info("Shutdown dialog closed")
     
     # Shutdown the application
-    app.shutdown()
     logging.info("Application shutdown initiated")
-    sys.exit()
+    app.shutdown()
+    
 
 def use_on_air(args: events.ValueChangeEventArguments):
     """
@@ -636,10 +637,6 @@ def main():
     )
     # Register some fonts that we might need later on.
     app.add_static_files("/fonts", str(Path(__file__).parent / "fonts"))
-    def hello_jelly():
-        print("Hello Jelly")
-        time.sleep(10)
-    app.on_shutdown(hello_jelly)
     ui.run(storage_secret="robin")
 
 
