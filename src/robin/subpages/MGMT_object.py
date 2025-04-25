@@ -61,6 +61,7 @@ import natsort
 import tempfile
 import logging
 from typing import Optional, Tuple
+from robin.core.state import state, ProcessType, ProcessState
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -181,6 +182,9 @@ class MGMT_Object(BaseAnalysis):
         self.last_seen: int = 0
         # logger.debug("Initializing MGMT_Object")
         super().__init__(*args, **kwargs)
+        # Remove state tracking for MGMT Analysis
+        # state.start_process("MGMT Analysis", ProcessType.BATCH)
+        state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
 
     def setup_ui(self) -> None:
         """
@@ -244,107 +248,107 @@ class MGMT_Object(BaseAnalysis):
         Returns:
             None
         """
-        
-        result = await run.cpu_bound(has_reads, bamfile, "chr10", 129467242, 129467244)
-        
-        if result:
-            MGMT_BED: str = f"{HVPATH}/bin/mgmt_hg38.bed"
-            tempbamfile = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
-            )
+        state.set_process_state("MGMT Analysis", ProcessState.RUNNING)
+        try:
+            result = await run.cpu_bound(has_reads, bamfile, "chr10", 129467242, 129467244)
+            
+            if result:
+                MGMT_BED: str = f"{HVPATH}/bin/mgmt_hg38.bed"
+                tempbamfile = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+                )
 
-            try:
-                await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
-            except Exception:
-                # logger.error(f"Error in process_bam: {e}")
-                return
+                try:
+                    await run.cpu_bound(run_bedtools, bamfile, MGMT_BED, tempbamfile.name)
+                except Exception:
+                    # logger.error(f"Error in process_bam: {e}")
+                    return
 
-            try:
-                if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
-                    if self.sampleID not in self.MGMTbamfile.keys():
-                        # if not self.MGMTbamfile:
-                        self.MGMTbamfile[self.sampleID] = os.path.join(
-                            self.check_and_create_folder(self.output, self.sampleID),
-                            "mgmt.bam",
-                        )
-                        shutil.copy2(tempbamfile.name, self.MGMTbamfile[self.sampleID])
-                        os.remove(f"{tempbamfile.name}.bai")
-                    else:
-                        tempbamholder = tempfile.NamedTemporaryFile(
-                            dir=self.check_and_create_folder(self.output, self.sampleID),
-                            suffix=".bam",
-                        )
-                        pysam.cat(
-                            "-o",
-                            tempbamholder.name,
-                            self.MGMTbamfile[self.sampleID],
-                            tempbamfile.name,
-                        )
-                        shutil.copy2(tempbamholder.name, self.MGMTbamfile[self.sampleID])
-                        try:
-                            os.remove(f"{tempbamholder.name}.bai")
+                try:
+                    if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
+                        if self.sampleID not in self.MGMTbamfile.keys():
+                            # if not self.MGMTbamfile:
+                            self.MGMTbamfile[self.sampleID] = os.path.join(
+                                self.check_and_create_folder(self.output, self.sampleID),
+                                "mgmt.bam",
+                            )
+                            shutil.copy2(tempbamfile.name, self.MGMTbamfile[self.sampleID])
                             os.remove(f"{tempbamfile.name}.bai")
-                        except FileNotFoundError:
-                            pass
-                    tempmgmtdir = tempfile.TemporaryDirectory(
-                        dir=self.check_and_create_folder(self.output, self.sampleID)
-                    )
-                    
-                    self.counter += 1
-
-                    output_mgmt_bed = os.path.join(
-                                self.check_and_create_folder(self.output, self.sampleID),
-                                f"{self.counter}_mgmt.bed",
+                        else:
+                            tempbamholder = tempfile.NamedTemporaryFile(
+                                dir=self.check_and_create_folder(self.output, self.sampleID),
+                                suffix=".bam",
                             )
+                            pysam.cat(
+                                "-o",
+                                tempbamholder.name,
+                                self.MGMTbamfile[self.sampleID],
+                                tempbamfile.name,
+                            )
+                            shutil.copy2(tempbamholder.name, self.MGMTbamfile[self.sampleID])
+                            try:
+                                os.remove(f"{tempbamholder.name}.bai")
+                                os.remove(f"{tempbamfile.name}.bai")
+                            except FileNotFoundError:
+                                pass
+                        tempmgmtdir = tempfile.TemporaryDirectory(
+                            dir=self.check_and_create_folder(self.output, self.sampleID)
+                        )
+                        
+                        self.counter += 1
 
-                    await run.cpu_bound(
-                        run_modkit,
-                        tempmgmtdir.name,
-                        self.MGMTbamfile[self.sampleID],
-                        self.threads,
-                        output_mgmt_bed,
-                    )
-
-                    try:
-                        if os.path.exists(
-                            os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
-                        ):
-                            results = pd.read_csv(
-                                os.path.join(
-                                    tempmgmtdir.name, "live_analysis_mgmt_status.csv"
+                        output_mgmt_bed = os.path.join(
+                                    self.check_and_create_folder(self.output, self.sampleID),
+                                    f"{self.counter}_mgmt.bed",
                                 )
-                            )
-                            #self.counter += 1
-                            plot_out = os.path.join(
-                                self.check_and_create_folder(self.output, self.sampleID),
-                                f"{self.counter}_mgmt.png",
-                            )
 
-                            await run.cpu_bound(
-                                run_methylartist, tempmgmtdir.name, plot_out
-                            )
-                            results.to_csv(
-                                os.path.join(
-                                    self.check_and_create_folder(
-                                        self.output, self.sampleID
+                        await run.cpu_bound(
+                            run_modkit,
+                            tempmgmtdir.name,
+                            self.MGMTbamfile[self.sampleID],
+                            self.threads,
+                            output_mgmt_bed,
+                        )
+
+                        try:
+                            if os.path.exists(
+                                os.path.join(tempmgmtdir.name, "live_analysis_mgmt_status.csv")
+                            ):
+                                results = pd.read_csv(
+                                    os.path.join(
+                                        tempmgmtdir.name, "live_analysis_mgmt_status.csv"
+                                    )
+                                )
+                                #self.counter += 1
+                                plot_out = os.path.join(
+                                    self.check_and_create_folder(self.output, self.sampleID),
+                                    f"{self.counter}_mgmt.png",
+                                )
+
+                                await run.cpu_bound(
+                                    run_methylartist, tempmgmtdir.name, plot_out
+                                )
+                                results.to_csv(
+                                    os.path.join(
+                                        self.check_and_create_folder(
+                                            self.output, self.sampleID
+                                        ),
+                                        f"{self.counter}_mgmt.csv",
                                     ),
-                                    f"{self.counter}_mgmt.csv",
-                                ),
-                                index=False,
-                            )
-                    except Exception:
-                        # logger.error(f"Error processing results: {e}")
-                        raise
-                else:
-                    os.remove(f"{tempbamfile.name}.bai")
-            except Exception:
-                # logger.error(f"Error in BAM file processing: {e}")
-                raise
-            finally:
-                # await asyncio.sleep(0.1)
+                                    index=False,
+                                )
+                        except Exception:
+                            # logger.error(f"Error processing results: {e}")
+                            raise
+                    else:
+                        os.remove(f"{tempbamfile.name}.bai")
+                except Exception:
+                    # logger.error(f"Error in BAM file processing: {e}")
+                    raise
+            else:
                 self.running = False
-        else:
-            self.running = False
+        finally:
+            state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
 
     def tabulate(self, results: pd.DataFrame) -> None:
         """

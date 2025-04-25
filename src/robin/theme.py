@@ -46,7 +46,7 @@ from pathlib import Path
 
 from robin import images
 from robin import __about__
-from .core.state import state, ProcessState
+from .core.state import state, ProcessState, ProcessType
 
 import os
 import psutil
@@ -144,7 +144,7 @@ STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 def create_activity_monitor():
     """
     Creates an activity monitor component that shows the status of processes using a clean, streamlined layout.
-    Colors are chosen to be colorblind-friendly based on ColorBrewer and IBM accessibility guidelines.
+    Uses Quasar's color system for consistent styling.
     
     Returns:
         ui.card: The activity monitor card component
@@ -153,69 +153,150 @@ def create_activity_monitor():
         # Create a data model for process status
         class ProcessStatus:
             def __init__(self):
-                self.processes = {}
+                self.processes = {}  # Dictionary to store process states
+                self.columns = {}    # Dictionary to store column containers
+                self.indicators = {} # Dictionary to store process indicators
+                self.is_shutting_down = False
+                
+                # Initialize process states
+                for process_type in ProcessType:
+                    self.processes[process_type] = {}
         
         status = ProcessStatus()
         
-        # Create a single collapsible section for process status
-        with ui.expansion("Process Status").classes("w-full text-sky-600 dark:text-white").style("font-size: 120%; font-weight: 500") as process_details:
-            # Status key in a more compact format
+        # Create the main expansion panel
+        with ui.expansion("Process Status").classes("w-full text-sky-600 dark:text-white").style("font-size: 120%; font-weight: 500") as status_panel:
+            # Status key in a compact format
             with ui.row().classes("w-full px-4 pb-4 gap-2 justify-center items-center text-sm"):
-                # Using a colorblind-friendly palette
-                for status_type, color_class in [
-                    ("Running", "rgb(0, 114, 178)"),      # Blue
-                    ("Waiting", "rgb(230, 159, 0)"),      # Orange
-                    ("Starting", "rgb(86, 180, 233)"),    # Sky Blue
-                    ("Error", "rgb(213, 94, 0)"),         # Vermillion
-                    ("Finished", "rgb(0, 158, 115)"),     # Bluish Green
+                # Using Quasar's color system
+                for status_type, color_class, is_spinning in [
+                    ("Running", "primary", True),      # Blue
+                    ("Waiting", "warning", False),     # Orange
+                    ("Starting", "info", True),        # Light Blue
+                    ("Error", "negative", False),      # Red
+                    ("Finished", "positive", False),   # Green
                 ]:
                     with ui.row().classes("items-center gap-1"):
-                        ui.icon("circle").style(f"color: {color_class}; font-size: 0.75rem")
-                        ui.label(status_type).style("font-size: 0.75rem")
-        
-        # Function to update process status
-        def update_process_status():
-            try:
-                # Get all processes (running and finished)
-                all_processes = set(state.process_states.keys()) | set(state.finished_processes)
-                
-                # Update the status model
-                for process in all_processes:
-                    if process not in status.processes:
-                        # Create new process status if it doesn't exist
-                        with process_details:
-                            with ui.row().classes("items-center gap-2 min-w-[200px]") as row:
-                                # Convert process name to Title Case with spaces
-                                process_name = ' '.join(word.capitalize() for word in process.split('_'))
-                                ui.label(process_name).classes("text-sm")
-                                indicator = ui.icon("circle").classes("text-sm")
-                                status.processes[process] = indicator
-                
-                # Update status of all processes
-                for process, indicator in status.processes.items():
-                    try:
-                        if process in state.process_states:
-                            process_state = state.get_process_state(process)
-                            if process_state == ProcessState.RUNNING:
-                                indicator.style("color: rgb(0, 114, 178)")    # Blue
-                            elif process_state == ProcessState.WAITING_FOR_DATA:
-                                indicator.style("color: rgb(230, 159, 0)")    # Orange
-                            elif process_state == ProcessState.STARTING:
-                                indicator.style("color: rgb(86, 180, 233)")   # Sky Blue
-                            elif process_state == ProcessState.STOPPING:
-                                indicator.style("color: rgb(213, 94, 0)")     # Vermillion
-                            else:
-                                indicator.style("color: rgb(128, 128, 128)")  # Gray
-                        elif process in state.finished_processes:
-                            indicator.style("color: rgb(0, 158, 115)")        # Bluish Green
+                        progress = ui.circular_progress(size='xs', show_value=False)
+                        progress.props(f'color={color_class}')
+                        if is_spinning:
+                            progress.props('indeterminate')
                         else:
-                            indicator.style("color: rgb(213, 94, 0)")         # Vermillion
-                    except Exception as e:
-                        logging.error(f"Error updating status for process {process}: {str(e)}")
-            except Exception as e:
-                logging.error(f"Error in update_process_status: {str(e)}")
+                            progress.value = 100
+                        ui.label(status_type).style("font-size: 0.75rem")
+            
+            # Create the grid for process types
+            grid = ui.grid(columns=4).classes("w-full gap-4")
+            
+            # Create columns for each process type
+            for process_type in ProcessType:
+                with grid:
+                    with ui.column().classes("w-full"):
+                        ui.label(process_type.name).classes("text-lg font-bold mb-2")
+                        status.columns[process_type] = ui.column().classes("gap-1")
         
-        # Update status every second
+        def create_process_row(process_name, process_type):
+            """Creates a new process row with bound indicators"""
+            with status.columns[process_type]:
+                with ui.row().classes("items-center gap-2 min-w-[200px]").props('no-wrap'):
+                    display_name = ' '.join(word.capitalize() for word in process_name.split('_'))
+                    ui.label(display_name).classes("text-sm")
+                    progress = ui.circular_progress(size='xs', show_value=False)
+                    status.indicators[process_name] = progress
+                    return progress
+
+        def get_process_state_info(process):
+            """
+            Determines the color and animation state for a process
+            Returns: (color, should_spin)
+            """
+            try:
+                if process in state.process_states:
+                    process_state = state.get_process_state(process)
+                    state_map = {
+                        ProcessState.RUNNING: ("primary", True),      # Blue, spinning
+                        ProcessState.WAITING_FOR_DATA: ("warning", False),  # Orange, static
+                        ProcessState.STARTING: ("info", True),    # Light Blue, spinning
+                        ProcessState.STOPPING: ("negative", False),     # Red, static
+                    }
+                    return state_map.get(process_state, ("grey-7", False))  # Gray for unknown
+                elif process in state.finished_processes:
+                    return ("positive", False)  # Green for finished
+                return ("negative", False)      # Red for error
+            except Exception as e:
+                logging.error(f"Error getting state for {process}: {str(e)}")
+                return ("negative", False)      # Red for error
+
+        async def update_process_status():
+            """Updates the process status display using binding"""
+            # Check for shutdown
+            if state.shutdown_event or status.is_shutting_down:
+                if not status.is_shutting_down:
+                    status.is_shutting_down = True
+                    logging.info("Status monitor detected shutdown, cleaning up...")
+                    # Set all indicators to stopped state
+                    for indicator in status.indicators.values():
+                        try:
+                            # Explicitly remove indeterminate state and set color
+                            indicator.props('indeterminate=false color=grey-7')
+                            indicator.value = 100
+                        except Exception:
+                            pass  # Ignore errors during shutdown
+                return
+            
+            try:
+                # Get current processes
+                current_processes = set(state.process_states.keys())
+                finished_processes = set(state.finished_processes)
+                all_processes = current_processes | finished_processes
+                
+                # Remove indicators for processes that no longer exist
+                removed_processes = set(status.indicators.keys()) - all_processes
+                for process in removed_processes:
+                    if process in status.indicators:
+                        try:
+                            status.indicators[process].delete()
+                            del status.indicators[process]
+                        except Exception:
+                            pass  # Ignore cleanup errors
+                
+                # Update or create indicators for current processes
+                for process in all_processes:
+                    try:
+                        process_type = state.get_process_type(process)
+                        if not process_type or process_type not in ProcessType:
+                            continue
+                            
+                        # Create new indicator if needed
+                        if process not in status.indicators:
+                            status.indicators[process] = create_process_row(process, process_type)
+                        
+                        # Get process state information
+                        color, should_spin = get_process_state_info(process)
+                        
+                        # Update indicator
+                        indicator = status.indicators[process]
+                        
+                        if should_spin:
+                            # Set spinning state with color
+                            indicator.props(f'indeterminate color={color}')
+                            indicator.value = None
+                        else:
+                            # Explicitly remove indeterminate state and set color
+                            indicator.props(f'indeterminate=false color={color}')
+                            indicator.value = 100
+                            
+                    except Exception as e:
+                        if not status.is_shutting_down:  # Only log errors if not shutting down
+                            logging.error(f"Error updating process {process}: {str(e)}")
+                        
+            except Exception as e:
+                if not status.is_shutting_down:  # Only log errors if not shutting down
+                    logging.error(f"Error in update_process_status: {str(e)}")
+                    import traceback
+                    logging.error(traceback.format_exc())
+        
+        # Update status every 0.2 seconds
         ui.timer(0.2, update_process_status)
     
     return monitor

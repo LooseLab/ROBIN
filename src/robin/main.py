@@ -23,7 +23,7 @@ from robin.utilities.news_feed import NewsFeed
 
 from robin.__about__ import __version__
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
-from .core.state import state
+from .core.state import state, ProcessType, ProcessState
 
 DEV_TESTING: bool = False
 
@@ -251,9 +251,17 @@ async def test() -> None:
     
 
 async def startup() -> None:
-    """
-    Start data processing in the main application loop.
-    """
+    """Initialize the application."""
+    state.start_process("Main Application", ProcessType.SYSTEM)
+    state.set_process_state("Main Application", ProcessState.RUNNING)
+    
+    # Initialize other system processes
+    state.start_process("File Watcher", ProcessType.BACKGROUND)
+    state.set_process_state("File Watcher", ProcessState.RUNNING)
+    
+    state.start_process("UI Renderer", ProcessType.BACKGROUND)
+    state.set_process_state("UI Renderer", ProcessState.RUNNING)
+
     logging.info(f"Setting up {UNIQUE_ID}.")
     MAINPAGE = Methnice(
         force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
@@ -421,9 +429,7 @@ class Methnice:
             raise
 
     async def start_analysis(self) -> None:
-        """
-        Async method to start analysis.
-        """
+        """Start the analysis process."""
         try:
             await self.robin.start_background()
         except Exception as e:
@@ -651,9 +657,9 @@ class Methnice:
             ui.notify("An error occurred while loading the page", type="negative")
             
     async def shutdown(self):
-        """
-        Shutdown the application.
-        """
+        """Clean up resources."""
+        state.set_process_state("Analysis", ProcessState.STOPPING)
+        state.stop_process("Analysis")
         ui.notify("Shutting down ROBIN...", type='warning')
         print("Shutting down ROBIN... from methnice?")
         self.robin.shutdown_background()

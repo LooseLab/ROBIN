@@ -74,7 +74,7 @@ import os
 import logging
 import asyncio
 
-from robin.core.state import state, ProcessState
+from robin.core.state import state, ProcessType, ProcessState
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -213,7 +213,7 @@ class BaseAnalysis:
         """
         Start processing BAM files either in batch mode or in a continuous timer mode.
         """
-        state.start_process(self.name)
+        state.start_process(self.name, ProcessType.BATCH if self.batch else ProcessType.PER_FILE)
         if self.batch:
             self.bams: Dict[str, List[Tuple[BinaryIO, Optional[float]]]] = {}
             self.batch_timer_run()
@@ -284,7 +284,6 @@ class BaseAnalysis:
                     "bam_processed"
                 ] += 1
             self.running = False
-        #await asyncio.sleep(0.05)
         state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
         if not self.terminate:
             self.timer.active = True

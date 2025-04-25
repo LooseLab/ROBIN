@@ -121,8 +121,7 @@ from typing import List, Tuple, Optional, Dict, Any
 
 import pyranges as pr  # For fast interval-based filtering
 
-from .core.state import state
-from .core.state import ProcessState
+from .core.state import state, ProcessType, ProcessState
 
 import pickle
 import polars as pl
@@ -131,18 +130,20 @@ def merge_modkit_files(
     new_files: List[str],
     existing_file: str,
     output_file: str,
-    filter_bed_file: str
+    filter_bed_file: str,
+    sample_id: str,
+    output_dir: str
 ) -> None:
     """
-    Efficiently merges new modkit pileup files with an existing dataset using incremental updates.
-    Uses lazy evaluation and chunked processing for better memory efficiency.
-    Implements optimized filtering and merging strategies.
+    Merge modkit files with improved caching and error handling.
 
-    Parameters:
-        new_files: List of new input files (modkit format).
-        existing_file: Path to the previously merged dataset (Parquet format).
-        output_file: Path to save the updated merged dataset.
-        filter_bed_file: Path to BED file to filter positions (can be .gz).
+    Args:
+        new_files (List[str]): List of new modkit files to merge
+        existing_file (str): Path to existing parquet file
+        output_file (str): Path to output parquet file
+        filter_bed_file (str): Path to BED file for filtering
+        sample_id (str): Sample ID for organizing output files
+        output_dir (str): Base output directory
     """
     # Define schema
     cols = [
@@ -163,7 +164,10 @@ def merge_modkit_files(
         pl.enable_string_cache()
         
         # Cache or build PyRanges filter with improved caching
-        cache_path = f"{filter_bed_file}.pgr_cache"
+        cache_path = os.path.join(
+            output_dir,
+            f"{os.path.basename(filter_bed_file)}.pgr_cache"
+        )
         if os.path.exists(cache_path):
             with open(cache_path, 'rb') as f:
                 filter_ranges = pickle.load(f)
@@ -676,18 +680,21 @@ class BrainMeth:
         
         # First stop all timers
         print("Stop observer")
-        #self.observer.stop()
-        #self.observer.join()
+        if hasattr(self, 'observer'):
+            state.set_process_state("File Observer", ProcessState.STOPPING)
+            state.stop_process("File Observer")
+            self.observer.stop()
+            self.observer.join()
         print("Observer stopped")
         
         print("Stop check_existing_bams_timer")
-        #if hasattr(self, 'check_existing_bams_timer'):
-        #    self.check_existing_bams_timer.cancel()
+        if hasattr(self, 'check_existing_bams_timer'):
+            self.check_existing_bams_timer.cancel()
         print("check_existing_bams_timer stopped")
         
         print("Stop background_process_bams_timer")
-        #if hasattr(self, 'background_process_bams_timer'):
-        #    self.background_process_bams_timer.cancel()
+        if hasattr(self, 'background_process_bams_timer'):
+            self.background_process_bams_timer.cancel()
         print("background_process_bams_timer stopped")
         
         # Wait for any pending tasks to complete
@@ -881,7 +888,12 @@ class BrainMeth:
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
             self.check_existing_bams_timer = ui.timer(1, callback=self.check_existing_bams, once=True)
+            
+            # Add status tracking for the observer
+            state.start_process("File Observer", ProcessType.SYSTEM)
+            state.set_process_state("File Observer", ProcessState.STARTING)
             self.observer.start()
+            state.set_process_state("File Observer", ProcessState.RUNNING)
 
             self.background_process_bams_timer = ui.timer(1, callback=self.background_process_bams, once=True)
 
@@ -2602,11 +2614,11 @@ class BrainMeth:
         logging.info("Starting background BAM processing")
         self.app_state_timer = app.timer(10, self.check_app_state)
         self.process_bams_tracker = app.timer(10, self.process_bams)
-        state.start_process("Serial Bam Analysis")
-        state.set_process_state("Serial Bam Analysis", ProcessState.STARTING)
+        state.start_process("Serial Bam Analysis", ProcessType.BACKGROUND)
+        state.set_process_state("Serial Bam Analysis", ProcessState.WAITING_FOR_DATA)
         self.process_bigbadmerge_tracker = app.timer(10, self.process_bigbadmerge)
-        state.start_process("Merge Bam Analysis")
-        state.set_process_state("Merge Bam Analysis", ProcessState.STARTING)
+        state.start_process("Merge Bam Analysis", ProcessType.BACKGROUND)
+        state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
         otherprocs = ['dorado', 'minknow', 'docker']
         self.check_and_log_memory = app.timer(5, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs))
         
@@ -2614,6 +2626,12 @@ class BrainMeth:
     async def check_app_state(self):
         if state.shutdown_event:
             print("shutdown_event is True, stopping background processes")
+            if hasattr(self, 'observer'):
+                state.set_process_state("File Observer", ProcessState.STOPPING)
+                state.stop_process("File Observer")
+                self.observer.stop()
+                self.observer.join()
+            print("Observer stopped")
             while state.get_running_process_count() > 0:
                 await asyncio.sleep(1)
                 print(f"Waiting for {state.get_running_process_count()} processes to finish")
@@ -2777,6 +2795,7 @@ class BrainMeth:
         # Dictionary to store files by sample ID
         files_by_sample = {}
         latest_files = {}  # Track latest file time per sample
+        state.start_process("Merge Bam Analysis", ProcessType.BACKGROUND)
         state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
 
         # Process queue and organize files by sample ID
@@ -2926,7 +2945,7 @@ class BrainMeth:
         """Process sample files using modkit."""
         if state.shutdown_event:
             logging.info("Shutdown event detected, skipping file processing")
-            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+            state.stop_process("Merge Bam Analysis")
             return
 
         try:
@@ -3033,6 +3052,8 @@ class BrainMeth:
                         parquet_path,  # Use the parquet_path for the existing file
                         parquet_path,
                         self.cpgs_master_file,  # Use the parquet_path for the output file
+                        sampleID,
+                        self.output,
                     )
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning("Process pool was terminated. This is normal during shutdown.")
@@ -3115,6 +3136,7 @@ class BrainMeth:
         Process BAM files in the watch folder.
         """
         logging.info("Process Bam Starting")
+        state.start_process("Serial Bam Analysis", ProcessType.BACKGROUND)
         state.set_process_state("Serial Bam Analysis", ProcessState.WAITING_FOR_DATA)
         self.process_bams_tracker.active = False
         if state.shutdown_event:
@@ -3122,7 +3144,6 @@ class BrainMeth:
             state.set_process_state("Serial Bam Analysis", ProcessState.STOPPING)
             self.process_bams_tracker.active = False
             state.stop_process("Serial Bam Analysis")
-            state.set_process_state("Serial Bam Analysis", ProcessState.STOPPED)
             return
             
         
@@ -3387,6 +3408,7 @@ class BrainMeth:
             else:
                 self.finished = True
                 state.set_process_state("Serial Bam Analysis", ProcessState.STOPPING)
+                state.stop_process("Serial Bam Analysis")
 
     async def check_existing_bams(self, sequencing_summary=None):
         """
@@ -3405,7 +3427,7 @@ class BrainMeth:
             file_endings,
             self.simtime,
         )
-
+        
         # Iterate through the sorted list
         for timestamp, f, elapsed_time in files_and_timestamps:
             logging.debug(f"Processing existing BAM file: {f} at {timestamp}")
@@ -3424,4 +3446,4 @@ class BrainMeth:
             if self.simtime:
                 await asyncio.sleep(0.1)
             else:
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.1)

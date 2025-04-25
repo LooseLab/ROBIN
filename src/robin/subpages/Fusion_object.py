@@ -72,6 +72,7 @@ from robin.utilities.performance_metrics import PerformanceMetrics
 from collections import Counter, defaultdict
 from datetime import datetime
 import time
+from robin.core.state import state, ProcessType, ProcessState
 
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
@@ -947,6 +948,9 @@ class FusionObject(BaseAnalysis):
     ):
         # Initialize base class first
         super().__init__(*args, **kwargs)
+        # Remove state tracking for Fusion Analysis
+        # state.start_process("Fusion Analysis", ProcessType.BATCH)
+        state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
         
         self.target_panel = target_panel
         self.reference_file = reference_file
@@ -1911,296 +1915,302 @@ class FusionObject(BaseAnalysis):
         """
         Processes a BAM file and identifies fusion candidates and structural variants.
         """
-        start_time = time.time()
-        bam_processing_start = None
+        # Remove state tracking for Fusion Analysis
+        # state.start_process("Fusion Analysis", ProcessType.BATCH)
+        state.set_process_state("Fusion Analysis", ProcessState.RUNNING)
         try:
-            logger.info(f"Starting BAM processing for file: {bamfile}")
-            
-            # Track BAM file size
-            bam_size = os.path.getsize(bamfile)
-            logger.info(f"BAM file size: {bam_size / (1024*1024):.2f} MB")
+            start_time = time.time()
+            bam_processing_start = None
+            try:
+                logger.info(f"Starting BAM processing for file: {bamfile}")
+                
+                # Track BAM file size
+                bam_size = os.path.getsize(bamfile)
+                logger.info(f"BAM file size: {bam_size / (1024*1024):.2f} MB")
 
-            if has_supplementary(bamfile):
-                # Create temporary files
-                tempreadfile = tempfile.NamedTemporaryFile(
-                    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
-                )
-                tempbamfile = tempfile.NamedTemporaryFile(
-                    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
-                )
-                tempmappings = tempfile.NamedTemporaryFile(
-                    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
-                )
-                tempallmappings = tempfile.NamedTemporaryFile(
-                    dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
-                )
-
-                try:
-                    bam_processing_start = time.time()  # Start timing BAM processing
-                    
-                    # Process fusion candidates
-                    logger.info(f"Processing BAM file for fusions: {bamfile}")
-                    fusion_start_time = time.time()
-                    fusion_candidates, fusion_candidates_all = await run.cpu_bound(
-                        fusion_work,
-                        self.threads,
-                        bamfile,
-                        self.gene_bed,
-                        self.all_gene_bed,
-                        tempreadfile.name,
-                        tempbamfile.name,
-                        tempmappings.name,
-                        tempallmappings.name,
+                if has_supplementary(bamfile):
+                    # Create temporary files
+                    tempreadfile = tempfile.NamedTemporaryFile(
+                        dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
                     )
-                    fusion_time = time.time() - fusion_start_time
-                    logger.info(f"Fusion detection time: {fusion_time:.2f} seconds")
-
-                    # Process genome-wide structural variants
-                    logger.info(f"Processing BAM file for structural variants: {bamfile}")
-                    sv_start_time = time.time()
-                    sv_csv_file = os.path.join(
-                        self.check_and_create_folder(self.output, self.sampleID),
-                        "sv_master.csv",
+                    tempbamfile = tempfile.NamedTemporaryFile(
+                        dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
                     )
-                    sv_reads = await run.cpu_bound(
-                        process_bam_file_svs,
-                        bamfile,
-                        sv_csv_file,
+                    tempmappings = tempfile.NamedTemporaryFile(
+                        dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
+                    )
+                    tempallmappings = tempfile.NamedTemporaryFile(
+                        dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".txt"
                     )
 
-                    bed_lines = await run.cpu_bound(
-                        build_breakpoint_graph, sv_reads, max_proximity=50000, group_by_sv=True
-                    )
-                    sv_time = time.time() - sv_start_time
-                    logger.info(f"Structural variant detection time: {sv_time:.2f} seconds")
+                    try:
+                        bam_processing_start = time.time()  # Start timing BAM processing
+                        
+                        # Process fusion candidates
+                        logger.info(f"Processing BAM file for fusions: {bamfile}")
+                        fusion_start_time = time.time()
+                        fusion_candidates, fusion_candidates_all = await run.cpu_bound(
+                            fusion_work,
+                            self.threads,
+                            bamfile,
+                            self.gene_bed,
+                            self.all_gene_bed,
+                            tempreadfile.name,
+                            tempbamfile.name,
+                            tempmappings.name,
+                            tempallmappings.name,
+                        )
+                        fusion_time = time.time() - fusion_start_time
+                        logger.info(f"Fusion detection time: {fusion_time:.2f} seconds")
 
-                    if len(bed_lines) > 0:
-                        # Convert bed lines to DataFrame for visualization
-                        sv_data = []
+                        # Process genome-wide structural variants
+                        logger.info(f"Processing BAM file for structural variants: {bamfile}")
+                        sv_start_time = time.time()
+                        sv_csv_file = os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID),
+                            "sv_master.csv",
+                        )
+                        sv_reads = await run.cpu_bound(
+                            process_bam_file_svs,
+                            bamfile,
+                            sv_csv_file,
+                        )
 
-                        # First, create a mapping of read pairs from sv_reads
-                        read_pairs = {}
-                        if not sv_reads.empty:
-                            for _, row in sv_reads.iterrows():
-                                qname = row["QNAME"]
-                                if qname not in read_pairs:
-                                    read_pairs[qname] = []
-                                read_pairs[qname].append(
+                        bed_lines = await run.cpu_bound(
+                            build_breakpoint_graph, sv_reads, max_proximity=50000, group_by_sv=True
+                        )
+                        sv_time = time.time() - sv_start_time
+                        logger.info(f"Structural variant detection time: {sv_time:.2f} seconds")
+
+                        if len(bed_lines) > 0:
+                            # Convert bed lines to DataFrame for visualization
+                            sv_data = []
+
+                            # First, create a mapping of read pairs from sv_reads
+                            read_pairs = {}
+                            if not sv_reads.empty:
+                                for _, row in sv_reads.iterrows():
+                                    qname = row["QNAME"]
+                                    if qname not in read_pairs:
+                                        read_pairs[qname] = []
+                                    read_pairs[qname].append(
+                                        {
+                                            "chrom": row["RNAME"],
+                                            "start": row["REF_START"],
+                                            "end": row["REF_END"],
+                                            "type": row["TYPE"],
+                                            "strand": row["STRAND"],
+                                        }
+                                    )
+
+                            for line in bed_lines:
+                                chrom, start, end, sv_type, _, strand = line.split("\t")
+                                # Format coordinates with commas for readability, handling float values
+                                formatted_start = f"{int(float(start)):,}"
+                                formatted_end = f"{int(float(end)):,}"
+                                # Calculate size of the variant
+                                size = int(float(end)) - int(float(start))
+                                formatted_size = f"{size:,}"
+
+                                # Find matching reads in sv_reads for this region
+                                matching_reads = sv_reads[
+                                    (sv_reads["RNAME"] == chrom)
+                                    & (sv_reads["REF_START"].astype(float).astype(int) >= float(start) - 1000)
+                                    & (sv_reads["REF_END"].astype(float).astype(int) <= float(end) + 1000)
+                                ]
+
+                                # Get partner chromosomes and positions
+                                partner_info = ""
+                                if not matching_reads.empty:
+                                    for _, read in matching_reads.iterrows():
+                                        qname = read["QNAME"]
+                                        if qname in read_pairs:
+                                            pairs = read_pairs[qname]
+                                            if len(pairs) > 1:
+                                                # Find the partner alignment
+                                                for pair in pairs:
+                                                    if pair["chrom"] != chrom:
+                                                        partner_chrom = pair["chrom"]
+                                                        partner_pos = f"{int(pair['start']):,}"
+                                                        partner_info = (
+                                                            f"{partner_chrom}:{partner_pos}"
+                                                        )
+                                                        break
+
+                                event_location = f"{chrom}:{formatted_start}-{formatted_end}"
+                                if partner_info:
+                                    event_location += f" ⟷ {partner_info}"
+
+                                sv_data.append(
                                     {
-                                        "chrom": row["RNAME"],
-                                        "start": row["REF_START"],
-                                        "end": row["REF_END"],
-                                        "type": row["TYPE"],
-                                        "strand": row["STRAND"],
+                                        "Event Type": sv_type,
+                                        "Primary Location": f"{chrom}:{formatted_start}-{formatted_end}",
+                                        "Partner Location": partner_info if partner_info else "N/A",
+                                        "Size (bp)": formatted_size,
+                                        "Strand": strand,
+                                        "Full Location": event_location,
                                     }
                                 )
 
-                        for line in bed_lines:
-                            chrom, start, end, sv_type, _, strand = line.split("\t")
-                            # Format coordinates with commas for readability, handling float values
-                            formatted_start = f"{int(float(start)):,}"
-                            formatted_end = f"{int(float(end)):,}"
-                            # Calculate size of the variant
-                            size = int(float(end)) - int(float(start))
-                            formatted_size = f"{size:,}"
+                            sv_df = pd.DataFrame(sv_data)
 
-                            # Find matching reads in sv_reads for this region
-                            matching_reads = sv_reads[
-                                (sv_reads["RNAME"] == chrom)
-                                & (sv_reads["REF_START"].astype(float).astype(int) >= float(start) - 1000)
-                                & (sv_reads["REF_END"].astype(float).astype(int) <= float(end) + 1000)
-                            ]
+                            # Sort by event type and location
+                            sv_df = sv_df.sort_values(["Event Type", "Primary Location"])
 
-                            # Get partner chromosomes and positions
-                            partner_info = ""
-                            if not matching_reads.empty:
-                                for _, read in matching_reads.iterrows():
-                                    qname = read["QNAME"]
-                                    if qname in read_pairs:
-                                        pairs = read_pairs[qname]
-                                        if len(pairs) > 1:
-                                            # Find the partner alignment
-                                            for pair in pairs:
-                                                if pair["chrom"] != chrom:
-                                                    partner_chrom = pair["chrom"]
-                                                    partner_pos = f"{int(pair['start']):,}"
-                                                    partner_info = (
-                                                        f"{partner_chrom}:{partner_pos}"
-                                                    )
-                                                    break
-
-                            event_location = f"{chrom}:{formatted_start}-{formatted_end}"
-                            if partner_info:
-                                event_location += f" ⟷ {partner_info}"
-
-                            sv_data.append(
-                                {
-                                    "Event Type": sv_type,
-                                    "Primary Location": f"{chrom}:{formatted_start}-{formatted_end}",
-                                    "Partner Location": partner_info if partner_info else "N/A",
-                                    "Size (bp)": formatted_size,
-                                    "Strand": strand,
-                                    "Full Location": event_location,
-                                }
+                            # Save structural variants to CSV
+                            sv_df.to_csv(
+                                os.path.join(
+                                    self.check_and_create_folder(self.output, self.sampleID),
+                                    "structural_variants.csv",
+                                ),
+                                index=False,
                             )
 
-                        sv_df = pd.DataFrame(sv_data)
+                            # Update structural variant count and visualization
+                            self.sv_count = len(sv_df)
 
-                        # Sort by event type and location
-                        sv_df = sv_df.sort_values(["Event Type", "Primary Location"])
+                            # Only update UI elements if they exist
+                            if hasattr(self, "sv_plot") and self.sv_plot is not None:
+                                self.sv_plot.clear()
+                                with self.sv_plot:
+                                    self.create_sv_plot(sv_df, self.sampleID)
 
-                        # Save structural variants to CSV
-                        sv_df.to_csv(
-                            os.path.join(
-                                self.check_and_create_folder(self.output, self.sampleID),
-                                "structural_variants.csv",
-                            ),
-                            index=False,
-                        )
+                            if (
+                                hasattr(self, "sv_table_container")
+                                and self.sv_table_container is not None
+                            ):
+                                self.update_sv_table(sv_df)
 
-                        # Update structural variant count and visualization
-                        self.sv_count = len(sv_df)
-
-                        # Only update UI elements if they exist
-                        if hasattr(self, "sv_plot") and self.sv_plot is not None:
-                            self.sv_plot.clear()
-                            with self.sv_plot:
-                                self.create_sv_plot(sv_df, self.sampleID)
-
-                        if (
-                            hasattr(self, "sv_table_container")
-                            and self.sv_table_container is not None
-                        ):
-                            self.update_sv_table(sv_df)
-
-                        # Add to BedTree if needed
-                        if self.master_bed_tree[self.sampleID] is None:
-                            self.master_bed_tree.add_bed_tree(
-                                sample_id=self.sampleID,
-                                preserve_original_tree=True,
-                                reference_file=f"{self.reference_file}.fai",
+                            # Add to BedTree if needed
+                            if self.master_bed_tree[self.sampleID] is None:
+                                self.master_bed_tree.add_bed_tree(
+                                    sample_id=self.sampleID,
+                                    preserve_original_tree=True,
+                                    reference_file=f"{self.reference_file}.fai",
+                                )
+                            bedfile = self.master_bed_tree.bed_trees[self.sampleID]
+                            
+                            bedfile.load_from_string(
+                                "\n".join(bed_lines),
+                                merge=False,
+                                write_files=True,
+                                output_location=os.path.join(
+                                    self.check_and_create_folder(self.output, self.sampleID)
+                                ),
+                                source_type="FUSION",
                             )
-                        bedfile = self.master_bed_tree.bed_trees[self.sampleID]
                         
-                        bedfile.load_from_string(
-                            "\n".join(bed_lines),
-                            merge=False,
-                            write_files=True,
-                            output_location=os.path.join(
-                                self.check_and_create_folder(self.output, self.sampleID)
-                            ),
-                            source_type="FUSION",
-                        )
-                    
-                    logger.info(f"We found {len(bed_lines)} possible events.")
+                            logger.info(f"We found {len(bed_lines)} possible events.")
 
-                    # Update fusion candidates
-                    if fusion_candidates is not None:
-                        logger.info("Processing fusion candidates")
-                        if self.sampleID not in self.fusion_candidates.keys():
-                            self.fusion_candidates[self.sampleID] = fusion_candidates
-                        else:
-                            self.fusion_candidates[self.sampleID] = pd.concat(
-                                [self.fusion_candidates[self.sampleID], fusion_candidates]
-                            ).reset_index(drop=True)
+                            # Update fusion candidates
+                            if fusion_candidates is not None:
+                                logger.info("Processing fusion candidates")
+                                if self.sampleID not in self.fusion_candidates.keys():
+                                    self.fusion_candidates[self.sampleID] = fusion_candidates
+                                else:
+                                    self.fusion_candidates[self.sampleID] = pd.concat(
+                                        [self.fusion_candidates[self.sampleID], fusion_candidates]
+                                    ).reset_index(drop=True)
 
-                    if fusion_candidates_all is not None:
-                        logger.info("Processing all fusion candidates")
-                        if self.sampleID not in self.fusion_candidates_all.keys():
-                            self.fusion_candidates_all[self.sampleID] = fusion_candidates_all
-                        else:
-                            self.fusion_candidates_all[self.sampleID] = pd.concat(
-                                [
-                                    self.fusion_candidates_all[self.sampleID],
-                                    fusion_candidates_all,
-                                ]
-                            ).reset_index(drop=True)
+                            if fusion_candidates_all is not None:
+                                logger.info("Processing all fusion candidates")
+                                if self.sampleID not in self.fusion_candidates_all.keys():
+                                    self.fusion_candidates_all[self.sampleID] = fusion_candidates_all
+                                else:
+                                    self.fusion_candidates_all[self.sampleID] = pd.concat(
+                                        [
+                                            self.fusion_candidates_all[self.sampleID],
+                                            fusion_candidates_all,
+                                        ]
+                                    ).reset_index(drop=True)
 
-                    # Update fusion tables
-                    self.fusion_table()
-                    self.fusion_table_all()
+                            # Update fusion tables
+                            self.fusion_table()
+                            self.fusion_table_all()
 
-                    # Calculate processing times
-                    bam_processing_time = time.time() - bam_processing_start if bam_processing_start else 0
-                    total_time = time.time() - start_time
-                    logger.info(f"BAM processing time: {bam_processing_time:.2f} seconds")
-                    logger.info(f"Total processing time: {total_time:.2f} seconds")
+                            # Calculate processing times
+                            bam_processing_time = time.time() - bam_processing_start if bam_processing_start else 0
+                            total_time = time.time() - start_time
+                            logger.info(f"BAM processing time: {bam_processing_time:.2f} seconds")
+                            logger.info(f"Total processing time: {total_time:.2f} seconds")
 
-                    # Record metrics if performance metrics is initialized
-                    if self.performance_metrics is not None:
-                        logger.info("Recording performance metrics")
-                        # Check if sampleID has changed since last metrics recording
-                        current_output_dir = os.path.join(
-                            self.check_and_create_folder(self.output, self.sampleID),
-                            'performance_fusion'
-                        )
-                        os.makedirs(current_output_dir, exist_ok=True)
-                        
-                        if current_output_dir != self.performance_metrics.output_dir:
-                            logger.info(f"SampleID changed, reinitializing performance metrics")
-                            self.performance_metrics = PerformanceMetrics(
-                                output_dir=current_output_dir,
-                                metrics={
-                                    'fusion_bam_merge_time': [],
-                                    'fusion_detection_time': [],
-                                    'sv_detection_time': [],
-                                    'fusion_total_time': [],
-                                    'fusion_timestamps': [],
-                                    'fusion_bam_sizes': [],
-                                    'fusion_bam_names': []
-                                }
-                            )
-                            # Load any existing metrics for the new sample
-                            self.performance_metrics.load_metrics()
-                            # Recreate UI if needed
-                            if not self.performance_ui_initialized:
-                                self.performance_metrics.create_ui()
-                                self.performance_ui_initialized = True
-                        
-                        # Record metrics
-                        self.performance_metrics.record_metrics(
-                            processing_time=total_time,
-                            file_path=bamfile,
-                            additional_metrics={
-                                'fusion_bam_merge_time': bam_processing_time - fusion_time - sv_time,
-                                'fusion_detection_time': fusion_time,
-                                'sv_detection_time': sv_time,
-                                'fusion_total_time': total_time,
-                                'fusion_timestamps': time.time() * 1000,
-                                'fusion_bam_sizes': bam_size,
-                                'fusion_bam_names': os.path.basename(bamfile)
-                            }
-                        )
-                        
-                        # Save metrics after recording
-                        self.performance_metrics.save_metrics()
-                        logger.info("Performance metrics saved successfully")
-                        
-                        # Update UI if it's initialized
-                        if self.performance_ui_initialized:
-                            logger.info("Updating performance metrics UI")
-                            self.performance_metrics.update_ui()
-                        else:
-                            logger.warning("Performance metrics UI not initialized, attempting to initialize")
-                            self.performance_metrics.create_ui()
-                            self.performance_ui_initialized = True
-                            self.performance_metrics.update_ui()
-                    else:
-                        logger.warning("Performance metrics not initialized, skipping metrics recording")
+                            # Record metrics if performance metrics is initialized
+                            if self.performance_metrics is not None:
+                                logger.info("Recording performance metrics")
+                                # Check if sampleID has changed since last metrics recording
+                                current_output_dir = os.path.join(
+                                    self.check_and_create_folder(self.output, self.sampleID),
+                                    'performance_fusion'
+                                )
+                                os.makedirs(current_output_dir, exist_ok=True)
+                                
+                                if current_output_dir != self.performance_metrics.output_dir:
+                                    logger.info(f"SampleID changed, reinitializing performance metrics")
+                                    self.performance_metrics = PerformanceMetrics(
+                                        output_dir=current_output_dir,
+                                        metrics={
+                                            'fusion_bam_merge_time': [],
+                                            'fusion_detection_time': [],
+                                            'sv_detection_time': [],
+                                            'fusion_total_time': [],
+                                            'fusion_timestamps': [],
+                                            'fusion_bam_sizes': [],
+                                            'fusion_bam_names': []
+                                        }
+                                    )
+                                    # Load any existing metrics for the new sample
+                                    self.performance_metrics.load_metrics()
+                                    # Recreate UI if needed
+                                    if not self.performance_ui_initialized:
+                                        self.performance_metrics.create_ui()
+                                        self.performance_ui_initialized = True
+                                    
+                                # Record metrics
+                                self.performance_metrics.record_metrics(
+                                    processing_time=total_time,
+                                    file_path=bamfile,
+                                    additional_metrics={
+                                        'fusion_bam_merge_time': bam_processing_time - fusion_time - sv_time,
+                                        'fusion_detection_time': fusion_time,
+                                        'sv_detection_time': sv_time,
+                                        'fusion_total_time': total_time,
+                                        'fusion_timestamps': time.time() * 1000,
+                                        'fusion_bam_sizes': bam_size,
+                                        'fusion_bam_names': os.path.basename(bamfile)
+                                    }
+                                )
+                                
+                                # Save metrics after recording
+                                self.performance_metrics.save_metrics()
+                                logger.info("Performance metrics saved successfully")
+                                
+                                # Update UI if it's initialized
+                                if self.performance_ui_initialized:
+                                    logger.info("Updating performance metrics UI")
+                                    self.performance_metrics.update_ui()
+                                else:
+                                    logger.warning("Performance metrics UI not initialized, attempting to initialize")
+                                    self.performance_metrics.create_ui()
+                                    self.performance_ui_initialized = True
+                                    self.performance_metrics.update_ui()
+                            else:
+                                logger.warning("Performance metrics not initialized, skipping metrics recording")
 
-                except Exception as e:
-                    logger.error(f"Error processing BAM file: {str(e)}")
-                    logger.error("Exception details:", exc_info=True)
-                    raise
-                finally:
+                    except Exception as e:
+                        logger.error(f"Error processing BAM file: {str(e)}")
+                        logger.error("Exception details:", exc_info=True)
+                        raise
+                    finally:
+                        self.running = False
+                else:
+                    logger.info("BAM file has no supplementary alignments, skipping.")
                     self.running = False
-            else:
-                logger.info("BAM file has no supplementary alignments, skipping.")
-                self.running = False
 
-        except Exception as e:
-            logger.error(f"Error in process_bam: {e}")
-            raise
+            except Exception as e:
+                logger.error(f"Error in process_bam: {e}")
+                raise
+        finally:
+            state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
 
     def show_previous_data(self) -> None:
         """
@@ -2375,6 +2385,12 @@ class FusionObject(BaseAnalysis):
                 else:
                     ax3.set_visible(False)
             """
+
+    async def stop_analysis(self):
+        """Stop the fusion analysis."""
+        state.set_process_state("Fusion Analysis", ProcessState.STOPPING)
+        state.stop_process("Fusion Analysis")
+        await super().stop_analysis()
 
 
 def test_me(
