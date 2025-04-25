@@ -61,6 +61,7 @@ import tempfile
 from robin import models, theme, resources
 import asyncio
 import logging
+from robin.core.state import state, ProcessType, ProcessState
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -140,8 +141,9 @@ def load_modkit_data(parquet_path):
         "n_nocall",
     ]
 
-    # Keep only the original 18 columns
-    return merged_modkit_df[column_names]
+    # Keep only the original 18 columns and sort by chrom and chromStart
+    df = merged_modkit_df[column_names]
+    return df.sort_values(by=['chrom', 'chromStart'])
 
 
 def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
@@ -234,6 +236,9 @@ class NanoDX_object(BaseAnalysis):
     """
 
     def __init__(self, *args, model: str = "Capper_et_al_NN.pkl", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Remove state tracking for NanoDX Analysis
+        # state.start_process("NanoDX Analysis", ProcessType.BATCH)
         self.cpgs_file = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "hglft_genome_260e9_91a970_clean.bed",
@@ -366,127 +371,130 @@ class NanoDX_object(BaseAnalysis):
         The method processes files in batches and updates progress trackers.
         Results are stored in temporary directories and visualized in real-time.
         """
-        sampleID = self.sampleID
-        # Initialize directories for each sampleID if not already present
-        if sampleID not in self.dataDir.keys():
-            self.dataDir[sampleID] = tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
-            self.bedDir[sampleID] = tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
-        
-        # Get latest timestamp from input files or use provided timestamp
-        if timestamp is not None:
-            currenttime = timestamp * 1000
-        else:
-            latest_file = max(timestamp for _, timestamp in bamfile) if bamfile else 0
-            currenttime = latest_file * 1000 if latest_file else time.time() * 1000
+        try:
+            sampleID = self.sampleID
+            # Initialize directories for each sampleID if not already present
+            if sampleID not in self.dataDir.keys():
+                self.dataDir[sampleID] = tempfile.TemporaryDirectory(
+                    dir=self.check_and_create_folder(self.output, sampleID)
+                )
+                self.bedDir[sampleID] = tempfile.TemporaryDirectory(
+                    dir=self.check_and_create_folder(self.output, sampleID)
+                )
+            
+            # Get latest timestamp from input files or use provided timestamp
+            if timestamp is not None:
+                currenttime = timestamp * 1000
+            else:
+                latest_file = max(timestamp for _, timestamp in bamfile) if bamfile else 0
+                currenttime = latest_file * 1000 if latest_file else time.time() * 1000
 
-        if (
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bam_count"
-            ]
-            > 0
-        ):
-            parquet_path = os.path.join(
-                self.check_and_create_folder(self.output, sampleID),
-                f"{sampleID}.parquet",
-            )
+            if (
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bam_count"
+                ]
+                > 0
+            ):
+                parquet_path = os.path.join(
+                    self.check_and_create_folder(self.output, sampleID),
+                    f"{sampleID}.parquet",
+                )
 
-            try:
-                if self.check_file_time(parquet_path):
-                    tomerge_length_file = os.path.join(
-                        self.check_and_create_folder(self.output, sampleID),
-                        "tomerge_length.txt",
-                    )
-                    with open(tomerge_length_file, "r") as f:
-                        tomerge_length = int(f.readline().strip().split(": ")[1])
-
-                    merged_modkit_df = await run.cpu_bound(
-                        load_modkit_data, parquet_path
-                    )
-
-                    merged_modkit_df.rename(
-                        columns={
-                            "chromStart": "start_pos",
-                            "chromEnd": "end_pos",
-                            "mod_code": "mod",
-                            "thickStart": "start_pos2",
-                            "thickEnd": "end_pos2",
-                            "color": "colour",
-                        },
-                        inplace=True,
-                    )
-                    merged_modkit_df.rename(
-                        columns={
-                            "n_canonical": "Ncanon",
-                            "n_delete": "Ndel",
-                            "n_diff": "Ndiff",
-                            "n_fail": "Nfail",
-                            "n_mod": "Nmod",
-                            "n_nocall": "Nnocall",
-                            "n_othermod": "Nother",
-                            "valid_cov": "Nvalid",
-                            "percent_modified": "score",
-                        },
-                        inplace=True,
-                    )
-
-                    nanodx_df = await run.cpu_bound(
-                        collapse_bedmethyl, merged_modkit_df
-                    )
-                    test_df = pd.merge(
-                        nanodx_df,
-                        self.cpgs,
-                        left_on=["chrom", "start_pos"],
-                        right_on=[0, 1],
-                    )
-                    test_df.rename(
-                        columns={3: "probe_id", "fraction": "methylation_call"},
-                        inplace=True,
-                    )
-                    test_df.loc[
-                        test_df["methylation_call"] < 60, "methylation_call"
-                    ] = -1
-                    test_df.loc[
-                        test_df["methylation_call"] >= 60, "methylation_call"
-                    ] = 1
-                    predictions, class_labels, n_features = await run.cpu_bound(
-                        classification, self.modelfile, test_df
-                    )
-
-                    nanoDX_df = pd.DataFrame(
-                        {"class": class_labels, "score": predictions}
-                    )
-                    nanoDX_save = nanoDX_df.set_index("class").T
-                    nanoDX_save["number_probes"] = n_features
-                    nanoDX_save["timestamp"] = currenttime
-
-                    if sampleID not in self.nanodx_df_store.keys():
-                        self.nanodx_df_store[sampleID] = pd.DataFrame()
-                    self.nanodx_df_store[sampleID] = pd.concat(
-                        [
-                            self.nanodx_df_store[sampleID],
-                            nanoDX_save.set_index("timestamp"),
-                        ]
-                    )
-
-                    self.nanodx_df_store[sampleID].to_csv(
-                        os.path.join(
+                try:
+                    if self.check_file_time(parquet_path):
+                        tomerge_length_file = os.path.join(
                             self.check_and_create_folder(self.output, sampleID),
-                            self.storefile,
+                            "tomerge_length.txt",
                         )
-                    )
+                        with open(tomerge_length_file, "r") as f:
+                            tomerge_length = int(f.readline().strip().split(": ")[1])
 
-                    app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                        "bam_processed"
-                    ] = tomerge_length
+                        merged_modkit_df = await run.cpu_bound(
+                            load_modkit_data, parquet_path
+                        )
 
-            except Exception as e:
-                logger.error(f"Error in process_bam (nanodx): {e}")
+                        merged_modkit_df.rename(
+                            columns={
+                                "chromStart": "start_pos",
+                                "chromEnd": "end_pos",
+                                "mod_code": "mod",
+                                "thickStart": "start_pos2",
+                                "thickEnd": "end_pos2",
+                                "color": "colour",
+                            },
+                            inplace=True,
+                        )
+                        merged_modkit_df.rename(
+                            columns={
+                                "n_canonical": "Ncanon",
+                                "n_delete": "Ndel",
+                                "n_diff": "Ndiff",
+                                "n_fail": "Nfail",
+                                "n_mod": "Nmod",
+                                "n_nocall": "Nnocall",
+                                "n_othermod": "Nother",
+                                "valid_cov": "Nvalid",
+                                "percent_modified": "score",
+                            },
+                            inplace=True,
+                        )
 
-        self.running = False
+                        nanodx_df = await run.cpu_bound(
+                            collapse_bedmethyl, merged_modkit_df
+                        )
+                        test_df = pd.merge(
+                            nanodx_df,
+                            self.cpgs,
+                            left_on=["chrom", "start_pos"],
+                            right_on=[0, 1],
+                        )
+                        test_df.rename(
+                            columns={3: "probe_id", "fraction": "methylation_call"},
+                            inplace=True,
+                        )
+                        test_df.loc[
+                            test_df["methylation_call"] < 60, "methylation_call"
+                        ] = -1
+                        test_df.loc[
+                            test_df["methylation_call"] >= 60, "methylation_call"
+                        ] = 1
+                        predictions, class_labels, n_features = await run.cpu_bound(
+                            classification, self.modelfile, test_df
+                        )
+
+                        nanoDX_df = pd.DataFrame(
+                            {"class": class_labels, "score": predictions}
+                        )
+                        nanoDX_save = nanoDX_df.set_index("class").T
+                        nanoDX_save["number_probes"] = n_features
+                        nanoDX_save["timestamp"] = currenttime
+
+                        if sampleID not in self.nanodx_df_store.keys():
+                            self.nanodx_df_store[sampleID] = pd.DataFrame()
+                        self.nanodx_df_store[sampleID] = pd.concat(
+                            [
+                                self.nanodx_df_store[sampleID],
+                                nanoDX_save.set_index("timestamp"),
+                            ]
+                        )
+
+                        self.nanodx_df_store[sampleID].to_csv(
+                            os.path.join(
+                                self.check_and_create_folder(self.output, sampleID),
+                                self.storefile,
+                            )
+                        )
+
+                        app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                            "bam_processed"
+                        ] = tomerge_length
+
+                except Exception as e:
+                    logger.error(f"Error in process_bam (nanodx): {e}")
+
+            self.running = False
+        finally:
+            pass
 
     def create_nanodx_chart(self, title):
         """
@@ -732,13 +740,16 @@ class NanoDX_object(BaseAnalysis):
                 "#4CD964",  # Light Green
             ]
 
+            # Ensure DataFrame is sorted by index (timestamp)
+            datadf = datadf.sort_index()
+
             for idx, (series, data) in enumerate(datadf.to_dict().items()):
                 if series != "number_probes":
                     logger.debug(f"Processing series: {series}")
-                    # Convert values to percentages
+                    # Convert values to percentages and ensure sorted by timestamp
                     data_list = [
                         [key, float(f"{value * 100:.1f}")]
-                        for key, value in data.items()
+                        for key, value in sorted(data.items())  # Sort by timestamp
                     ]
                     logger.debug(f"First few data points for {series}: {data_list[:3]}")
 
@@ -795,6 +806,10 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_time_chart.options["title"]["text"] = "Error Updating Chart"
             self.nanodx_time_chart.options["series"] = []
             self.nanodx_time_chart.update()
+
+    async def stop_analysis(self):
+        """Stop the NanoDX analysis."""
+        await super().stop_analysis()
 
 
 def test_me(

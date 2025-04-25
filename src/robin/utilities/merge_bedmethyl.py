@@ -218,7 +218,7 @@ def parquet_to_bed(parquet_file: str, output_bed: str) -> None:
         bed_df = df[required_columns].copy()
         
         # Convert numeric columns to appropriate types
-        numeric_columns = ["chromStart", "chromEnd", "thickStart", "thickEnd"]
+        numeric_columns = ["chromStart", "chromEnd", "thickStart", "thickEnd", "valid_cov"]
         for col in numeric_columns:
             bed_df[col] = pd.to_numeric(bed_df[col], errors='coerce').astype(int)
         

@@ -115,6 +115,8 @@ from scipy.ndimage import uniform_filter1d
 import math
 import time
 
+from robin.core.state import state, ProcessType, ProcessState
+
 os.environ["CI"] = "1"
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -390,6 +392,9 @@ class CNVAnalysis(BaseAnalysis):
     ) -> None:
         # self.file_list = []
         super().__init__(*args, **kwargs)
+        # Remove state tracking for CNV Analysis
+        # state.start_process("CNV Analysis", ProcessType.BATCH)
+        state.set_process_state("CNV Analysis", ProcessState.WAITING_FOR_DATA)
         self.target_panel = target_panel
         self.reference_file = reference_file
         self.bed_file = bed_file
@@ -740,12 +745,16 @@ class CNVAnalysis(BaseAnalysis):
             bamfile (BinaryIO): The BAM file to process.
             timestamp (float): The timestamp indicating when the file was generated.
         """
-        # self.file_list.append(bamfile)
-        # try:
-        await self.do_cnv_work(bamfile)
-        # except Exception as e:
-        #    logger.error(e)
-        #    logger.error("line 313")
+        state.set_process_state("CNV Analysis", ProcessState.RUNNING)
+        try:
+            # self.file_list.append(bamfile)
+            # try:
+            await self.do_cnv_work(bamfile)
+            # except Exception as e:
+            #    logger.error(e)
+            #    logger.error("line 313")
+        finally:
+            state.set_process_state("CNV Analysis", ProcessState.WAITING_FOR_DATA)
 
     async def do_cnv_work(self, bamfile: BinaryIO) -> None:
         """
@@ -3461,6 +3470,12 @@ class CNVAnalysis(BaseAnalysis):
         # Update references
         self.DATA_ARRAY = new_array
         self.data_array_size = new_size
+
+    async def stop_analysis(self):
+        """Stop the CNV analysis."""
+        state.set_process_state("CNV Analysis", ProcessState.STOPPING)
+        state.stop_process("CNV Analysis")
+        await super().stop_analysis()
 
 
 def test_me(

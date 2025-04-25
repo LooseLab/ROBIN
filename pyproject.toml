@@ -61,6 +61,7 @@ dependencies = [
   "svglib>=1.5.1",
   "alive-progress>=3.1.5",
   "geocoder>=1.38.1",
+  "polars",
 ]
 
 [project.scripts]

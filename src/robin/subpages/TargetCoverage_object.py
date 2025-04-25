@@ -60,6 +60,8 @@ import asyncio
 from robin.utilities.decompress import decompress_gzip_file
 from robin.subpages.base_analysis import BaseAnalysis
 
+from robin.core.state import state, ProcessState
+
 os.environ["CI"] = "1"
 logger = logging.getLogger(__name__)
 
@@ -276,7 +278,8 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
     -------
     None
     """
-    
+    state.start_process("clair3")
+    state.set_process_state("clair3", ProcessState.RUNNING)
     # Debug: Log input file paths for verification.
     if showerrors:
         logger.info(f"Input BAM file: {bamfile}")
@@ -416,7 +419,8 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             # Parse the annotated VCF files.
             parse_vcf(os.path.join(workdirout, "snpsift_output.vcf"))
             parse_vcf(os.path.join(workdirout, "snpsift_indel_output.vcf"))
-
+            state.set_process_state("clair3", ProcessState.WAITING_FOR_DATA)
+            state.stop_process("clair3")
         except Exception as e:
             logger.error("Error running Clair3")
             logger.error(f"Error: {e}")
@@ -581,6 +585,8 @@ class TargetCoverage(BaseAnalysis):
         Path to the reference genome for variant calling
     simtime : bool, optional
         Whether to use simulation time instead of real time for timestamps
+    enable_snp_calling : bool, optional
+        Whether to enable SNP calling functionality, by default False
 
     Attributes
     ----------
@@ -600,7 +606,7 @@ class TargetCoverage(BaseAnalysis):
     """
 
     def __init__(
-        self, *args, showerrors=False, target_panel=None, reference=None, simtime=False, **kwargs
+        self, *args, showerrors=False, target_panel=None, reference=None, simtime=False, enable_snp_calling=False, **kwargs
     ):
         """
         Initialize the TargetCoverage analysis object.
@@ -617,6 +623,8 @@ class TargetCoverage(BaseAnalysis):
             Path to the reference genome
         simtime : bool, optional
             Whether to use simulation time instead of real time for timestamps
+        enable_snp_calling : bool, optional
+            Whether to enable SNP calling functionality, by default False
         **kwargs
             Arbitrary keyword arguments.
         """
@@ -633,12 +641,13 @@ class TargetCoverage(BaseAnalysis):
         self.reference = reference
         self.showerrors = showerrors
         self.simtime = simtime
-        if self.reference:
+        self.enable_snp_calling = enable_snp_calling
+        self.snp_calling = False  # Will be set to True only if both reference is provided and enable_snp_calling is True
+        
+        if self.reference and self.enable_snp_calling:
             self.snp_calling = True
-        else:
-            self.snp_calling = False
-        if self.snp_calling:
             self.SNP_timer_run()
+            
         self.target_panel = target_panel
 
         if self.target_panel == "rCNS2":
@@ -1848,6 +1857,90 @@ class TargetCoverage(BaseAnalysis):
         # await asyncio.sleep(0.5)
         self.running = False
 
+    async def rerun_snp_analysis(self):
+        """
+        Rerun the SNP calling analysis for the current sample.
+        
+        This function triggers a new SNP analysis by adding the current target regions
+        to the SNP queue for processing.
+        """
+        if not self.reference:
+            ui.notify("Reference genome not provided. SNP calling is disabled.", type="warning")
+            return
+            
+        if self.clair3running:
+            ui.notify("SNP analysis is already running. Please wait.", type="warning")
+            return
+            
+        # Enable SNP calling for this run
+        self.snp_calling = True
+        if not hasattr(self, 'SNP_timer') or not self.SNP_timer.active:
+            self.SNP_timer_run()
+            
+        output = self.check_and_create_folder(self.output, self.sampleID)
+        clair3workdir = os.path.join(output, "clair3")
+        
+        if not os.path.exists(clair3workdir):
+            os.mkdir(clair3workdir)
+            
+        # Get the current target regions that exceed threshold
+        run_list = self.target_coverage_df[
+            self.target_coverage_df["coverage"].ge(self.callthreshold)
+        ]
+        
+        if len(run_list) == 0:
+            ui.notify("No regions currently exceed the coverage threshold.", type="warning")
+            return
+            
+        # Check if we have access to the BAM file
+        if self.sampleID not in self.targetbamfile or not os.path.exists(self.targetbamfile[self.sampleID]):
+            ui.notify("Target BAM file not found. Cannot rerun analysis.", type="error")
+            return
+            
+        # Verify BAM file integrity
+        try:
+            # Check if BAM file is being written to
+            initial_size = os.path.getsize(self.targetbamfile[self.sampleID])
+            await asyncio.sleep(1)  # Wait 1 second
+            if os.path.getsize(self.targetbamfile[self.sampleID]) != initial_size:
+                ui.notify("BAM file is still being written. Please wait and try again.", type="warning")
+                return
+                
+            # Try to open the BAM file to verify it's not corrupted
+            with pysam.AlignmentFile(self.targetbamfile[self.sampleID], "rb") as bam:
+                if bam.count() == 0:
+                    ui.notify("BAM file appears to be empty or corrupted.", type="error")
+                    return
+        except Exception as e:
+            ui.notify(f"Error verifying BAM file: {str(e)}", type="error")
+            return
+            
+        # Save the target regions to a new BED file
+        bed_file = os.path.join(output, "targets_exceeding_threshold.bed")
+        run_list[["chrom", "startpos", "endpos"]].to_csv(
+            bed_file,
+            sep="\t",
+            header=None,
+            index=None,
+        )
+        
+        # Sort the BAM file
+        sorted_bam = os.path.join(clair3workdir, "sorted_targets_exceeding_rerun.bam")
+        try:
+            await run.cpu_bound(
+                sort_bam,
+                self.targetbamfile[self.sampleID],
+                sorted_bam,
+                self.threads,
+            )
+        except Exception as e:
+            ui.notify(f"Error sorting BAM file: {str(e)}", type="error")
+            return
+            
+        # Add to SNP queue
+        self.SNPqueue.put([run_list, sorted_bam, bed_file])
+        ui.notify("SNP analysis rerun initiated", type="info")
+
     def show_previous_data(self):
         """
         Display previously generated coverage analysis results.
@@ -1957,6 +2050,17 @@ class TargetCoverage(BaseAnalysis):
             # Initialize targetbamfile if it exists in the clair3 directory
             if os.path.exists(os.path.join(output, "clair3", "sorted_targets_exceeding.bam")):
                 self.targetbamfile[self.sampleID] = os.path.join(output, "clair3", "sorted_targets_exceeding.bam")
+            
+            # Show rerun button if we have regions with sufficient coverage
+            if len(self.target_coverage_df[self.target_coverage_df["coverage"].ge(self.callthreshold)]) > 0:
+                self.SNPplaceholder.clear()
+                with self.SNPplaceholder:
+                    with ui.row().classes("w-full justify-between items-center mb-4"):
+                        ui.label("Candidate SNPs").classes("text-lg font-medium")
+                        ui.button("Rerun SNP Analysis", on_click=lambda: self.rerun_snp_analysis()).props("color=primary")
+                    with ui.column().classes("gap-2"):
+                        ui.label("No SNP data available yet").classes("text-gray-600")
+                        ui.label("Click 'Rerun SNP Analysis' to generate SNP calls for regions with sufficient coverage.").classes("text-gray-600")
             
             if self.summary:
                 with self.summary:
@@ -2071,7 +2175,9 @@ class TargetCoverage(BaseAnalysis):
             with self.SNPplaceholder:
                 with ui.row().classes("w-full justify-between items-center mb-4"):
                     ui.label("Candidate SNPs").classes("text-lg font-medium")
-                    ui.button("Rerun SNP Analysis", on_click=lambda: self.rerun_snp_analysis()).props("color=primary")
+                    # Only show rerun button if we have sufficient coverage
+                    if len(self.target_coverage_df[self.target_coverage_df["coverage"].ge(self.callthreshold)]) > 0:
+                        ui.button("Rerun SNP Analysis", on_click=lambda: self.rerun_snp_analysis()).props("color=primary")
                 
                 if len(vcf) > 0:
                     self.snptable = (
@@ -2205,64 +2311,6 @@ class TargetCoverage(BaseAnalysis):
                         ).bind_value(self.indeltable, "filter").add_slot("append"):
                             ui.icon("search")
 
-    async def rerun_snp_analysis(self):
-        """
-        Rerun the SNP calling analysis for the current sample.
-        
-        This function triggers a new SNP analysis by adding the current target regions
-        to the SNP queue for processing.
-        """
-        if not self.reference:
-            ui.notify("Reference genome not provided. SNP calling is disabled.", type="warning")
-            return
-            
-        if self.clair3running:
-            ui.notify("SNP analysis is already running. Please wait.", type="warning")
-            return
-            
-        output = self.check_and_create_folder(self.output, self.sampleID)
-        clair3workdir = os.path.join(output, "clair3")
-        
-        if not os.path.exists(clair3workdir):
-            os.mkdir(clair3workdir)
-            
-        # Get the current target regions that exceed threshold
-        run_list = self.target_coverage_df[
-            self.target_coverage_df["coverage"].ge(self.callthreshold)
-        ]
-        
-        if len(run_list) == 0:
-            ui.notify("No regions currently exceed the coverage threshold.", type="warning")
-            return
-            
-        # Check if we have access to the BAM file
-        if self.sampleID not in self.targetbamfile or not os.path.exists(self.targetbamfile[self.sampleID]):
-            ui.notify("Target BAM file not found. Cannot rerun analysis.", type="error")
-            return
-            
-        # Save the target regions to a new BED file
-        bed_file = os.path.join(output, "targets_exceeding_threshold.bed")
-        run_list[["chrom", "startpos", "endpos"]].to_csv(
-            bed_file,
-            sep="\t",
-            header=None,
-            index=None,
-        )
-        
-        # Sort the BAM file
-        sorted_bam = os.path.join(clair3workdir, "sorted_targets_exceeding_rerun.bam")
-        await run.cpu_bound(
-            sort_bam,
-            self.targetbamfile[self.sampleID],
-            sorted_bam,
-            self.threads,
-        )
-        
-        # Add to SNP queue
-        self.SNPqueue.put([run_list, sorted_bam, bed_file])
-        ui.notify("SNP analysis rerun initiated", type="info")
-
-
 def test_me(
     port: int,
     threads: int,
@@ -2271,11 +2319,17 @@ def test_me(
     reload: bool = False,
     browse: bool = False,
     simtime: bool = False,
+    enable_snp_calling: bool = False,
 ):
     my_connection = None
     with theme.frame("Target Coverage Data", my_connection):
-        TestObject = TargetCoverage(threads, output, progress=True, simtime=simtime)
-        # TestObject = MGMT_Object(threads, output, progress=True)
+        TestObject = TargetCoverage(
+            threads, 
+            output, 
+            progress=True, 
+            simtime=simtime,
+            enable_snp_calling=enable_snp_calling
+        )
     if not browse:
         path = watchfolder
         searchdirectory = os.fsencode(path)
@@ -2285,7 +2339,6 @@ def test_me(
                 filename = os.fsdecode(f)
                 if filename.endswith(".bam"):
                     TestObject.add_bam(os.path.join(directory, filename))
-                    # break
     else:
         TestObject.progress_trackers.visible = False
         TestObject.show_previous_data(output)
@@ -2327,7 +2380,14 @@ def test_me(
     default=False,
     help="Use simulation time instead of real time for timestamps.",
 )
-def run_main(port, threads, watchfolder, output, browse, simtime):
+@click.option(
+    "--enable-snp-calling",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Enable SNP calling functionality (requires reference genome).",
+)
+def run_main(port, threads, watchfolder, output, browse, simtime, enable_snp_calling):
     """
     Helper function to run the app.
     :param port: The port to serve the app on.
@@ -2341,16 +2401,12 @@ def run_main(port, threads, watchfolder, output, browse, simtime):
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,  # commented out
             watchfolder=None,
             output=watchfolder,
-            # sequencing_summary=sequencing_summary,
-            # showerrors=showerrors,
             browse=browse,
             simtime=simtime,
-            # exclude=exclude,
+            enable_snp_calling=enable_snp_calling,
         )
-        # Your logic for browse mode
     else:
         # Handle the case when --browse is not set
         click.echo(f"Watchfolder: {watchfolder}, Output: {output}")
@@ -2361,14 +2417,11 @@ def run_main(port, threads, watchfolder, output, browse, simtime):
             port=port,
             reload=False,
             threads=threads,
-            # simtime=simtime,  # commented out
             watchfolder=watchfolder,
             output=output,
-            # sequencing_summary=sequencing_summary,
-            # showerrors=showerrors,
             browse=browse,
             simtime=simtime,
-            # exclude=exclude,
+            enable_snp_calling=enable_snp_calling,
         )
 
 

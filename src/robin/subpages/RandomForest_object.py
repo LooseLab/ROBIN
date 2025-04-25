@@ -54,6 +54,7 @@ from robin.utilities.merge_bedmethyl import (
 )
 
 from typing import List, Tuple
+from robin.core.state import state, ProcessType, ProcessState
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -207,8 +208,9 @@ def load_modkit_data(parquet_path):
         "n_nocall",
     ]
 
-    # Keep only the original 18 columns
-    return merged_modkit_df[column_names]
+    # Keep only the original 18 columns and sort by chrom and chromStart
+    df = merged_modkit_df[column_names]
+    return df.sort_values(by=['chrom', 'chromStart'])
 
 
 class RandomForest_object(BaseAnalysis):
@@ -255,6 +257,10 @@ class RandomForest_object(BaseAnalysis):
     """
 
     def __init__(self, *args, showerrors=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Remove state tracking for Random Forest Analysis
+        # state.start_process("Random Forest Analysis", ProcessType.BATCH)
+        state.set_process_state("Random Forest Analysis", ProcessState.WAITING_FOR_DATA)
         self.rcns2_df_store = {}
         self.threshold = 0.5
         self.bambatch = {}
@@ -276,8 +282,6 @@ class RandomForest_object(BaseAnalysis):
         # RandomForest confidence is reported as percentage (0-100) but converted to 0-1 in create_summary_card
         kwargs['high_confidence_threshold'] = 0.85  # RandomForest-specific high confidence threshold
         kwargs['medium_confidence_threshold'] = 0.65  # RandomForest-specific medium confidence threshold
-        
-        super().__init__(*args, **kwargs)
 
     def setup_ui(self):
         self.card = ui.card().classes("w-full p-2")
@@ -411,173 +415,177 @@ class RandomForest_object(BaseAnalysis):
         timestamp : float, optional
             Optional timestamp override for the current processing batch
         """
-        sampleID = self.sampleID
-        # Initialize directories for each sampleID if not already present
-        if sampleID not in self.dataDir.keys():
-            self.dataDir[sampleID] = tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
-            self.bedDir[sampleID] = tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
-        
-        # Get latest timestamp from input files or use provided timestamp
-        if timestamp is not None:
-            currenttime = timestamp * 1000
-        else:
-            latest_file = max(timestamp for _, timestamp in bamfile) if bamfile else 0
-            currenttime = latest_file * 1000 if latest_file else time.time() * 1000
+        state.set_process_state("Random Forest Analysis", ProcessState.RUNNING)
+        try:
+            sampleID = self.sampleID
+            # Initialize directories for each sampleID if not already present
+            if sampleID not in self.dataDir.keys():
+                self.dataDir[sampleID] = tempfile.TemporaryDirectory(
+                    dir=self.check_and_create_folder(self.output, sampleID)
+                )
+                self.bedDir[sampleID] = tempfile.TemporaryDirectory(
+                    dir=self.check_and_create_folder(self.output, sampleID)
+                )
+            
+            # Get latest timestamp from input files or use provided timestamp
+            if timestamp is not None:
+                currenttime = timestamp * 1000
+            else:
+                latest_file = max(timestamp for _, timestamp in bamfile) if bamfile else 0
+                currenttime = latest_file * 1000 if latest_file else time.time() * 1000
 
-        if (
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bam_count"
-            ]
-            > 0
-        ):
-            parquet_path = os.path.join(
-                self.check_and_create_folder(self.output, sampleID),
-                f"{sampleID}.parquet",
-            )
+            if (
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bam_count"
+                ]
+                > 0
+            ):
+                parquet_path = os.path.join(
+                    self.check_and_create_folder(self.output, sampleID),
+                    f"{sampleID}.parquet",
+                )
 
-            try:
-                if self.check_file_time(parquet_path):
-                    logger.debug("Parquet file exists and is ready for processing")
-                    tomerge_length_file = os.path.join(
-                        self.check_and_create_folder(self.output, sampleID),
-                        "tomerge_length.txt",
-                    )
-                    try:
-                        with open(tomerge_length_file, "r") as f:
-                            tomerge_length = int(f.readline().strip().split(": ")[1])
-                        logger.info(f"Number of files to merge: {tomerge_length}")
-                    except FileNotFoundError:
-                        logger.warning(
-                            "tomerge_length.txt not found yet, waiting for file creation"
-                        )
-                        return
-                    except Exception as e:
-                        logger.error(f"Error reading tomerge_length.txt: {str(e)}")
-                        return
-
-                    logger.debug("Loading modkit data from parquet file...")
-                    merged_modkit_df = await run.cpu_bound(
-                        load_modkit_data, parquet_path
-                    )
-
-                    merged_modkit_df.rename(
-                        columns={
-                            "chromStart": "start_pos",
-                            "chromEnd": "end_pos",
-                            "mod_code": "mod",
-                            "thickStart": "start_pos2",
-                            "thickEnd": "end_pos2",
-                            "color": "colour",
-                        },
-                        inplace=True,
-                    )
-                    merged_modkit_df.rename(
-                        columns={
-                            "n_canonical": "Ncanon",
-                            "n_delete": "Ndel",
-                            "n_diff": "Ndiff",
-                            "n_fail": "Nfail",
-                            "n_mod": "Nmod",
-                            "n_nocall": "Nnocall",
-                            "n_othermod": "Nother",
-                            "valid_cov": "Nvalid",
-                            "percent_modified": "score",
-                        },
-                        inplace=True,
-                    )
-
-                    forest_dx = await run.cpu_bound(
-                        collapse_bedmethyl, merged_modkit_df
-                    )
-                    merged_modkit_df = forest_dx
-                    if merged_modkit_df is None:
-                        logger.error("Failed to load modkit data from parquet file")
-                        return
-                    logger.info(
-                        f"Loaded modkit data with shape: {merged_modkit_df.shape}"
-                    )
-
-                    # Create a temporary directory for R script output
-                    rcns2folder = tempfile.mkdtemp(
-                        dir=self.check_and_create_folder(self.output, sampleID)
-                    )
-                    logger.info(
-                        f"Created temporary directory for R output: {rcns2folder}"
-                    )
-
-                    # Write the BED file to the output folder as "RandomForestBed.bed"
-                    randomforest_bed_output = os.path.join(
-                        self.check_and_create_folder(self.output, sampleID),
-                        "RandomForestBed.bed",
-                    )
-                    logger.info(f"Writing BED file to: {randomforest_bed_output}")
-
-                    merged_modkit_df.to_csv(
-                        randomforest_bed_output, sep="\t", index=False, header=False
-                    )
-
-                    # Initialize batch number if not exists
-                    if sampleID not in self.bambatch:
-                        self.bambatch[sampleID] = 1
-                    logger.info(f"Using batch number: {self.bambatch[sampleID]}")
-
-                    # Run the R script
-                    logger.info("Attempting to run R script...")
-                    try:
-                        await run.cpu_bound(
-                            run_rcns2,
-                            rcns2folder,
-                            self.bambatch[sampleID],
-                            randomforest_bed_output,
-                            self.threads,
-                            self.showerrors,
-                        )
-                        logger.info("R script completed successfully")
-                    except Exception as e:
-                        logger.error(f"Error running R script: {str(e)}", exc_info=True)
-                        raise
-
-                    votes_file = (
-                        f"{rcns2folder}/live_{self.bambatch[sampleID]}_votes.tsv"
-                    )
-                    if os.path.isfile(votes_file):
-                        logger.info(f"Found votes file: {votes_file}")
-                        scores = pd.read_table(votes_file, sep="\s+")
-                        scores_to_save = scores.drop(columns=["Freq"]).T
-                        scores_to_save["timestamp"] = currenttime
-
-                        if sampleID not in self.rcns2_df_store:
-                            self.rcns2_df_store[sampleID] = pd.DataFrame()
-
-                        self.rcns2_df_store[sampleID] = pd.concat(
-                            [
-                                self.rcns2_df_store[sampleID],
-                                scores_to_save.set_index("timestamp"),
-                            ]
-                        )
-
-                        # Save results
-                        output_file = os.path.join(
+                try:
+                    if self.check_file_time(parquet_path):
+                        logger.debug("Parquet file exists and is ready for processing")
+                        tomerge_length_file = os.path.join(
                             self.check_and_create_folder(self.output, sampleID),
-                            "random_forest_scores.csv",
+                            "tomerge_length.txt",
                         )
-                        logger.info(f"Saving results to: {output_file}")
-                        self.rcns2_df_store[sampleID].to_csv(output_file)
-                    else:
-                        logger.error(f"Votes file not found: {votes_file}")
+                        try:
+                            with open(tomerge_length_file, "r") as f:
+                                tomerge_length = int(f.readline().strip().split(": ")[1])
+                            logger.info(f"Number of files to merge: {tomerge_length}")
+                        except FileNotFoundError:
+                            logger.warning(
+                                "tomerge_length.txt not found yet, waiting for file creation"
+                            )
+                            return
+                        except Exception as e:
+                            logger.error(f"Error reading tomerge_length.txt: {str(e)}")
+                            return
 
-                    app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                        "bam_processed"
-                    ] = tomerge_length
+                        logger.debug("Loading modkit data from parquet file...")
+                        merged_modkit_df = await run.cpu_bound(
+                            load_modkit_data, parquet_path
+                        )
 
-            except Exception as e:
-                logger.error(f"Error in process_bam: {str(e)}", exc_info=True)
+                        merged_modkit_df.rename(
+                            columns={
+                                "chromStart": "start_pos",
+                                "chromEnd": "end_pos",
+                                "mod_code": "mod",
+                                "thickStart": "start_pos2",
+                                "thickEnd": "end_pos2",
+                                "color": "colour",
+                            },
+                            inplace=True,
+                        )
+                        merged_modkit_df.rename(
+                            columns={
+                                "n_canonical": "Ncanon",
+                                "n_delete": "Ndel",
+                                "n_diff": "Ndiff",
+                                "n_fail": "Nfail",
+                                "n_mod": "Nmod",
+                                "n_nocall": "Nnocall",
+                                "n_othermod": "Nother",
+                                "valid_cov": "Nvalid",
+                                "percent_modified": "score",
+                            },
+                            inplace=True,
+                        )
 
-        self.running = False
+                        forest_dx = await run.cpu_bound(
+                            collapse_bedmethyl, merged_modkit_df
+                        )
+                        merged_modkit_df = forest_dx
+                        if merged_modkit_df is None:
+                            logger.error("Failed to load modkit data from parquet file")
+                            return
+                        logger.info(
+                            f"Loaded modkit data with shape: {merged_modkit_df.shape}"
+                        )
+
+                        # Create a temporary directory for R script output
+                        rcns2folder = tempfile.mkdtemp(
+                            dir=self.check_and_create_folder(self.output, sampleID)
+                        )
+                        logger.info(
+                            f"Created temporary directory for R output: {rcns2folder}"
+                        )
+
+                        # Write the BED file to the output folder as "RandomForestBed.bed"
+                        randomforest_bed_output = os.path.join(
+                            self.check_and_create_folder(self.output, sampleID),
+                            "RandomForestBed.bed",
+                        )
+                        logger.info(f"Writing BED file to: {randomforest_bed_output}")
+
+                        merged_modkit_df.to_csv(
+                            randomforest_bed_output, sep="\t", index=False, header=False
+                        )
+
+                        # Initialize batch number if not exists
+                        if sampleID not in self.bambatch:
+                            self.bambatch[sampleID] = 1
+                        logger.info(f"Using batch number: {self.bambatch[sampleID]}")
+
+                        # Run the R script
+                        logger.info("Attempting to run R script...")
+                        try:
+                            await run.cpu_bound(
+                                run_rcns2,
+                                rcns2folder,
+                                self.bambatch[sampleID],
+                                randomforest_bed_output,
+                                self.threads,
+                                self.showerrors,
+                            )
+                            logger.info("R script completed successfully")
+                        except Exception as e:
+                            logger.error(f"Error running R script: {str(e)}", exc_info=True)
+                            raise
+
+                        votes_file = (
+                            f"{rcns2folder}/live_{self.bambatch[sampleID]}_votes.tsv"
+                        )
+                        if os.path.isfile(votes_file):
+                            logger.info(f"Found votes file: {votes_file}")
+                            scores = pd.read_table(votes_file, sep="\s+")
+                            scores_to_save = scores.drop(columns=["Freq"]).T
+                            scores_to_save["timestamp"] = currenttime
+
+                            if sampleID not in self.rcns2_df_store:
+                                self.rcns2_df_store[sampleID] = pd.DataFrame()
+
+                            self.rcns2_df_store[sampleID] = pd.concat(
+                                [
+                                    self.rcns2_df_store[sampleID],
+                                    scores_to_save.set_index("timestamp"),
+                                ]
+                            )
+
+                            # Save results
+                            output_file = os.path.join(
+                                self.check_and_create_folder(self.output, sampleID),
+                                "random_forest_scores.csv",
+                            )
+                            logger.info(f"Saving results to: {output_file}")
+                            self.rcns2_df_store[sampleID].to_csv(output_file)
+                        else:
+                            logger.error(f"Votes file not found: {votes_file}")
+
+                        app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                            "bam_processed"
+                        ] = tomerge_length
+
+                except Exception as e:
+                    logger.error(f"Error in process_bam: {str(e)}", exc_info=True)
+
+            self.running = False
+        finally:
+            state.set_process_state("Random Forest Analysis", ProcessState.WAITING_FOR_DATA)
 
     def create_rcns2_chart(self, title):
         """
@@ -822,6 +830,9 @@ class RandomForest_object(BaseAnalysis):
                 "#4CD964",  # Light Green
             ]
 
+            # Ensure DataFrame is sorted by index (timestamp)
+            datadf = datadf.sort_index()
+
             # Get the top 10 diagnoses based on the latest data point
             latest_data = datadf.iloc[-1]
             if "number_probes" in latest_data:
@@ -833,9 +844,10 @@ class RandomForest_object(BaseAnalysis):
 
             for idx, (series, data) in enumerate(filtered_df.to_dict().items()):
                 logger.debug(f"Processing series: {series}")
-                # Values are already percentages, just format them
+                # Values are already percentages, just format them and ensure sorted by timestamp
                 data_list = [
-                    [key, float(f"{value:.1f}")] for key, value in data.items()
+                    [key, float(f"{value:.1f}")] 
+                    for key, value in sorted(data.items())  # Sort by timestamp
                 ]
                 logger.debug(f"First few data points for {series}: {data_list[:3]}")
 
@@ -880,6 +892,12 @@ class RandomForest_object(BaseAnalysis):
         except Exception as e:
             logger.error(f"Error in update_rcns2_time_chart: {str(e)}", exc_info=True)
             raise
+
+    async def stop_analysis(self):
+        """Stop the Random Forest analysis."""
+        state.set_process_state("Random Forest Analysis", ProcessState.STOPPING)
+        state.stop_process("Random Forest Analysis")
+        await super().stop_analysis()
 
 
 def test_ui():

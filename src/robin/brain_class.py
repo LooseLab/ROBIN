@@ -82,6 +82,8 @@ import psutil
 import tempfile
 from alive_progress import alive_bar
 from nicegui import ui, app, run
+from nicegui.run import process_pool
+import concurrent.futures
 import subprocess
 import time
 
@@ -119,276 +121,203 @@ from typing import List, Tuple, Optional, Dict, Any
 
 import pyranges as pr  # For fast interval-based filtering
 
+from .core.state import state, ProcessType, ProcessState
+
+import pickle
+import polars as pl
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 def merge_modkit_files(
-    new_files: List[str], existing_file: str, output_file: str, filter_bed_file: str
-):
+    new_files: List[str],
+    existing_file: str,
+    output_file: str,
+    filter_bed_file: str,
+    sample_id: str,
+    output_dir: str
+) -> None:
     """
-    Efficiently merges new modkit pileup files with an existing dataset using incremental updates.
-    Filters out any positions that do not overlap with the given BED file using pyranges for speed.
+    Merge modkit files with improved caching and error handling.
 
-    Parameters:
-        new_files (List[str]): List of new input files (modkit format).
-        existing_file (str): Path to the previously merged dataset (Parquet format).
-        output_file (str): Path to save the updated merged dataset.
-        filter_bed_file (str): Path to BED file to filter positions (can be .gz).
-
-    Returns:
-        None (Saves the merged DataFrame to `output_file`).
+    Args:
+        new_files (List[str]): List of new modkit files to merge
+        existing_file (str): Path to existing parquet file
+        output_file (str): Path to output parquet file
+        filter_bed_file (str): Path to BED file for filtering
+        sample_id (str): Sample ID for organizing output files
+        output_dir (str): Base output directory
     """
-    column_names = [
-        "chrom",
-        "chromStart",
-        "chromEnd",
-        "mod_code",
-        "score_bed",
-        "strand",
-        "thickStart",
-        "thickEnd",
-        "color",
-        "valid_cov",
-        "percent_modified",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
+    # Define schema
+    cols = [
+        "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
+        "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
+        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
     ]
-
     categorical_cols = ["chrom", "mod_code", "strand", "color"]
     int_cols = ["thickStart", "thickEnd"]
     unsigned_int_cols = [
-        "chromStart", 
-        "chromEnd", 
-        "valid_cov", 
-        "n_mod", 
-        "n_canonical", 
-        "n_othermod", 
-        "n_delete", 
-        "n_fail", 
-        "n_diff", 
-        "n_nocall"
+        "chromStart", "chromEnd", "valid_cov", "n_mod", "n_canonical",
+        "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
     ]
-    float_cols = ["score_bed", "percent_modified"]
-    
-    # Determine if the filter BED file is gzipped
-    compression_type = "gzip" if filter_bed_file.endswith(".gz") else None
+    float_cols = ["score_bed"]
 
-    # Load filter BED file and convert to pyranges
-    logging.debug("🔍 Loading and indexing filter BED file for fast lookup...")
-    filter_df = pd.read_csv(
-        filter_bed_file,
-        sep="\t",
-        header=None,
-        names=["Chromosome", "Start", "End", "cg_label"],
-        compression=compression_type,
-        dtype={"Chromosome": str},
-    )
-
-    # Convert to pyranges for fast interval-based filtering
-    filter_ranges = pr.PyRanges(filter_df[["Chromosome", "Start", "End"]])
-
-    # Load existing dataset if it exists
-    if os.path.exists(existing_file):
-        logging.debug(f"🔹 Loading existing dataset: {existing_file}")
-        existing_df = pd.read_parquet(existing_file)
+    try:
+        # Enable StringCache for consistent categorical encoding
+        pl.enable_string_cache()
         
-        # Ensure efficient dtypes for existing data
-        for col in categorical_cols:
-            if col in existing_df.columns:
-                existing_df[col] = existing_df[col].astype("category")
-                
-        for col in int_cols:
-            if col in existing_df.columns:
-                existing_df[col] = existing_df[col].astype("int64")
-                
-        if all(col in existing_df.columns for col in unsigned_int_cols):
-            existing_df[unsigned_int_cols] = existing_df[unsigned_int_cols].apply(
-                pd.to_numeric, downcast="unsigned"
+        # Cache or build PyRanges filter with improved caching
+        cache_path = os.path.join(
+            output_dir,
+            f"{os.path.basename(filter_bed_file)}.pgr_cache"
+        )
+        if os.path.exists(cache_path):
+            with open(cache_path, 'rb') as f:
+                filter_ranges = pickle.load(f)
+        else:
+            comp = 'gzip' if filter_bed_file.endswith('.gz') else None
+            bed_df = pd.read_csv(
+                filter_bed_file,
+                sep='\t', header=None,
+                names=["Chromosome","Start","End","cg_label"],
+                compression=comp, dtype={"Chromosome": str}
             )
-            
-        if all(col in existing_df.columns for col in float_cols):
-            existing_df[float_cols] = existing_df[float_cols].apply(
-                pd.to_numeric, downcast="float"
-            )
-    else:
-        logging.debug("🔹 No existing dataset found. Creating a new dataset.")
-        existing_df = pd.DataFrame(columns=column_names)
+            filter_ranges = pr.PyRanges(bed_df[["Chromosome","Start","End"]])
+            with open(cache_path, 'wb') as f:
+                pickle.dump(filter_ranges, f)
 
-    # Read and merge only new files
-    new_data = []
-    for file in new_files:
-        logging.debug(f"📂 Processing file: {file}")
-
-        # Read file efficiently with appropriate dtypes
-        dtype_dict = {col: str for col in categorical_cols}
-        modkit_df = pd.read_csv(
-            file, sep="\s+", header=None, names=column_names, dtype=dtype_dict
-        )
-
-        # Convert numeric columns properly with efficient dtypes
-        for col in int_cols:
-            modkit_df[col] = pd.to_numeric(modkit_df[col], errors="coerce").astype("int64")
-            
-        modkit_df[unsigned_int_cols] = modkit_df[unsigned_int_cols].apply(
-            pd.to_numeric, errors="coerce", downcast="unsigned"
-        )
-        
-        modkit_df[float_cols] = modkit_df[float_cols].apply(
-            pd.to_numeric, errors="coerce", downcast="float"
-        )
-        
-        # Convert categorical columns
-        for col in categorical_cols:
-            modkit_df[col] = modkit_df[col].astype("category")
-
-        # Convert to pyranges format for fast overlap filtering
-        modkit_ranges = pr.PyRanges(
-            modkit_df.rename(
-                columns={
-                    "chrom": "Chromosome",
-                    "chromStart": "Start",
-                    "chromEnd": "End",
-                }
-            )
-        )
-
-        # Perform fast overlap filtering
-        filtered_ranges = modkit_ranges.intersect(filter_ranges)
-
-        # Convert back to DataFrame
-        modkit_filtered = filtered_ranges.df.rename(
-            columns={"Chromosome": "chrom", "Start": "chromStart", "End": "chromEnd"}
-        )
-
-        # Reapply efficient dtypes after filtering
-        for col in categorical_cols:
-            if col in modkit_filtered.columns:
-                modkit_filtered[col] = modkit_filtered[col].astype("category")
+        # Process new files in chunks using Polars lazy evaluation
+        new_frames = []
+        for bed in new_files:
+            try:
+                # Read with pandas first to handle regex separator
+                df = pd.read_csv(
+                    bed,
+                    sep='\s+',
+                    header=None,
+                    names=cols,
+                    dtype={c: str for c in categorical_cols}
+                )
                 
-        # Append to list (avoids multiple DataFrame copies)
-        new_data.append(modkit_filtered)
+                # Validate required columns
+                missing_cols = set(cols) - set(df.columns)
+                if missing_cols:
+                    raise ValueError(f"Missing required columns: {missing_cols}")
+                
+                # Convert to Polars for efficient processing
+                pl_df = pl.from_pandas(df)
+                
+                # Convert numeric columns with proper error handling
+                for c in int_cols:
+                    pl_df = pl_df.with_columns(pl.col(c).cast(pl.Int64, strict=False))
+                for c in unsigned_int_cols:
+                    pl_df = pl_df.with_columns(pl.col(c).cast(pl.UInt32, strict=False))
+                for c in float_cols:
+                    pl_df = pl_df.with_columns(pl.col(c).cast(pl.Float32, strict=False))
 
-    if not new_data:
-        logging.debug("⚠️ No new data to merge after filtering. Exiting.")
-        return
+                # Filter using PyRanges
+                # Rename columns using Polars syntax
+                pr_df = pl_df.rename({
+                    'chrom': 'Chromosome',
+                    'chromStart': 'Start',
+                    'chromEnd': 'End'
+                })
+                # Convert to pandas for PyRanges
+                pr_df_pandas = pr_df.to_pandas()
+                gr = pr.PyRanges(pr_df_pandas[["Chromosome","Start","End"]])
+                inter = gr.intersect(filter_ranges).df
+                filt = pd.merge(
+                    inter.rename(columns={'Chromosome':'chrom','Start':'chromStart','End':'chromEnd'}),
+                    pl_df.to_pandas(),
+                    on=['chrom','chromStart','chromEnd'],
+                    how='inner'
+                )
+                new_frames.append(filt)
+            except Exception as e:
+                logging.error(f"Error processing file {bed}: {str(e)}")
+                continue
 
-    # Combine new data into a single DataFrame
-    new_df = pd.concat(new_data, ignore_index=True)
-    
-    # Apply efficient dtypes to the combined new data
-    for col in categorical_cols:
-        if col in new_df.columns:
-            new_df[col] = new_df[col].astype("category")
-            
-    for col in int_cols:
-        if col in new_df.columns:
-            new_df[col] = pd.to_numeric(new_df[col], errors="coerce").astype("int64")
-            
-    if all(col in new_df.columns for col in unsigned_int_cols):
-        new_df[unsigned_int_cols] = new_df[unsigned_int_cols].apply(
-            pd.to_numeric, errors="coerce", downcast="unsigned"
-        )
+        if not new_frames:
+            logging.warning("No valid data to merge after filtering")
+            return
+
+        # Combine new data
+        new_df = pd.concat(new_frames, ignore_index=True)
         
-    if all(col in new_df.columns for col in float_cols):
-        new_df[float_cols] = new_df[float_cols].apply(
-            pd.to_numeric, errors="coerce", downcast="float"
-        )
+        # If no existing file, just save the new data
+        if not os.path.exists(existing_file):
+            pl_df = pl.from_pandas(new_df)
+            pl_df.write_parquet(output_file)
+            return
 
-    # If existing dataset is empty, save new data and exit
-    if existing_df.empty:
-        logging.debug("✅ No previous data found. Saving only new filtered data.")
-        new_df.to_parquet(output_file, index=False)
-        return
-
-    # Identify unique positions for faster merging
-    existing_positions = set(
-        zip(existing_df["chrom"], existing_df["chromStart"], existing_df["chromEnd"])
-    )
-    new_positions = set(zip(new_df["chrom"], new_df["chromStart"], new_df["chromEnd"]))
-
-    # Find new data that isn't already in the existing dataset
-    unique_positions = new_positions - existing_positions
-    if not unique_positions:
-        logging.debug("⚠️ All new data already exists. No updates needed.")
-        return 
-
-    # Filter only truly new data
-    new_df = new_df[
-        new_df.set_index(["chrom", "chromStart", "chromEnd"]).index.isin(
-            unique_positions
-        )
-    ]
-
-    # Debugging Step: Check for missing columns before aggregation
-    logging.debug("\n🔍 Checking DataFrame before aggregation:")
-    # logging.debug(new_df.info())
-
-    # **Fix Aggregation Issue: Handle missing categorical values**
-    for col in ["mod_code", "strand", "thickStart", "thickEnd", "color"]:
-        if col in new_df.columns:
-            new_df[col] = new_df[col].ffill()  # Forward fill missing values
-
-    # Merge new data with existing data
-    merged_df = pd.concat([existing_df, new_df], ignore_index=True)
-
-    # Aggregate count-based columns only when necessary
-    sum_columns = [
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
-
-    # **⚡ FIX: Use `observed=True` to match behavior and avoid warnings**
-    merged_df = (
-        merged_df.groupby(
-            ["chrom", "chromStart", "chromEnd"], as_index=False, observed=True
-        )
-        .agg(
-            {
-                "mod_code": "first",
-                "score_bed": "mean",
-                "strand": "first",
-                "thickStart": "first",
-                "thickEnd": "first",
-                "color": "first",
-                "valid_cov": "sum",
-                "percent_modified": "mean",
-                **{col: "sum" for col in sum_columns},  # Sum count-based columns
-            }
-        )
-        .reset_index(drop=True)
-    )  # Ensure index is reset correctly
-
-    # Apply efficient dtypes to the final merged dataframe
-    for col in categorical_cols:
-        if col in merged_df.columns:
-            merged_df[col] = merged_df[col].astype("category")
-            
-    for col in int_cols:
-        if col in merged_df.columns:
-            merged_df[col] = merged_df[col].astype("int64")
-            
-    if all(col in merged_df.columns for col in unsigned_int_cols):
-        merged_df[unsigned_int_cols] = merged_df[unsigned_int_cols].apply(
-            pd.to_numeric, downcast="unsigned"
-        )
+        # Process existing data in chunks
+        existing_df = pl.scan_parquet(existing_file)
         
-    if all(col in merged_df.columns for col in float_cols):
-        merged_df[float_cols] = merged_df[float_cols].apply(
-            pd.to_numeric, downcast="float"
-        )
-
-    # Save updated dataset
-    merged_df.to_parquet(output_file, index=False)
-    logging.debug(f"✅ Incremental update saved to: {output_file}")
-    return
+        # Combine and aggregate using Polars lazy evaluation
+        count_cols = [
+            'n_mod','n_canonical','n_othermod','n_delete',
+            'n_fail','n_diff','n_nocall','valid_cov'
+        ]
+        
+        # Convert new data to Polars
+        pl_new_df = pl.from_pandas(new_df)
+        
+        # Convert existing data to regular DataFrame for concatenation
+        existing_df = existing_df.collect()
+        
+        # Ensure consistent data types and column order
+        for c in categorical_cols:
+            if c in existing_df.columns and c in pl_new_df.columns:
+                existing_df = existing_df.with_columns(pl.col(c).cast(pl.Categorical))
+                pl_new_df = pl_new_df.with_columns(pl.col(c).cast(pl.Categorical))
+        
+        # Ensure columns are in the same order
+        pl_new_df = pl_new_df.select(existing_df.columns)
+        
+        # Validate column names match
+        if set(existing_df.columns) != set(pl_new_df.columns):
+            missing_cols = set(existing_df.columns) - set(pl_new_df.columns)
+            extra_cols = set(pl_new_df.columns) - set(existing_df.columns)
+            raise ValueError(f"Column mismatch: missing {missing_cols}, extra {extra_cols}")
+        
+        # Combine existing and new data
+        combined = pl.concat([existing_df, pl_new_df])
+        
+        # Define aggregation expressions
+        exprs = [
+            pl.first('mod_code'),
+            pl.mean('score_bed').alias('score_bed'),
+            pl.first('strand'),
+            pl.first('thickStart'),
+            pl.first('thickEnd'),
+            pl.first('color'),
+            *[pl.sum(c).alias(c) for c in count_cols]
+        ]
+        
+        # Perform groupby and aggregation
+        grouped = combined.group_by(['chrom','chromStart','chromEnd']).agg(exprs)
+        
+        # Calculate percent_modified with error handling
+        grouped = grouped.with_columns([
+            (pl.col('n_mod') / pl.col('valid_cov') * 100).alias('percent_modified')
+        ])
+        
+        # Save using Polars' efficient parquet writer
+        grouped.write_parquet(output_file)
+        logging.debug(f"✅ Merged with optimized Polars and cache saved to: {output_file}")
+        
+    except Exception as e:
+        logging.error(f"Error in merge_modkit_files: {str(e)}")
+        raise
+    finally:
+        # Cleanup temporary files if needed
+        if os.path.exists(cache_path) and not os.path.exists(filter_bed_file):
+            try:
+                os.remove(cache_path)
+            except:
+                pass
+        # Disable StringCache
+        pl.disable_string_cache()
 
 
 def run_modkit(sortfile: str, temp: str, threads: int) -> None:
@@ -615,6 +544,8 @@ class BrainMeth:
         self.dataDir = {}
         self.bedDir = {}
         self.first_run = {}
+        self.terminate = False
+        self.finished = False
         self.cpgs_master_file = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "sturg_nanodx_cpgs_0125.bed.gz",
@@ -640,7 +571,8 @@ class BrainMeth:
             )
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
-
+        
+    
     def configure_storage(self, sample_id):
         """
         Configure storage for the application.
@@ -740,6 +672,46 @@ class BrainMeth:
             logging.error(f"Error updating counter {counter_name} for sample {sample_id}: {str(e)}", exc_info=True)
             # Re-raise the exception to ensure we don't silently fail
             raise
+
+    def shutdown_background(self):
+        """
+        Shutdown the application gracefully.
+        """
+        print("Shutting down ROBIN... from brainclas?")
+        print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
+        self.terminate = True
+        
+        # First stop all timers
+        print("Stop observer")
+        if hasattr(self, 'observer'):
+            state.set_process_state("File Observer", ProcessState.STOPPING)
+            state.stop_process("File Observer")
+            self.observer.stop()
+            self.observer.join()
+        print("Observer stopped")
+        
+        print("Stop check_existing_bams_timer")
+        if hasattr(self, 'check_existing_bams_timer'):
+            self.check_existing_bams_timer.cancel()
+        print("check_existing_bams_timer stopped")
+        
+        print("Stop background_process_bams_timer")
+        if hasattr(self, 'background_process_bams_timer'):
+            self.background_process_bams_timer.cancel()
+        print("background_process_bams_timer stopped")
+        
+        # Wait for any pending tasks to complete
+        while not self.finished:
+            print("Waiting for finished")
+            print(f"Value of terminate: {self.terminate}")
+            print(f"Value of finished: {self.finished}")
+            time.sleep(0.1)
+            
+        if self.mainuuid in app.storage.general:
+            app.storage.general.pop(self.mainuuid)
+        print("Shutdown complete")
+        
+        state.shutdown_event = False
 
     async def start_background(self):
         """
@@ -918,10 +890,15 @@ class BrainMeth:
             )
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
-            ui.timer(1, callback=self.check_existing_bams, once=True)
+            self.check_existing_bams_timer = ui.timer(1, callback=self.check_existing_bams, once=True)
+            
+            # Add status tracking for the observer
+            state.start_process("File Observer", ProcessType.SYSTEM)
+            state.set_process_state("File Observer", ProcessState.STARTING)
             self.observer.start()
+            state.set_process_state("File Observer", ProcessState.RUNNING)
 
-            ui.timer(1, callback=self.background_process_bams, once=True)
+            self.background_process_bams_timer = ui.timer(1, callback=self.background_process_bams, once=True)
 
             logging.info("Watchfolder setup and added")
 
@@ -2476,7 +2453,8 @@ class BrainMeth:
                                         target_panel=self.target_panel,
                                         reference_file=self.reference,
                                         bed_file=self.bed_file,
-                                        #NewBed=self.NewBed,
+                                        readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
+                                        #NewBed=self.NewBed, #ToDo: This assumes a single sample per CNV analysis.
                                         master_bed_tree=self.master_bed_tree,
                                         **display_args,
                                     )
@@ -2517,6 +2495,7 @@ class BrainMeth:
                                         target_panel=self.target_panel,
                                         reference_file=self.reference,
                                         bed_file=self.bed_file,
+                                        readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
                                         #NewBed=self.NewBed,
                                         master_bed_tree=self.master_bed_tree,
                                         **display_args,
@@ -2636,10 +2615,34 @@ class BrainMeth:
         :return: None
         """
         logging.info("Starting background BAM processing")
+        self.app_state_timer = app.timer(10, self.check_app_state)
         self.process_bams_tracker = app.timer(10, self.process_bams)
+        state.start_process("Serial Bam Analysis", ProcessType.BACKGROUND)
+        state.set_process_state("Serial Bam Analysis", ProcessState.WAITING_FOR_DATA)
         self.process_bigbadmerge_tracker = app.timer(10, self.process_bigbadmerge)
+        state.start_process("Merge Bam Analysis", ProcessType.BACKGROUND)
+        state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
         otherprocs = ['dorado', 'minknow', 'docker']
         self.check_and_log_memory = app.timer(5, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs))
+        
+    
+    async def check_app_state(self):
+        if state.shutdown_event:
+            print("shutdown_event is True, stopping background processes")
+            if hasattr(self, 'observer'):
+                state.set_process_state("File Observer", ProcessState.STOPPING)
+                state.stop_process("File Observer")
+                self.observer.stop()
+                self.observer.join()
+            print("Observer stopped")
+            while state.get_running_process_count() > 0:
+                await asyncio.sleep(1)
+                print(f"Waiting for {state.get_running_process_count()} processes to finish")
+                print(f"Running processes: {[p for p, s in state.process_states.items() if s == ProcessState.RUNNING]}")
+            self.finished = True
+            self.shutdown_background()
+            
+            
         
 
     def check_and_create_folder(self, path, folder_name=None):
@@ -2791,14 +2794,16 @@ class BrainMeth:
             return None
 
     async def process_bigbadmerge(self):
+        self.process_bigbadmerge_tracker.active = False
         # Dictionary to store files by sample ID
         files_by_sample = {}
         latest_files = {}  # Track latest file time per sample
+        state.start_process("Merge Bam Analysis", ProcessType.BACKGROUND)
+        state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
 
         # Process queue and organize files by sample ID
         while self.bamforbigbadmerge.qsize() > 0:
-            #memory = self.get_memory_usage()
-            #if memory: print (memory)
+            state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
             file, filetime, sampleID = self.bamforbigbadmerge.get()
 
             # Initialize containers for new sample IDs
@@ -2827,29 +2832,20 @@ class BrainMeth:
                             app.storage.general[self.mainuuid][sampleID][analysis] = {
                                 "counters": {
                                     "bams_in_processing": 0,
-                                    "bams_processed": 0,
+                                    "bam_processed": 0,
                                     "bams_failed": 0,
                                 }
                             }
-                        elif (
-                            "counters"
-                            not in app.storage.general[self.mainuuid][sampleID][
-                                analysis
-                            ]
-                        ):
-                            app.storage.general[self.mainuuid][sampleID][analysis][
-                                "counters"
-                            ] = {
+                        elif "counters" not in app.storage.general[self.mainuuid][sampleID][analysis]:
+                            app.storage.general[self.mainuuid][sampleID][analysis]["counters"] = {
                                 "bams_in_processing": 0,
-                                "bams_processed": 0,
+                                "bam_processed": 0,
                                 "bams_failed": 0,
                             }
 
-            # Update latest file time for this sample
-            if filetime > latest_files[sampleID]:
-                latest_files[sampleID] = filetime
-
+            # Add file to the list for this sample
             files_by_sample[sampleID].append(file)
+            latest_files[sampleID] = max(latest_files[sampleID], filetime or 0)
 
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
@@ -2864,13 +2860,27 @@ class BrainMeth:
                     for analysis in analyses:
                         if analysis.lower() not in self.exclude:
                             try:
-                                app.storage.general[self.mainuuid][sample_id][analysis][
-                                    "counters"
-                                ]["bams_in_processing"] += files_to_process
+                                # Ensure the counter structure exists
+                                if analysis not in app.storage.general[self.mainuuid][sample_id]:
+                                    app.storage.general[self.mainuuid][sample_id][analysis] = {
+                                        "counters": {
+                                            "bams_in_processing": 0,
+                                            "bam_processed": 0,
+                                            "bams_failed": 0,
+                                        }
+                                    }
+                                elif "counters" not in app.storage.general[self.mainuuid][sample_id][analysis]:
+                                    app.storage.general[self.mainuuid][sample_id][analysis]["counters"] = {
+                                        "bams_in_processing": 0,
+                                        "bam_processed": 0,
+                                        "bams_failed": 0,
+                                    }
+                                
+                                app.storage.general[self.mainuuid][sample_id][analysis]["counters"]["bams_in_processing"] += files_to_process
                                 logging.debug(
                                     f"Updated {analysis} counter for {sample_id} by {files_to_process}"
                                 )
-                            except KeyError as e:
+                            except Exception as e:
                                 logging.error(
                                     f"Failed to update counter for {analysis}: {str(e)}"
                                 )
@@ -2897,13 +2907,27 @@ class BrainMeth:
                     for analysis in analyses:
                         if analysis.lower() not in self.exclude:
                             try:
-                                app.storage.general[self.mainuuid][sample_id][analysis][
-                                    "counters"
-                                ]["bams_in_processing"] += files_to_process
+                                # Ensure the counter structure exists
+                                if analysis not in app.storage.general[self.mainuuid][sample_id]:
+                                    app.storage.general[self.mainuuid][sample_id][analysis] = {
+                                        "counters": {
+                                            "bams_in_processing": 0,
+                                            "bam_processed": 0,
+                                            "bams_failed": 0,
+                                        }
+                                    }
+                                elif "counters" not in app.storage.general[self.mainuuid][sample_id][analysis]:
+                                    app.storage.general[self.mainuuid][sample_id][analysis]["counters"] = {
+                                        "bams_in_processing": 0,
+                                        "bam_processed": 0,
+                                        "bams_failed": 0,
+                                    }
+                                
+                                app.storage.general[self.mainuuid][sample_id][analysis]["counters"]["bams_in_processing"] += files_to_process
                                 logging.debug(
                                     f"Updated {analysis} counter for {sample_id} by {files_to_process}"
                                 )
-                            except KeyError as e:
+                            except Exception as e:
                                 logging.error(
                                     f"Failed to update counter for {analysis}: {str(e)}"
                                 )
@@ -2912,16 +2936,19 @@ class BrainMeth:
                         sample_id, files, latest_files[sample_id]
                     )
 
-    async def process_sample_files(self, sampleID, tomerge, latest_file):
-        """
-        Process a batch of BAM files for a specific sample.
+        if not state.shutdown_event:
+            self.process_bigbadmerge_tracker.active = True
+            state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
+        else:
+            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPING)
+            state.stop_process("Merge Bam Analysis")
+            self.finished = True
 
-        Args:
-            sampleID (str): The sample ID being processed
-            tomerge (list): List of BAM files to merge
-            latest_file (float): Timestamp of the latest file
-        """
-        if not tomerge:  # Skip if no files to process
+    async def process_sample_files(self, sampleID, tomerge, latest_file):
+        """Process sample files using modkit."""
+        if state.shutdown_event:
+            logging.info("Shutdown event detected, skipping file processing")
+            state.stop_process("Merge Bam Analysis")
             return
 
         try:
@@ -2939,7 +2966,7 @@ class BrainMeth:
                         app.storage.general[self.mainuuid][sampleID][analysis] = {
                             "counters": {
                                 "bams_in_processing": 0,
-                                "bams_processed": 0,
+                                "bam_processed": 0,
                                 "bams_failed": 0,
                             }
                         }
@@ -2951,7 +2978,7 @@ class BrainMeth:
                             "counters"
                         ] = {
                             "bams_in_processing": 0,
-                            "bams_processed": 0,
+                            "bam_processed": 0,
                             "bams_failed": 0,
                         }
 
@@ -2991,15 +3018,28 @@ class BrainMeth:
             )
             sortfile = sorttempbam.name
 
+            # Set process state to running
+            state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
+            
             # Sort and merge BAM files
-            await run.cpu_bound(
-                run_samtools_sort, file, tomerge, sortfile, self.threads
-            )
+            try:
+                await run.cpu_bound(
+                    run_samtools_sort, file, tomerge, sortfile, self.threads
+                )
+            except concurrent.futures.process.BrokenProcessPool:
+                logger.warning("Process pool was terminated. This is normal during shutdown.")
+                state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                return
 
             with tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             ) as temp2:
-                await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
+                try:
+                    await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
+                except concurrent.futures.process.BrokenProcessPool:
+                    logger.warning("Process pool was terminated. This is normal during shutdown.")
+                    state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                    return
 
                 # Create output path specific to this sample
                 parquet_path = os.path.join(
@@ -3008,14 +3048,20 @@ class BrainMeth:
                 )
 
                 # Merge modkit files for this sample
-                #merged_df = await run.cpu_bound(
-                await run.cpu_bound(
-                    merge_modkit_files,
-                    [temp.name],
-                    parquet_path,  # Use the parquet_path for the existing file
-                    parquet_path,
-                    self.cpgs_master_file,  # Use the parquet_path for the output file
-                )
+                try:
+                    await run.cpu_bound(
+                        merge_modkit_files,
+                        [temp.name],
+                        parquet_path,  # Use the parquet_path for the existing file
+                        parquet_path,
+                        self.cpgs_master_file,  # Use the parquet_path for the output file
+                        sampleID,
+                        self.output,
+                    )
+                except concurrent.futures.process.BrokenProcessPool:
+                    logger.warning("Process pool was terminated. This is normal during shutdown.")
+                    state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                    return
 
                 # Log the number of BAM files processed
                 logging.info(
@@ -3028,56 +3074,60 @@ class BrainMeth:
                 for analysis in analyses:
                     if analysis.lower() not in self.exclude:
                         try:
-                            counters = app.storage.general[self.mainuuid][sampleID][
-                                analysis
-                            ]["counters"]
-                            if "bams_in_processing" not in counters:
-                                counters["bams_in_processing"] = 0
-                            if "bams_processed" not in counters:
-                                counters["bams_processed"] = 0
-
+                            if self.mainuuid not in app.storage.general:
+                                app.storage.general[self.mainuuid] = {}
+                            if sampleID not in app.storage.general[self.mainuuid]:
+                                app.storage.general[self.mainuuid][sampleID] = {}
+                            if analysis not in app.storage.general[self.mainuuid][sampleID]:
+                                app.storage.general[self.mainuuid][sampleID][analysis] = {
+                                    "counters": {
+                                        "bams_in_processing": 0,
+                                        "bam_processed": 0,
+                                        "bams_failed": 0,
+                                    }
+                                }
+                            
+                            counters = app.storage.general[self.mainuuid][sampleID][analysis]["counters"]
+                            
                             # Decrease the in_processing counter and increase the processed counter
                             counters["bams_in_processing"] = max(
                                 0, counters["bams_in_processing"] - num_bam_files_seen
                             )
-                            counters["bams_processed"] += num_bam_files_seen
+                            counters["bam_processed"] += num_bam_files_seen
 
                             logging.debug(
                                 f"Updated {analysis} processed counter for {sampleID} by {num_bam_files_seen}"
                             )
-                        except KeyError as e:
-                            logging.error(
-                                f"Failed to update processed counter for {analysis}: {str(e)}"
-                            )
-                            # Initialize counters if they don't exist
-                            app.storage.general[self.mainuuid][sampleID][analysis] = {
-                                "counters": {
-                                    "bams_in_processing": 0,
-                                    "bams_processed": num_bam_files_seen,
-                                    "bams_failed": 0,
-                                }
-                            }
                         except Exception as e:
                             logging.error(
                                 f"Error updating counters for {analysis}: {str(e)}"
                             )
+                        if state.shutdown_event:
+                            print("Terminate detected, stopping process_sample_files")
+                            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                            return
 
+        except concurrent.futures.process.BrokenProcessPool:
+            logger.warning("Process pool was terminated. This is normal during shutdown.")
+            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
         except Exception as e:
             logging.error(f"Error in process_sample_files: {str(e)}", exc_info=True)
+            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
             # Update the failed counters for each analysis type
             analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
             for analysis in analyses:
                 if analysis.lower() not in self.exclude:
                     try:
-                        app.storage.general[self.mainuuid][sampleID][analysis][
-                            "counters"
-                        ]["bams_in_processing"] -= num_bam_files_seen
-                        app.storage.general[self.mainuuid][sampleID][analysis][
-                            "counters"
-                        ]["bams_failed"] += num_bam_files_seen
-                        logging.debug(
-                            f"Updated {analysis} failed counter for {sampleID} by {num_bam_files_seen}"
-                        )
+                        if self.mainuuid in app.storage.general and sampleID in app.storage.general[self.mainuuid] and analysis in app.storage.general[self.mainuuid][sampleID]:
+                            app.storage.general[self.mainuuid][sampleID][analysis][
+                                "counters"
+                            ]["bams_in_processing"] -= num_bam_files_seen
+                            app.storage.general[self.mainuuid][sampleID][analysis][
+                                "counters"
+                            ]["bams_failed"] += num_bam_files_seen
+                            logging.debug(
+                                f"Updated {analysis} failed counter for {sampleID} by {num_bam_files_seen}"
+                            )
                     except Exception as nested_e:
                         logging.error(
                             f"Error updating failed counters for {analysis}: {str(nested_e)}"
@@ -3086,16 +3136,25 @@ class BrainMeth:
 
     async def process_bams(self) -> None:
         """
-        Process BAM files and update the application's storage.
-
-        :return: None
+        Process BAM files in the watch folder.
         """
         logging.info("Process Bam Starting")
+        state.start_process("Serial Bam Analysis", ProcessType.BACKGROUND)
+        state.set_process_state("Serial Bam Analysis", ProcessState.WAITING_FOR_DATA)
         self.process_bams_tracker.active = False
+        if state.shutdown_event:
+            print("shutdown_event is True, stopping process_bams")
+            state.set_process_state("Serial Bam Analysis", ProcessState.STOPPING)
+            self.process_bams_tracker.active = False
+            state.stop_process("Serial Bam Analysis")
+            return
+            
+        
         counter = 0
         #memory = self.get_memory_usage()
         #if memory: print (memory)
         if "file" in app.storage.general[self.mainuuid]["bam_count"]:
+            state.set_process_state("Serial Bam Analysis", ProcessState.RUNNING)
             while self.watchdogbamqueue.qsize() > 0:
                 filename, timestamp = self.watchdogbamqueue.get()
                 logging.info(f"Processing new BAM file from watchdog queue: {filename}")
@@ -3159,6 +3218,11 @@ class BrainMeth:
                 self.update_counter(sample_id, "unmapped_bases", bamdata["unmapped_bases"])
                 self.update_counter(sample_id, "mapped_reads_num", bamdata["mapped_reads_num"])
                 self.update_counter(sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"])
+                if state.shutdown_event:
+                    print("shutdown_event is True, stopping process_bams")
+                    self.process_bams_tracker.active = False
+                    state.stop_process("Serial Bam Analysis")
+                    return
 
             # Process the files
             while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
@@ -3333,8 +3397,21 @@ class BrainMeth:
                     self.bamforfusions.put([file[0], file[1], sample_id])
 
                 self.nofiles = True
+                
+                if state.shutdown_event:
+                    print("shutdown_event is True, stopping process_bams")
+                    self.process_bams_tracker.active = False
+                    state.stop_process("Serial Bam Analysis")
+                    return
+                
             logging.info("Process Bam Finishing")
-            self.process_bams_tracker.active = True
+            if not state.shutdown_event:
+                self.process_bams_tracker.active = True
+                state.set_process_state("Serial Bam Analysis", ProcessState.WAITING_FOR_DATA)
+            else:
+                self.finished = True
+                state.set_process_state("Serial Bam Analysis", ProcessState.STOPPING)
+                state.stop_process("Serial Bam Analysis")
 
     async def check_existing_bams(self, sequencing_summary=None):
         """
@@ -3353,10 +3430,13 @@ class BrainMeth:
             file_endings,
             self.simtime,
         )
-
+        
         # Iterate through the sorted list
         for timestamp, f, elapsed_time in files_and_timestamps:
             logging.debug(f"Processing existing BAM file: {f} at {timestamp}")
+            if state.shutdown_event:
+                self.terminate = True
+                return
             app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
             app.storage.general[self.mainuuid]["bam_count"][
                 "total_files"
@@ -3369,4 +3449,4 @@ class BrainMeth:
             if self.simtime:
                 await asyncio.sleep(0.1)
             else:
-                await asyncio.sleep(0)
+                await asyncio.sleep(0.1)
