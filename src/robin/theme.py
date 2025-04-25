@@ -48,7 +48,7 @@ from robin import images
 from robin import __about__
 from .core.state import state, ProcessState, ProcessType
 
-import os
+import os, sys
 import psutil
 import platform
 import time
@@ -474,8 +474,8 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                             ui.button("Quit", icon="logout", on_click=quitdialog.open)
                     ui.image(IMAGEFILE).style("width: 50px")
 
-    # Add the activity monitor to the main content area
-    with ui.column().classes("w-full p-4"):
+    # Add the process status monitor between main content and footer
+    with ui.column().classes("w-full p-4 border-t border-gray-200 dark:border-gray-700"):
         create_activity_monitor()
 
     # Create a footer with useful information and quit button
@@ -522,6 +522,17 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
         ui.label("Not for diagnostic use.").classes(
             f"min-[{MENU_BREAKPOINT+1}px]:hidden"
         ).tailwind("text-sm font-italic")
+        
+        result = ui.label().classes('mr-auto')
+        with ui.button(icon='menu'):
+            with ui.menu() as menu:
+                ui.menu_item('Menu item 1', lambda: result.set_text('Selected item 1'))
+                ui.menu_item('Menu item 2', lambda: result.set_text('Selected item 2'))
+                ui.menu_item('Menu item 3 (keep open)',
+                            lambda: result.set_text('Selected item 3'), auto_close=False)
+                ui.separator()
+                ui.menu_item('Close', menu.close)
+
 
     yield
 
@@ -539,16 +550,46 @@ async def cleanup_and_exit():
     """
     logging.info("User initiated shutdown via UI")
     
-    print("Shutting down ROBIN... from theme.py")
-    print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
-    ui.notify("Shutting down ROBIN...", type='warning')
+    # Create and show shutdown modal
+    with ui.dialog().props('persistent') as shutdown_dialog, ui.card().classes('w-96'):
+        ui.label('Shutting Down').classes('text-h5 text-weight-bold q-mb-md')
+        ui.label('ROBIN is shutting down. Please wait while we clean up...').classes('text-body1 q-mb-md')
+        with ui.row().classes('w-full justify-center'):
+            ui.spinner(size='lg', color='primary')
+    
+    # Close the quit dialog if it's open
     if quitdialog:
         quitdialog.close()
+    
+    # Show the shutdown dialog
+    shutdown_dialog.open()
+    logging.info("Shutdown dialog opened")
+    
+    # Set shutdown event
     state.shutdown_event = True
-    print(f"Value of shutdown_event: {state.shutdown_event}")
-    #await asyncio.sleep(10)
-    #app.shutdown()
-
+    logging.info("Shutdown event set")
+    
+    # Wait a moment to ensure the dialog is visible
+    await asyncio.sleep(1.0)
+    logging.info("Initial wait complete")
+    
+    # Perform cleanup
+    logging.info("Performing cleanup operations...")
+    print("Shutting down ROBIN... from theme.py")
+    print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
+    
+    while state.shutdown_event:# Wait for cleanup to complete
+        await asyncio.sleep(3.0)
+    logging.info("Cleanup wait complete")
+    
+    # Close the shutdown dialog
+    shutdown_dialog.close()
+    logging.info("Shutdown dialog closed")
+    
+    # Shutdown the application
+    app.shutdown()
+    logging.info("Application shutdown initiated")
+    sys.exit()
 
 def use_on_air(args: events.ValueChangeEventArguments):
     """

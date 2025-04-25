@@ -1076,7 +1076,7 @@ def package_run(
                 sleep(1)
                 print(f"Active processes: {list(state.process_states.keys())}")
         
-    signal.signal(signal.SIGINT, handler=handler)
+    #signal.signal(signal.SIGINT, handler=handler)
     
     # Initialize telemetry based on opt-out setting
     if not no_telemetry:

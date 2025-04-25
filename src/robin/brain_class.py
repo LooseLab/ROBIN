@@ -126,6 +126,9 @@ from .core.state import state, ProcessType, ProcessState
 import pickle
 import polars as pl
 
+# Configure logging
+logger = logging.getLogger(__name__)
+
 def merge_modkit_files(
     new_files: List[str],
     existing_file: str,
@@ -708,7 +711,7 @@ class BrainMeth:
             app.storage.general.pop(self.mainuuid)
         print("Shutdown complete")
         
-        app.shutdown()
+        state.shutdown_event = False
 
     async def start_background(self):
         """
@@ -2846,7 +2849,7 @@ class BrainMeth:
 
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
-                if len(files_by_sample[sample_id]) >= 25:
+                if len(files_by_sample[sample_id]) >= 10:
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
                         f"Processing batch of {files_to_process} files for sample {sample_id}"
