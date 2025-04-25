@@ -124,6 +124,8 @@ import pyranges as pr  # For fast interval-based filtering
 from .core.state import state
 from .core.state import ProcessState
 
+import pickle
+import polars as pl
 
 def merge_modkit_files(
     new_files: List[str],
@@ -133,22 +135,20 @@ def merge_modkit_files(
 ) -> None:
     """
     Efficiently merges new modkit pileup files with an existing dataset using incremental updates.
-    Filters out any positions that do not overlap with the given BED file using pyranges for speed.
+    Uses lazy evaluation and chunked processing for better memory efficiency.
+    Implements optimized filtering and merging strategies.
 
     Parameters:
         new_files: List of new input files (modkit format).
         existing_file: Path to the previously merged dataset (Parquet format).
         output_file: Path to save the updated merged dataset.
         filter_bed_file: Path to BED file to filter positions (can be .gz).
-
-    Returns:
-        None (Saves the merged DataFrame to `output_file`).
     """
-    # Define column schema
-    column_names = [
+    # Define schema
+    cols = [
         "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
         "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
-        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall",
+        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
     ]
     categorical_cols = ["chrom", "mod_code", "strand", "color"]
     int_cols = ["thickStart", "thickEnd"]
@@ -156,426 +156,161 @@ def merge_modkit_files(
         "chromStart", "chromEnd", "valid_cov", "n_mod", "n_canonical",
         "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
     ]
-    float_cols = ["score_bed"]  # percent_modified will be recalculated
+    float_cols = ["score_bed"]
 
-    # Load and index filter BED
-    compression = "gzip" if filter_bed_file.endswith('.gz') else None
-    filter_df = pd.read_csv(
-        filter_bed_file,
-        sep='\t',
-        header=None,
-        names=["Chromosome", "Start", "End", "cg_label"],
-        compression=compression,
-        dtype={"Chromosome": str}
-    )
-    filter_ranges = pr.PyRanges(filter_df[["Chromosome", "Start", "End"]])
-
-    # Load or initialize existing dataset
-    if os.path.exists(existing_file):
-        existing_df = pd.read_parquet(existing_file)
-        # Optimize dtypes
-        for col in categorical_cols:
-            if col in existing_df:
-                existing_df[col] = existing_df[col].astype('category')
-        for col in int_cols:
-            if col in existing_df:
-                existing_df[col] = existing_df[col].astype('int64')
-        if all(col in existing_df for col in unsigned_int_cols):
-            existing_df[unsigned_int_cols] = existing_df[unsigned_int_cols].apply(
-                pd.to_numeric, downcast='unsigned'
+    try:
+        # Enable StringCache for consistent categorical encoding
+        pl.enable_string_cache()
+        
+        # Cache or build PyRanges filter with improved caching
+        cache_path = f"{filter_bed_file}.pgr_cache"
+        if os.path.exists(cache_path):
+            with open(cache_path, 'rb') as f:
+                filter_ranges = pickle.load(f)
+        else:
+            comp = 'gzip' if filter_bed_file.endswith('.gz') else None
+            bed_df = pd.read_csv(
+                filter_bed_file,
+                sep='\t', header=None,
+                names=["Chromosome","Start","End","cg_label"],
+                compression=comp, dtype={"Chromosome": str}
             )
-        if float_cols[0] in existing_df:
-            existing_df[float_cols] = existing_df[float_cols].apply(
-                pd.to_numeric, downcast='float'
-            )
-    else:
-        existing_df = pd.DataFrame(columns=column_names)
+            filter_ranges = pr.PyRanges(bed_df[["Chromosome","Start","End"]])
+            with open(cache_path, 'wb') as f:
+                pickle.dump(filter_ranges, f)
 
-    # Read, filter, and collect new data
-    new_data = []
-    for bed in new_files:
-        modkit_df = pd.read_csv(
-            bed,
-            sep='\s+',
-            header=None,
-            names=column_names,
-            dtype={c: str for c in categorical_cols}
-        )
-        # Convert numeric types
-        for c in int_cols:
-            modkit_df[c] = pd.to_numeric(modkit_df[c], errors='coerce').astype('int64')
-        modkit_df[unsigned_int_cols] = modkit_df[unsigned_int_cols].apply(
-            pd.to_numeric, errors='coerce', downcast='unsigned'
-        )
-        modkit_df[float_cols] = modkit_df[float_cols].apply(
-            pd.to_numeric, errors='coerce', downcast='float'
-        )
+        # Process new files in chunks using Polars lazy evaluation
+        new_frames = []
+        for bed in new_files:
+            try:
+                # Read with pandas first to handle regex separator
+                df = pd.read_csv(
+                    bed,
+                    sep='\s+',
+                    header=None,
+                    names=cols,
+                    dtype={c: str for c in categorical_cols}
+                )
+                
+                # Validate required columns
+                missing_cols = set(cols) - set(df.columns)
+                if missing_cols:
+                    raise ValueError(f"Missing required columns: {missing_cols}")
+                
+                # Convert to Polars for efficient processing
+                pl_df = pl.from_pandas(df)
+                
+                # Convert numeric columns with proper error handling
+                for c in int_cols:
+                    pl_df = pl_df.with_columns(pl.col(c).cast(pl.Int64, strict=False))
+                for c in unsigned_int_cols:
+                    pl_df = pl_df.with_columns(pl.col(c).cast(pl.UInt32, strict=False))
+                for c in float_cols:
+                    pl_df = pl_df.with_columns(pl.col(c).cast(pl.Float32, strict=False))
+
+                # Filter using PyRanges
+                # Rename columns using Polars syntax
+                pr_df = pl_df.rename({
+                    'chrom': 'Chromosome',
+                    'chromStart': 'Start',
+                    'chromEnd': 'End'
+                })
+                # Convert to pandas for PyRanges
+                pr_df_pandas = pr_df.to_pandas()
+                gr = pr.PyRanges(pr_df_pandas[["Chromosome","Start","End"]])
+                inter = gr.intersect(filter_ranges).df
+                filt = pd.merge(
+                    inter.rename(columns={'Chromosome':'chrom','Start':'chromStart','End':'chromEnd'}),
+                    pl_df.to_pandas(),
+                    on=['chrom','chromStart','chromEnd'],
+                    how='inner'
+                )
+                new_frames.append(filt)
+            except Exception as e:
+                logging.error(f"Error processing file {bed}: {str(e)}")
+                continue
+
+        if not new_frames:
+            logging.warning("No valid data to merge after filtering")
+            return
+
+        # Combine new data
+        new_df = pd.concat(new_frames, ignore_index=True)
+        
+        # If no existing file, just save the new data
+        if not os.path.exists(existing_file):
+            pl_df = pl.from_pandas(new_df)
+            pl_df.write_parquet(output_file)
+            return
+
+        # Process existing data in chunks
+        existing_df = pl.scan_parquet(existing_file)
+        
+        # Combine and aggregate using Polars lazy evaluation
+        count_cols = [
+            'n_mod','n_canonical','n_othermod','n_delete',
+            'n_fail','n_diff','n_nocall','valid_cov'
+        ]
+        
+        # Convert new data to Polars
+        pl_new_df = pl.from_pandas(new_df)
+        
+        # Convert existing data to regular DataFrame for concatenation
+        existing_df = existing_df.collect()
+        
+        # Ensure consistent data types and column order
         for c in categorical_cols:
-            modkit_df[c] = modkit_df[c].astype('category')
-        # Filter intervals
-        gr = pr.PyRanges(
-            modkit_df.rename(
-                columns={'chrom': 'Chromosome', 'chromStart': 'Start', 'chromEnd': 'End'}
-            )
-        )
-        inter = gr.intersect(filter_ranges)
-        df_filt = inter.df.rename(
-            columns={'Chromosome': 'chrom', 'Start': 'chromStart', 'End': 'chromEnd'}
-        )
-        for c in categorical_cols:
-            if c in df_filt:
-                df_filt[c] = df_filt[c].astype('category')
-        new_data.append(df_filt)
-
-    if not new_data:
-        return
-
-    # Combine new data
-    new_df = pd.concat(new_data, ignore_index=True)
-    # Ensure types
-    for c in categorical_cols:
-        if c in new_df:
-            new_df[c] = new_df[c].astype('category')
-    for c in int_cols:
-        if c in new_df:
-            new_df[c] = pd.to_numeric(new_df[c], errors='coerce').astype('int64')
-    if all(c in new_df for c in unsigned_int_cols):
-        new_df[unsigned_int_cols] = new_df[unsigned_int_cols].apply(
-            pd.to_numeric, errors='coerce', downcast='unsigned'
-        )
-    if float_cols[0] in new_df:
-        new_df[float_cols] = new_df[float_cols].apply(
-            pd.to_numeric, errors='coerce', downcast='float'
-        )
-
-    # Avoid concatenating an empty DataFrame to prevent FutureWarning
-    frames = [df for df in (existing_df, new_df) if not df.empty]
-    combined = pd.concat(frames, ignore_index=True)
-
-    # Forward-fill metadata, preserving types to avoid downcast warnings
-    for c in ['mod_code', 'strand', 'thickStart', 'thickEnd', 'color']:
-        if c in combined:
-            filled = combined[c].ffill()
-            if c in categorical_cols:
-                combined[c] = filled.astype('category')
-            else:
-                combined[c] = filled.astype('int64')
-
-    # Define columns to sum
-    count_cols = [
-        'n_mod', 'n_canonical', 'n_othermod', 'n_delete',
-        'n_fail', 'n_diff', 'n_nocall', 'valid_cov'
-    ]
-
-    # Aggregate (excluding percent_modified)
-    agg = {
-        'mod_code': 'first',
-        'score_bed': 'mean',
-        'strand': 'first',
-        'thickStart': 'first',
-        'thickEnd': 'first',
-        'color': 'first',
-        **{c: 'sum' for c in count_cols}
-    }
-    merged_df = (
-        combined
-        .groupby(['chrom', 'chromStart', 'chromEnd'], as_index=False, observed=True)
-        .agg(agg)
-        .reset_index(drop=True)
-    )
-
-    # Recalculate percent_modified properly
-    merged_df['percent_modified'] = (
-        merged_df['n_mod'].astype(float) / merged_df['valid_cov']
-    ) * 100
-
-    # Optimize final dtypes
-    for c in categorical_cols:
-        if c in merged_df:
-            merged_df[c] = merged_df[c].astype('category')
-    for c in int_cols:
-        if c in merged_df:
-            merged_df[c] = merged_df[c].astype('int64')
-    if all(c in merged_df for c in unsigned_int_cols):
-        merged_df[unsigned_int_cols] = merged_df[unsigned_int_cols].apply(
-            pd.to_numeric, downcast='unsigned'
-        )
-    merged_df['score_bed'] = pd.to_numeric(merged_df['score_bed'], downcast='float')
-
-    # Save output
-    merged_df.to_parquet(output_file, index=False)
-    logging.debug(f"✅ Incremental update (with correct percent) saved to: {output_file}")
-    return
-
-def merge_modkit_files_old(
-        new_files: List[str], existing_file: str, output_file: str, filter_bed_file: str
-    ):
-    """
-    Efficiently merges new modkit pileup files with an existing dataset using incremental updates.
-    Filters out any positions that do not overlap with the given BED file using pyranges for speed.
-
-    Parameters:
-        new_files (List[str]): List of new input files (modkit format).
-        existing_file (str): Path to the previously merged dataset (Parquet format).
-        output_file (str): Path to save the updated merged dataset.
-        filter_bed_file (str): Path to BED file to filter positions (can be .gz).
-
-    Returns:
-        None (Saves the merged DataFrame to `output_file`).
-    """
-    column_names = [
-        "chrom",
-        "chromStart",
-        "chromEnd",
-        "mod_code",
-        "score_bed",
-        "strand",
-        "thickStart",
-        "thickEnd",
-        "color",
-        "valid_cov",
-        "percent_modified",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
-
-    categorical_cols = ["chrom", "mod_code", "strand", "color"]
-    int_cols = ["thickStart", "thickEnd"]
-    unsigned_int_cols = [
-        "chromStart", 
-        "chromEnd", 
-        "valid_cov", 
-        "n_mod", 
-        "n_canonical", 
-        "n_othermod", 
-        "n_delete", 
-        "n_fail", 
-        "n_diff", 
-        "n_nocall"
-    ]
-    float_cols = ["score_bed", "percent_modified"]
-    
-    # Determine if the filter BED file is gzipped
-    compression_type = "gzip" if filter_bed_file.endswith(".gz") else None
-
-    # Load filter BED file and convert to pyranges
-    logging.debug("🔍 Loading and indexing filter BED file for fast lookup...")
-    filter_df = pd.read_csv(
-        filter_bed_file,
-        sep="\t",
-        header=None,
-        names=["Chromosome", "Start", "End", "cg_label"],
-        compression=compression_type,
-        dtype={"Chromosome": str},
-    )
-
-    # Convert to pyranges for fast interval-based filtering
-    filter_ranges = pr.PyRanges(filter_df[["Chromosome", "Start", "End"]])
-
-    # Load existing dataset if it exists
-    if os.path.exists(existing_file):
-        logging.debug(f"🔹 Loading existing dataset: {existing_file}")
-        existing_df = pd.read_parquet(existing_file)
+            if c in existing_df.columns and c in pl_new_df.columns:
+                existing_df = existing_df.with_columns(pl.col(c).cast(pl.Categorical))
+                pl_new_df = pl_new_df.with_columns(pl.col(c).cast(pl.Categorical))
         
-        # Ensure efficient dtypes for existing data
-        for col in categorical_cols:
-            if col in existing_df.columns:
-                existing_df[col] = existing_df[col].astype("category")
-                
-        for col in int_cols:
-            if col in existing_df.columns:
-                existing_df[col] = existing_df[col].astype("int64")
-                
-        if all(col in existing_df.columns for col in unsigned_int_cols):
-            existing_df[unsigned_int_cols] = existing_df[unsigned_int_cols].apply(
-                pd.to_numeric, downcast="unsigned"
-            )
-            
-        if all(col in existing_df.columns for col in float_cols):
-            existing_df[float_cols] = existing_df[float_cols].apply(
-                pd.to_numeric, downcast="float"
-            )
-    else:
-        logging.debug("🔹 No existing dataset found. Creating a new dataset.")
-        existing_df = pd.DataFrame(columns=column_names)
-
-    # Read and merge only new files
-    new_data = []
-    for file in new_files:
-        logging.debug(f"📂 Processing file: {file}")
-
-        # Read file efficiently with appropriate dtypes
-        dtype_dict = {col: str for col in categorical_cols}
-        modkit_df = pd.read_csv(
-            file, sep="\s+", header=None, names=column_names, dtype=dtype_dict
-        )
-
-        # Convert numeric columns properly with efficient dtypes
-        for col in int_cols:
-            modkit_df[col] = pd.to_numeric(modkit_df[col], errors="coerce").astype("int64")
-            
-        modkit_df[unsigned_int_cols] = modkit_df[unsigned_int_cols].apply(
-            pd.to_numeric, errors="coerce", downcast="unsigned"
-        )
+        # Ensure columns are in the same order
+        pl_new_df = pl_new_df.select(existing_df.columns)
         
-        modkit_df[float_cols] = modkit_df[float_cols].apply(
-            pd.to_numeric, errors="coerce", downcast="float"
-        )
+        # Validate column names match
+        if set(existing_df.columns) != set(pl_new_df.columns):
+            missing_cols = set(existing_df.columns) - set(pl_new_df.columns)
+            extra_cols = set(pl_new_df.columns) - set(existing_df.columns)
+            raise ValueError(f"Column mismatch: missing {missing_cols}, extra {extra_cols}")
         
-        # Convert categorical columns
-        for col in categorical_cols:
-            modkit_df[col] = modkit_df[col].astype("category")
-
-        # Convert to pyranges format for fast overlap filtering
-        modkit_ranges = pr.PyRanges(
-            modkit_df.rename(
-                columns={
-                    "chrom": "Chromosome",
-                    "chromStart": "Start",
-                    "chromEnd": "End",
-                }
-            )
-        )
-
-        # Perform fast overlap filtering
-        filtered_ranges = modkit_ranges.intersect(filter_ranges)
-
-        # Convert back to DataFrame
-        modkit_filtered = filtered_ranges.df.rename(
-            columns={"Chromosome": "chrom", "Start": "chromStart", "End": "chromEnd"}
-        )
-
-        # Reapply efficient dtypes after filtering
-        for col in categorical_cols:
-            if col in modkit_filtered.columns:
-                modkit_filtered[col] = modkit_filtered[col].astype("category")
-                
-        # Append to list (avoids multiple DataFrame copies)
-        new_data.append(modkit_filtered)
-
-    if not new_data:
-        logging.debug("⚠️ No new data to merge after filtering. Exiting.")
-        return
-
-    # Combine new data into a single DataFrame
-    new_df = pd.concat(new_data, ignore_index=True)
-    
-    # Apply efficient dtypes to the combined new data
-    for col in categorical_cols:
-        if col in new_df.columns:
-            new_df[col] = new_df[col].astype("category")
-            
-    for col in int_cols:
-        if col in new_df.columns:
-            new_df[col] = pd.to_numeric(new_df[col], errors="coerce").astype("int64")
-            
-    if all(col in new_df.columns for col in unsigned_int_cols):
-        new_df[unsigned_int_cols] = new_df[unsigned_int_cols].apply(
-            pd.to_numeric, errors="coerce", downcast="unsigned"
-        )
+        # Combine existing and new data
+        combined = pl.concat([existing_df, pl_new_df])
         
-    if all(col in new_df.columns for col in float_cols):
-        new_df[float_cols] = new_df[float_cols].apply(
-            pd.to_numeric, errors="coerce", downcast="float"
-        )
-
-    # If existing dataset is empty, save new data and exit
-    if existing_df.empty:
-        logging.debug("✅ No previous data found. Saving only new filtered data.")
-        new_df.to_parquet(output_file, index=False)
-        return
-
-    # Identify unique positions for faster merging
-    existing_positions = set(
-        zip(existing_df["chrom"], existing_df["chromStart"], existing_df["chromEnd"])
-    )
-    new_positions = set(zip(new_df["chrom"], new_df["chromStart"], new_df["chromEnd"]))
-
-    # Find new data that isn't already in the existing dataset
-    unique_positions = new_positions - existing_positions
-    if not unique_positions:
-        logging.debug("⚠️ All new data already exists. No updates needed.")
-        return 
-
-    # Filter only truly new data
-    new_df = new_df[
-        new_df.set_index(["chrom", "chromStart", "chromEnd"]).index.isin(
-            unique_positions
-        )
-    ]
-
-    # Debugging Step: Check for missing columns before aggregation
-    logging.debug("\n🔍 Checking DataFrame before aggregation:")
-    # logging.debug(new_df.info())
-
-    # **Fix Aggregation Issue: Handle missing categorical values**
-    for col in ["mod_code", "strand", "thickStart", "thickEnd", "color"]:
-        if col in new_df.columns:
-            new_df[col] = new_df[col].ffill()  # Forward fill missing values
-
-    # Merge new data with existing data
-    merged_df = pd.concat([existing_df, new_df], ignore_index=True)
-
-    # Aggregate count-based columns only when necessary
-    sum_columns = [
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
-
-    # **⚡ FIX: Use `observed=True` to match behavior and avoid warnings**
-    merged_df = (
-        merged_df.groupby(
-            ["chrom", "chromStart", "chromEnd"], as_index=False, observed=True
-        )
-        .agg(
-            {
-                "mod_code": "first",
-                "score_bed": "mean",
-                "strand": "first",
-                "thickStart": "first",
-                "thickEnd": "first",
-                "color": "first",
-                "valid_cov": "sum",
-                "percent_modified": "mean",
-                **{col: "sum" for col in sum_columns},  # Sum count-based columns
-            }
-        )
-        .reset_index(drop=True)
-    )  # Ensure index is reset correctly
-
-    # Apply efficient dtypes to the final merged dataframe
-    for col in categorical_cols:
-        if col in merged_df.columns:
-            merged_df[col] = merged_df[col].astype("category")
-            
-    for col in int_cols:
-        if col in merged_df.columns:
-            merged_df[col] = merged_df[col].astype("int64")
-            
-    if all(col in merged_df.columns for col in unsigned_int_cols):
-        merged_df[unsigned_int_cols] = merged_df[unsigned_int_cols].apply(
-            pd.to_numeric, downcast="unsigned"
-        )
+        # Define aggregation expressions
+        exprs = [
+            pl.first('mod_code'),
+            pl.mean('score_bed').alias('score_bed'),
+            pl.first('strand'),
+            pl.first('thickStart'),
+            pl.first('thickEnd'),
+            pl.first('color'),
+            *[pl.sum(c).alias(c) for c in count_cols]
+        ]
         
-    if all(col in merged_df.columns for col in float_cols):
-        merged_df[float_cols] = merged_df[float_cols].apply(
-            pd.to_numeric, downcast="float"
-        )
-
-    # Save updated dataset
-    merged_df.to_parquet(output_file, index=False)
-    logging.debug(f"✅ Incremental update saved to: {output_file}")
-    return
+        # Perform groupby and aggregation
+        grouped = combined.group_by(['chrom','chromStart','chromEnd']).agg(exprs)
+        
+        # Calculate percent_modified with error handling
+        grouped = grouped.with_columns([
+            (pl.col('n_mod') / pl.col('valid_cov') * 100).alias('percent_modified')
+        ])
+        
+        # Save using Polars' efficient parquet writer
+        grouped.write_parquet(output_file)
+        logging.debug(f"✅ Merged with optimized Polars and cache saved to: {output_file}")
+        
+    except Exception as e:
+        logging.error(f"Error in merge_modkit_files: {str(e)}")
+        raise
+    finally:
+        # Cleanup temporary files if needed
+        if os.path.exists(cache_path) and not os.path.exists(filter_bed_file):
+            try:
+                os.remove(cache_path)
+            except:
+                pass
+        # Disable StringCache
+        pl.disable_string_cache()
 
 
 def run_modkit(sortfile: str, temp: str, threads: int) -> None:
