@@ -101,8 +101,9 @@ def load_modkit_data(parquet_path):
         "n_nocall",
     ]
 
-    # Keep only the original 18 columns
-    return merged_modkit_df[column_names]
+    # Keep only the original 18 columns and sort by chrom and chromStart
+    df = merged_modkit_df[column_names]
+    return df.sort_values(by=['chrom', 'chromStart'])
 
 
 def modkit_pileup_file_to_bed(
@@ -1032,11 +1033,15 @@ class Sturgeon_object(BaseAnalysis):
             "#4CD964",  # Light Green
         ]
 
+        # Ensure DataFrame is sorted by index (timestamp)
+        datadf = datadf.sort_index()
+
         for idx, (series, data) in enumerate(datadf.to_dict().items()):
             if series != "number_probes":
-                # Convert values to percentages
+                # Convert values to percentages and ensure sorted by timestamp
                 data_list = [
-                    [key, float(f"{value * 100:.1f}")] for key, value in data.items()
+                    [key, float(f"{value * 100:.1f}")] 
+                    for key, value in sorted(data.items())  # Sort by timestamp
                 ]
                 self.sturgeon_time_chart.options["series"].append(
                     {

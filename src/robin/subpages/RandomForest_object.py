@@ -207,8 +207,9 @@ def load_modkit_data(parquet_path):
         "n_nocall",
     ]
 
-    # Keep only the original 18 columns
-    return merged_modkit_df[column_names]
+    # Keep only the original 18 columns and sort by chrom and chromStart
+    df = merged_modkit_df[column_names]
+    return df.sort_values(by=['chrom', 'chromStart'])
 
 
 class RandomForest_object(BaseAnalysis):
@@ -822,6 +823,9 @@ class RandomForest_object(BaseAnalysis):
                 "#4CD964",  # Light Green
             ]
 
+            # Ensure DataFrame is sorted by index (timestamp)
+            datadf = datadf.sort_index()
+
             # Get the top 10 diagnoses based on the latest data point
             latest_data = datadf.iloc[-1]
             if "number_probes" in latest_data:
@@ -833,9 +837,10 @@ class RandomForest_object(BaseAnalysis):
 
             for idx, (series, data) in enumerate(filtered_df.to_dict().items()):
                 logger.debug(f"Processing series: {series}")
-                # Values are already percentages, just format them
+                # Values are already percentages, just format them and ensure sorted by timestamp
                 data_list = [
-                    [key, float(f"{value:.1f}")] for key, value in data.items()
+                    [key, float(f"{value:.1f}")] 
+                    for key, value in sorted(data.items())  # Sort by timestamp
                 ]
                 logger.debug(f"First few data points for {series}: {data_list[:3]}")
 
