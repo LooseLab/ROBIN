@@ -12,7 +12,6 @@ Dependencies:
     - time: Time-related functions.
     - nicegui: GUI creation.
     - pysam: BAM file processing.
-    - shutil: File operations.
     - tempfile: Temporary file creation.
     - click: Command-line interface creation.
     - pathlib: File system paths.
@@ -227,7 +226,6 @@ class NanoDX_object(BaseAnalysis):
         not_first_run (bool): Flag indicating whether it's the first run.
         modelfile (str): Path to the neural network model file.
         nanodx_df_store (pd.DataFrame): DataFrame for storing NanoDX results.
-        nanodxfile (tempfile.NamedTemporaryFile): Temporary file for NanoDX results.
     """
 
     def __init__(self, *args, model: str = "Capper_et_al_NN.pkl", **kwargs) -> None:
@@ -248,14 +246,11 @@ class NanoDX_object(BaseAnalysis):
         self.bedDir = {}
         self.threshold = 0.01
         self.nanodx_bam_count = {}
-        self.not_first_run = {}  # False
         self.modelfile = os.path.join(
             os.path.dirname(os.path.abspath(models.__file__)), self.model
         )
         logger.info(f"model file: {self.modelfile}")
         self.nanodx_df_store = {}  # pd.DataFrame()
-        self.nanodxfile = {}
-        self.merged_bed_file = {}
 
         # Set NanoDX-specific confidence thresholds
         # NanoDX typically produces lower confidence scores, so adjust thresholds accordingly
@@ -273,10 +268,6 @@ class NanoDX_object(BaseAnalysis):
             self.storefile = "NanoDX_scores.csv"
         #    self.output = f"{self.output}_PanCan"
 
-    def __del__(self):
-        if self.nanodxfile:
-            pass
-            # self.nanodxfile.close()
 
     def setup_ui(self) -> None:
         """
@@ -810,9 +801,9 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_time_chart.options["series"] = []
             self.nanodx_time_chart.update()
 
-    async def stop_analysis(self):
-        """Stop the NanoDX analysis."""
-        await super().stop_analysis()
+    #async def stop_analysis(self):
+    #    """Stop the NanoDX analysis."""
+    #    await super().stop_analysis()
 
 
 def test_me(
