@@ -34,12 +34,7 @@ import time
 import pandas as pd
 from nicegui import ui, app, run
 from robin import theme
-import pysam
 from robin import models
-from sturgeon.callmapping import (
-    merge_probes_methyl_calls,
-    probes_methyl_calls_to_bed,
-)
 import click
 from pathlib import Path
 from typing import Optional
@@ -403,159 +398,6 @@ def map_methyl_calls_to_probes_chr(
 
     return probes_df
 
-
-def run_probes_methyl_calls(merged_output_file, bed_output_file):
-    """
-    Convert merged methylation calls to BED format.
-
-    Parameters
-    ----------
-    merged_output_file : str
-        Path to the input file containing merged methylation calls
-    bed_output_file : str
-        Path where the output BED file should be written
-
-    Notes
-    -----
-    This function is a wrapper around sturgeon's probes_methyl_calls_to_bed function.
-    """
-    probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
-
-
-def run_sturgeon_merge_probes(calls_per_probe_file, merged_output_file):
-    """
-    Merge multiple probe methylation call files.
-
-    Parameters
-    ----------
-    calls_per_probe_file : str
-        Path to the input file containing methylation calls per probe
-    merged_output_file : str
-        Path where the merged output should be written
-
-    Notes
-    -----
-    This function merges multiple probe methylation call files into a single output file
-    using sturgeon's merge_probes_methyl_calls function.
-    """
-    merge_probes_methyl_calls(
-        [calls_per_probe_file, merged_output_file],
-        merged_output_file,
-    )
-
-
-def pysam_cat(tempbam, tomerge):
-    """
-    Concatenate multiple BAM files using pysam.
-
-    Parameters
-    ----------
-    tempbam : str
-        Path where the concatenated BAM file should be written
-    tomerge : list
-        List of BAM file paths to merge
-
-    Notes
-    -----
-    This function uses pysam's cat functionality to merge multiple BAM files
-    into a single output file.
-    """
-    pysam.cat("-o", tempbam, *tomerge)
-
-
-def run_modkit(file, temp, threads):
-    """
-    Run modkit to extract methylation data from a BAM file.
-
-    Parameters
-    ----------
-    file : str
-        Path to input BAM file
-    temp : str
-        Path for temporary output
-    threads : int
-        Number of threads to use for processing
-
-    Notes
-    -----
-    This function adapts its command based on the installed modkit version.
-    For versions >= 0.4, it uses 'extract full', otherwise just 'extract'.
-    """
-    try:
-        # Get modkit version
-        import subprocess
-
-        version_output = subprocess.check_output(
-            ["modkit", "--version"], text=True
-        ).strip()
-        version = version_output.split()[-1]  # Gets '0.4.1' from 'mod_kit 0.4.1'
-
-        # Parse version number
-        major, minor, *_ = version.split(".")
-        version_num = float(f"{major}.{minor}")
-
-        # Choose appropriate command based on version
-        extract_cmd = "extract full" if version_num >= 0.4 else "extract"
-
-        os.system(
-            f"modkit {extract_cmd} --ignore h -t {threads} {file} {temp} "
-            f"--force --suppress-progress >/dev/null 2>&1"
-        )
-    except Exception as e:
-        logger.error(f"Error in run_modkit: {e}")
-        pass
-
-
-def run_sturgeon_predict(bedDir, dataDir, modelfile):
-    """
-    Run Sturgeon prediction on methylation data.
-
-    Parameters
-    ----------
-    bedDir : str
-        Directory containing BED format methylation data
-    dataDir : str
-        Directory where prediction output will be saved
-    modelfile : str
-        Path to the Sturgeon model file to use for predictions
-
-    Notes
-    -----
-    This function executes the Sturgeon predict command with the specified
-    model file and suppresses terminal output.
-    """
-    os.system(
-        f"sturgeon predict -i {bedDir} -o {dataDir} "
-        f"--model-files {modelfile} >/dev/null 2>&1"
-    )
-
-
-def run_sturgeon_inputtobed(temp, temp2):
-    """
-    Convert Sturgeon input format to BED format.
-
-    Parameters
-    ----------
-    temp : str
-        Path to input file in modkit format
-    temp2 : str
-        Directory where BED format output will be saved
-
-    Notes
-    -----
-    This function converts modkit format methylation data to BED format
-    using hg38 as the reference genome. Errors are caught and printed.
-    """
-    try:
-        os.system(
-            f"sturgeon inputtobed -i {temp} -o {temp2} -s modkit "
-            f"--reference-genome hg38 >/dev/null 2>&1"
-        )
-    except Exception as e:
-        logger.error(f"Error in run_sturgeon_inputtobed: {e}")
-        pass
-
-
 class Sturgeon_object(BaseAnalysis):
     """
     A class for processing and visualizing Sturgeon methylation analysis results.
@@ -721,14 +563,14 @@ class Sturgeon_object(BaseAnalysis):
                     dir=self.check_and_create_folder(self.output, sampleID)
                 )
 
-            tomerge = []
+            #tomerge = []
             latest_file = 0
 
             # Handle both single files and lists of files
-            if isinstance(bamfile, list):
-                tomerge = bamfile  # Use the list directly
-            else:
-                tomerge = [bamfile]  # Make a single-item list
+            #if isinstance(bamfile, list):
+            #    tomerge = bamfile  # Use the list directly
+            #else:
+           #     tomerge = [bamfile]  # Make a single-item list
 
             if (
                 app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
