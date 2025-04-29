@@ -563,14 +563,7 @@ class Sturgeon_object(BaseAnalysis):
                     dir=self.check_and_create_folder(self.output, sampleID)
                 )
 
-            #tomerge = []
             latest_file = 0
-
-            # Handle both single files and lists of files
-            #if isinstance(bamfile, list):
-            #    tomerge = bamfile  # Use the list directly
-            #else:
-           #     tomerge = [bamfile]  # Make a single-item list
 
             if (
                 app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
