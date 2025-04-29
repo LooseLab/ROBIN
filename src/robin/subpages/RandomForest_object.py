@@ -41,9 +41,6 @@ from sturgeon.callmapping import (
     probes_methyl_calls_to_bed,
 )
 
-import yappi
-import tabulate
-
 from robin import submodules
 
 from robin.utilities.merge_bedmethyl import (
@@ -59,17 +56,6 @@ logger = logging.getLogger(__name__)
 HVPATH = os.path.join(
     os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
 )
-
-
-def run_probes_methyl_calls(merged_output_file, bed_output_file):
-    probes_methyl_calls_to_bed(merged_output_file, bed_output_file)
-
-
-def run_sturgeon_merge_probes(calls_per_probe_file, merged_output_file):
-    merge_probes_methyl_calls(
-        [calls_per_probe_file, merged_output_file],
-        merged_output_file,
-    )
 
 
 def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
@@ -156,20 +142,6 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
     except Exception as e:
         logger.error(f"Error in run_rcns2: {str(e)}", exc_info=True)
         raise
-
-
-def run_samtools_sort(file, tomerge, sortfile, threads, regions):
-    pysam.cat("-o", file, *tomerge)
-    # pysam.sort("-@", f"{threads}", "--write-index", "-o", sortfile, file)
-    intermediate_bam = tempfile.NamedTemporaryFile(suffix=".bam")
-    command = (
-        f"samtools sort -@{threads} --write-index -o {intermediate_bam.name} {file}"
-    )
-    logger.debug(command)
-    os.system(command)
-    command2 = f"samtools view -b -L {regions} -o {sortfile} --write-index {intermediate_bam.name} "
-    logger.debug(command2)
-    os.system(command2)
 
 
 def load_modkit_data(parquet_path):
@@ -928,27 +900,6 @@ def test_ui():
             time.sleep(0.001)
     ui.run(port=8082, reload=False)
 
-
-def start() -> None:
-    yappi.clear_stats()
-    yappi.start()
-
-
-def stop() -> None:
-    yappi.stop()
-    table = [
-        [str(v) for v in [stat.full_name, stat.ttot, stat.tsub, stat.tavg, stat.ncall]]
-        for stat in yappi.get_func_stats()
-        if "python" not in stat.module
-    ]
-    print(
-        tabulate.tabulate(
-            table[:15],
-            headers=["function", "total", "excl. sub", "avg", "ncall"],
-            floatfmt=".4f",
-        )
-    )
-    yappi.get_thread_stats().print_all()
 
 
 if __name__ in ("__main__", "__mp_main__"):
