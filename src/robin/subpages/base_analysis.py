@@ -199,13 +199,14 @@ class BaseAnalysis:
         if self.progress and not self.browse:
             self.progress_bars()
 
-
     async def stop_analysis(self):
         """Stop the analysis and clean up resources."""
         state.set_process_state(self.name, ProcessState.STOPPING)
         self.running = False
         self.batch_running = False
-        print(f"Analysis stopped for {self.name} and {self.sampleID}. Active processes: {list(state.process_states.keys())}")
+        print(
+            f"Analysis stopped for {self.name} and {self.sampleID}. Active processes: {list(state.process_states.keys())}"
+        )
         if self.name in state.process_states:
             state.stop_process(self.name)
 
@@ -213,7 +214,9 @@ class BaseAnalysis:
         """
         Start processing BAM files either in batch mode or in a continuous timer mode.
         """
-        state.start_process(self.name, ProcessType.BATCH if self.batch else ProcessType.PER_FILE)
+        state.start_process(
+            self.name, ProcessType.BATCH if self.batch else ProcessType.PER_FILE
+        )
         if self.batch:
             self.bams: Dict[str, List[Tuple[BinaryIO, Optional[float]]]] = {}
             self.batch_timer_run()
@@ -234,7 +237,7 @@ class BaseAnalysis:
         """
         self.timer.active = False
         if state.shutdown_event:
-            print(f"shutdown_event is True, stopping _worker in {self.name}")   
+            print(f"shutdown_event is True, stopping _worker in {self.name}")
             await self.stop_analysis()
             return
 
@@ -242,9 +245,11 @@ class BaseAnalysis:
             self.running = True
             state.set_process_state(self.name, ProcessState.RUNNING)
             bamfile, timestamp, sampleID = self.bamqueue.get()
-            logger.debug(f"Processing BAM file: {bamfile} with timestamp: {timestamp} and sampleID: {sampleID}")
+            logger.debug(
+                f"Processing BAM file: {bamfile} with timestamp: {timestamp} and sampleID: {sampleID}"
+            )
             self.sampleID = sampleID
-            
+
             # Initialize storage structure
             if self.mainuuid not in app.storage.general:
                 app.storage.general[self.mainuuid] = {}
@@ -264,11 +269,15 @@ class BaseAnalysis:
             if not timestamp:
                 timestamp = time.time()
             try:
-                logger.debug(f"Calling process_bam with bamfile: {bamfile}, timestamp: {timestamp}")
+                logger.debug(
+                    f"Calling process_bam with bamfile: {bamfile}, timestamp: {timestamp}"
+                )
                 await self.process_bam(bamfile, timestamp)
             except ValueError as e:
                 if "invalid literal for int() with base 10" in str(e):
-                    logger.error(f"Error processing BAM file: {e}. Skipping this file and continuing.")
+                    logger.error(
+                        f"Error processing BAM file: {e}. Skipping this file and continuing."
+                    )
                     logger.debug(f"BAM file that caused error: {bamfile}")
                     logger.debug(f"Timestamp that caused error: {timestamp}")
                     logger.debug(f"SampleID that caused error: {sampleID}")
@@ -276,18 +285,19 @@ class BaseAnalysis:
                     logger.error(f"Error processing BAM files: {e}")
             except Exception as e:
                 logger.error(f"Error processing BAM files: {e}")
-                logger.debug(f"Unexpected error occurred while processing BAM file: {bamfile}")
+                logger.debug(
+                    f"Unexpected error occurred while processing BAM file: {bamfile}"
+                )
                 logger.debug(f"Error details: {str(e)}")
                 logger.debug(f"Error type: {type(e)}")
             finally:
-                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
-                    "bam_processed"
-                ] += 1
+                app.storage.general[self.mainuuid][self.sampleID][self.name][
+                    "counters"
+                ]["bam_processed"] += 1
             self.running = False
         state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
         if not self.terminate:
             self.timer.active = True
-
 
     def add_bam(self, bamfile: BinaryIO, timestamp: Optional[float] = None) -> None:
         """
@@ -315,7 +325,7 @@ class BaseAnalysis:
         count = 0
         while self.bamqueue.qsize() > 0:
             state.set_process_state(self.name, ProcessState.RUNNING)
-            
+
             bamfile, timestamp, sampleID = self.bamqueue.get()
 
             if sampleID not in self.bams:
@@ -339,22 +349,25 @@ class BaseAnalysis:
                 state.set_process_state(self.name, ProcessState.RUNNING)
                 self.running = True
                 self.sampleID = sample_id
-                
+
                 # Initialize counters for this sampleID if they don't exist
                 self._initialize_counters(self.sampleID)
 
                 try:
                     # Sort the data_list by timestamp if timestamps exist
-                    sorted_data = sorted(data_list, key=lambda x: x[1] if x[1] is not None else float('inf'))
-                    
+                    sorted_data = sorted(
+                        data_list,
+                        key=lambda x: x[1] if x[1] is not None else float("inf"),
+                    )
+
                     # Extract just the bamfiles while preserving order
                     bamfiles = [item[0] for item in sorted_data]
                     # Get the latest timestamp
                     latest_timestamp = sorted_data[-1][1] if sorted_data else None
-                    
+
                     # Process the batch with the latest timestamp
                     await self.process_bam(bamfiles, latest_timestamp)
-                        
+
                 except Exception as e:
                     logger.error(f"Error processing BAM files: {e}")
         state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
@@ -364,7 +377,7 @@ class BaseAnalysis:
     def _initialize_counters(self, sample_id: str) -> None:
         """
         Initialize counters for a specific sample if they don't exist.
-        
+
         Args:
             sample_id (str): The ID of the sample to initialize counters for.
         """
@@ -372,47 +385,50 @@ class BaseAnalysis:
             if not sample_id:
                 logging.warning(f"No sample ID provided for {self.name}")
                 return
-                
+
             if not self.mainuuid:
                 logging.warning(f"No UUID provided for {self.name}")
                 return
-                
+
             if self.mainuuid not in app.storage.general:
                 app.storage.general[self.mainuuid] = {}
                 logging.debug(f"Initialized storage for UUID {self.mainuuid}")
-                
+
             if sample_id not in app.storage.general[self.mainuuid]:
                 app.storage.general[self.mainuuid][sample_id] = {}
                 logging.debug(f"Initialized storage for sample {sample_id}")
-                
+
             if self.name not in app.storage.general[self.mainuuid][sample_id]:
                 app.storage.general[self.mainuuid][sample_id][self.name] = {
                     "counters": Counter(
-                        bam_count=0,
-                        bam_processed=0,
-                        bams_in_processing=0
+                        bam_count=0, bam_processed=0, bams_in_processing=0
                     )
                 }
-                logging.debug(f"Initialized counters for {self.name} in sample {sample_id}")
-            elif "counters" not in app.storage.general[self.mainuuid][sample_id][self.name]:
-                app.storage.general[self.mainuuid][sample_id][self.name]["counters"] = Counter(
-                    bam_count=0,
-                    bam_processed=0,
-                    bams_in_processing=0
+                logging.debug(
+                    f"Initialized counters for {self.name} in sample {sample_id}"
                 )
-                logging.debug(f"Initialized missing counters for {self.name} in sample {sample_id}")
-                
+            elif (
+                "counters"
+                not in app.storage.general[self.mainuuid][sample_id][self.name]
+            ):
+                app.storage.general[self.mainuuid][sample_id][self.name]["counters"] = (
+                    Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
+                )
+                logging.debug(
+                    f"Initialized missing counters for {self.name} in sample {sample_id}"
+                )
+
         except Exception as e:
-            logging.error(f"Error initializing counters for {self.name} in sample {sample_id}: {str(e)}")
+            logging.error(
+                f"Error initializing counters for {self.name} in sample {sample_id}: {str(e)}"
+            )
             # Create empty counter to prevent further errors
             try:
                 app.storage.general[self.mainuuid] = {
                     sample_id: {
                         self.name: {
                             "counters": Counter(
-                                bam_count=0,
-                                bam_processed=0,
-                                bams_in_processing=0
+                                bam_count=0, bam_processed=0, bams_in_processing=0
                             )
                         }
                     }
@@ -430,7 +446,9 @@ class BaseAnalysis:
         """
         try:
             self._initialize_counters(self.sampleID)
-            counters = app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+                "counters"
+            ]
             if counters.get("bam_count", 0) == 0:
                 return 0.0
             return counters.get("bam_processed", 0) / counters.get("bam_count", 1)
@@ -447,7 +465,9 @@ class BaseAnalysis:
         """
         try:
             self._initialize_counters(self.sampleID)
-            counters = app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+                "counters"
+            ]
             if counters.get("bam_count", 0) == 0:
                 return 0.0
             return counters.get("bams_in_processing", 0) / counters.get("bam_count", 1)
@@ -464,7 +484,9 @@ class BaseAnalysis:
         """
         try:
             self._initialize_counters(self.sampleID)
-            counters = app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+                "counters"
+            ]
             if counters.get("bam_count", 0) == 0:
                 return 0.0
             return (
@@ -482,7 +504,7 @@ class BaseAnalysis:
         try:
             self.progress_trackers = ui.card().classes("w-full p-2")
             logger.debug(f"Progress bars for {self.name} and {self.sampleID}")
-            
+
             # Initialize storage structure
             self._initialize_counters(self.sampleID)
 
@@ -491,7 +513,9 @@ class BaseAnalysis:
                 with ui.expansion().classes("w-full") as expansion:
                     # Header slot with summary
                     with expansion.add_slot("header"):
-                        with ui.row().classes("w-full items-center justify-between gap-1"):
+                        with ui.row().classes(
+                            "w-full items-center justify-between gap-1"
+                        ):
                             with ui.column().classes("flex-grow gap-0"):
                                 ui.label("File Processing Status").classes(
                                     "text-sm font-medium mb-0 pb-0"
@@ -508,9 +532,9 @@ class BaseAnalysis:
                                         .props("instant-feedback")
                                     )
                                     ui.label().bind_text_from(
-                                        app.storage.general[self.mainuuid][self.sampleID][
-                                            self.name
-                                        ]["counters"],
+                                        app.storage.general[self.mainuuid][
+                                            self.sampleID
+                                        ][self.name]["counters"],
                                         "bam_processed",
                                         backward=lambda n: f"{n}/{self._get_counter_value('bam_count', 0)}",
                                     ).classes("text-xs min-w-fit")
@@ -593,7 +617,9 @@ class BaseAnalysis:
                 ui.timer(1, callback=lambda: progress_summary.set_value(self._progress))
                 ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
                 if self.batch:
-                    ui.timer(1, callback=lambda: progressbar2.set_value(self._progress2))
+                    ui.timer(
+                        1, callback=lambda: progressbar2.set_value(self._progress2)
+                    )
                 ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
 
         except Exception as e:
@@ -605,16 +631,18 @@ class BaseAnalysis:
     def _get_counter_value(self, counter_name: str, default: int = 0) -> int:
         """
         Safely get a counter value from storage.
-        
+
         Args:
             counter_name (str): Name of the counter to retrieve
             default (int): Default value if counter doesn't exist
-            
+
         Returns:
             int: Counter value or default
         """
         try:
-            return app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"].get(counter_name, default)
+            return app.storage.general[self.mainuuid][self.sampleID][self.name][
+                "counters"
+            ].get(counter_name, default)
         except (KeyError, AttributeError):
             return default
 

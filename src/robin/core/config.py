@@ -2,13 +2,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional, List
 
+
 @dataclass
 class BrainMethConfig:
     """Configuration for the BrainMeth application.
-    
+
     This dataclass holds all configuration parameters for the BrainMeth application,
     providing a centralized way to manage application settings.
     """
+
     threads: int = 4
     force_sampleid: Optional[str] = None
     kit: Optional[str] = None
@@ -33,4 +35,4 @@ class BrainMethConfig:
     def __post_init__(self):
         """Initialize default values for mutable attributes."""
         if self.exclude is None:
-            self.exclude = [] 
+            self.exclude = []

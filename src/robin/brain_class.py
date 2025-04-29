@@ -75,14 +75,11 @@ import pysam
 from collections import Counter
 from datetime import datetime
 from dateutil import parser
-import pytz
 import os
-import shutil
 import psutil
 import tempfile
 from alive_progress import alive_bar
 from nicegui import ui, app, run
-from nicegui.run import process_pool
 import concurrent.futures
 import subprocess
 import time
@@ -94,10 +91,6 @@ from robin.utilities.bam_handler import BamEventHandler
 from robin.subpages.MGMT_object import MGMT_Object
 from robin.subpages.Sturgeon_object import (
     Sturgeon_object,
-    run_sturgeon_inputtobed,
-    pysam_cat,
-    run_sturgeon_merge_probes,
-    run_probes_methyl_calls,
 )
 from robin.subpages.NanoDX_object import NanoDX_object
 from robin.subpages.RandomForest_object import RandomForest_object
@@ -106,17 +99,13 @@ from robin.subpages.TargetCoverage_object import TargetCoverage
 from robin.subpages.Fusion_object import FusionObject
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.ReadBam import ReadBam
-from robin.utilities.bed_file import BedTree, MasterBedTree
+from robin.utilities.bed_file import MasterBedTree
 from robin.reporting.report import create_pdf
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
-from sturgeon.callmapping import (
-    merge_probes_methyl_calls,
-    probes_methyl_calls_to_bed,
-)
 
 from watchdog.observers import Observer
-from typing import List, Tuple, Optional, Dict, Any
+from typing import List
 
 
 import pyranges as pr  # For fast interval-based filtering
@@ -129,13 +118,14 @@ import polars as pl
 # Configure logging
 logger = logging.getLogger(__name__)
 
+
 def merge_modkit_files(
     new_files: List[str],
     existing_file: str,
     output_file: str,
     filter_bed_file: str,
     sample_id: str,
-    output_dir: str
+    output_dir: str,
 ) -> None:
     """
     Merge modkit files with improved caching and error handling.
@@ -150,40 +140,64 @@ def merge_modkit_files(
     """
     # Define schema
     cols = [
-        "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
-        "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
-        "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
+        "chrom",
+        "chromStart",
+        "chromEnd",
+        "mod_code",
+        "score_bed",
+        "strand",
+        "thickStart",
+        "thickEnd",
+        "color",
+        "valid_cov",
+        "percent_modified",
+        "n_mod",
+        "n_canonical",
+        "n_othermod",
+        "n_delete",
+        "n_fail",
+        "n_diff",
+        "n_nocall",
     ]
     categorical_cols = ["chrom", "mod_code", "strand", "color"]
     int_cols = ["thickStart", "thickEnd"]
     unsigned_int_cols = [
-        "chromStart", "chromEnd", "valid_cov", "n_mod", "n_canonical",
-        "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
+        "chromStart",
+        "chromEnd",
+        "valid_cov",
+        "n_mod",
+        "n_canonical",
+        "n_othermod",
+        "n_delete",
+        "n_fail",
+        "n_diff",
+        "n_nocall",
     ]
     float_cols = ["score_bed"]
 
     try:
         # Enable StringCache for consistent categorical encoding
         pl.enable_string_cache()
-        
+
         # Cache or build PyRanges filter with improved caching
         cache_path = os.path.join(
-            output_dir,
-            f"{os.path.basename(filter_bed_file)}.pgr_cache"
+            output_dir, f"{os.path.basename(filter_bed_file)}.pgr_cache"
         )
         if os.path.exists(cache_path):
-            with open(cache_path, 'rb') as f:
+            with open(cache_path, "rb") as f:
                 filter_ranges = pickle.load(f)
         else:
-            comp = 'gzip' if filter_bed_file.endswith('.gz') else None
+            comp = "gzip" if filter_bed_file.endswith(".gz") else None
             bed_df = pd.read_csv(
                 filter_bed_file,
-                sep='\t', header=None,
-                names=["Chromosome","Start","End","cg_label"],
-                compression=comp, dtype={"Chromosome": str}
+                sep="\t",
+                header=None,
+                names=["Chromosome", "Start", "End", "cg_label"],
+                compression=comp,
+                dtype={"Chromosome": str},
             )
-            filter_ranges = pr.PyRanges(bed_df[["Chromosome","Start","End"]])
-            with open(cache_path, 'wb') as f:
+            filter_ranges = pr.PyRanges(bed_df[["Chromosome", "Start", "End"]])
+            with open(cache_path, "wb") as f:
                 pickle.dump(filter_ranges, f)
 
         # Process new files in chunks using Polars lazy evaluation
@@ -193,20 +207,20 @@ def merge_modkit_files(
                 # Read with pandas first to handle regex separator
                 df = pd.read_csv(
                     bed,
-                    sep='\s+',
+                    sep="\s+",
                     header=None,
                     names=cols,
-                    dtype={c: str for c in categorical_cols}
+                    dtype={c: str for c in categorical_cols},
                 )
-                
+
                 # Validate required columns
                 missing_cols = set(cols) - set(df.columns)
                 if missing_cols:
                     raise ValueError(f"Missing required columns: {missing_cols}")
-                
+
                 # Convert to Polars for efficient processing
                 pl_df = pl.from_pandas(df)
-                
+
                 # Convert numeric columns with proper error handling
                 for c in int_cols:
                     pl_df = pl_df.with_columns(pl.col(c).cast(pl.Int64, strict=False))
@@ -217,20 +231,24 @@ def merge_modkit_files(
 
                 # Filter using PyRanges
                 # Rename columns using Polars syntax
-                pr_df = pl_df.rename({
-                    'chrom': 'Chromosome',
-                    'chromStart': 'Start',
-                    'chromEnd': 'End'
-                })
+                pr_df = pl_df.rename(
+                    {"chrom": "Chromosome", "chromStart": "Start", "chromEnd": "End"}
+                )
                 # Convert to pandas for PyRanges
                 pr_df_pandas = pr_df.to_pandas()
-                gr = pr.PyRanges(pr_df_pandas[["Chromosome","Start","End"]])
+                gr = pr.PyRanges(pr_df_pandas[["Chromosome", "Start", "End"]])
                 inter = gr.intersect(filter_ranges).df
                 filt = pd.merge(
-                    inter.rename(columns={'Chromosome':'chrom','Start':'chromStart','End':'chromEnd'}),
+                    inter.rename(
+                        columns={
+                            "Chromosome": "chrom",
+                            "Start": "chromStart",
+                            "End": "chromEnd",
+                        }
+                    ),
                     pl_df.to_pandas(),
-                    on=['chrom','chromStart','chromEnd'],
-                    how='inner'
+                    on=["chrom", "chromStart", "chromEnd"],
+                    how="inner",
                 )
                 new_frames.append(filt)
             except Exception as e:
@@ -243,7 +261,7 @@ def merge_modkit_files(
 
         # Combine new data
         new_df = pd.concat(new_frames, ignore_index=True)
-        
+
         # If no existing file, just save the new data
         if not os.path.exists(existing_file):
             pl_df = pl.from_pandas(new_df)
@@ -252,60 +270,70 @@ def merge_modkit_files(
 
         # Process existing data in chunks
         existing_df = pl.scan_parquet(existing_file)
-        
+
         # Combine and aggregate using Polars lazy evaluation
         count_cols = [
-            'n_mod','n_canonical','n_othermod','n_delete',
-            'n_fail','n_diff','n_nocall','valid_cov'
+            "n_mod",
+            "n_canonical",
+            "n_othermod",
+            "n_delete",
+            "n_fail",
+            "n_diff",
+            "n_nocall",
+            "valid_cov",
         ]
-        
+
         # Convert new data to Polars
         pl_new_df = pl.from_pandas(new_df)
-        
+
         # Convert existing data to regular DataFrame for concatenation
         existing_df = existing_df.collect()
-        
+
         # Ensure consistent data types and column order
         for c in categorical_cols:
             if c in existing_df.columns and c in pl_new_df.columns:
                 existing_df = existing_df.with_columns(pl.col(c).cast(pl.Categorical))
                 pl_new_df = pl_new_df.with_columns(pl.col(c).cast(pl.Categorical))
-        
+
         # Ensure columns are in the same order
         pl_new_df = pl_new_df.select(existing_df.columns)
-        
+
         # Validate column names match
         if set(existing_df.columns) != set(pl_new_df.columns):
             missing_cols = set(existing_df.columns) - set(pl_new_df.columns)
             extra_cols = set(pl_new_df.columns) - set(existing_df.columns)
-            raise ValueError(f"Column mismatch: missing {missing_cols}, extra {extra_cols}")
-        
+            raise ValueError(
+                f"Column mismatch: missing {missing_cols}, extra {extra_cols}"
+            )
+
         # Combine existing and new data
         combined = pl.concat([existing_df, pl_new_df])
-        
+
         # Define aggregation expressions
         exprs = [
-            pl.first('mod_code'),
-            pl.mean('score_bed').alias('score_bed'),
-            pl.first('strand'),
-            pl.first('thickStart'),
-            pl.first('thickEnd'),
-            pl.first('color'),
-            *[pl.sum(c).alias(c) for c in count_cols]
+            pl.first("mod_code"),
+            pl.mean("score_bed").alias("score_bed"),
+            pl.first("strand"),
+            pl.first("thickStart"),
+            pl.first("thickEnd"),
+            pl.first("color"),
+            *[pl.sum(c).alias(c) for c in count_cols],
         ]
-        
+
         # Perform groupby and aggregation
-        grouped = combined.group_by(['chrom','chromStart','chromEnd']).agg(exprs)
-        
+        grouped = combined.group_by(["chrom", "chromStart", "chromEnd"]).agg(exprs)
+
         # Calculate percent_modified with error handling
-        grouped = grouped.with_columns([
-            (pl.col('n_mod') / pl.col('valid_cov') * 100).alias('percent_modified')
-        ])
-        
+        grouped = grouped.with_columns(
+            [(pl.col("n_mod") / pl.col("valid_cov") * 100).alias("percent_modified")]
+        )
+
         # Save using Polars' efficient parquet writer
         grouped.write_parquet(output_file)
-        logging.debug(f"✅ Merged with optimized Polars and cache saved to: {output_file}")
-        
+        logging.debug(
+            f"✅ Merged with optimized Polars and cache saved to: {output_file}"
+        )
+
     except Exception as e:
         logging.error(f"Error in merge_modkit_files: {str(e)}")
         raise
@@ -314,8 +342,8 @@ def merge_modkit_files(
         if os.path.exists(cache_path) and not os.path.exists(filter_bed_file):
             try:
                 os.remove(cache_path)
-            except:
-                pass
+            except Exception as e:
+                logging.error(f"Error removing cache file: {str(e)}")
         # Disable StringCache
         pl.disable_string_cache()
 
@@ -333,12 +361,12 @@ def run_modkit(sortfile: str, temp: str, threads: int) -> None:
         "modkit",
         "pileup",
         "-t",
-        str(threads),  # Ensure threads is a string 
+        str(threads),  # Ensure threads is a string
         "--filter-threshold",
         "0.73",
         "--chunk-size",
-        "1", 
-        "--interval-size", 
+        "1",
+        "--interval-size",
         "10000000",
         "--combine-mods",
         sortfile,
@@ -347,8 +375,9 @@ def run_modkit(sortfile: str, temp: str, threads: int) -> None:
     ]
 
     # Run the command
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    
+    subprocess.run(cmd, capture_output=True, text=True)
+
+
 def run_samtools_sort(
     file: str, tomerge: List[str], sortfile: str, threads: int
 ) -> None:
@@ -380,7 +409,7 @@ def check_bam(bamfile):
     import os
 
     logging.info(f"Checking BAM file: {bamfile}")
-    
+
     # Check if file exists and is accessible
     if not os.path.exists(bamfile):
         logging.error(f"BAM file does not exist: {bamfile}")
@@ -389,7 +418,7 @@ def check_bam(bamfile):
     # Check if file is being written to
     try:
         file_size = os.path.getsize(bamfile)
-        #time.sleep(0.1)  # Brief pause
+        # time.sleep(0.1)  # Brief pause
         if os.path.getsize(bamfile) != file_size:
             logging.warning(f"BAM file is still being written: {bamfile}")
             raise IOError("BAM file is still being written")
@@ -400,39 +429,47 @@ def check_bam(bamfile):
     # Try to index the BAM file with retries
     max_retries = 3
     retry_delay = 1  # seconds
-    
+
     for attempt in range(max_retries):
         try:
             # Check if index exists and is newer than BAM file
             bai_file = f"{bamfile}.bai"
-            if os.path.exists(bai_file) and os.path.getmtime(bai_file) > os.path.getmtime(bamfile):
+            if os.path.exists(bai_file) and os.path.getmtime(
+                bai_file
+            ) > os.path.getmtime(bamfile):
                 logging.info(f"Using existing index for {bamfile}")
             else:
-                logging.info(f"Indexing BAM file (attempt {attempt + 1}/{max_retries}): {bamfile}")
+                logging.info(
+                    f"Indexing BAM file (attempt {attempt + 1}/{max_retries}): {bamfile}"
+                )
                 pysam.index(bamfile)
             break
         except pysam.utils.SamtoolsError as e:
             if "Resource temporarily unavailable" in str(e):
                 if attempt < max_retries - 1:
-                    logging.warning(f"BAM indexing failed (attempt {attempt + 1}), retrying in {retry_delay}s: {str(e)}")
+                    logging.warning(
+                        f"BAM indexing failed (attempt {attempt + 1}), retrying in {retry_delay}s: {str(e)}"
+                    )
                     time.sleep(retry_delay)
                     retry_delay *= 2  # Exponential backoff
                     continue
                 else:
-                    logging.error(f"Failed to index BAM file after {max_retries} attempts: {bamfile}")
+                    logging.error(
+                        f"Failed to index BAM file after {max_retries} attempts: {bamfile}"
+                    )
                     raise
             else:
                 logging.error(f"Error indexing BAM file: {str(e)}")
                 raise
 
-    #try:
-        # Read BAM file
+    # try:
+    # Read BAM file
     bam = ReadBam(bamfile)
     baminfo = bam.process_reads()
     bamdata = bam.summary()
     logging.info(f"BAM file processed successfully: {bamfile}")
     return baminfo, bamdata
-    #except Exception as e:
+    # except Exception as e:
     #    logging.error(f"Error processing BAM file {bamfile}: {str(e)}")
     #    raise
 
@@ -551,19 +588,19 @@ class BrainMeth:
             "sturg_nanodx_cpgs_0125.bed.gz",
         )
         if self.reference:
-            #ToDo: We need to pass through an instance of the MasterBedTree class here.
+            # ToDo: We need to pass through an instance of the MasterBedTree class here.
             self.master_bed_tree = MasterBedTree(
                 default_preserve_original_tree=True,
                 default_reference_file=f"{self.reference}.fai",
                 default_readfish_toml=self.readfish_toml,
             )
-            
-            #self.NewBed = BedTree(
+
+            # self.NewBed = BedTree(
             #    preserve_original_tree=True,
             #    reference_file=f"{self.reference}.fai",
             #     readfish_toml=self.readfish_toml,
-            #)
-            #if self.bed_file:
+            # )
+            # if self.bed_file:
             #    self.NewBed.load_from_file(self.bed_file)
         else:
             self.master_bed_tree = MasterBedTree(
@@ -571,8 +608,7 @@ class BrainMeth:
             )
 
         logging.info(f"BrainMeth initialized with UUID: {self.mainuuid}")
-        
-    
+
     def configure_storage(self, sample_id):
         """
         Configure storage for the application.
@@ -630,8 +666,13 @@ class BrainMeth:
                 logging.info(f"Initialized storage for new sample: {sample_id}")
 
             # Ensure file_counters exists
-            if "file_counters" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
-                app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"] = {
+            if (
+                "file_counters"
+                not in app.storage.general[self.mainuuid]["samples"][sample_id]
+            ):
+                app.storage.general[self.mainuuid]["samples"][sample_id][
+                    "file_counters"
+                ] = {
                     "bam_passed": 0,
                     "bam_failed": 0,
                     "mapped_count": 0,
@@ -659,17 +700,35 @@ class BrainMeth:
                 logging.info(f"Initialized file_counters for sample: {sample_id}")
 
             # Ensure counter exists
-            if counter_name not in app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"]:
-                app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][counter_name] = 0
-                logging.info(f"Initialized counter {counter_name} for sample: {sample_id}")
+            if (
+                counter_name
+                not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                    "file_counters"
+                ]
+            ):
+                app.storage.general[self.mainuuid]["samples"][sample_id][
+                    "file_counters"
+                ][counter_name] = 0
+                logging.info(
+                    f"Initialized counter {counter_name} for sample: {sample_id}"
+                )
 
-            current = app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][counter_name]
+            current = app.storage.general[self.mainuuid]["samples"][sample_id][
+                "file_counters"
+            ][counter_name]
             new_value = max(0, current + value)  # Ensure we don't go below 0
-            app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][counter_name] = new_value
-            logging.debug(f"Counter {counter_name} updated for sample {sample_id}: {current} -> {new_value}")
+            app.storage.general[self.mainuuid]["samples"][sample_id]["file_counters"][
+                counter_name
+            ] = new_value
+            logging.debug(
+                f"Counter {counter_name} updated for sample {sample_id}: {current} -> {new_value}"
+            )
 
         except Exception as e:
-            logging.error(f"Error updating counter {counter_name} for sample {sample_id}: {str(e)}", exc_info=True)
+            logging.error(
+                f"Error updating counter {counter_name} for sample {sample_id}: {str(e)}",
+                exc_info=True,
+            )
             # Re-raise the exception to ensure we don't silently fail
             raise
 
@@ -678,39 +737,41 @@ class BrainMeth:
         Shutdown the application gracefully.
         """
         print("Shutting down ROBIN... from brainclas?")
-        print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
+        print(
+            "Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open."
+        )
         self.terminate = True
-        
+
         # First stop all timers
         print("Stop observer")
-        if hasattr(self, 'observer'):
+        if hasattr(self, "observer"):
             state.set_process_state("File Observer", ProcessState.STOPPING)
             state.stop_process("File Observer")
             self.observer.stop()
             self.observer.join()
         print("Observer stopped")
-        
+
         print("Stop check_existing_bams_timer")
-        if hasattr(self, 'check_existing_bams_timer'):
+        if hasattr(self, "check_existing_bams_timer"):
             self.check_existing_bams_timer.cancel()
         print("check_existing_bams_timer stopped")
-        
+
         print("Stop background_process_bams_timer")
-        if hasattr(self, 'background_process_bams_timer'):
+        if hasattr(self, "background_process_bams_timer"):
             self.background_process_bams_timer.cancel()
         print("background_process_bams_timer stopped")
-        
+
         # Wait for any pending tasks to complete
         while not self.finished:
             print("Waiting for finished")
             print(f"Value of terminate: {self.terminate}")
             print(f"Value of finished: {self.finished}")
             time.sleep(0.1)
-            
+
         if self.mainuuid in app.storage.general:
             app.storage.general.pop(self.mainuuid)
         print("Shutdown complete")
-        
+
         state.shutdown_event = False
 
     async def start_background(self):
@@ -718,18 +779,18 @@ class BrainMeth:
         Start background tasks for BAM processing and analysis.
         """
         logging.info(f"Starting background tasks for UUID: {self.mainuuid}")
-        
+
         # Ensure storage directory exists
         storage_dir = os.path.join(os.path.expanduser("~"), ".nicegui")
         os.makedirs(storage_dir, exist_ok=True)
-        
+
         # Initialize storage if it doesn't exist
         if not hasattr(app.storage, "general"):
             app.storage.general = {}
-        
+
         if self.mainuuid not in app.storage.general:
             app.storage.general[self.mainuuid] = {}
-        
+
         app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
         app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
         app.storage.general[self.mainuuid]["bam_count"]["total_files"] = 0
@@ -814,8 +875,8 @@ class BrainMeth:
                 target_panel=self.target_panel,
                 reference_file=self.reference,
                 bed_file=self.bed_file,
-                readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
-                #NewBed=self.NewBed, #ToDo: This assumes a single sample per CNV analysis.
+                readfish_toml=self.readfish_toml,  # ToDo: This assumes a single sample per CNV analysis.
+                # NewBed=self.NewBed, #ToDo: This assumes a single sample per CNV analysis.
                 master_bed_tree=self.master_bed_tree,
                 **common_args,
             )
@@ -850,8 +911,8 @@ class BrainMeth:
                 target_panel=self.target_panel,
                 reference_file=self.reference,
                 bed_file=self.bed_file,
-                readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
-                #NewBed=self.NewBed,
+                readfish_toml=self.readfish_toml,  # ToDo: This assumes a single sample per CNV analysis.
+                # NewBed=self.NewBed,
                 master_bed_tree=self.master_bed_tree,
                 **common_args,
             )
@@ -890,15 +951,19 @@ class BrainMeth:
             )
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
-            self.check_existing_bams_timer = ui.timer(1, callback=self.check_existing_bams, once=True)
-            
+            self.check_existing_bams_timer = ui.timer(
+                1, callback=self.check_existing_bams, once=True
+            )
+
             # Add status tracking for the observer
             state.start_process("File Observer", ProcessType.SYSTEM)
             state.set_process_state("File Observer", ProcessState.STARTING)
             self.observer.start()
             state.set_process_state("File Observer", ProcessState.RUNNING)
 
-            self.background_process_bams_timer = ui.timer(1, callback=self.background_process_bams, once=True)
+            self.background_process_bams_timer = ui.timer(
+                1, callback=self.background_process_bams, once=True
+            )
 
             logging.info("Watchfolder setup and added")
 
@@ -1241,8 +1306,13 @@ class BrainMeth:
                 with ui.column().classes("w-full space-y-4"):
                     # Classification Results - Single row with equal width columns
                     # Only show if at least one classifier is not excluded
-                    if not all(classifier in self.exclude for classifier in ["sturgeon", "nanodx", "pannanodx", "forest"]):
-                        with ui.card().classes("w-full p-3 sm:p-4 bg-gray-50 rounded-lg"):
+                    if not all(
+                        classifier in self.exclude
+                        for classifier in ["sturgeon", "nanodx", "pannanodx", "forest"]
+                    ):
+                        with ui.card().classes(
+                            "w-full p-3 sm:p-4 bg-gray-50 rounded-lg"
+                        ):
                             ui.label("Classification Summary").classes(
                                 "font-medium text-gray-900 mb-3"
                             )
@@ -1257,7 +1327,7 @@ class BrainMeth:
                                     pannanodxsummary = ui.column().classes("space-y-2")
                                 if "forest" not in self.exclude:
                                     forestsummary = ui.column().classes("space-y-2")
-                
+
                 with ui.column().classes("w-full space-y-4"):
                     # Analysis Results - Two columns grid
                     with ui.grid().classes(
@@ -1274,7 +1344,7 @@ class BrainMeth:
 
                     # Add monitoring information panel - Now positioned after diagnosis cards
                     # Only show in live mode
-                    if not self.browse:                    
+                    if not self.browse:
                         with ui.card().classes("w-full bg-white rounded-lg shadow-sm"):
                             with ui.expansion(
                                 "Monitoring Information", icon="folder"
@@ -1295,7 +1365,7 @@ class BrainMeth:
                                                 )
 
                                                 total_files = ui.label().classes(
-                                                        "font-medium text-gray-900"
+                                                    "font-medium text-gray-900"
                                                 )
 
                                                 def update_total_files():
@@ -1312,8 +1382,6 @@ class BrainMeth:
                                                     "bam_count"
                                                 ].on_change(update_total_files)
                                                 update_total_files()
-                                                
-                                                
 
                                             with ui.row().classes("items-center gap-1"):
                                                 ui.icon("check_circle").classes(
@@ -2347,7 +2415,7 @@ class BrainMeth:
                                                                 update_mean_fail_unmapped
                                                             )
                                                             update_mean_fail_unmapped()
-                            
+
                 # Detailed Analysis Tabs
                 if sample_id:
                     selectedtab = None
@@ -2453,8 +2521,8 @@ class BrainMeth:
                                         target_panel=self.target_panel,
                                         reference_file=self.reference,
                                         bed_file=self.bed_file,
-                                        readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
-                                        #NewBed=self.NewBed, #ToDo: This assumes a single sample per CNV analysis.
+                                        readfish_toml=self.readfish_toml,  # ToDo: This assumes a single sample per CNV analysis.
+                                        # NewBed=self.NewBed, #ToDo: This assumes a single sample per CNV analysis.
                                         master_bed_tree=self.master_bed_tree,
                                         **display_args,
                                     )
@@ -2495,8 +2563,8 @@ class BrainMeth:
                                         target_panel=self.target_panel,
                                         reference_file=self.reference,
                                         bed_file=self.bed_file,
-                                        readfish_toml=self.readfish_toml, #ToDo: This assumes a single sample per CNV analysis.
-                                        #NewBed=self.NewBed,
+                                        readfish_toml=self.readfish_toml,  # ToDo: This assumes a single sample per CNV analysis.
+                                        # NewBed=self.NewBed,
                                         master_bed_tree=self.master_bed_tree,
                                         **display_args,
                                     )
@@ -2558,7 +2626,7 @@ class BrainMeth:
                         dialog_result = await dialog
                         if dialog_result is None:
                             return  # Dialog was closed without submitting
-                        
+
                         result, report_type = dialog_result
                         if result == "Yes":
                             await download_report(report_type)
@@ -2622,14 +2690,15 @@ class BrainMeth:
         self.process_bigbadmerge_tracker = app.timer(10, self.process_bigbadmerge)
         state.start_process("Merge Bam Analysis", ProcessType.BACKGROUND)
         state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
-        otherprocs = ['dorado', 'minknow', 'docker']
-        self.check_and_log_memory = app.timer(5, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs))
-        
-    
+        otherprocs = ["dorado", "minknow", "docker"]
+        self.check_and_log_memory = app.timer(
+            5, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs)
+        )
+
     async def check_app_state(self):
         if state.shutdown_event:
             print("shutdown_event is True, stopping background processes")
-            if hasattr(self, 'observer'):
+            if hasattr(self, "observer"):
                 state.set_process_state("File Observer", ProcessState.STOPPING)
                 state.stop_process("File Observer")
                 self.observer.stop()
@@ -2637,13 +2706,14 @@ class BrainMeth:
             print("Observer stopped")
             while state.get_running_process_count() > 0:
                 await asyncio.sleep(1)
-                print(f"Waiting for {state.get_running_process_count()} processes to finish")
-                print(f"Running processes: {[p for p, s in state.process_states.items() if s == ProcessState.RUNNING]}")
+                print(
+                    f"Waiting for {state.get_running_process_count()} processes to finish"
+                )
+                print(
+                    f"Running processes: {[p for p, s in state.process_states.items() if s == ProcessState.RUNNING]}"
+                )
             self.finished = True
             self.shutdown_background()
-            
-            
-        
 
     def check_and_create_folder(self, path, folder_name=None):
         """
@@ -2670,14 +2740,14 @@ class BrainMeth:
             return full_path
         else:
             return path
-        
+
     def get_memory_usage(self, process_names_to_monitor=None):
         """
         Get memory usage statistics for the current process and optionally other specified processes.
-        
+
         Args:
             process_names_to_monitor (list): Optional list of process names to monitor (e.g., ['modkit', 'samtools'])
-            
+
         Returns:
             dict: Dictionary containing memory usage statistics
         """
@@ -2685,73 +2755,102 @@ class BrainMeth:
             # Get the current process
             current_process = psutil.Process(os.getpid())
             memory = psutil.virtual_memory()
-            available_memory_gb = memory.available / (1024 ** 3)
-            total_memory_gb = memory.total / (1024 ** 3)
+            available_memory_gb = memory.available / (1024**3)
+            total_memory_gb = memory.total / (1024**3)
             mem_info = current_process.memory_info()
-            rss = mem_info.rss / (1024 ** 3)
-            vms = mem_info.vms / (1024 ** 3)
-            
+            rss = mem_info.rss / (1024**3)
+            vms = mem_info.vms / (1024**3)
+
             # Create memory usage data dictionary for current process
             memory_data = {
-                'system': {
-                    'total': total_memory_gb,
-                    'avail': available_memory_gb,
+                "system": {
+                    "total": total_memory_gb,
+                    "avail": available_memory_gb,
                 },
-                'main_process': {
-                    'name': current_process.name(),
-                    'pid': current_process.pid,
-                    'rss': rss,  # Resident Set Size (physical memory)
-                    'vms': vms,  # Virtual Memory Size
-                    'cpu_percent': current_process.cpu_percent(),
+                "main_process": {
+                    "name": current_process.name(),
+                    "pid": current_process.pid,
+                    "rss": rss,  # Resident Set Size (physical memory)
+                    "vms": vms,  # Virtual Memory Size
+                    "cpu_percent": current_process.cpu_percent(),
                 },
-                'monitored_processes': {}
+                "monitored_processes": {},
             }
-            
+
             # Monitor other processes if specified
             if process_names_to_monitor:
-                for proc in psutil.process_iter(['pid', 'name', 'memory_info', 'cpu_percent']):
+                for proc in psutil.process_iter(
+                    ["pid", "name", "memory_info", "cpu_percent"]
+                ):
                     try:
                         for monitor_name in process_names_to_monitor:
-                            if monitor_name.lower() in proc.info['name'].lower():
-                                if proc.info['memory_info'] is not None:
-                                    proc_mem = proc.info['memory_info']
-                                    proc_rss = proc_mem.rss / (1024 ** 3)
-                                    proc_vms = proc_mem.vms / (1024 ** 3)
-                                    
+                            if monitor_name.lower() in proc.info["name"].lower():
+                                if proc.info["memory_info"] is not None:
+                                    proc_mem = proc.info["memory_info"]
+                                    proc_rss = proc_mem.rss / (1024**3)
+                                    proc_vms = proc_mem.vms / (1024**3)
+
                                     # Add or append to process list in memory data
-                                    if monitor_name not in memory_data['monitored_processes']:
-                                        memory_data['monitored_processes'][monitor_name] = []
-                                    
-                                    memory_data['monitored_processes'][monitor_name].append({
-                                        'pid': proc.info['pid'],
-                                        'rss': proc_rss,
-                                        'vms': proc_vms,
-                                        'cpu_percent': proc.info['cpu_percent']
-                                    })
-                    except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                                    if (
+                                        monitor_name
+                                        not in memory_data["monitored_processes"]
+                                    ):
+                                        memory_data["monitored_processes"][
+                                            monitor_name
+                                        ] = []
+
+                                    memory_data["monitored_processes"][
+                                        monitor_name
+                                    ].append(
+                                        {
+                                            "pid": proc.info["pid"],
+                                            "rss": proc_rss,
+                                            "vms": proc_vms,
+                                            "cpu_percent": proc.info["cpu_percent"],
+                                        }
+                                    )
+                    except (
+                        psutil.NoSuchProcess,
+                        psutil.AccessDenied,
+                        psutil.ZombieProcess,
+                    ):
                         continue
-            
-            
+
             # Create memory log file path
-            memory_log_file = os.path.join(self.output, f"memory_usage_{self.mainuuid}.csv")
-            
+            memory_log_file = os.path.join(
+                self.output, f"memory_usage_{self.mainuuid}.csv"
+            )
+
             # Get current timestamp
-            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
             # Create header if file doesn't exist
             if not os.path.exists(memory_log_file):
-                header = ["timestamp", "total_memory_gb", "available_memory_gb", 
-                         "main_process_name", "main_process_pid", "main_process_rss_gb", 
-                         "main_process_vms_gb", "main_process_cpu_percent"]
-                
+                header = [
+                    "timestamp",
+                    "total_memory_gb",
+                    "available_memory_gb",
+                    "main_process_name",
+                    "main_process_pid",
+                    "main_process_rss_gb",
+                    "main_process_vms_gb",
+                    "main_process_cpu_percent",
+                ]
+
                 if process_names_to_monitor:
                     for proc_name in process_names_to_monitor:
-                        header.extend([f"{proc_name}_pid", f"{proc_name}_rss_gb", 
-                                    f"{proc_name}_vms_gb", f"{proc_name}_cpu_percent"])
-                
-                with open(memory_log_file, 'w') as f:
-                    f.write(','.join(header) + '\n')
-            
+                        header.extend(
+                            [
+                                f"{proc_name}_pid",
+                                f"{proc_name}_rss_gb",
+                                f"{proc_name}_vms_gb",
+                                f"{proc_name}_cpu_percent",
+                            ]
+                        )
+
+                with open(memory_log_file, "w") as f:
+                    f.write(",".join(header) + "\n")
+
             # Prepare log entry
             log_data = [
                 timestamp,
@@ -2761,31 +2860,36 @@ class BrainMeth:
                 str(current_process.pid),
                 f"{rss:.2f}",
                 f"{vms:.2f}",
-                f"{current_process.cpu_percent():.1f}"
+                f"{current_process.cpu_percent():.1f}",
             ]
-            
+
             # Add monitored processes data
             if process_names_to_monitor:
                 for proc_name in process_names_to_monitor:
-                    if proc_name in memory_data['monitored_processes'] and memory_data['monitored_processes'][proc_name]:
+                    if (
+                        proc_name in memory_data["monitored_processes"]
+                        and memory_data["monitored_processes"][proc_name]
+                    ):
                         # Use the first instance if multiple processes with same name
-                        proc_data = memory_data['monitored_processes'][proc_name][0]
-                        log_data.extend([
-                            str(proc_data['pid']),
-                            f"{proc_data['rss']:.2f}",
-                            f"{proc_data['vms']:.2f}",
-                            f"{proc_data['cpu_percent']:.1f}"
-                        ])
+                        proc_data = memory_data["monitored_processes"][proc_name][0]
+                        log_data.extend(
+                            [
+                                str(proc_data["pid"]),
+                                f"{proc_data['rss']:.2f}",
+                                f"{proc_data['vms']:.2f}",
+                                f"{proc_data['cpu_percent']:.1f}",
+                            ]
+                        )
                     else:
                         # If process not found, add placeholder values
-                        log_data.extend(['NA', '0.00', '0.00', '0.0'])
-            
+                        log_data.extend(["NA", "0.00", "0.00", "0.0"])
+
             # Append memory data with timestamp
-            with open(memory_log_file, 'a') as f:
-                f.write(','.join(log_data) + '\n')
-            
+            with open(memory_log_file, "a") as f:
+                f.write(",".join(log_data) + "\n")
+
             return memory_data
-            
+
         except psutil.NoSuchProcess:
             logging.error("Error: Process not found.")
             return None
@@ -2836,8 +2940,15 @@ class BrainMeth:
                                     "bams_failed": 0,
                                 }
                             }
-                        elif "counters" not in app.storage.general[self.mainuuid][sampleID][analysis]:
-                            app.storage.general[self.mainuuid][sampleID][analysis]["counters"] = {
+                        elif (
+                            "counters"
+                            not in app.storage.general[self.mainuuid][sampleID][
+                                analysis
+                            ]
+                        ):
+                            app.storage.general[self.mainuuid][sampleID][analysis][
+                                "counters"
+                            ] = {
                                 "bams_in_processing": 0,
                                 "bam_processed": 0,
                                 "bams_failed": 0,
@@ -2861,22 +2972,36 @@ class BrainMeth:
                         if analysis.lower() not in self.exclude:
                             try:
                                 # Ensure the counter structure exists
-                                if analysis not in app.storage.general[self.mainuuid][sample_id]:
-                                    app.storage.general[self.mainuuid][sample_id][analysis] = {
+                                if (
+                                    analysis
+                                    not in app.storage.general[self.mainuuid][sample_id]
+                                ):
+                                    app.storage.general[self.mainuuid][sample_id][
+                                        analysis
+                                    ] = {
                                         "counters": {
                                             "bams_in_processing": 0,
                                             "bam_processed": 0,
                                             "bams_failed": 0,
                                         }
                                     }
-                                elif "counters" not in app.storage.general[self.mainuuid][sample_id][analysis]:
-                                    app.storage.general[self.mainuuid][sample_id][analysis]["counters"] = {
+                                elif (
+                                    "counters"
+                                    not in app.storage.general[self.mainuuid][
+                                        sample_id
+                                    ][analysis]
+                                ):
+                                    app.storage.general[self.mainuuid][sample_id][
+                                        analysis
+                                    ]["counters"] = {
                                         "bams_in_processing": 0,
                                         "bam_processed": 0,
                                         "bams_failed": 0,
                                     }
-                                
-                                app.storage.general[self.mainuuid][sample_id][analysis]["counters"]["bams_in_processing"] += files_to_process
+
+                                app.storage.general[self.mainuuid][sample_id][analysis][
+                                    "counters"
+                                ]["bams_in_processing"] += files_to_process
                                 logging.debug(
                                     f"Updated {analysis} counter for {sample_id} by {files_to_process}"
                                 )
@@ -2908,22 +3033,36 @@ class BrainMeth:
                         if analysis.lower() not in self.exclude:
                             try:
                                 # Ensure the counter structure exists
-                                if analysis not in app.storage.general[self.mainuuid][sample_id]:
-                                    app.storage.general[self.mainuuid][sample_id][analysis] = {
+                                if (
+                                    analysis
+                                    not in app.storage.general[self.mainuuid][sample_id]
+                                ):
+                                    app.storage.general[self.mainuuid][sample_id][
+                                        analysis
+                                    ] = {
                                         "counters": {
                                             "bams_in_processing": 0,
                                             "bam_processed": 0,
                                             "bams_failed": 0,
                                         }
                                     }
-                                elif "counters" not in app.storage.general[self.mainuuid][sample_id][analysis]:
-                                    app.storage.general[self.mainuuid][sample_id][analysis]["counters"] = {
+                                elif (
+                                    "counters"
+                                    not in app.storage.general[self.mainuuid][
+                                        sample_id
+                                    ][analysis]
+                                ):
+                                    app.storage.general[self.mainuuid][sample_id][
+                                        analysis
+                                    ]["counters"] = {
                                         "bams_in_processing": 0,
                                         "bam_processed": 0,
                                         "bams_failed": 0,
                                     }
-                                
-                                app.storage.general[self.mainuuid][sample_id][analysis]["counters"]["bams_in_processing"] += files_to_process
+
+                                app.storage.general[self.mainuuid][sample_id][analysis][
+                                    "counters"
+                                ]["bams_in_processing"] += files_to_process
                                 logging.debug(
                                     f"Updated {analysis} counter for {sample_id} by {files_to_process}"
                                 )
@@ -3020,24 +3159,28 @@ class BrainMeth:
 
             # Set process state to running
             state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
-            
+
             # Sort and merge BAM files
             try:
                 await run.cpu_bound(
                     run_samtools_sort, file, tomerge, sortfile, self.threads
                 )
             except concurrent.futures.process.BrokenProcessPool:
-                logger.warning("Process pool was terminated. This is normal during shutdown.")
+                logger.warning(
+                    "Process pool was terminated. This is normal during shutdown."
+                )
                 state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
                 return
 
             with tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
-            ) as temp2:
+            ):
                 try:
                     await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
                 except concurrent.futures.process.BrokenProcessPool:
-                    logger.warning("Process pool was terminated. This is normal during shutdown.")
+                    logger.warning(
+                        "Process pool was terminated. This is normal during shutdown."
+                    )
                     state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
                     return
 
@@ -3059,7 +3202,9 @@ class BrainMeth:
                         self.output,
                     )
                 except concurrent.futures.process.BrokenProcessPool:
-                    logger.warning("Process pool was terminated. This is normal during shutdown.")
+                    logger.warning(
+                        "Process pool was terminated. This is normal during shutdown."
+                    )
                     state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
                     return
 
@@ -3078,17 +3223,24 @@ class BrainMeth:
                                 app.storage.general[self.mainuuid] = {}
                             if sampleID not in app.storage.general[self.mainuuid]:
                                 app.storage.general[self.mainuuid][sampleID] = {}
-                            if analysis not in app.storage.general[self.mainuuid][sampleID]:
-                                app.storage.general[self.mainuuid][sampleID][analysis] = {
+                            if (
+                                analysis
+                                not in app.storage.general[self.mainuuid][sampleID]
+                            ):
+                                app.storage.general[self.mainuuid][sampleID][
+                                    analysis
+                                ] = {
                                     "counters": {
                                         "bams_in_processing": 0,
                                         "bam_processed": 0,
                                         "bams_failed": 0,
                                     }
                                 }
-                            
-                            counters = app.storage.general[self.mainuuid][sampleID][analysis]["counters"]
-                            
+
+                            counters = app.storage.general[self.mainuuid][sampleID][
+                                analysis
+                            ]["counters"]
+
                             # Decrease the in_processing counter and increase the processed counter
                             counters["bams_in_processing"] = max(
                                 0, counters["bams_in_processing"] - num_bam_files_seen
@@ -3104,11 +3256,15 @@ class BrainMeth:
                             )
                         if state.shutdown_event:
                             print("Terminate detected, stopping process_sample_files")
-                            state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                            state.set_process_state(
+                                "Merge Bam Analysis", ProcessState.STOPPED
+                            )
                             return
 
         except concurrent.futures.process.BrokenProcessPool:
-            logger.warning("Process pool was terminated. This is normal during shutdown.")
+            logger.warning(
+                "Process pool was terminated. This is normal during shutdown."
+            )
             state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
         except Exception as e:
             logging.error(f"Error in process_sample_files: {str(e)}", exc_info=True)
@@ -3118,7 +3274,11 @@ class BrainMeth:
             for analysis in analyses:
                 if analysis.lower() not in self.exclude:
                     try:
-                        if self.mainuuid in app.storage.general and sampleID in app.storage.general[self.mainuuid] and analysis in app.storage.general[self.mainuuid][sampleID]:
+                        if (
+                            self.mainuuid in app.storage.general
+                            and sampleID in app.storage.general[self.mainuuid]
+                            and analysis in app.storage.general[self.mainuuid][sampleID]
+                        ):
                             app.storage.general[self.mainuuid][sampleID][analysis][
                                 "counters"
                             ]["bams_in_processing"] -= num_bam_files_seen
@@ -3148,11 +3308,7 @@ class BrainMeth:
             self.process_bams_tracker.active = False
             state.stop_process("Serial Bam Analysis")
             return
-            
-        
-        counter = 0
-        #memory = self.get_memory_usage()
-        #if memory: print (memory)
+
         if "file" in app.storage.general[self.mainuuid]["bam_count"]:
             state.set_process_state("Serial Bam Analysis", ProcessState.RUNNING)
             while self.watchdogbamqueue.qsize() > 0:
@@ -3160,7 +3316,11 @@ class BrainMeth:
                 logging.info(f"Processing new BAM file from watchdog queue: {filename}")
                 # First check the BAM file to get its sample ID
                 baminfo, bamdata = await run.cpu_bound(check_bam, filename)
-                sample_id = baminfo["sample_id"] if not self.force_sampleid else self.force_sampleid
+                sample_id = (
+                    baminfo["sample_id"]
+                    if not self.force_sampleid
+                    else self.force_sampleid
+                )
                 logging.info(f"BAM file {filename} belongs to sample: {sample_id}")
 
                 # Initialize sample-specific counters if they don't exist
@@ -3170,54 +3330,110 @@ class BrainMeth:
                     self.configure_storage(sample_id)
                     app.storage.general[self.mainuuid]["sample_list"].append(sample_id)
                     # Initialize sample-specific BAM tracking
-                    if "bam_tracking" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"] = {
-                            "counter": 0,
-                            "total_files": 0,
-                            "files": {}
-                        }
+                    if (
+                        "bam_tracking"
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "bam_tracking"
+                        ] = {"counter": 0, "total_files": 0, "files": {}}
 
                 # Update run information from BAM file
-                if "run_info" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"] = {}
-                
+                if (
+                    "run_info"
+                    not in app.storage.general[self.mainuuid]["samples"][sample_id]
+                ):
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ] = {}
+
                 # Update both the run_info dictionary and the arrays
                 if baminfo.get("time_of_run"):
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["run_time"] = baminfo["time_of_run"]
-                    if baminfo["time_of_run"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"].append(baminfo["time_of_run"])
-                
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ]["run_time"] = baminfo["time_of_run"]
+                    if (
+                        baminfo["time_of_run"]
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "run_time"
+                        ]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "run_time"
+                        ].append(baminfo["time_of_run"])
+
                 if baminfo.get("device_position"):
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["device"] = baminfo["device_position"]
-                    if baminfo["device_position"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["devices"]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["devices"].append(baminfo["device_position"])
-                
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ]["device"] = baminfo["device_position"]
+                    if (
+                        baminfo["device_position"]
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "devices"
+                        ]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "devices"
+                        ].append(baminfo["device_position"])
+
                 if baminfo.get("basecall_model"):
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["model"] = baminfo["basecall_model"]
-                    if baminfo["basecall_model"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"].append(baminfo["basecall_model"])
-                
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ]["model"] = baminfo["basecall_model"]
+                    if (
+                        baminfo["basecall_model"]
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "basecall_models"
+                        ]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "basecall_models"
+                        ].append(baminfo["basecall_model"])
+
                 if baminfo.get("flow_cell_id"):
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["flow_cell"] = baminfo["flow_cell_id"]
-                    if baminfo["flow_cell_id"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"].append(baminfo["flow_cell_id"])
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ]["flow_cell"] = baminfo["flow_cell_id"]
+                    if (
+                        baminfo["flow_cell_id"]
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "flowcell_ids"
+                        ]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "flowcell_ids"
+                        ].append(baminfo["flow_cell_id"])
 
                 # Update sample-specific counters
-                app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["counter"] += 1
-                app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["total_files"] += 1
-                app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["files"][filename] = timestamp
+                app.storage.general[self.mainuuid]["samples"][sample_id][
+                    "bam_tracking"
+                ]["counter"] += 1
+                app.storage.general[self.mainuuid]["samples"][sample_id][
+                    "bam_tracking"
+                ]["total_files"] += 1
+                app.storage.general[self.mainuuid]["samples"][sample_id][
+                    "bam_tracking"
+                ]["files"][filename] = timestamp
 
                 # Also update global counters for overall tracking
                 app.storage.general[self.mainuuid]["bam_count"]["counter"] += 1
                 app.storage.general[self.mainuuid]["bam_count"]["total_files"] += 1
-                app.storage.general[self.mainuuid]["bam_count"]["file"][filename] = timestamp
+                app.storage.general[self.mainuuid]["bam_count"]["file"][
+                    filename
+                ] = timestamp
 
                 # Inside the process_bams method, after updating pass_* or fail_* counters:
-                # Update the combined counters 
+                # Update the combined counters
                 self.update_counter(sample_id, "mapped_bases", bamdata["mapped_bases"])
-                self.update_counter(sample_id, "unmapped_bases", bamdata["unmapped_bases"])
-                self.update_counter(sample_id, "mapped_reads_num", bamdata["mapped_reads_num"])
-                self.update_counter(sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"])
+                self.update_counter(
+                    sample_id, "unmapped_bases", bamdata["unmapped_bases"]
+                )
+                self.update_counter(
+                    sample_id, "mapped_reads_num", bamdata["mapped_reads_num"]
+                )
+                self.update_counter(
+                    sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"]
+                )
                 if state.shutdown_event:
                     print("shutdown_event is True, stopping process_bams")
                     self.process_bams_tracker.active = False
@@ -3227,19 +3443,37 @@ class BrainMeth:
             # Process the files
             while len(app.storage.general[self.mainuuid]["bam_count"]["file"]) > 0:
                 self.nofiles = False
-                file = (k := next(iter(app.storage.general[self.mainuuid]["bam_count"]["file"])),
-                       app.storage.general[self.mainuuid]["bam_count"]["file"].pop(k))
-                
+                file = (
+                    k := next(
+                        iter(app.storage.general[self.mainuuid]["bam_count"]["file"])
+                    ),
+                    app.storage.general[self.mainuuid]["bam_count"]["file"].pop(k),
+                )
+
                 logging.info(f"Processing BAM file from global queue: {file[0]}")
                 baminfo, bamdata = await run.cpu_bound(check_bam, file[0])
-                sample_id = baminfo["sample_id"] if not self.force_sampleid else self.force_sampleid
+                sample_id = (
+                    baminfo["sample_id"]
+                    if not self.force_sampleid
+                    else self.force_sampleid
+                )
                 logging.info(f"BAM file {file[0]} belongs to sample: {sample_id}")
 
                 # Remove from sample-specific tracking as well
                 if sample_id in app.storage.general[self.mainuuid]["samples"]:
-                    if "bam_tracking" in app.storage.general[self.mainuuid]["samples"][sample_id]:
-                        if file[0] in app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["files"]:
-                            app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"]["files"].pop(file[0])
+                    if (
+                        "bam_tracking"
+                        in app.storage.general[self.mainuuid]["samples"][sample_id]
+                    ):
+                        if (
+                            file[0]
+                            in app.storage.general[self.mainuuid]["samples"][sample_id][
+                                "bam_tracking"
+                            ]["files"]
+                        ):
+                            app.storage.general[self.mainuuid]["samples"][sample_id][
+                                "bam_tracking"
+                            ]["files"].pop(file[0])
 
                 # Initialize sample storage if it doesn't exist
                 if sample_id not in app.storage.general[self.mainuuid]["samples"]:
@@ -3248,126 +3482,243 @@ class BrainMeth:
                     self.configure_storage(sample_id)
                     app.storage.general[self.mainuuid]["sample_list"].append(sample_id)
                     # Initialize sample-specific BAM tracking
-                    if "bam_tracking" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["bam_tracking"] = {
-                            "counter": 0,
-                            "total_files": 0,
-                            "files": {}
-                        }
+                    if (
+                        "bam_tracking"
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "bam_tracking"
+                        ] = {"counter": 0, "total_files": 0, "files": {}}
 
                 # Update run information from BAM file
-                if "run_info" not in app.storage.general[self.mainuuid]["samples"][sample_id]:
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"] = {}
-                
+                if (
+                    "run_info"
+                    not in app.storage.general[self.mainuuid]["samples"][sample_id]
+                ):
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ] = {}
+
                 # Update both the run_info dictionary and the arrays
                 if baminfo.get("time_of_run"):
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["run_time"] = baminfo["time_of_run"]
-                    if baminfo["time_of_run"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["run_time"].append(baminfo["time_of_run"])
-                
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ]["run_time"] = baminfo["time_of_run"]
+                    if (
+                        baminfo["time_of_run"]
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "run_time"
+                        ]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "run_time"
+                        ].append(baminfo["time_of_run"])
+
                 if baminfo.get("device_position"):
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["device"] = baminfo["device_position"]
-                    if baminfo["device_position"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["devices"]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["devices"].append(baminfo["device_position"])
-                
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ]["device"] = baminfo["device_position"]
+                    if (
+                        baminfo["device_position"]
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "devices"
+                        ]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "devices"
+                        ].append(baminfo["device_position"])
+
                 if baminfo.get("basecall_model"):
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["model"] = baminfo["basecall_model"]
-                    if baminfo["basecall_model"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["basecall_models"].append(baminfo["basecall_model"])
-                
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ]["model"] = baminfo["basecall_model"]
+                    if (
+                        baminfo["basecall_model"]
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "basecall_models"
+                        ]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "basecall_models"
+                        ].append(baminfo["basecall_model"])
+
                 if baminfo.get("flow_cell_id"):
-                    app.storage.general[self.mainuuid]["samples"][sample_id]["run_info"]["flow_cell"] = baminfo["flow_cell_id"]
-                    if baminfo["flow_cell_id"] not in app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"]:
-                        app.storage.general[self.mainuuid]["samples"][sample_id]["flowcell_ids"].append(baminfo["flow_cell_id"])
+                    app.storage.general[self.mainuuid]["samples"][sample_id][
+                        "run_info"
+                    ]["flow_cell"] = baminfo["flow_cell_id"]
+                    if (
+                        baminfo["flow_cell_id"]
+                        not in app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "flowcell_ids"
+                        ]
+                    ):
+                        app.storage.general[self.mainuuid]["samples"][sample_id][
+                            "flowcell_ids"
+                        ].append(baminfo["flow_cell_id"])
 
                 # Process state and update counters
                 if baminfo["state"] == "pass":
-                    #logging.info(f"BAM file {filename} passed quality checks")
+                    # logging.info(f"BAM file {filename} passed quality checks")
                     self.update_counter(sample_id, "bam_passed", 1)
-                    self.update_counter(sample_id, "pass_mapped_count", bamdata["mapped_reads"])
-                    self.update_counter(sample_id, "pass_unmapped_count", bamdata["unmapped_reads"])
-                    self.update_counter(sample_id, "pass_bases_count", bamdata["yield_tracking"])
-                    self.update_counter(sample_id, "pass_mapped_reads_num", bamdata["mapped_reads_num"])
-                    self.update_counter(sample_id, "pass_unmapped_reads_num", bamdata["unmapped_reads_num"])
-                    self.update_counter(sample_id, "pass_mapped_bases", bamdata["mapped_bases"])
-                    self.update_counter(sample_id, "pass_unmapped_bases", bamdata["unmapped_bases"])
-                    
+                    self.update_counter(
+                        sample_id, "pass_mapped_count", bamdata["mapped_reads"]
+                    )
+                    self.update_counter(
+                        sample_id, "pass_unmapped_count", bamdata["unmapped_reads"]
+                    )
+                    self.update_counter(
+                        sample_id, "pass_bases_count", bamdata["yield_tracking"]
+                    )
+                    self.update_counter(
+                        sample_id, "pass_mapped_reads_num", bamdata["mapped_reads_num"]
+                    )
+                    self.update_counter(
+                        sample_id,
+                        "pass_unmapped_reads_num",
+                        bamdata["unmapped_reads_num"],
+                    )
+                    self.update_counter(
+                        sample_id, "pass_mapped_bases", bamdata["mapped_bases"]
+                    )
+                    self.update_counter(
+                        sample_id, "pass_unmapped_bases", bamdata["unmapped_bases"]
+                    )
+
                     # Update the combined counters for pass files
-                    self.update_counter(sample_id, "mapped_bases", bamdata["mapped_bases"])
-                    self.update_counter(sample_id, "unmapped_bases", bamdata["unmapped_bases"])
-                    self.update_counter(sample_id, "mapped_reads_num", bamdata["mapped_reads_num"])
-                    self.update_counter(sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"])
-                    self.update_counter(sample_id, "mapped_count", bamdata["mapped_reads"])
-                    self.update_counter(sample_id, "unmapped_count", bamdata["unmapped_reads"])
-                    self.update_counter(sample_id, "bases_count", bamdata["yield_tracking"])
+                    self.update_counter(
+                        sample_id, "mapped_bases", bamdata["mapped_bases"]
+                    )
+                    self.update_counter(
+                        sample_id, "unmapped_bases", bamdata["unmapped_bases"]
+                    )
+                    self.update_counter(
+                        sample_id, "mapped_reads_num", bamdata["mapped_reads_num"]
+                    )
+                    self.update_counter(
+                        sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"]
+                    )
+                    self.update_counter(
+                        sample_id, "mapped_count", bamdata["mapped_reads"]
+                    )
+                    self.update_counter(
+                        sample_id, "unmapped_count", bamdata["unmapped_reads"]
+                    )
+                    self.update_counter(
+                        sample_id, "bases_count", bamdata["yield_tracking"]
+                    )
                 else:
-                    #logging.info(f"BAM file {filename} failed quality checks")
+                    # logging.info(f"BAM file {filename} failed quality checks")
                     self.update_counter(sample_id, "bam_failed", 1)
-                    self.update_counter(sample_id, "fail_mapped_count", bamdata["mapped_reads"])
-                    self.update_counter(sample_id, "fail_unmapped_count", bamdata["unmapped_reads"])
-                    self.update_counter(sample_id, "fail_bases_count", bamdata["yield_tracking"])
-                    self.update_counter(sample_id, "fail_mapped_reads_num", bamdata["mapped_reads_num"])
-                    self.update_counter(sample_id, "fail_unmapped_reads_num", bamdata["unmapped_reads_num"])
-                    self.update_counter(sample_id, "fail_mapped_bases", bamdata["mapped_bases"])
-                    self.update_counter(sample_id, "fail_unmapped_bases", bamdata["unmapped_bases"])
-                    
+                    self.update_counter(
+                        sample_id, "fail_mapped_count", bamdata["mapped_reads"]
+                    )
+                    self.update_counter(
+                        sample_id, "fail_unmapped_count", bamdata["unmapped_reads"]
+                    )
+                    self.update_counter(
+                        sample_id, "fail_bases_count", bamdata["yield_tracking"]
+                    )
+                    self.update_counter(
+                        sample_id, "fail_mapped_reads_num", bamdata["mapped_reads_num"]
+                    )
+                    self.update_counter(
+                        sample_id,
+                        "fail_unmapped_reads_num",
+                        bamdata["unmapped_reads_num"],
+                    )
+                    self.update_counter(
+                        sample_id, "fail_mapped_bases", bamdata["mapped_bases"]
+                    )
+                    self.update_counter(
+                        sample_id, "fail_unmapped_bases", bamdata["unmapped_bases"]
+                    )
+
                     # Update the combined counters for fail files
-                    self.update_counter(sample_id, "mapped_bases", bamdata["mapped_bases"])
-                    self.update_counter(sample_id, "unmapped_bases", bamdata["unmapped_bases"])
-                    self.update_counter(sample_id, "mapped_reads_num", bamdata["mapped_reads_num"])
-                    self.update_counter(sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"])
-                    self.update_counter(sample_id, "mapped_count", bamdata["mapped_reads"])
-                    self.update_counter(sample_id, "unmapped_count", bamdata["unmapped_reads"])
-                    self.update_counter(sample_id, "bases_count", bamdata["yield_tracking"])
+                    self.update_counter(
+                        sample_id, "mapped_bases", bamdata["mapped_bases"]
+                    )
+                    self.update_counter(
+                        sample_id, "unmapped_bases", bamdata["unmapped_bases"]
+                    )
+                    self.update_counter(
+                        sample_id, "mapped_reads_num", bamdata["mapped_reads_num"]
+                    )
+                    self.update_counter(
+                        sample_id, "unmapped_reads_num", bamdata["unmapped_reads_num"]
+                    )
+                    self.update_counter(
+                        sample_id, "mapped_count", bamdata["mapped_reads"]
+                    )
+                    self.update_counter(
+                        sample_id, "unmapped_count", bamdata["unmapped_reads"]
+                    )
+                    self.update_counter(
+                        sample_id, "bases_count", bamdata["yield_tracking"]
+                    )
 
                 # Save master data to CSV
                 try:
                     # Create a flattened dictionary for the DataFrame
-                    sample_data = app.storage.general[self.mainuuid]["samples"][sample_id]
+                    sample_data = app.storage.general[self.mainuuid]["samples"][
+                        sample_id
+                    ]
                     flattened_data = {}
-                    
+
                     # Handle counters
                     if "file_counters" in sample_data:
                         for key, value in sample_data["file_counters"].items():
                             flattened_data[f"counter_{key}"] = value
-                    
+
                     # Handle arrays - convert to comma-separated strings
-                    array_fields = ["devices", "basecall_models", "run_time", "flowcell_ids"]
+                    array_fields = [
+                        "devices",
+                        "basecall_models",
+                        "run_time",
+                        "flowcell_ids",
+                    ]
                     for field in array_fields:
                         if field in sample_data:
-                            flattened_data[field] = ",".join(map(str, sample_data[field]))
-                    
+                            flattened_data[field] = ",".join(
+                                map(str, sample_data[field])
+                            )
+
                     # Handle run_info dictionary
                     if "run_info" in sample_data:
                         for key, value in sample_data["run_info"].items():
                             flattened_data[f"run_info_{key}"] = value
-                    
+
                     # Handle bam_tracking
                     if "bam_tracking" in sample_data:
                         for key, value in sample_data["bam_tracking"].items():
                             if key == "files":
                                 # Convert files dictionary to comma-separated string
-                                flattened_data["bam_files"] = ",".join(sample_data["bam_tracking"]["files"].keys())
+                                flattened_data["bam_files"] = ",".join(
+                                    sample_data["bam_tracking"]["files"].keys()
+                                )
                             else:
                                 flattened_data[f"bam_tracking_{key}"] = value
-                    
+
                     # Create DataFrame from flattened data
                     mydf = pd.DataFrame([flattened_data])
-                    
+
                     # Save to CSV
                     master_csv_path = os.path.join(
                         self.check_and_create_folder(self.output, sample_id),
-                        "master.csv"
+                        "master.csv",
                     )
                     mydf.to_csv(master_csv_path, index=False)
                     logging.info(f"Updated master.csv for sample {sample_id}")
                 except Exception as e:
-                    logging.error(f"Error writing master.csv for sample {sample_id}: {str(e)}")
+                    logging.error(
+                        f"Error writing master.csv for sample {sample_id}: {str(e)}"
+                    )
 
                 # Route to analysis queues
                 analyses = ["forest", "sturgeon", "nanodx", "pannanodx"]
                 if any(analysis.lower() not in self.exclude for analysis in analyses):
-                    logging.info(f"Routing {file[0]} to bigbadmerge queue for batch processing")
+                    logging.info(
+                        f"Routing {file[0]} to bigbadmerge queue for batch processing"
+                    )
                     self.bamforbigbadmerge.put([file[0], file[1], sample_id])
 
                 # Individual analysis queue routing
@@ -3397,17 +3748,19 @@ class BrainMeth:
                     self.bamforfusions.put([file[0], file[1], sample_id])
 
                 self.nofiles = True
-                
+
                 if state.shutdown_event:
                     print("shutdown_event is True, stopping process_bams")
                     self.process_bams_tracker.active = False
                     state.stop_process("Serial Bam Analysis")
                     return
-                
+
             logging.info("Process Bam Finishing")
             if not state.shutdown_event:
                 self.process_bams_tracker.active = True
-                state.set_process_state("Serial Bam Analysis", ProcessState.WAITING_FOR_DATA)
+                state.set_process_state(
+                    "Serial Bam Analysis", ProcessState.WAITING_FOR_DATA
+                )
             else:
                 self.finished = True
                 state.set_process_state("Serial Bam Analysis", ProcessState.STOPPING)
@@ -3421,7 +3774,7 @@ class BrainMeth:
         :return: None
         """
         file_endings = {".bam"}
-        
+
         files_and_timestamps = []
         files_and_timestamps = await run.cpu_bound(
             sort_bams,
@@ -3430,7 +3783,7 @@ class BrainMeth:
             file_endings,
             self.simtime,
         )
-        
+
         # Iterate through the sorted list
         for timestamp, f, elapsed_time in files_and_timestamps:
             logging.debug(f"Processing existing BAM file: {f} at {timestamp}")

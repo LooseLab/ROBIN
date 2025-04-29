@@ -61,17 +61,17 @@ Example Usage
 .. code-block:: python
 
     from robin.subpages.CNV_object import CNVAnalysis
-    
+
     # Initialize analysis
     cnv_analysis = CNVAnalysis(
         threads=4,
         output_dir="output/",
         target_panel="rCNS2"
     )
-    
+
     # Process BAM files
     cnv_analysis.add_bam("sample.bam")
-    
+
     # Run the UI
     cnv_analysis.setup_ui()
 
@@ -93,7 +93,7 @@ import pysam
 from cnv_from_bam import iterate_bam_file
 from robin.subpages.base_analysis import BaseAnalysis
 from robin.utilities.break_point_detector import CNVChangeDetectorTracker
-from robin.utilities.bed_file import BedTree, MasterBedTree
+from robin.utilities.bed_file import MasterBedTree
 import natsort
 from robin import theme, resources
 import pandas as pd
@@ -115,7 +115,7 @@ from scipy.ndimage import uniform_filter1d
 import math
 import time
 
-from robin.core.state import state, ProcessType, ProcessState
+from robin.core.state import state, ProcessState
 
 os.environ["CI"] = "1"
 # Use the main logger configured in the main application
@@ -417,13 +417,13 @@ class CNVAnalysis(BaseAnalysis):
         self.chrom_filter = "All"
         # Color mode: "chromosome" for coloring by chromosome, "value" for red/blue based on values
         self.color_mode = "chromosome"
-        
+
         # Initialize data array related attributes
         self.DATA_ARRAY = None
         self.data_array_size = 0
         self.data_array_path = None
         self.local_data_array = None
-        
+
         # self.len_tracker = defaultdict(lambda: 0)
         self.map_tracker = Counter()
         self.load_data = False
@@ -474,11 +474,10 @@ class CNVAnalysis(BaseAnalysis):
             header=None,
             sep="\s+",
         )
-        
+
         self.master_bed_tree = master_bed_tree
         super().__init__(*args, **kwargs)
-        
-        
+
         self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
         # Add target_table as instance variable
         self.target_table = None
@@ -578,18 +577,24 @@ class CNVAnalysis(BaseAnalysis):
                 mask = np.ones_like(data, dtype=bool)
                 cent = self.centromere_bed[self.centromere_bed["chrom"] == chrom]
                 if not cent.empty:
-                    cent_start = int(cent["start_pos"].iloc[0] / self.cnv_dict["bin_width"])
+                    cent_start = int(
+                        cent["start_pos"].iloc[0] / self.cnv_dict["bin_width"]
+                    )
                     cent_end = int(cent["end_pos"].iloc[0] / self.cnv_dict["bin_width"])
                     if cent_start < len(mask) and cent_end <= len(mask):
                         mask[cent_start:cent_end] = False
                 filtered_data = data[mask]
-                
+
                 # Handle empty arrays
                 if len(filtered_data) > 0:
                     chromosome_means[chrom] = np.mean(filtered_data)
 
         # Calculate mean and standard deviation of autosomal chromosomes
-        autosomal_means = [v for k, v in chromosome_means.items() if k.startswith("chr") and k[3:].isdigit()]
+        autosomal_means = [
+            v
+            for k, v in chromosome_means.items()
+            if k.startswith("chr") and k[3:].isdigit()
+        ]
         if autosomal_means:
             mean_of_means = np.mean(autosomal_means)
             std_of_means = np.std(autosomal_means)
@@ -630,7 +635,7 @@ class CNVAnalysis(BaseAnalysis):
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "GAIN",
-                                "description": f"Chromosome X gain (expected single copy in males)",
+                                "description": "Chromosome X gain (expected single copy in males)",
                             }
                         )
                     elif mean_cnv < -0.5:  # Threshold for X loss in males
@@ -639,7 +644,7 @@ class CNVAnalysis(BaseAnalysis):
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "LOSS",
-                                "description": f"Chromosome X loss (expected single copy in males)",
+                                "description": "Chromosome X loss (expected single copy in males)",
                             }
                         )
             elif chrom == "chrY":
@@ -651,7 +656,7 @@ class CNVAnalysis(BaseAnalysis):
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "GAIN",
-                                "description": f"Chromosome Y gain (expected single copy in males)",
+                                "description": "Chromosome Y gain (expected single copy in males)",
                             }
                         )
                     elif mean_cnv < -0.5:  # Threshold for Y loss in males
@@ -660,7 +665,7 @@ class CNVAnalysis(BaseAnalysis):
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "LOSS",
-                                "description": f"Chromosome Y loss (expected single copy in males)",
+                                "description": "Chromosome Y loss (expected single copy in males)",
                             }
                         )
                 elif self.sex_estimate in ["Female", "XX"]:  # Female
@@ -671,7 +676,7 @@ class CNVAnalysis(BaseAnalysis):
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "GAIN",
-                                "description": f"Unexpected Y chromosome presence (expected absent in females)",
+                                "description": "Unexpected Y chromosome presence (expected absent in females)",
                             }
                         )
                     elif mean_cnv > -0.2 and self.sex_estimate in ["Female", "XX"]:
@@ -681,7 +686,7 @@ class CNVAnalysis(BaseAnalysis):
                                 "chromosome": chrom,
                                 "mean_cnv": mean_cnv,
                                 "type": "NORMAL",
-                                "description": f"Slight Y chromosome signal (check sample quality)",
+                                "description": "Slight Y chromosome signal (check sample quality)",
                             }
                         )
             else:  # Autosomal chromosomes
@@ -726,8 +731,8 @@ class CNVAnalysis(BaseAnalysis):
             self.sex_estimate = "Unknown (Query XY copy number changes)"
         else:
             self.sex_estimate = "Unknown"
-            
-        #print(X,Y, self.sex_estimate)
+
+        # print(X,Y, self.sex_estimate)
         with open(
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
@@ -776,19 +781,20 @@ class CNVAnalysis(BaseAnalysis):
         NewBed = self.master_bed_tree.bed_trees[self.sampleID]
 
         bamdata = pysam.AlignmentFile(bamfile, "rb")
-        
+
         self.data_array_path = os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID), "cnv_data_array.npy"
-            )
-        
+            self.check_and_create_folder(self.output, self.sampleID),
+            "cnv_data_array.npy",
+        )
+
         # Initialize or load memory-mapped array
         if not os.path.exists(self.data_array_path):
             # Initialize new memory-mapped array with minimal size
             self.DATA_ARRAY = np.memmap(
                 self.data_array_path,
                 dtype=self.dtype,
-                mode='w+',
-                shape=(1,)  # Start with minimal size instead of empty
+                mode="w+",
+                shape=(1,),  # Start with minimal size instead of empty
             )
             # Set initial size to 0 (logical size)
             self.data_array_size = 0
@@ -797,8 +803,8 @@ class CNVAnalysis(BaseAnalysis):
             self.DATA_ARRAY = np.memmap(
                 self.data_array_path,
                 dtype=self.dtype,
-                mode='r+',  # Read-write mode for existing file
-                shape=(1,)  # Initial shape, will be adjusted when needed
+                mode="r+",  # Read-write mode for existing file
+                shape=(1,),  # Initial shape, will be adjusted when needed
             )
             # Count existing entries
             self.data_array_size = len(self.DATA_ARRAY)
@@ -1155,21 +1161,21 @@ class CNVAnalysis(BaseAnalysis):
             # Add a toggle switch for color mode
             with ui.row().classes("items-center gap-2"):
                 ui.label("Color by:").classes("text-sm")
-                
+
                 # Define callback function before creating the toggle
                 def toggle_color_mode(e):
                     self.color_mode = e.value
                     self.update_plots()
-                
+
                 # Create toggle with options as a dict and pass on_change in constructor
                 color_toggle = ui.toggle(
                     options={"chromosome": "Chromosome", "value": "Up/Down"},
                     value="chromosome",
-                    on_change=toggle_color_mode
+                    on_change=toggle_color_mode,
                 ).classes("mt-1")
-                
+
                 # Add explanation of the value-based coloring
-                #ui.tooltip("In value mode: Blue = values ≥ expected ploidy, Red = values < expected ploidy. For difference plots: Blue = values ≥ 0, Red = values < 0.").classes("bg-blue-100 p-2 text-xs")
+                # ui.tooltip("In value mode: Blue = values ≥ expected ploidy, Red = values < expected ploidy. For difference plots: Blue = values ≥ 0, Red = values < 0.").classes("bg-blue-100 p-2 text-xs")
 
         self.scatter_echart = self.generate_chart(title="CNV Scatter Plot")
         self.difference_scatter_echart = self.generate_chart(
@@ -1995,10 +2001,14 @@ class CNVAnalysis(BaseAnalysis):
                 # Update the plot title to reflect that all chromosomes are being shown
                 plot_to_update.options["title"]["text"] = f"{title} - All Chromosomes"
                 plot_to_update.options["series"] = []
-                
+
                 # Set legend display based on color mode - always hide it
                 if "legend" not in plot_to_update.options:
-                    plot_to_update.options["legend"] = {"show": False, "right": "10%", "top": "10%"}
+                    plot_to_update.options["legend"] = {
+                        "show": False,
+                        "right": "10%",
+                        "top": "10%",
+                    }
                 else:
                     plot_to_update.options["legend"]["show"] = False
 
@@ -2100,7 +2110,9 @@ class CNVAnalysis(BaseAnalysis):
                                         {
                                             "lineStyle": {"width": 2},
                                             "label": {"normal": {"show": False}},
-                                            "xAxis": ((total) * self.cnv_dict["bin_width"]),
+                                            "xAxis": (
+                                                (total) * self.cnv_dict["bin_width"]
+                                            ),
                                         },
                                     ],
                                 },
@@ -2110,16 +2122,22 @@ class CNVAnalysis(BaseAnalysis):
                         # Value-based coloring (red/blue)
                         # Determine expected ploidy value based on chromosome
                         expected_ploidy = 2  # Default for autosomes
-                        if contig in ["chrX", "chrY"] and self.sex_estimate and self.sex_estimate in ["Male", "XY"]:
+                        if (
+                            contig in ["chrX", "chrY"]
+                            and self.sex_estimate
+                            and self.sex_estimate in ["Male", "XY"]
+                        ):
                             expected_ploidy = 1
-                            
+
                         # For relative difference plot
-                        is_difference_plot = "Difference" in plot_to_update.options["title"]["text"]
-                        
+                        is_difference_plot = (
+                            "Difference" in plot_to_update.options["title"]["text"]
+                        )
+
                         # Create two data arrays - one for values above threshold, one for below
                         data_above = []
                         data_below = []
-                        
+
                         for pos, val in data:
                             if is_difference_plot:
                                 if val >= 0:
@@ -2131,41 +2149,49 @@ class CNVAnalysis(BaseAnalysis):
                                     data_above.append([pos, val])
                                 else:
                                     data_below.append([pos, val])
-                        
+
                         # Add a legend when in value mode - but actually hide it
                         if "legend" not in plot_to_update.options:
-                            plot_to_update.options["legend"] = {"show": False, "right": "10%", "top": "10%"}
+                            plot_to_update.options["legend"] = {
+                                "show": False,
+                                "right": "10%",
+                                "top": "10%",
+                            }
                         else:
                             plot_to_update.options["legend"]["show"] = False
-                        
+
                         # Add blue points (values >= expected or >= 0)
                         if data_above:
                             plot_to_update.options["series"].append(
                                 {
                                     "type": "scatter",
-                                    "name": "Values ≥ 0" if is_difference_plot else f"Values ≥ {expected_ploidy} ({contig})",
+                                    "name": (
+                                        "Values ≥ 0"
+                                        if is_difference_plot
+                                        else f"Values ≥ {expected_ploidy} ({contig})"
+                                    ),
                                     "data": data_above,
                                     "symbolSize": 5,
-                                    "itemStyle": {
-                                        "color": "#007AFF"  # Blue color
-                                    },
+                                    "itemStyle": {"color": "#007AFF"},  # Blue color
                                 }
                             )
-                        
+
                         # Add red points (values < expected or < 0)
                         if data_below:
                             plot_to_update.options["series"].append(
                                 {
                                     "type": "scatter",
-                                    "name": "Values < 0" if is_difference_plot else f"Values < {expected_ploidy} ({contig})",
+                                    "name": (
+                                        "Values < 0"
+                                        if is_difference_plot
+                                        else f"Values < {expected_ploidy} ({contig})"
+                                    ),
                                     "data": data_below,
                                     "symbolSize": 5,
-                                    "itemStyle": {
-                                        "color": "#FF3B30"  # Red color
-                                    },
+                                    "itemStyle": {"color": "#FF3B30"},  # Red color
                                 }
                             )
-                        
+
                         # Add chromosome marker line
                         plot_to_update.options["series"].append(
                             {
@@ -2188,7 +2214,9 @@ class CNVAnalysis(BaseAnalysis):
                                         {
                                             "lineStyle": {"width": 2},
                                             "label": {"normal": {"show": False}},
-                                            "xAxis": ((total) * self.cnv_dict["bin_width"]),
+                                            "xAxis": (
+                                                (total) * self.cnv_dict["bin_width"]
+                                            ),
                                         },
                                     ],
                                 },
@@ -2305,10 +2333,14 @@ class CNVAnalysis(BaseAnalysis):
 
                 # Set legend display based on color mode - always hide it
                 if "legend" not in plot_to_update.options:
-                    plot_to_update.options["legend"] = {"show": False, "right": "10%", "top": "10%"}
+                    plot_to_update.options["legend"] = {
+                        "show": False,
+                        "right": "10%",
+                        "top": "10%",
+                    }
                 else:
                     plot_to_update.options["legend"]["show"] = False
-                
+
                 # Now initialize the series after we have contig defined
                 plot_to_update.options["series"] = []
 
@@ -2352,16 +2384,22 @@ class CNVAnalysis(BaseAnalysis):
                     # Value-based coloring (red/blue)
                     # Determine expected ploidy value based on chromosome
                     expected_ploidy = 2  # Default for autosomes
-                    if contig in ["chrX", "chrY"] and self.sex_estimate and self.sex_estimate in ["Male", "XY"]:
+                    if (
+                        contig in ["chrX", "chrY"]
+                        and self.sex_estimate
+                        and self.sex_estimate in ["Male", "XY"]
+                    ):
                         expected_ploidy = 1
-                        
+
                     # For relative difference plot
-                    is_difference_plot = "Difference" in plot_to_update.options["title"]["text"]
-                    
+                    is_difference_plot = (
+                        "Difference" in plot_to_update.options["title"]["text"]
+                    )
+
                     # Create two data arrays - one for values above threshold, one for below
                     data_above = []
                     data_below = []
-                    
+
                     for pos, val in data:
                         if is_difference_plot:
                             if val >= 0:
@@ -2373,23 +2411,29 @@ class CNVAnalysis(BaseAnalysis):
                                 data_above.append([pos, val])
                             else:
                                 data_below.append([pos, val])
-                    
+
                     # Add a legend when in value mode - but actually hide it
                     if "legend" not in plot_to_update.options:
-                        plot_to_update.options["legend"] = {"show": False, "right": "10%", "top": "10%"}
+                        plot_to_update.options["legend"] = {
+                            "show": False,
+                            "right": "10%",
+                            "top": "10%",
+                        }
                     else:
                         plot_to_update.options["legend"]["show"] = False
-                    
+
                     # Initialize series with separate scatter plots for values above and below thresholds
                     plot_to_update.options["series"] = [
                         {
                             "type": "scatter",
-                            "name": "Values ≥ 0" if is_difference_plot else f"Values ≥ {expected_ploidy} ({contig})",
+                            "name": (
+                                "Values ≥ 0"
+                                if is_difference_plot
+                                else f"Values ≥ {expected_ploidy} ({contig})"
+                            ),
                             "data": data_above,
                             "symbolSize": 3,
-                            "itemStyle": {
-                                "color": "#007AFF"  # Blue color
-                            },
+                            "itemStyle": {"color": "#007AFF"},  # Blue color
                             "markArea": {
                                 "itemStyle": {"color": "rgba(255, 173, 177, 0.4)"},
                                 "data": [],
@@ -2397,12 +2441,14 @@ class CNVAnalysis(BaseAnalysis):
                         },
                         {
                             "type": "scatter",
-                            "name": "Values < 0" if is_difference_plot else f"Values < {expected_ploidy} ({contig})",
+                            "name": (
+                                "Values < 0"
+                                if is_difference_plot
+                                else f"Values < {expected_ploidy} ({contig})"
+                            ),
                             "data": data_below,
                             "symbolSize": 3,
-                            "itemStyle": {
-                                "color": "#FF3B30"  # Red color
-                            },
+                            "itemStyle": {"color": "#FF3B30"},  # Red color
                             "markArea": {
                                 "itemStyle": {"color": "rgba(135, 206, 250, 0.4)"},
                                 "data": [],
@@ -2444,8 +2490,13 @@ class CNVAnalysis(BaseAnalysis):
                 ].iterrows():
                     try:
                         # Make sure we have a valid series with markArea property
-                        if len(plot_to_update.options["series"]) > 0 and "markArea" in plot_to_update.options["series"][0]:
-                            plot_to_update.options["series"][0]["markArea"]["data"].append(
+                        if (
+                            len(plot_to_update.options["series"]) > 0
+                            and "markArea" in plot_to_update.options["series"][0]
+                        ):
+                            plot_to_update.options["series"][0]["markArea"][
+                                "data"
+                            ].append(
                                 [
                                     {
                                         "name": row["gene"],
@@ -2476,13 +2527,20 @@ class CNVAnalysis(BaseAnalysis):
                 ].iterrows():
                     try:
                         # Make sure we have a valid series with markArea property
-                        if len(plot_to_update.options["series"]) > 1 and "markArea" in plot_to_update.options["series"][1]:
-                            plot_to_update.options["series"][1]["markArea"]["data"].append(
+                        if (
+                            len(plot_to_update.options["series"]) > 1
+                            and "markArea" in plot_to_update.options["series"][1]
+                        ):
+                            plot_to_update.options["series"][1]["markArea"][
+                                "data"
+                            ].append(
                                 [
                                     {
                                         "name": row["name"],
                                         "xAxis": row["start_pos"],
-                                        "itemStyle": {"color": "rgba(255, 173, 177, 0.4)"},
+                                        "itemStyle": {
+                                            "color": "rgba(255, 173, 177, 0.4)"
+                                        },
                                         "label": {
                                             "position": "insideBottom",
                                             "distance": 10,
@@ -2518,14 +2576,21 @@ class CNVAnalysis(BaseAnalysis):
                             elif cnv_state == "LOSS":
                                 color = "rgba(255, 45, 85, 0.15)"  # Red for losses
                             else:
-                                color = "rgba(0, 0, 0, 0.02)"  # Very subtle gray for normal
+                                color = (
+                                    "rgba(0, 0, 0, 0.02)"  # Very subtle gray for normal
+                                )
                         else:
                             color = "rgba(0, 0, 0, 0.02)"  # Default subtle gray
 
                         # Make sure we have a valid series with markArea property
-                        if len(plot_to_update.options["series"]) > 2 and "markArea" in plot_to_update.options["series"][2]:
+                        if (
+                            len(plot_to_update.options["series"]) > 2
+                            and "markArea" in plot_to_update.options["series"][2]
+                        ):
                             # Add colored regions to the plot
-                            plot_to_update.options["series"][2]["markArea"]["data"].append(
+                            plot_to_update.options["series"][2]["markArea"][
+                                "data"
+                            ].append(
                                 [
                                     {
                                         "name": row[
@@ -2559,9 +2624,13 @@ class CNVAnalysis(BaseAnalysis):
                     if "Difference" in plot_to_update.options["title"]["text"]:
                         try:
                             # Make sure we have a valid series with markLine property
-                            if (len(plot_to_update.options["series"]) > 2 and 
-                                "markLine" in plot_to_update.options["series"][2]):
-                                plot_to_update.options["series"][2]["markLine"]["data"].extend(
+                            if (
+                                len(plot_to_update.options["series"]) > 2
+                                and "markLine" in plot_to_update.options["series"][2]
+                            ):
+                                plot_to_update.options["series"][2]["markLine"][
+                                    "data"
+                                ].extend(
                                     [
                                         {
                                             "name": "Gain Threshold",
@@ -2677,11 +2746,10 @@ class CNVAnalysis(BaseAnalysis):
             display_sex = "Male (XY)"
         else:
             display_sex = xy_estimate
-        
-        
+
         # Determine if male or female for icon and styling
         is_male = xy_estimate.split(" ")[0] in ["XY", "Male"]
-        
+
         with self.summary:
             self.summary.clear()
             with ui.card().classes("w-full p-4 mb-4"):
@@ -2694,15 +2762,9 @@ class CNVAnalysis(BaseAnalysis):
                         with ui.row().classes("items-center gap-2"):
                             if xy_estimate != "Unknown":
                                 status_color = (
-                                    "text-blue-600"
-                                    if is_male
-                                    else "text-pink-600"
+                                    "text-blue-600" if is_male else "text-pink-600"
                                 )
-                                status_bg = (
-                                    "bg-blue-100"
-                                    if is_male
-                                    else "bg-pink-100"
-                                )
+                                status_bg = "bg-blue-100" if is_male else "bg-pink-100"
                                 if is_male:
                                     ui.icon("man").classes("text-4xl text-blue-500")
                                 else:
@@ -2833,7 +2895,7 @@ class CNVAnalysis(BaseAnalysis):
                 self.CNVResults = np.load(
                     os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
                 ).item()
-                
+
                 # Initialize data array for existing data
                 self.data_array_path = os.path.join(output, "cnv_data_array.npy")
                 if os.path.exists(self.data_array_path):
@@ -2841,24 +2903,27 @@ class CNVAnalysis(BaseAnalysis):
                     file_size = os.path.getsize(self.data_array_path)
                     # Calculate maximum possible shape based on file size
                     max_shape = file_size // self.dtype.itemsize
-                    
+
                     # Load existing data array with safe initial shape
                     self.DATA_ARRAY = np.memmap(
                         self.data_array_path,
                         dtype=self.dtype,
-                        mode='r',
-                        shape=(min(1, max_shape),)  # Start with safe shape
+                        mode="r",
+                        shape=(min(1, max_shape),),  # Start with safe shape
                     )
-                    
+
                     # Count total number of entries across all chromosomes
-                    total_entries = sum(len(chrom_data.get("bed_data", [])) for chrom_data in self.CNVResults.values())
+                    total_entries = sum(
+                        len(chrom_data.get("bed_data", []))
+                        for chrom_data in self.CNVResults.values()
+                    )
                     if total_entries > 0 and total_entries <= max_shape:
                         # Only resize if the new size is valid
                         self.DATA_ARRAY = np.memmap(
                             self.data_array_path,
                             dtype=self.dtype,
-                            mode='r',
-                            shape=(total_entries,)
+                            mode="r",
+                            shape=(total_entries,),
                         )
                         self.data_array_size = total_entries
                     else:
@@ -2867,10 +2932,7 @@ class CNVAnalysis(BaseAnalysis):
                 else:
                     # Initialize empty array if no existing data
                     self.DATA_ARRAY = np.memmap(
-                        self.data_array_path,
-                        dtype=self.dtype,
-                        mode='w+',
-                        shape=(1,)
+                        self.data_array_path, dtype=self.dtype, mode="w+", shape=(1,)
                     )
                     self.data_array_size = 0
 
@@ -2883,7 +2945,7 @@ class CNVAnalysis(BaseAnalysis):
                     bedcontent += f'{self.CNVResults[chrom]["bed_data_breakpoints"]}\n'
                     local_update = True
 
-            #self.NewBed.load_from_string(bedcontent, merge=False, source_type="CNV")
+            # self.NewBed.load_from_string(bedcontent, merge=False, source_type="CNV")
 
             if self.check_file_time(os.path.join(output, "bedranges.csv")):
                 self.proportions_df_store = pd.read_csv(
@@ -2915,7 +2977,9 @@ class CNVAnalysis(BaseAnalysis):
                     self.summary.clear()
                     with open(os.path.join(output, "XYestimate.pkl"), "rb") as file:
                         xy_estimate = pickle.load(file)
-                        self.sex_estimate = xy_estimate  # Store the loaded value in sex_estimate
+                        self.sex_estimate = (
+                            xy_estimate  # Store the loaded value in sex_estimate
+                        )
                         self.create_summary_card(
                             xy_estimate=xy_estimate,
                             bin_width=self.cnv_dict["bin_width"],
@@ -3454,19 +3518,16 @@ class CNVAnalysis(BaseAnalysis):
         # Create a new memory-mapped array with the required size
         new_size = self.data_array_size + len(new_data)
         new_array = np.memmap(
-            self.data_array_path,
-            dtype=self.dtype,
-            mode='w+',
-            shape=(new_size,)
+            self.data_array_path, dtype=self.dtype, mode="w+", shape=(new_size,)
         )
-        
+
         # Copy existing data
         if self.data_array_size > 0:
-            new_array[:self.data_array_size] = self.DATA_ARRAY[:self.data_array_size]
-        
+            new_array[: self.data_array_size] = self.DATA_ARRAY[: self.data_array_size]
+
         # Add new data
-        new_array[self.data_array_size:] = new_data
-        
+        new_array[self.data_array_size :] = new_data
+
         # Update references
         self.DATA_ARRAY = new_array
         self.data_array_size = new_size
@@ -3607,4 +3668,3 @@ def main(
 if __name__ in {"__main__", "__mp_main__"}:
     print("GUI launched by auto-reload function.")
     main()
-

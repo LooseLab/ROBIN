@@ -43,18 +43,15 @@ from sturgeon.callmapping import (
 
 import yappi
 import tabulate
-import shutil
 
 from robin import submodules
 
 from robin.utilities.merge_bedmethyl import (
-    merge_bedmethyl,
-    save_bedmethyl,
     collapse_bedmethyl,
 )
 
 from typing import List, Tuple
-from robin.core.state import state, ProcessType, ProcessState
+from robin.core.state import state, ProcessState
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -174,6 +171,7 @@ def run_samtools_sort(file, tomerge, sortfile, threads, regions):
     logger.debug(command2)
     os.system(command2)
 
+
 def load_modkit_data(parquet_path):
     for attempt in range(5):  # Retry up to 5 times
         try:
@@ -210,7 +208,7 @@ def load_modkit_data(parquet_path):
 
     # Keep only the original 18 columns and sort by chrom and chromStart
     df = merged_modkit_df[column_names]
-    return df.sort_values(by=['chrom', 'chromStart'])
+    return df.sort_values(by=["chrom", "chromStart"])
 
 
 class RandomForest_object(BaseAnalysis):
@@ -277,11 +275,15 @@ class RandomForest_object(BaseAnalysis):
         self.dataDir = {}
         self.bedDir = {}
         self.merged_bed_file = {}
-        
+
         # Set RandomForest-specific confidence thresholds
         # RandomForest confidence is reported as percentage (0-100) but converted to 0-1 in create_summary_card
-        kwargs['high_confidence_threshold'] = 0.85  # RandomForest-specific high confidence threshold
-        kwargs['medium_confidence_threshold'] = 0.65  # RandomForest-specific medium confidence threshold
+        kwargs["high_confidence_threshold"] = (
+            0.85  # RandomForest-specific high confidence threshold
+        )
+        kwargs["medium_confidence_threshold"] = (
+            0.65  # RandomForest-specific medium confidence threshold
+        )
 
     def setup_ui(self):
         self.card = ui.card().classes("w-full p-2")
@@ -403,7 +405,9 @@ class RandomForest_object(BaseAnalysis):
             logger.error(f"Error in show_previous_data: {str(e)}", exc_info=True)
             raise
 
-    async def process_bam(self, bamfile: List[Tuple[str, float]], timestamp: float = None) -> None:
+    async def process_bam(
+        self, bamfile: List[Tuple[str, float]], timestamp: float = None
+    ) -> None:
         """
         Process BAM files and perform Random Forest analysis.
 
@@ -426,12 +430,14 @@ class RandomForest_object(BaseAnalysis):
                 self.bedDir[sampleID] = tempfile.TemporaryDirectory(
                     dir=self.check_and_create_folder(self.output, sampleID)
                 )
-            
+
             # Get latest timestamp from input files or use provided timestamp
             if timestamp is not None:
                 currenttime = timestamp * 1000
             else:
-                latest_file = max(timestamp for _, timestamp in bamfile) if bamfile else 0
+                latest_file = (
+                    max(timestamp for _, timestamp in bamfile) if bamfile else 0
+                )
                 currenttime = latest_file * 1000 if latest_file else time.time() * 1000
 
             if (
@@ -454,7 +460,9 @@ class RandomForest_object(BaseAnalysis):
                         )
                         try:
                             with open(tomerge_length_file, "r") as f:
-                                tomerge_length = int(f.readline().strip().split(": ")[1])
+                                tomerge_length = int(
+                                    f.readline().strip().split(": ")[1]
+                                )
                             logger.info(f"Number of files to merge: {tomerge_length}")
                         except FileNotFoundError:
                             logger.warning(
@@ -544,7 +552,9 @@ class RandomForest_object(BaseAnalysis):
                             )
                             logger.info("R script completed successfully")
                         except Exception as e:
-                            logger.error(f"Error running R script: {str(e)}", exc_info=True)
+                            logger.error(
+                                f"Error running R script: {str(e)}", exc_info=True
+                            )
                             raise
 
                         votes_file = (
@@ -576,16 +586,18 @@ class RandomForest_object(BaseAnalysis):
                         else:
                             logger.error(f"Votes file not found: {votes_file}")
 
-                        app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                            "bam_processed"
-                        ] = tomerge_length
+                        app.storage.general[self.mainuuid][sampleID][self.name][
+                            "counters"
+                        ]["bam_processed"] = tomerge_length
 
                 except Exception as e:
                     logger.error(f"Error in process_bam: {str(e)}", exc_info=True)
 
             self.running = False
         finally:
-            state.set_process_state("Random Forest Analysis", ProcessState.WAITING_FOR_DATA)
+            state.set_process_state(
+                "Random Forest Analysis", ProcessState.WAITING_FOR_DATA
+            )
 
     def create_rcns2_chart(self, title):
         """
@@ -846,7 +858,7 @@ class RandomForest_object(BaseAnalysis):
                 logger.debug(f"Processing series: {series}")
                 # Values are already percentages, just format them and ensure sorted by timestamp
                 data_list = [
-                    [key, float(f"{value:.1f}")] 
+                    [key, float(f"{value:.1f}")]
                     for key, value in sorted(data.items())  # Sort by timestamp
                 ]
                 logger.debug(f"First few data points for {series}: {data_list[:3]}")

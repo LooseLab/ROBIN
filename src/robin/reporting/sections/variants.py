@@ -8,8 +8,6 @@ import os
 import logging
 import re
 import pandas as pd
-import numpy as np
-from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.styles import ParagraphStyle
@@ -163,11 +161,23 @@ class VariantAnalysis:
                                 logger.debug("HGVS.c: %s", variant_data["hgvs_c"])
                             elif field.startswith("ANN="):
                                 # Extract HGVS.c and HGVS.p from ANN field
-                                ann_fields = field.split("=")[1].split(",")[0].split("|")
-                                if len(ann_fields) >= 10:  # Ensure we have enough fields
-                                    variant_data["hgvs_c"] = ann_fields[9]  # HGVS.c is at index 9
-                                    variant_data["hgvs_p"] = ann_fields[10]  # HGVS.p is at index 10
-                                    logger.debug("HGVS.c: %s, HGVS.p: %s", variant_data["hgvs_c"], variant_data["hgvs_p"])
+                                ann_fields = (
+                                    field.split("=")[1].split(",")[0].split("|")
+                                )
+                                if (
+                                    len(ann_fields) >= 10
+                                ):  # Ensure we have enough fields
+                                    variant_data["hgvs_c"] = ann_fields[
+                                        9
+                                    ]  # HGVS.c is at index 9
+                                    variant_data["hgvs_p"] = ann_fields[
+                                        10
+                                    ]  # HGVS.p is at index 10
+                                    logger.debug(
+                                        "HGVS.c: %s, HGVS.p: %s",
+                                        variant_data["hgvs_c"],
+                                        variant_data["hgvs_p"],
+                                    )
                             elif field.startswith("CLNSIG="):
                                 variant_data["significance"] = field.split("=")[1]
                                 logger.debug(
@@ -393,12 +403,27 @@ class VariantsSection(ReportSection):
                         # Preserve specific alignments
                         ("ALIGN", (0, 0), (0, -1), "CENTER"),  # Type column centered
                         ("ALIGN", (1, 0), (1, -1), "CENTER"),  # Chr column centered
-                        ("ALIGN", (2, 0), (2, -1), "RIGHT"),  # Position column right-aligned
+                        (
+                            "ALIGN",
+                            (2, 0),
+                            (2, -1),
+                            "RIGHT",
+                        ),  # Position column right-aligned
                         ("ALIGN", (3, 0), (3, -1), "LEFT"),  # Gene column left-aligned
                         ("ALIGN", (4, 0), (4, -1), "CENTER"),  # Change column centered
                         ("ALIGN", (5, 0), (5, -1), "CENTER"),  # Filter column centered
-                        ("ALIGN", (6, 0), (6, -1), "LEFT"),  # HGVS.c column left-aligned
-                        ("ALIGN", (7, 0), (7, -1), "LEFT"),  # HGVS.p column left-aligned
+                        (
+                            "ALIGN",
+                            (6, 0),
+                            (6, -1),
+                            "LEFT",
+                        ),  # HGVS.c column left-aligned
+                        (
+                            "ALIGN",
+                            (7, 0),
+                            (7, -1),
+                            "LEFT",
+                        ),  # HGVS.p column left-aligned
                     ]
                 )
             )

@@ -4,12 +4,9 @@ run_data.py
 This module contains the run data summary section of the report.
 """
 
-import os
 import logging
-import pickle
 from datetime import datetime
 from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak
-from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle
 from .base import ReportSection
@@ -134,16 +131,35 @@ class RunDataSection(ReportSection):
 
             # Run Statistics
             stats_info = [
-                ("Total Files", self._format_number(master_data["counter_bam_passed"] + master_data["counter_bam_failed"])),
-                ("Passed Files", self._format_number(master_data["counter_bam_passed"])),
-                ("Failed Files", self._format_number(master_data["counter_bam_failed"])),
-                ("Total Bases", self._format_number(master_data["counter_bases_count"])),
-                ("Mapped Reads", self._format_number(master_data["counter_mapped_reads_num"])),
-                ("Unmapped Reads", self._format_number(master_data["counter_unmapped_reads_num"])),
+                (
+                    "Total Files",
+                    self._format_number(
+                        master_data["counter_bam_passed"]
+                        + master_data["counter_bam_failed"]
+                    ),
+                ),
+                (
+                    "Passed Files",
+                    self._format_number(master_data["counter_bam_passed"]),
+                ),
+                (
+                    "Failed Files",
+                    self._format_number(master_data["counter_bam_failed"]),
+                ),
+                (
+                    "Total Bases",
+                    self._format_number(master_data["counter_bases_count"]),
+                ),
+                (
+                    "Mapped Reads",
+                    self._format_number(master_data["counter_mapped_reads_num"]),
+                ),
+                (
+                    "Unmapped Reads",
+                    self._format_number(master_data["counter_unmapped_reads_num"]),
+                ),
             ]
-            self.elements.append(
-                self._create_info_table(stats_info, "Run Statistics")
-            )
+            self.elements.append(self._create_info_table(stats_info, "Run Statistics"))
             self.elements.append(Spacer(1, 12))
 
         except Exception as e:

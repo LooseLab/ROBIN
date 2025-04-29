@@ -56,12 +56,9 @@ from pathlib import Path
 import numpy as np
 import pysam
 import pandas as pd
-import shutil
 import tempfile
 from robin import models, theme, resources
-import asyncio
 import logging
-from robin.core.state import state, ProcessType, ProcessState
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -100,8 +97,6 @@ else:
 
 from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
 from robin.utilities.merge_bedmethyl import (
-    merge_bedmethyl,
-    save_bedmethyl,
     collapse_bedmethyl,
 )
 from typing import List, Tuple, Optional, Dict, Any
@@ -143,7 +138,7 @@ def load_modkit_data(parquet_path):
 
     # Keep only the original 18 columns and sort by chrom and chromStart
     df = merged_modkit_df[column_names]
-    return df.sort_values(by=['chrom', 'chromStart'])
+    return df.sort_values(by=["chrom", "chromStart"])
 
 
 def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
@@ -261,12 +256,16 @@ class NanoDX_object(BaseAnalysis):
         self.nanodx_df_store = {}  # pd.DataFrame()
         self.nanodxfile = {}
         self.merged_bed_file = {}
-        
+
         # Set NanoDX-specific confidence thresholds
         # NanoDX typically produces lower confidence scores, so adjust thresholds accordingly
-        kwargs['high_confidence_threshold'] = 0.5  # NanoDX-specific high confidence threshold
-        kwargs['medium_confidence_threshold'] = 0.25  # NanoDX-specific medium confidence threshold
-        
+        kwargs["high_confidence_threshold"] = (
+            0.5  # NanoDX-specific high confidence threshold
+        )
+        kwargs["medium_confidence_threshold"] = (
+            0.25  # NanoDX-specific medium confidence threshold
+        )
+
         super().__init__(*args, **kwargs)
         if self.model != "Capper_et_al_NN.pkl":
             self.storefile = "PanNanoDX_scores.csv"
@@ -354,7 +353,9 @@ class NanoDX_object(BaseAnalysis):
                 self.nanodx_df_store.iloc[-1]["number_probes"],
             )
 
-    async def process_bam(self, bamfile: List[Tuple[str, float]], timestamp: float = None) -> None:
+    async def process_bam(
+        self, bamfile: List[Tuple[str, float]], timestamp: float = None
+    ) -> None:
         """
         Process BAM files and perform NanoDX analysis.
 
@@ -381,12 +382,14 @@ class NanoDX_object(BaseAnalysis):
                 self.bedDir[sampleID] = tempfile.TemporaryDirectory(
                     dir=self.check_and_create_folder(self.output, sampleID)
                 )
-            
+
             # Get latest timestamp from input files or use provided timestamp
             if timestamp is not None:
                 currenttime = timestamp * 1000
             else:
-                latest_file = max(timestamp for _, timestamp in bamfile) if bamfile else 0
+                latest_file = (
+                    max(timestamp for _, timestamp in bamfile) if bamfile else 0
+                )
                 currenttime = latest_file * 1000 if latest_file else time.time() * 1000
 
             if (
@@ -485,9 +488,9 @@ class NanoDX_object(BaseAnalysis):
                             )
                         )
 
-                        app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                            "bam_processed"
-                        ] = tomerge_length
+                        app.storage.general[self.mainuuid][sampleID][self.name][
+                            "counters"
+                        ]["bam_processed"] = tomerge_length
 
                 except Exception as e:
                     logger.error(f"Error in process_bam (nanodx): {e}")

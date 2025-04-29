@@ -5,7 +5,6 @@ This module contains the class for adding headers and footers to the PDF report.
 """
 
 from reportlab.pdfgen import canvas
-from reportlab.platypus import Paragraph
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import inch
 from datetime import datetime
@@ -13,7 +12,6 @@ import os
 from robin import images
 from reportlab.lib import colors
 from PIL import Image as PILImage
-import io
 
 from robin.__about__ import __version__
 

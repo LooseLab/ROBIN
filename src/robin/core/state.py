@@ -1,42 +1,48 @@
 """
 Module for storing shared state variables across the application.
 """
+
 from enum import Enum
-from typing import Optional
+
 
 class ProcessState(Enum):
     """Enum representing the possible states of a process."""
+
     STARTING = "starting"
     WAITING_FOR_DATA = "waiting_for_data"
     RUNNING = "running"
     STOPPING = "stopping"
     STOPPED = "stopped"
 
+
 class ProcessType(Enum):
     """Enum representing the possible types of processes."""
+
     BACKGROUND = "Background"
     PER_FILE = "Per File"
     BATCH = "Batch"
     SYSTEM = "System"
 
+
 class State:
     """Singleton class to manage shared state across the application."""
+
     _instance = None
-    
+
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(State, cls).__new__(cls)
             cls._instance._shutdown_event = False
             cls._instance._process_states = {}  # Dictionary to store process states
-            cls._instance._process_types = {}   # Dictionary to store process types
-            cls._instance._process_progress = {} # Dictionary to store process progress
+            cls._instance._process_types = {}  # Dictionary to store process types
+            cls._instance._process_progress = {}  # Dictionary to store process progress
             cls._instance._finished_processes = set()
         return cls._instance
-    
+
     @property
     def shutdown_event(self):
         return self._shutdown_event
-        
+
     @shutdown_event.setter
     def shutdown_event(self, value):
         self._shutdown_event = value
@@ -103,11 +109,19 @@ class State:
 
     def is_process_running(self, process_name: str) -> bool:
         """Check if a specific process is currently running."""
-        return process_name in self._process_states and self._process_states[process_name] == ProcessState.RUNNING
+        return (
+            process_name in self._process_states
+            and self._process_states[process_name] == ProcessState.RUNNING
+        )
 
     def get_running_process_count(self) -> int:
         """Get the current number of running processes."""
-        return sum(1 for state in self._process_states.values() if state == ProcessState.RUNNING)
+        return sum(
+            1
+            for state in self._process_states.values()
+            if state == ProcessState.RUNNING
+        )
+
 
 # Create a singleton instance
-state = State() 
+state = State()

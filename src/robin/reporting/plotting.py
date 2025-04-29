@@ -9,7 +9,6 @@ import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
 import io
-import math
 import matplotlib.font_manager as fm
 import os
 from robin import fonts
@@ -17,7 +16,6 @@ from robin import fonts
 import natsort
 
 from matplotlib import gridspec
-from robin.subpages.CNV_object import filter_and_find_max
 
 # Define consistent color scheme and style
 MODERN_COLORS = {

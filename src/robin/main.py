@@ -2,13 +2,12 @@ import uuid
 import click
 import os
 import sys
-import signal
 import logging
 from datetime import datetime
 import asyncio
 from time import sleep
 
-from typing import Optional, List, Tuple
+from typing import Optional, List
 from pathlib import Path
 from nicegui import ui, app, core, observables
 import nicegui.air
@@ -33,7 +32,9 @@ UNIQUE_ID: str = str(uuid.uuid4())
 DISCLAIMER = EXTENDED_DISCLAIMER_TEXT
 
 # Initialize telemetry
-TELEMETRY_ENDPOINT = "https://8n5cmljgjk.execute-api.eu-west-1.amazonaws.com/prod/record"
+TELEMETRY_ENDPOINT = (
+    "https://8n5cmljgjk.execute-api.eu-west-1.amazonaws.com/prod/record"
+)
 TELEMETRY_INSTANCE = None  # Initialize to None, will be set after parsing arguments
 
 
@@ -112,7 +113,7 @@ async def index() -> None:
     if UNIQUE_ID not in app.storage.general:
         logging.error("No storage found for this session")
         return
-        
+
     GUI = Methnice(
         force_sampleid=app.storage.general[UNIQUE_ID]["force_sampleid"],
         kit=app.storage.general[UNIQUE_ID]["kit"],
@@ -132,7 +133,7 @@ async def index() -> None:
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
-        telemetry_instance=TELEMETRY_INSTANCE
+        telemetry_instance=TELEMETRY_INSTANCE,
     )
     logging.info(f"Created GUI instance with telemetry: {GUI.telemetry is not None}")
     GUI.setup()
@@ -248,17 +249,17 @@ async def test() -> None:
     GUI_browse.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI_browse))
     await GUI_browse.browse_page()
-    
+
 
 async def startup() -> None:
     """Initialize the application."""
     state.start_process("Main Application", ProcessType.SYSTEM)
     state.set_process_state("Main Application", ProcessState.RUNNING)
-    
+
     # Initialize other system processes
     state.start_process("File Watcher", ProcessType.BACKGROUND)
     state.set_process_state("File Watcher", ProcessState.RUNNING)
-    
+
     state.start_process("UI Renderer", ProcessType.BACKGROUND)
     state.set_process_state("UI Renderer", ProcessState.RUNNING)
 
@@ -285,10 +286,7 @@ async def startup() -> None:
     )
     MAINPAGE.setup()
     await MAINPAGE.start_analysis()
-    
 
-
-    
 
 class Methnice:
     """
@@ -414,16 +412,19 @@ class Methnice:
                 bed_file=self.bed_file,
                 readfish_toml=self.readfish_toml,
             )
-            
+
             # Set up periodic telemetry updates if telemetry is enabled
             if self.telemetry:
+
                 def send_telemetry_update():
                     logging.info("Sending periodic telemetry update")
                     self.telemetry.send_run_telemetry(self)
-                
-                ui.timer(120.0, send_telemetry_update, active=True)  # Send update every minute
+
+                ui.timer(
+                    120.0, send_telemetry_update, active=True
+                )  # Send update every minute
                 logging.info("Telemetry update timer initialized (1-minute interval)")
-                
+
         except Exception as e:
             logging.error(f"Error initializing BrainMeth: {str(e)}")
             raise
@@ -485,22 +486,28 @@ class Methnice:
         """
         Async method for rendering the splash screen.
         """
-        logging.info(f"Rendering splash screen with telemetry: {self.telemetry is not None}")
+        logging.info(
+            f"Rendering splash screen with telemetry: {self.telemetry is not None}"
+        )
         with theme.frame(
             self.title,
             smalltitle=self.smalltitle,
             batphone=self.batphone,
         ):
-            with ui.card().classes('w-full shadow-lg rounded-xl'):
-                with ui.row().classes('w-full items-center justify-between p-4 border-b border-gray-200'):
-                    with ui.row().classes('items-center gap-2'):
-                        #ui.icon('feed', color='primary').classes('text-xl')
+            with ui.card().classes("w-full shadow-lg rounded-xl"):
+                with ui.row().classes(
+                    "w-full items-center justify-between p-4 border-b border-gray-200"
+                ):
+                    with ui.row().classes("items-center gap-2"):
+                        # ui.icon('feed', color='primary').classes('text-xl')
                         ui.label("Welcome to R.O.B.I.N").classes(
                             "text-sky-600 dark:text-white"
                         ).style("font-size: 150%; font-weight: 300").tailwind(
                             "drop-shadow", "font-bold"
                         )
-                with ui.row().classes('w-full items-center justify-between p-4 border-b border-gray-200'):
+                with ui.row().classes(
+                    "w-full items-center justify-between p-4 border-b border-gray-200"
+                ):
                     ui.label(
                         "This tool enables classification of brain tumours in real time from Oxford Nanopore Data."
                     ).classes("text-black-600 dark:text-white").style(
@@ -508,20 +515,22 @@ class Methnice:
                     ).tailwind(
                         "drop-shadow", "font-bold"
                     )
-            with ui.row().classes('w-full no-wrap'):
-                with ui.column().classes('w-1/4'):
-                    with ui.card().classes('w-full shadow-lg rounded-xl'):
-                        with ui.row().classes('w-full items-center justify-between p-4 border-b border-gray-200'):
-                            with ui.row().classes('items-center gap-2'):
-                                #ui.icon('feed', color='primary').classes('text-xl')
+            with ui.row().classes("w-full no-wrap"):
+                with ui.column().classes("w-1/4"):
+                    with ui.card().classes("w-full shadow-lg rounded-xl"):
+                        with ui.row().classes(
+                            "w-full items-center justify-between p-4 border-b border-gray-200"
+                        ):
+                            with ui.row().classes("items-center gap-2"):
+                                # ui.icon('feed', color='primary').classes('text-xl')
                                 ui.label("View Data").classes(
                                     "text-sky-600 dark:text-white"
                                 ).style("font-size: 150%; font-weight: 300").tailwind(
                                     "drop-shadow", "font-bold"
                                 )
                         with ui.button(on_click=lambda: ui.navigate.to("/live")).props(
-                                "color=green"
-                            ):
+                            "color=green"
+                        ):
                             ui.label("View Live Data")
                             ui.image(
                                 os.path.join(
@@ -529,9 +538,9 @@ class Methnice:
                                     "ROBIN_logo_small.png",
                                 )
                             ).classes("rounded-full w-16 h-16 ml-4")
-                        with ui.button(on_click=lambda: ui.navigate.to("/browse")).props(
-                                "color=green"
-                            ):
+                        with ui.button(
+                            on_click=lambda: ui.navigate.to("/browse")
+                        ).props("color=green"):
                             ui.label("Browse Historic Data")
                             ui.image(
                                 os.path.join(
@@ -539,21 +548,22 @@ class Methnice:
                                     "ROBIN_logo_small.png",
                                 )
                             ).classes("rounded-full w-16 h-16 ml-4")
-                with ui.column().classes('w-2/4'):
+                with ui.column().classes("w-2/4"):
                     # Initialize news feed only if it hasn't been initialized yet
                     if self.news_feed is None:
                         self.news_feed = NewsFeed()
                         self.news_feed.start_update_timer()
                     # Create the news element
                     self.news_feed.create_news_element()
-                with ui.column().classes('w-1/4'):
+                with ui.column().classes("w-1/4"):
                     # Initialize telemetry if enabled
                     if self.telemetry:
                         logging.info("Adding telemetry map to splash screen")
                         self.telemetry.create_map_element()
                     else:
-                        logging.warning("No telemetry instance available for map display")
-        
+                        logging.warning(
+                            "No telemetry instance available for map display"
+                        )
 
     async def index_page(self) -> None:
         """
@@ -655,12 +665,12 @@ class Methnice:
         except Exception as e:
             logging.error(f"Error rendering index page: {str(e)}")
             ui.notify("An error occurred while loading the page", type="negative")
-            
+
     async def shutdown(self):
         """Clean up resources."""
         state.set_process_state("Analysis", ProcessState.STOPPING)
         state.stop_process("Analysis")
-        ui.notify("Shutting down ROBIN...", type='warning')
+        ui.notify("Shutting down ROBIN...", type="warning")
         print("Shutting down ROBIN... from methnice?")
         self.robin.shutdown_background()
         print("Shutting down ROBIN... from methnice? done")
@@ -692,7 +702,7 @@ def run_class(
     Set up and run the ROBIN application.
     """
     logging.info(f"run_class called with telemetry: {telemetry is not None}")
-    
+
     try:
         app.storage.general.clear()
     except Exception as e:
@@ -711,9 +721,7 @@ def run_class(
     # Store the telemetry instance in a module-level variable
     global TELEMETRY_INSTANCE
     TELEMETRY_INSTANCE = telemetry
-    
-    
-        
+
     app.storage.general[UNIQUE_ID] = {
         "threads": threads,
         "force_sampleid": force_sampleid,
@@ -773,7 +781,9 @@ def run_class(
         unique_id=UNIQUE_ID,
         telemetry_instance=telemetry,
     )
-    logging.info(f"Created Methnice instance with telemetry: {global_methnice.telemetry is not None}")
+    logging.info(
+        f"Created Methnice instance with telemetry: {global_methnice.telemetry is not None}"
+    )
 
     # Initialize the Methnice instance
     global_methnice.setup()
@@ -783,14 +793,14 @@ def run_class(
         Start data processing in the main application loop.
         """
         logging.info(f"Setting up {UNIQUE_ID}.")
-        
+
         if DEV_TESTING:
             loop = asyncio.get_running_loop()
             loop.set_debug(True)
             loop.slow_callback_duration = 0.05
 
         await global_methnice.start_analysis()
-    
+
     """
     async def shutdown_with_methnice():
         ```
@@ -802,9 +812,9 @@ def run_class(
         state.shutdown_event = True
         print(f"Value of shutdown_event: {state.shutdown_event}")
     """
-     
+
     app.on_startup(startup_with_methnice)
-    #app.on_shutdown(shutdown_with_methnice)
+    # app.on_shutdown(shutdown_with_methnice)
 
     try:
         ui.run(
@@ -1046,13 +1056,15 @@ def package_run(
     """
     Main entry point for the ROBIN package.
     """
-    
+
     def handler(*args):
         print("Shutting down ROBIN... from ctrl-c")
-        print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
+        print(
+            "Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open."
+        )
         print("Please shut down ROBIN from the command line.")
         state.shutdown_event = True
-        
+
         # Get the current event loop
         try:
             loop = asyncio.get_event_loop()
@@ -1061,13 +1073,15 @@ def package_run(
                 async def shutdown_task():
                     while state.get_running_process_count() > 0:
                         await asyncio.sleep(1)
-                        print(f"Waiting for {state.get_running_process_count()} processes to finish")
+                        print(
+                            f"Waiting for {state.get_running_process_count()} processes to finish"
+                        )
                         print(f"Active processes: {list(state.process_states.keys())}")
                     # Don't exit, just keep running
                     while True:
                         await asyncio.sleep(1)
                         print(f"Active processes: {list(state.process_states.keys())}")
-                
+
                 loop.create_task(shutdown_task())
         except Exception as e:
             print(f"Error during shutdown: {e}")
@@ -1075,9 +1089,9 @@ def package_run(
             while True:
                 sleep(1)
                 print(f"Active processes: {list(state.process_states.keys())}")
-        
-    #signal.signal(signal.SIGINT, handler=handler)
-    
+
+    # signal.signal(signal.SIGINT, handler=handler)
+
     # Initialize telemetry based on opt-out setting
     if not no_telemetry:
         print("Telemetry collection enabled.")
@@ -1097,7 +1111,7 @@ def package_run(
         "showerrors": showerrors,
         "browse": browse,
         "exclude": exclude,
-        "experiment_duration": experiment_duration
+        "experiment_duration": experiment_duration,
     }
 
     # Try to send telemetry, fall back to local storage if endpoint unavailable
@@ -1138,7 +1152,9 @@ def package_run(
             reference=click.format_filename(reference),
             bed_file=click.format_filename(bed_file),
             basecall_config=basecall_config,
-            readfish_toml=click.format_filename(readfish_toml) if readfish_toml else None,
+            readfish_toml=(
+                click.format_filename(readfish_toml) if readfish_toml else None
+            ),
             experiment_duration=experiment_duration,
             telemetry=telemetry,
         )
@@ -1167,11 +1183,13 @@ def package_run(
             reference=click.format_filename(reference),
             bed_file=click.format_filename(bed_file),
             basecall_config=basecall_config,
-            readfish_toml=click.format_filename(readfish_toml) if readfish_toml else None,
+            readfish_toml=(
+                click.format_filename(readfish_toml) if readfish_toml else None
+            ),
             experiment_duration=experiment_duration,
             telemetry=telemetry,
         )
-        
+
     print("ROBIN has been launched and closed.")
 
 

@@ -31,7 +31,6 @@ import os
 import sys
 import tempfile
 import time
-import shutil
 import pandas as pd
 from nicegui import ui, app, run
 from robin import theme
@@ -43,11 +42,9 @@ from sturgeon.callmapping import (
 )
 import click
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional
 import logging
 
-import json
-import zipfile
 from copy import deepcopy
 
 
@@ -59,10 +56,8 @@ import sturgeon
 # Sturgeon-related imports (must be installed)
 from sturgeon.utils import validate_model_file, get_model_path, read_probes_file
 from sturgeon.prediction import load_model, predict_sample
-from sturgeon.plot import plot_prediction
 
-from robin import models
-from robin.core.state import state, ProcessType, ProcessState
+from robin.core.state import state, ProcessState
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -104,7 +99,7 @@ def load_modkit_data(parquet_path):
 
     # Keep only the original 18 columns and sort by chrom and chromStart
     df = merged_modkit_df[column_names]
-    return df.sort_values(by=['chrom', 'chromStart'])
+    return df.sort_values(by=["chrom", "chromStart"])
 
 
 def modkit_pileup_file_to_bed(
@@ -610,12 +605,16 @@ class Sturgeon_object(BaseAnalysis):
             "include/static",
             "probes_{}.bed".format(reference_genome),
         )
-        
+
         # Set Sturgeon-specific confidence thresholds
         # Sturgeon typically gives higher confidence scores, so adjust thresholds accordingly
-        kwargs['high_confidence_threshold'] = 0.8  # Sturgeon-specific high confidence threshold
-        kwargs['medium_confidence_threshold'] = 0.6  # Sturgeon-specific medium confidence threshold
-        
+        kwargs["high_confidence_threshold"] = (
+            0.8  # Sturgeon-specific high confidence threshold
+        )
+        kwargs["medium_confidence_threshold"] = (
+            0.6  # Sturgeon-specific medium confidence threshold
+        )
+
         super().__init__(*args, **kwargs)
         # Remove state tracking for Sturgeon Analysis
         # state.start_process("Sturgeon Analysis", ProcessType.BATCH)
@@ -649,7 +648,7 @@ class Sturgeon_object(BaseAnalysis):
                     self.create_sturgeon_time_chart("Sturgeon Time Series")
         if self.summary:
             with self.summary:
-                ui.label(f"Sturgeon classification: Unknown")
+                ui.label("Sturgeon classification: Unknown")
         if self.browse:
             self.show_previous_data()
         else:
@@ -712,7 +711,7 @@ class Sturgeon_object(BaseAnalysis):
         state.set_process_state("Sturgeon Analysis", ProcessState.RUNNING)
         try:
             sampleID = self.sampleID
-            
+
             # Initialize directories if needed
             if sampleID not in self.dataDir.keys():
                 self.dataDir[sampleID] = tempfile.TemporaryDirectory(
@@ -731,7 +730,12 @@ class Sturgeon_object(BaseAnalysis):
             else:
                 tomerge = [bamfile]  # Make a single-item list
 
-            if app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_count"] > 0:
+            if (
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bam_count"
+                ]
+                > 0
+            ):
                 if latest_file:
                     currenttime = latest_file * 1000
                 else:
@@ -768,7 +772,9 @@ class Sturgeon_object(BaseAnalysis):
                         )
 
                         diagnosis = predict_sample_from_dataframe(result_df)
-                        self.st_num_probes[sampleID] = diagnosis.iloc[-1]["number_probes"]
+                        self.st_num_probes[sampleID] = diagnosis.iloc[-1][
+                            "number_probes"
+                        ]
                         # lastrow = mydf.iloc[-1].drop("number_probes")
                         mydf_to_save = diagnosis
                         mydf_to_save["timestamp"] = currenttime
@@ -790,9 +796,9 @@ class Sturgeon_object(BaseAnalysis):
                                     "sturgeon_scores.csv",
                                 )
                             )
-                        app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                            "bam_processed"
-                        ] = tomerge_length
+                        app.storage.general[self.mainuuid][sampleID][self.name][
+                            "counters"
+                        ]["bam_processed"] = tomerge_length
 
                         # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                         #    "bams_in_processing"
@@ -1039,7 +1045,7 @@ class Sturgeon_object(BaseAnalysis):
             if series != "number_probes":
                 # Convert values to percentages and ensure sorted by timestamp
                 data_list = [
-                    [key, float(f"{value * 100:.1f}")] 
+                    [key, float(f"{value * 100:.1f}")]
                     for key, value in sorted(data.items())  # Sort by timestamp
                 ]
                 self.sturgeon_time_chart.options["series"].append(

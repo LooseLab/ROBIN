@@ -32,11 +32,9 @@ from datetime import datetime
 from robin import theme
 from minknow_api.manager import Manager
 import os
-import asyncio
 import re
 import logging
 from contextlib import contextmanager
-from collections import deque
 import time
 
 # MinKNOW API Imports
@@ -44,13 +42,9 @@ from robin.utilities.camera import Camera
 from typing import Sequence
 import uuid
 
-import cv2
-import zxingcpp
-
-import numpy as np
 
 
-import base64
+
 
 # We need `find_protocol` to search for the required protocol given a kit + product code.
 from minknow_api.tools import protocols
@@ -519,11 +513,11 @@ class Minknow_Info:
                                 # Create a radio group with the position and enable the run button immediately
                                 # since we only have one position
                                 ui.radio(
-                                    [self.position.name], 
+                                    [self.position.name],
                                     value=self.position.name,
-                                    on_change=lambda: run_button.enable()
+                                    on_change=lambda: run_button.enable(),
                                 ).classes("q-mt-md")
-                                
+
                                 # Enable the run button by default since we only have one position
                                 run_button.enable()
 

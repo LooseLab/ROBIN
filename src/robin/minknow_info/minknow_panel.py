@@ -25,7 +25,7 @@ Dependencies:
 - threading: Concurrent operations handling
 """
 
-from nicegui import binding, ui, run, app
+from nicegui import ui, run, app
 import time
 import threading
 import logging
@@ -41,8 +41,6 @@ logger.addHandler(console_handler)
 
 # MinKNOW API Imports
 import minknow_api.manager_pb2 as manager_pb2
-from minknow_api.protocol_pb2 import ProtocolPhase, ProtocolRunInfo, ProtocolState
-from readfish._utils import get_device
 from robin.minknow_info.minKNOWhistograms import MinknowHistograms
 from robin.minknow_info.minknow_info import Minknow_Info
 
@@ -54,7 +52,6 @@ import ipaddress
 # MinKNOW API Imports
 from minknow_api.manager import Manager
 from minknow_api.tools import protocols
-import grpc
 
 from typing import Sequence
 from pathlib import Path
@@ -64,7 +61,6 @@ from datetime import datetime, timedelta
 
 
 # We need `find_protocol` to search for the required protocol given a kit + product code.
-from minknow_api.tools import protocols
 
 
 UNIQUE_ID: str = str(uuid.uuid4())

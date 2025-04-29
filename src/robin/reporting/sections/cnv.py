@@ -13,7 +13,6 @@ import pandas as pd
 import natsort
 from reportlab.lib.units import inch
 from reportlab.platypus import PageBreak, Paragraph, Image, Spacer, Table, TableStyle
-from reportlab.lib.colors import HexColor, white
 from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
 from ..plotting import create_CNV_plot, create_CNV_plot_per_chromosome
@@ -338,80 +337,110 @@ class CNVSection(ReportSection):
             for chrom in natsort.natsorted(CNVresult.cnv.keys()):
                 if chrom != "chrM" and re.match(r"^chr(\d+|X|Y)$", chrom):
                     logger.info(f"Analyzing chromosome {chrom} for events")
-                    cytoband_analysis = cnv_analyzer.analyze_cytoband_cnv(result3.cnv, chrom)
+                    cytoband_analysis = cnv_analyzer.analyze_cytoband_cnv(
+                        result3.cnv, chrom
+                    )
                     if not cytoband_analysis.empty:
                         # Skip Y chromosome for male samples
                         if chrom == "chrY" and XYestimate == "XY":
                             continue
-                            
+
                         gain_threshold = chromosome_stats[chrom]["gain_threshold"]
                         loss_threshold = chromosome_stats[chrom]["loss_threshold"]
-                        logger.info(f"{chrom} thresholds: gain={gain_threshold:.2f}, loss={loss_threshold:.2f}")
-                        
+                        logger.info(
+                            f"{chrom} thresholds: gain={gain_threshold:.2f}, loss={loss_threshold:.2f}"
+                        )
+
                         # Log the cytoband names for debugging
-                        logger.info(f"Available cytoband names: {cytoband_analysis['name'].tolist()}")
-                        
+                        logger.info(
+                            f"Available cytoband names: {cytoband_analysis['name'].tolist()}"
+                        )
+
                         # Check both arms
                         p_arm_mean = None
                         q_arm_mean = None
                         p_arm_proportion = 0
                         q_arm_proportion = 0
-                        
+
                         # Analyze p arm
                         p_arm_cytobands = cytoband_analysis[
-                            cytoband_analysis["name"].str.contains(f"{chrom} p", regex=False)
+                            cytoband_analysis["name"].str.contains(
+                                f"{chrom} p", regex=False
+                            )
                         ]
                         if not p_arm_cytobands.empty:
                             p_arm_values = p_arm_cytobands["mean_cnv"].values
                             p_arm_mean = np.mean(p_arm_values)
                             logger.info(f"{chrom} p-arm mean: {p_arm_mean:.2f}")
                             # Calculate proportion affected regardless of mean
-                            p_arm_proportion_gain = np.sum(p_arm_values > gain_threshold) / len(p_arm_values)
-                            p_arm_proportion_loss = np.sum(p_arm_values < loss_threshold) / len(p_arm_values)
-                            p_arm_proportion = max(p_arm_proportion_gain, p_arm_proportion_loss)
-                            logger.info(f"{chrom} p-arm proportion affected: {p_arm_proportion:.2f}")
+                            p_arm_proportion_gain = np.sum(
+                                p_arm_values > gain_threshold
+                            ) / len(p_arm_values)
+                            p_arm_proportion_loss = np.sum(
+                                p_arm_values < loss_threshold
+                            ) / len(p_arm_values)
+                            p_arm_proportion = max(
+                                p_arm_proportion_gain, p_arm_proportion_loss
+                            )
+                            logger.info(
+                                f"{chrom} p-arm proportion affected: {p_arm_proportion:.2f}"
+                            )
 
                         # Analyze q arm
                         q_arm_cytobands = cytoband_analysis[
-                            cytoband_analysis["name"].str.contains(f"{chrom} q", regex=False)
+                            cytoband_analysis["name"].str.contains(
+                                f"{chrom} q", regex=False
+                            )
                         ]
                         if not q_arm_cytobands.empty:
                             q_arm_values = q_arm_cytobands["mean_cnv"].values
                             q_arm_mean = np.mean(q_arm_values)
                             logger.info(f"{chrom} q-arm mean: {q_arm_mean:.2f}")
                             # Calculate proportion affected regardless of mean
-                            q_arm_proportion_gain = np.sum(q_arm_values > gain_threshold) / len(q_arm_values)
-                            q_arm_proportion_loss = np.sum(q_arm_values < loss_threshold) / len(q_arm_values)
-                            q_arm_proportion = max(q_arm_proportion_gain, q_arm_proportion_loss)
-                            logger.info(f"{chrom} q-arm proportion affected: {q_arm_proportion:.2f}")
+                            q_arm_proportion_gain = np.sum(
+                                q_arm_values > gain_threshold
+                            ) / len(q_arm_values)
+                            q_arm_proportion_loss = np.sum(
+                                q_arm_values < loss_threshold
+                            ) / len(q_arm_values)
+                            q_arm_proportion = max(
+                                q_arm_proportion_gain, q_arm_proportion_loss
+                            )
+                            logger.info(
+                                f"{chrom} q-arm proportion affected: {q_arm_proportion:.2f}"
+                            )
 
                         # Determine if this is a whole chromosome event or arm-specific events
                         whole_chr_mean = chromosome_stats[chrom]["mean"]
-                        
+
                         # Check if both arms show similar changes (whole chromosome event)
                         if p_arm_mean is not None and q_arm_mean is not None:
                             # For gains, check if both arms show consistent gains
                             both_arms_gained = (
                                 # Both arms must show gain above threshold
-                                p_arm_mean > gain_threshold and 
-                                q_arm_mean > gain_threshold and
+                                p_arm_mean > gain_threshold
+                                and q_arm_mean > gain_threshold
+                                and
                                 # At least one arm must have high proportion affected
-                                (p_arm_proportion > 0.7 or q_arm_proportion > 0.7) and
+                                (p_arm_proportion > 0.7 or q_arm_proportion > 0.7)
+                                and
                                 # Other arm must show some effect
                                 (p_arm_proportion > 0.4 and q_arm_proportion > 0.4)
                             )
-                            
+
                             # For losses, check if both arms show consistent losses
                             both_arms_lost = (
                                 # Both arms must show loss below threshold
-                                p_arm_mean < loss_threshold and 
-                                q_arm_mean < loss_threshold and
+                                p_arm_mean < loss_threshold
+                                and q_arm_mean < loss_threshold
+                                and
                                 # At least one arm must have high proportion affected
-                                (p_arm_proportion > 0.7 or q_arm_proportion > 0.7) and
+                                (p_arm_proportion > 0.7 or q_arm_proportion > 0.7)
+                                and
                                 # Other arm must show some effect
                                 (p_arm_proportion > 0.4 and q_arm_proportion > 0.4)
                             )
-                            
+
                             # Check for whole chromosome event first
                             if both_arms_gained or both_arms_lost:
                                 # Report as whole chromosome event
@@ -419,39 +448,57 @@ class CNVSection(ReportSection):
                                     summary_whole_chr_events.append(
                                         f"Chromosome {chrom[3:]}: GAIN (mean={whole_chr_mean:.2f})"
                                     )
-                                    logger.info(f"Added whole chromosome gain for {chrom}")
+                                    logger.info(
+                                        f"Added whole chromosome gain for {chrom}"
+                                    )
                                 elif whole_chr_mean < loss_threshold:
                                     summary_whole_chr_events.append(
                                         f"Chromosome {chrom[3:]}: LOSS (mean={whole_chr_mean:.2f})"
                                     )
-                                    logger.info(f"Added whole chromosome loss for {chrom}")
+                                    logger.info(
+                                        f"Added whole chromosome loss for {chrom}"
+                                    )
                             else:
                                 # If not a whole chromosome event, check for individual arm events
                                 # Skip Y chromosome for arm events
                                 if chrom != "chrY":
-                                    if p_arm_mean is not None and p_arm_proportion > 0.7:
+                                    if (
+                                        p_arm_mean is not None
+                                        and p_arm_proportion > 0.7
+                                    ):
                                         if p_arm_mean > gain_threshold:
                                             summary_arm_events.append(
                                                 f"Chromosome {chrom[3:]} p-arm: GAIN (mean={p_arm_mean:.2f}, {p_arm_proportion:.0%} of arm)"
                                             )
-                                            logger.info(f"Added arm event: {chrom} p-arm GAIN")
+                                            logger.info(
+                                                f"Added arm event: {chrom} p-arm GAIN"
+                                            )
                                         elif p_arm_mean < loss_threshold:
                                             summary_arm_events.append(
                                                 f"Chromosome {chrom[3:]} p-arm: LOSS (mean={p_arm_mean:.2f}, {p_arm_proportion:.0%} of arm)"
                                             )
-                                            logger.info(f"Added arm event: {chrom} p-arm LOSS")
-                                    
-                                    if q_arm_mean is not None and q_arm_proportion > 0.7:
+                                            logger.info(
+                                                f"Added arm event: {chrom} p-arm LOSS"
+                                            )
+
+                                    if (
+                                        q_arm_mean is not None
+                                        and q_arm_proportion > 0.7
+                                    ):
                                         if q_arm_mean > gain_threshold:
                                             summary_arm_events.append(
                                                 f"Chromosome {chrom[3:]} q-arm: GAIN (mean={q_arm_mean:.2f}, {q_arm_proportion:.0%} of arm)"
                                             )
-                                            logger.info(f"Added arm event: {chrom} q-arm GAIN")
+                                            logger.info(
+                                                f"Added arm event: {chrom} q-arm GAIN"
+                                            )
                                         elif q_arm_mean < loss_threshold:
                                             summary_arm_events.append(
                                                 f"Chromosome {chrom[3:]} q-arm: LOSS (mean={q_arm_mean:.2f}, {q_arm_proportion:.0%} of arm)"
                                             )
-                                            logger.info(f"Added arm event: {chrom} q-arm LOSS")
+                                            logger.info(
+                                                f"Added arm event: {chrom} q-arm LOSS"
+                                            )
                         else:
                             # Only one arm has data, check for whole chromosome event
                             # For chromosomes with only one arm, use a stricter threshold
@@ -460,16 +507,22 @@ class CNVSection(ReportSection):
                                     summary_whole_chr_events.append(
                                         f"Chromosome {chrom[3:]}: GAIN (mean={whole_chr_mean:.2f})"
                                     )
-                                    logger.info(f"Added whole chromosome gain for {chrom}")
+                                    logger.info(
+                                        f"Added whole chromosome gain for {chrom}"
+                                    )
                                 elif whole_chr_mean < loss_threshold:
                                     summary_whole_chr_events.append(
                                         f"Chromosome {chrom[3:]}: LOSS (mean={whole_chr_mean:.2f})"
                                     )
-                                    logger.info(f"Added whole chromosome loss for {chrom}")
+                                    logger.info(
+                                        f"Added whole chromosome loss for {chrom}"
+                                    )
 
             # Log the final counts
             logger.info(f"Found {len(summary_arm_events)} arm events")
-            logger.info(f"Found {len(summary_whole_chr_events)} whole chromosome events")
+            logger.info(
+                f"Found {len(summary_whole_chr_events)} whole chromosome events"
+            )
 
             self.summary_elements.append(
                 Paragraph(
@@ -489,7 +542,8 @@ class CNVSection(ReportSection):
             if summary_whole_chr_events:
                 self.summary_elements.append(
                     Paragraph(
-                        "Whole Chromosome Events:<br/> " + " <br/> ".join(summary_whole_chr_events),
+                        "Whole Chromosome Events:<br/> "
+                        + " <br/> ".join(summary_whole_chr_events),
                         ParagraphStyle(
                             "SummaryText",
                             parent=self.styles.styles["Normal"],
@@ -498,7 +552,7 @@ class CNVSection(ReportSection):
                             textColor=self.styles.COLORS["text"],
                             leading=14,
                             spaceAfter=12,
-                        )
+                        ),
                     )
                 )
 
@@ -507,7 +561,8 @@ class CNVSection(ReportSection):
                 logger.debug(f"Found {len(summary_arm_events)} arm events to report")
                 self.summary_elements.append(
                     Paragraph(
-                        "Chromosome Arm Events:<br/> " + " <br/> ".join(summary_arm_events),
+                        "Chromosome Arm Events:<br/> "
+                        + " <br/> ".join(summary_arm_events),
                         ParagraphStyle(
                             "SummaryText",
                             parent=self.styles.styles["Normal"],
@@ -516,7 +571,7 @@ class CNVSection(ReportSection):
                             textColor=self.styles.COLORS["text"],
                             leading=14,
                             spaceAfter=12,
-                        )
+                        ),
                     )
                 )
 
@@ -592,14 +647,26 @@ class CNVSection(ReportSection):
                                 ]
                                 if not arm_cytobands.empty:
                                     arm_mean = arm_cytobands["mean_cnv"].mean()
-                                    arm_state = "GAIN" if arm_mean > 0.5 else "LOSS" if arm_mean < -0.5 else "NORMAL"
+                                    arm_state = (
+                                        "GAIN"
+                                        if arm_mean > 0.5
+                                        else "LOSS" if arm_mean < -0.5 else "NORMAL"
+                                    )
                                     if arm_state != "NORMAL":
                                         # Calculate proportion of arm showing the event
-                                        arm_bins_above = np.sum(arm_cytobands["mean_cnv"] > 0.5) / len(arm_cytobands)
-                                        arm_bins_below = np.sum(arm_cytobands["mean_cnv"] < -0.5) / len(arm_cytobands)
-                                        arm_proportion = max(arm_bins_above, arm_bins_below)
-                                        
-                                        if arm_proportion > 0.7:  # Require at least 70% of arm to show the event
+                                        arm_bins_above = np.sum(
+                                            arm_cytobands["mean_cnv"] > 0.5
+                                        ) / len(arm_cytobands)
+                                        arm_bins_below = np.sum(
+                                            arm_cytobands["mean_cnv"] < -0.5
+                                        ) / len(arm_cytobands)
+                                        arm_proportion = max(
+                                            arm_bins_above, arm_bins_below
+                                        )
+
+                                        if (
+                                            arm_proportion > 0.7
+                                        ):  # Require at least 70% of arm to show the event
                                             arm_events.append(
                                                 [
                                                     row["chrom"].replace("chr", ""),
@@ -673,7 +740,12 @@ class CNVSection(ReportSection):
                             *self.MODERN_TABLE_STYLE._cmds,
                             ("ALIGN", (3, 1), (3, -1), "RIGHT"),  # Right-align mean CNV
                             ("ALIGN", (2, 1), (2, -1), "CENTER"),  # Center-align state
-                            ("ALIGN", (4, 1), (4, -1), "RIGHT"),  # Right-align proportion
+                            (
+                                "ALIGN",
+                                (4, 1),
+                                (4, -1),
+                                "RIGHT",
+                            ),  # Right-align proportion
                         ]
                     )
                 )

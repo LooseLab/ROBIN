@@ -48,10 +48,10 @@ from robin import images
 from robin import __about__
 from robin.core.state import state, ProcessState, ProcessType
 
-import os, sys
+import os
 import psutil
 import platform
-import time
+
 
 async def check_version():
     """
@@ -64,21 +64,23 @@ async def check_version():
 
     try:
         # Get the remote version from GitHub
-        response = requests.get('https://raw.githubusercontent.com/LooseLab/ROBIN/main/src/robin/__about__.py')
+        response = requests.get(
+            "https://raw.githubusercontent.com/LooseLab/ROBIN/main/src/robin/__about__.py"
+        )
         response.raise_for_status()
-        
+
         # Extract version from the response text
         remote_version_str = None
-        for line in response.text.split('\n'):
-            if line.startswith('__version__'):
-                remote_version_str = line.split('=')[1].strip().strip('"').strip("'")
+        for line in response.text.split("\n"):
+            if line.startswith("__version__"):
+                remote_version_str = line.split("=")[1].strip().strip('"').strip("'")
                 break
-        
+
         if not remote_version_str:
             with ui.dialog() as dialog, ui.card():
-                ui.label('Version Check Error').classes('text-h6')
-                ui.label('Could not determine remote version. Please check manually.')
-                ui.button('OK', on_click=dialog.close)
+                ui.label("Version Check Error").classes("text-h6")
+                ui.label("Could not determine remote version. Please check manually.")
+                ui.button("OK", on_click=dialog.close)
             dialog.open()
             return
 
@@ -86,44 +88,52 @@ async def check_version():
         remote_version = version.parse(remote_version_str)
 
         if local_version == remote_version:
-            ui.notify('Your ROBIN installation is up to date!', type='positive')
+            ui.notify("Your ROBIN installation is up to date!", type="positive")
         elif local_version < remote_version:
             with ui.dialog() as dialog, ui.card():
-                ui.label('Update Available!').classes('text-h6')
-                ui.label(f'Your version: {local_version}')
-                ui.label(f'Latest version: {remote_version}')
-                ui.label('Would you like to visit the GitHub repository to update?')
+                ui.label("Update Available!").classes("text-h6")
+                ui.label(f"Your version: {local_version}")
+                ui.label(f"Latest version: {remote_version}")
+                ui.label("Would you like to visit the GitHub repository to update?")
                 with ui.row():
-                    ui.button('Continue with current version', on_click=dialog.close)
-                    ui.button('Visit GitHub', on_click=lambda: ui.open('https://github.com/LooseLab/ROBIN')).classes('bg-primary')
+                    ui.button("Continue with current version", on_click=dialog.close)
+                    ui.button(
+                        "Visit GitHub",
+                        on_click=lambda: ui.open("https://github.com/LooseLab/ROBIN"),
+                    ).classes("bg-primary")
             dialog.open()
         else:
             with ui.dialog() as dialog, ui.card():
-                ui.label('Development Version').classes('text-h6')
-                ui.label(f'You are running a development version ({local_version}).')
-                ui.label(f'Latest release: {remote_version}')
-                ui.label('This version may be unstable and is only for testing purposes. It is not recommended for production use.')
-                ui.label('Please consider using the latest release instead.')
-                ui.button('OK', on_click=dialog.close)
+                ui.label("Development Version").classes("text-h6")
+                ui.label(f"You are running a development version ({local_version}).")
+                ui.label(f"Latest release: {remote_version}")
+                ui.label(
+                    "This version may be unstable and is only for testing purposes. It is not recommended for production use."
+                )
+                ui.label("Please consider using the latest release instead.")
+                ui.button("OK", on_click=dialog.close)
             dialog.open()
-    
+
     except requests.RequestException:
         with ui.dialog() as dialog, ui.card():
-            ui.label('Connection Error').classes('text-h6')
-            ui.label('Could not check for updates.')
-            ui.label('Either you are not connected to the internet or you cannot access https://www.github.com/looselab/robin.')
-            ui.label('Please manually check for updates.')
-            ui.button('OK', on_click=dialog.close)
+            ui.label("Connection Error").classes("text-h6")
+            ui.label("Could not check for updates.")
+            ui.label(
+                "Either you are not connected to the internet or you cannot access https://www.github.com/looselab/robin."
+            )
+            ui.label("Please manually check for updates.")
+            ui.button("OK", on_click=dialog.close)
         dialog.open()
     except Exception as e:
         with ui.dialog() as dialog, ui.card():
-            ui.label('Error').classes('text-h6')
-            ui.label(f'Error checking version: {str(e)}')
-            ui.button('OK', on_click=dialog.close)
+            ui.label("Error").classes("text-h6")
+            ui.label(f"Error checking version: {str(e)}")
+            ui.button("OK", on_click=dialog.close)
         dialog.open()
-    
+
     # Mark version as checked for this session
     app.storage.tab["version_checked"] = True
+
 
 # Define the path to the image file used in the header and footer
 IMAGEFILE = os.path.join(
@@ -141,11 +151,12 @@ HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
 # Read the CSS styles for the application
 STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 
+
 def create_activity_monitor():
     """
     Creates an activity monitor component that shows the status of processes using a clean, streamlined layout.
     Uses Quasar's color system for consistent styling.
-    
+
     Returns:
         ui.card: The activity monitor card component
     """
@@ -154,54 +165,62 @@ def create_activity_monitor():
         class ProcessStatus:
             def __init__(self):
                 self.processes = {}  # Dictionary to store process states
-                self.columns = {}    # Dictionary to store column containers
-                self.indicators = {} # Dictionary to store process indicators
+                self.columns = {}  # Dictionary to store column containers
+                self.indicators = {}  # Dictionary to store process indicators
                 self.is_shutting_down = False
-                
+
                 # Initialize process states
                 for process_type in ProcessType:
                     self.processes[process_type] = {}
-        
+
         status = ProcessStatus()
-        
+
         # Create the main expansion panel
-        with ui.expansion("Process Status").classes("w-full text-sky-600 dark:text-white").style("font-size: 120%; font-weight: 500") as status_panel:
+        with ui.expansion("Process Status").classes(
+            "w-full text-sky-600 dark:text-white"
+        ).style("font-size: 120%; font-weight: 500") as status_panel:
             # Status key in a compact format
-            with ui.row().classes("w-full px-4 pb-4 gap-2 justify-center items-center text-sm"):
+            with ui.row().classes(
+                "w-full px-4 pb-4 gap-2 justify-center items-center text-sm"
+            ):
                 # Using Quasar's color system
                 for status_type, color_class, is_spinning in [
-                    ("Running", "primary", True),      # Blue
-                    ("Waiting", "warning", False),     # Orange
-                    ("Starting", "info", True),        # Light Blue
-                    ("Error", "negative", False),      # Red
-                    ("Finished", "positive", False),   # Green
+                    ("Running", "primary", True),  # Blue
+                    ("Waiting", "warning", False),  # Orange
+                    ("Starting", "info", True),  # Light Blue
+                    ("Error", "negative", False),  # Red
+                    ("Finished", "positive", False),  # Green
                 ]:
                     with ui.row().classes("items-center gap-1"):
-                        progress = ui.circular_progress(size='xs', show_value=False)
-                        progress.props(f'color={color_class}')
+                        progress = ui.circular_progress(size="xs", show_value=False)
+                        progress.props(f"color={color_class}")
                         if is_spinning:
-                            progress.props('indeterminate')
+                            progress.props("indeterminate")
                         else:
                             progress.value = 100
                         ui.label(status_type).style("font-size: 0.75rem")
-            
+
             # Create the grid for process types
             grid = ui.grid(columns=4).classes("w-full gap-4")
-            
+
             # Create columns for each process type
             for process_type in ProcessType:
                 with grid:
                     with ui.column().classes("w-full"):
                         ui.label(process_type.name).classes("text-lg font-bold mb-2")
                         status.columns[process_type] = ui.column().classes("gap-1")
-        
+
         def create_process_row(process_name, process_type):
             """Creates a new process row with bound indicators"""
             with status.columns[process_type]:
-                with ui.row().classes("items-center gap-2 min-w-[200px]").props('no-wrap'):
-                    display_name = ' '.join(word.capitalize() for word in process_name.split('_'))
+                with ui.row().classes("items-center gap-2 min-w-[200px]").props(
+                    "no-wrap"
+                ):
+                    display_name = " ".join(
+                        word.capitalize() for word in process_name.split("_")
+                    )
                     ui.label(display_name).classes("text-sm")
-                    progress = ui.circular_progress(size='xs', show_value=False)
+                    progress = ui.circular_progress(size="xs", show_value=False)
                     status.indicators[process_name] = progress
                     return progress
 
@@ -214,18 +233,23 @@ def create_activity_monitor():
                 if process in state.process_states:
                     process_state = state.get_process_state(process)
                     state_map = {
-                        ProcessState.RUNNING: ("primary", True),      # Blue, spinning
-                        ProcessState.WAITING_FOR_DATA: ("warning", False),  # Orange, static
-                        ProcessState.STARTING: ("info", True),    # Light Blue, spinning
-                        ProcessState.STOPPING: ("negative", False),     # Red, static
+                        ProcessState.RUNNING: ("primary", True),  # Blue, spinning
+                        ProcessState.WAITING_FOR_DATA: (
+                            "warning",
+                            False,
+                        ),  # Orange, static
+                        ProcessState.STARTING: ("info", True),  # Light Blue, spinning
+                        ProcessState.STOPPING: ("negative", False),  # Red, static
                     }
-                    return state_map.get(process_state, ("grey-7", False))  # Gray for unknown
+                    return state_map.get(
+                        process_state, ("grey-7", False)
+                    )  # Gray for unknown
                 elif process in state.finished_processes:
                     return ("positive", False)  # Green for finished
-                return ("negative", False)      # Red for error
+                return ("negative", False)  # Red for error
             except Exception as e:
                 logging.error(f"Error getting state for {process}: {str(e)}")
-                return ("negative", False)      # Red for error
+                return ("negative", False)  # Red for error
 
         async def update_process_status():
             """Updates the process status display using binding"""
@@ -238,18 +262,18 @@ def create_activity_monitor():
                     for indicator in status.indicators.values():
                         try:
                             # Explicitly remove indeterminate state and set color
-                            indicator.props('indeterminate=false color=grey-7')
+                            indicator.props("indeterminate=false color=grey-7")
                             indicator.value = 100
                         except Exception:
                             pass  # Ignore errors during shutdown
                 return
-            
+
             try:
                 # Get current processes
                 current_processes = set(state.process_states.keys())
                 finished_processes = set(state.finished_processes)
                 all_processes = current_processes | finished_processes
-                
+
                 # Remove indicators for processes that no longer exist
                 removed_processes = set(status.indicators.keys()) - all_processes
                 for process in removed_processes:
@@ -259,47 +283,53 @@ def create_activity_monitor():
                             del status.indicators[process]
                         except Exception:
                             pass  # Ignore cleanup errors
-                
+
                 # Update or create indicators for current processes
                 for process in all_processes:
                     try:
                         process_type = state.get_process_type(process)
                         if not process_type or process_type not in ProcessType:
                             continue
-                            
+
                         # Create new indicator if needed
                         if process not in status.indicators:
-                            status.indicators[process] = create_process_row(process, process_type)
-                        
+                            status.indicators[process] = create_process_row(
+                                process, process_type
+                            )
+
                         # Get process state information
                         color, should_spin = get_process_state_info(process)
-                        
+
                         # Update indicator
                         indicator = status.indicators[process]
-                        
+
                         if should_spin:
                             # Set spinning state with color
-                            indicator.props(f'indeterminate color={color}')
+                            indicator.props(f"indeterminate color={color}")
                             indicator.value = None
                         else:
                             # Explicitly remove indeterminate state and set color
-                            indicator.props(f'indeterminate=false color={color}')
+                            indicator.props(f"indeterminate=false color={color}")
                             indicator.value = 100
-                            
+
                     except Exception as e:
-                        if not status.is_shutting_down:  # Only log errors if not shutting down
+                        if (
+                            not status.is_shutting_down
+                        ):  # Only log errors if not shutting down
                             logging.error(f"Error updating process {process}: {str(e)}")
-                        
+
             except Exception as e:
                 if not status.is_shutting_down:  # Only log errors if not shutting down
                     logging.error(f"Error in update_process_status: {str(e)}")
                     import traceback
+
                     logging.error(traceback.format_exc())
-        
+
         # Update status every 0.2 seconds
         ui.timer(0.2, update_process_status)
-    
+
     return monitor
+
 
 @contextmanager
 def frame(navtitle: str, batphone=False, smalltitle=None):
@@ -317,7 +347,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
     global quitdialog
     if batphone:
         navtitle = f"BATMAN & {navtitle}"
-    
+
     # Add custom HTML and CSS to the head of the page
     ui.add_head_html(
         '<script src="https://cdn.jsdelivr.net/npm/igv@3.2.0/dist/igv.min.js"></script>'
@@ -373,17 +403,17 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
             disclaimer_dialog.open()
 
     ui.timer(0.1, show_disclaimer, once=True)
-    
+
     # Add version check timer
     ui.timer(1.0, check_version, once=True)
 
     # Create a persistent dialog for quitting the app
     quitdialog = ui.dialog().props("persistent")
-    
+
     async def quit_app():
         quitdialog.close()
         await cleanup_and_exit()
-    
+
     with quitdialog, ui.card():
         ui.label(
             "Quitting the app will stop running methylation analysis. Are you sure?"
@@ -438,14 +468,16 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                             self.ram = 0
 
                     metrics = SystemMetrics()
-                    
+
                     # Bind the progress indicators to the model
-                    cpu_activity.bind_value_from(metrics, 'cpu')
-                    ram_utilisation.bind_value_from(metrics, 'ram')
+                    cpu_activity.bind_value_from(metrics, "cpu")
+                    ram_utilisation.bind_value_from(metrics, "ram")
 
                     # Single timer to update both metrics
                     def update_metrics():
-                        metrics.cpu = round(psutil.getloadavg()[1] / os.cpu_count() * 100, 1)
+                        metrics.cpu = round(
+                            psutil.getloadavg()[1] / os.cpu_count() * 100, 1
+                        )
                         metrics.ram = round(psutil.virtual_memory()[2], 1)
 
                     ui.timer(1.0, update_metrics)
@@ -475,7 +507,9 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                     ui.image(IMAGEFILE).style("width: 50px")
 
     # Add the process status monitor between main content and footer
-    with ui.column().classes("w-full p-4 border-t border-gray-200 dark:border-gray-700"):
+    with ui.column().classes(
+        "w-full p-4 border-t border-gray-200 dark:border-gray-700"
+    ):
         create_activity_monitor()
 
     # Create a footer with useful information and quit button
@@ -538,48 +572,52 @@ async def cleanup_and_exit():
         None
     """
     logging.info("User initiated shutdown via UI")
-    
+
     # Create and show shutdown modal
-    with ui.dialog().props('persistent') as shutdown_dialog, ui.card().classes('w-96'):
-        ui.label('Shutting Down').classes('text-h5 text-weight-bold q-mb-md')
-        ui.label('ROBIN is shutting down. Please wait while we clean up...').classes('text-body1 q-mb-md')
-        with ui.row().classes('w-full justify-center'):
-            ui.spinner(size='lg', color='primary')
-    
+    with ui.dialog().props("persistent") as shutdown_dialog, ui.card().classes("w-96"):
+        ui.label("Shutting Down").classes("text-h5 text-weight-bold q-mb-md")
+        ui.label("ROBIN is shutting down. Please wait while we clean up...").classes(
+            "text-body1 q-mb-md"
+        )
+        with ui.row().classes("w-full justify-center"):
+            ui.spinner(size="lg", color="primary")
+
     # Close the quit dialog if it's open
     if quitdialog:
         quitdialog.close()
-    
+
     # Show the shutdown dialog
     shutdown_dialog.open()
     logging.info("Shutdown dialog opened")
-    
+
     # Set shutdown event
     state.shutdown_event = True
     logging.info("Shutdown event set")
-    
+
     # Wait a moment to ensure the dialog is visible
     await asyncio.sleep(1.0)
     logging.info("Initial wait complete")
-    
+
     # Perform cleanup
     logging.info("Performing cleanup operations...")
     print("Shutting down ROBIN... from theme.py")
-    print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
-    
+    print(
+        "Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open."
+    )
+
     # Wait for cleanup to complete
     while state.shutdown_event and state.get_running_process_count() > 0:
         await asyncio.sleep(3.0)
     logging.info("Cleanup wait complete")
-    
+
     # Close the shutdown dialog
     shutdown_dialog.close()
     logging.info("Shutdown dialog closed")
-    
+
     # Shutdown the application
     logging.info("Application shutdown initiated")
     app.shutdown()
-    
+
 
 def use_on_air(args: events.ValueChangeEventArguments):
     """
@@ -613,9 +651,10 @@ def my_page():
         ui.label("Welcome to the Application")
 
 
-#ToDo: The shutdown should be handled in the main.py file. So a gui triggered shutdown needs to set a flag in the main.py file. 
+# ToDo: The shutdown should be handled in the main.py file. So a gui triggered shutdown needs to set a flag in the main.py file.
 #      Then the main.py file can trigger the shutdown and handle the cleanup.
 #      The issue is that the nicegui shutdown event is immedately called when the app.shutdown() is called and I need to complete some running code first.
+
 
 def main():
     """

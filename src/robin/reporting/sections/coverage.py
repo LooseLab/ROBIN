@@ -4,7 +4,6 @@ coverage.py
 This module contains the coverage analysis section of the report.
 """
 
-from reportlab.lib import colors
 from reportlab.lib.units import inch
 from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak, Image
 from reportlab.lib.styles import ParagraphStyle

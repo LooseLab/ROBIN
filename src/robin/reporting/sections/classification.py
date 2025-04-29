@@ -7,8 +7,7 @@ including results from Sturgeon, Random Forest, NanoDX, and PannanoDX classifier
 
 import os
 import pandas as pd
-import natsort
-from reportlab.platypus import PageBreak, Paragraph, Image, Spacer
+from reportlab.platypus import PageBreak, Paragraph, Spacer
 from reportlab.lib.colors import HexColor
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import inch

@@ -169,7 +169,7 @@ def merge_bedmethyl(dfA: pd.DataFrame, dfB: pd.DataFrame) -> pd.DataFrame:
 def parquet_to_bed(parquet_file: str, output_bed: str) -> None:
     """
     Convert a parquet file containing methylation data to BED format.
-    
+
     The function reads a parquet file with methylation data and converts it to
     standard BED format. The input parquet file should have the following columns:
     - chrom: chromosome name
@@ -201,37 +201,59 @@ def parquet_to_bed(parquet_file: str, output_bed: str) -> None:
     try:
         # Read the parquet file
         df = pd.read_parquet(parquet_file)
-        
+
         # Ensure all required columns are present
         required_columns = [
-            "chrom", "chromStart", "chromEnd", "mod_code", "score_bed",
-            "strand", "thickStart", "thickEnd", "color", "valid_cov",
-            "percent_modified", "n_mod", "n_canonical", "n_othermod",
-            "n_delete", "n_fail", "n_diff", "n_nocall"
+            "chrom",
+            "chromStart",
+            "chromEnd",
+            "mod_code",
+            "score_bed",
+            "strand",
+            "thickStart",
+            "thickEnd",
+            "color",
+            "valid_cov",
+            "percent_modified",
+            "n_mod",
+            "n_canonical",
+            "n_othermod",
+            "n_delete",
+            "n_fail",
+            "n_diff",
+            "n_nocall",
         ]
-        
+
         missing_columns = [col for col in required_columns if col not in df.columns]
         if missing_columns:
             raise ValueError(f"Missing required columns: {missing_columns}")
-        
+
         # Create BED format DataFrame with correct column order
         bed_df = df[required_columns].copy()
-        
+
         # Convert numeric columns to appropriate types
-        numeric_columns = ["chromStart", "chromEnd", "thickStart", "thickEnd", "valid_cov"]
+        numeric_columns = [
+            "chromStart",
+            "chromEnd",
+            "thickStart",
+            "thickEnd",
+            "valid_cov",
+        ]
         for col in numeric_columns:
-            bed_df[col] = pd.to_numeric(bed_df[col], errors='coerce').astype(int)
-        
+            bed_df[col] = pd.to_numeric(bed_df[col], errors="coerce").astype(int)
+
         # Ensure strand is properly formatted
-        bed_df['strand'] = bed_df['strand'].astype(str).map({'.': '+', '-': '-'})
-        
+        bed_df["strand"] = bed_df["strand"].astype(str).map({".": "+", "-": "-"})
+
         # Sort by chromosome and start position
-        bed_df = bed_df.sort_values(['chrom', 'chromStart'])
-        
+        bed_df = bed_df.sort_values(["chrom", "chromStart"])
+
         # Write to BED file
-        bed_df.to_csv(output_bed, sep='\t', header=False, index=False)
-        logging.info(f"Successfully converted {parquet_file} to BED format: {output_bed}")
-        
+        bed_df.to_csv(output_bed, sep="\t", header=False, index=False)
+        logging.info(
+            f"Successfully converted {parquet_file} to BED format: {output_bed}"
+        )
+
     except Exception as e:
         logging.error(f"Error converting parquet to BED: {e}")
         raise

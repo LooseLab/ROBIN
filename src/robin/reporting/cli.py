@@ -4,7 +4,6 @@ cli.py
 Command-line interface for the ROBIN report generation tool.
 """
 
-import os
 import sys
 import click
 import logging

@@ -9,7 +9,7 @@ import pandas as pd
 import natsort
 from reportlab.lib.units import inch
 from reportlab.platypus import PageBreak, Paragraph, Image, Spacer, Table, TableStyle
-from reportlab.lib.colors import HexColor, white
+from reportlab.lib.colors import HexColor
 from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
 
@@ -92,7 +92,7 @@ class MGMTSection(ReportSection):
                     [
                         Paragraph("Average:", self.styles.styles["Normal"]),
                         Paragraph(
-                            f"{methylation_average:.1f}%", 
+                            f"{methylation_average:.1f}%",
                             ParagraphStyle(
                                 "ValueStyle",
                                 parent=self.styles.styles["Normal"],
@@ -108,7 +108,7 @@ class MGMTSection(ReportSection):
                     [
                         Paragraph("Score:", self.styles.styles["Normal"]),
                         Paragraph(
-                            f"{prediction_score:.1f}%", 
+                            f"{prediction_score:.1f}%",
                             ParagraphStyle(
                                 "ValueStyle",
                                 parent=self.styles.styles["Normal"],
@@ -164,7 +164,9 @@ class MGMTSection(ReportSection):
                 specific_sites = pd.read_csv(specific_sites_file)
                 if not specific_sites.empty:
                     self.elements.append(
-                        Paragraph("Key CpG Sites Analysis", self.styles.styles["Heading3"])
+                        Paragraph(
+                            "Key CpG Sites Analysis", self.styles.styles["Heading3"]
+                        )
                     )
                     self.elements.append(Spacer(1, 6))
 
@@ -184,16 +186,18 @@ class MGMTSection(ReportSection):
 
                     # Add data rows
                     for _, row in specific_sites.iterrows():
-                        cpg_data.append([
-                            f"Site {row['Site_Label'].split(' ')[1]}",  # Just the number
-                            row['Position'].split('/')[0],  # Just first position
-                            str(row['Coverage_Forward']),
-                            str(row['Coverage_Reverse']),
-                            str(row['Total_Coverage']),
-                            f"{row['Methylation_Percentage']:.1f}",  # Removed % symbol
-                            f"{row['Forward_Methylation']:.1f}",
-                            f"{row['Reverse_Methylation']:.1f}",
-                        ])
+                        cpg_data.append(
+                            [
+                                f"Site {row['Site_Label'].split(' ')[1]}",  # Just the number
+                                row["Position"].split("/")[0],  # Just first position
+                                str(row["Coverage_Forward"]),
+                                str(row["Coverage_Reverse"]),
+                                str(row["Total_Coverage"]),
+                                f"{row['Methylation_Percentage']:.1f}",  # Removed % symbol
+                                f"{row['Forward_Methylation']:.1f}",
+                                f"{row['Reverse_Methylation']:.1f}",
+                            ]
+                        )
 
                     # Create the table with more compact column widths
                     cpg_table = Table(
@@ -219,7 +223,12 @@ class MGMTSection(ReportSection):
                                 *self.MODERN_TABLE_STYLE._cmds,
                                 # More compact styling
                                 ("FONTSIZE", (0, 0), (-1, -1), 6),  # Even smaller font
-                                ("LEADING", (0, 0), (-1, -1), 7),  # Tighter line spacing
+                                (
+                                    "LEADING",
+                                    (0, 0),
+                                    (-1, -1),
+                                    7,
+                                ),  # Tighter line spacing
                                 ("ALIGN", (0, 0), (-1, -1), "CENTER"),
                                 ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
                                 # Header styling
@@ -255,7 +264,7 @@ class MGMTSection(ReportSection):
                     self.elements.append(Spacer(1, 6))  # Reduced spacing
 
                     # Add average methylation in a more compact format
-                    avg_methylation = specific_sites['Methylation_Percentage'].mean()
+                    avg_methylation = specific_sites["Methylation_Percentage"].mean()
                     self.elements.append(
                         Paragraph(
                             f"Mean methylation: {avg_methylation:.1f}%",  # Shortened text
@@ -275,11 +284,15 @@ class MGMTSection(ReportSection):
                 ["Source", "Location"],  # Shorter headers
                 [
                     "Results",  # Shorter labels
-                    os.path.basename(os.path.join(self.report.output, f"{last_seen}_mgmt.csv")),  # Just filename
+                    os.path.basename(
+                        os.path.join(self.report.output, f"{last_seen}_mgmt.csv")
+                    ),  # Just filename
                 ],
                 [
                     "Plot",
-                    os.path.basename(os.path.join(self.report.output, f"{last_seen}_mgmt.png")),
+                    os.path.basename(
+                        os.path.join(self.report.output, f"{last_seen}_mgmt.png")
+                    ),
                 ],
             ]
 

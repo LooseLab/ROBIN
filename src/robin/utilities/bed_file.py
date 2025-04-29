@@ -14,13 +14,11 @@ from collections import defaultdict
 import numpy as np
 import os
 
-from nicegui import ui
 import csv
 from natsort import natsorted
 from io import StringIO
 import copy
 import hashlib
-import logging
 from datetime import datetime
 import pandas as pd
 
@@ -30,17 +28,17 @@ import tomli_w
 from pathlib import Path
 
 
-
 class MasterBedTree:
     """
     A class for managing and processing BED (Browser Extensible Data) files.
-    
+
     This class is used to manage multiple BedTree instances.
     It provides functionality to:
     - Create and add a new BedTree instances
     - Remove BedTree instances
     - Get the results from a specific BedTree instance for a specific sample
     """
+
     def __init__(
         self,
         default_preserve_original_tree: bool = False,
@@ -88,20 +86,34 @@ class MasterBedTree:
 
         Args:
             sample_id (str): The ID of the sample to create the BedTree for
-            preserve_original_tree (bool, optional): Whether to preserve the original tree structure. 
+            preserve_original_tree (bool, optional): Whether to preserve the original tree structure.
                 If None, uses the default from MasterBedTree initialization. Defaults to None.
-            reference_file (str, optional): Path to reference genome FASTA index file. 
+            reference_file (str, optional): Path to reference genome FASTA index file.
                 If None, uses the default from MasterBedTree initialization. Defaults to None.
-            output_location (str, optional): Directory for output files. 
+            output_location (str, optional): Directory for output files.
                 If None, uses the default from MasterBedTree initialization. Defaults to None.
-            readfish_toml (Optional[Path], optional): Path to readfish TOML configuration. 
+            readfish_toml (Optional[Path], optional): Path to readfish TOML configuration.
                 If None, uses the default from MasterBedTree initialization. Defaults to None.
         """
         # Use provided values or fall back to defaults
-        preserve_original_tree = preserve_original_tree if preserve_original_tree is not None else self.default_preserve_original_tree
-        reference_file = reference_file if reference_file is not None else self.default_reference_file
-        output_location = output_location if output_location is not None else self.default_output_location
-        readfish_toml = readfish_toml if readfish_toml is not None else self.default_readfish_toml
+        preserve_original_tree = (
+            preserve_original_tree
+            if preserve_original_tree is not None
+            else self.default_preserve_original_tree
+        )
+        reference_file = (
+            reference_file
+            if reference_file is not None
+            else self.default_reference_file
+        )
+        output_location = (
+            output_location
+            if output_location is not None
+            else self.default_output_location
+        )
+        readfish_toml = (
+            readfish_toml if readfish_toml is not None else self.default_readfish_toml
+        )
 
         bed_tree = BedTree(
             preserve_original_tree=preserve_original_tree,
@@ -114,8 +126,6 @@ class MasterBedTree:
 
     def remove_bed_tree(self, sample_id: str):
         del self.bed_trees[sample_id]
-
-
 
 
 class BedTree:
@@ -610,14 +620,17 @@ class BedTree:
             for strand_group in natsorted(chromosome_data["children"]):
                 try:
                     strand_group["children"] = natsorted(
-                        strand_group["children"], 
-                        key=lambda x: int(x["id"].split("-")[0]) if x["id"] and "-" in x["id"] else 0
+                        strand_group["children"],
+                        key=lambda x: (
+                            int(x["id"].split("-")[0])
+                            if x["id"] and "-" in x["id"]
+                            else 0
+                        ),
                     )
                 except (ValueError, IndexError):
                     # If conversion fails, sort by the original ID
                     strand_group["children"] = natsorted(
-                        strand_group["children"], 
-                        key=lambda x: x["id"]
+                        strand_group["children"], key=lambda x: x["id"]
                     )
                 self._update_strands(chromosome_data["id"], strand_group["id"])
                 self._update_targets(
@@ -1017,25 +1030,24 @@ def index_page() -> None:
         preserve_original_tree=True,
         reference_file="/Users/mattloose/references/hg38_simple.fa.fai",
     )
-    
+
     master_bed_tree.add_bed_tree(
         sample_id="ds1305_CNVDetection_40_b",
         preserve_original_tree=True,
         reference_file="/Users/mattloose/references/hg38_simple.fa.fai",
     )
 
-
-    #original_bed_tree = BedTree(
+    # original_bed_tree = BedTree(
     #    preserve_original_tree=True,
     #    reference_file="/Users/mattloose/references/hg38_simple.fa.fai",
-    #)
+    # )
     original_bed_tree = master_bed_tree.bed_trees["ds1305_CNVDetection_0048_a"]
 
     original_bed_tree.load_from_file(existing_bed)
-    
+
     original_bed_tree2 = master_bed_tree.bed_trees["ds1305_CNVDetection_40_b"]
     original_bed_tree2.load_from_file(existing_bed2)
-    
+
     original_bed_tree3 = master_bed_tree.bed_trees["camel"]
 
     if original_bed_tree3:
@@ -1048,7 +1060,7 @@ def index_page() -> None:
     CNVResults = np.load(
         os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
     ).item()
-    
+
     CNVResults2 = np.load(
         os.path.join(output2, "ruptures.npy"), allow_pickle="TRUE"
     ).item()
@@ -1086,7 +1098,7 @@ def index_page() -> None:
         
             """,
             )
-            
+
         with ui.card().classes("w-full"):
 
             ui.label("New Target Information")
