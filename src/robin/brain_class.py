@@ -144,6 +144,43 @@ def merge_modkit_files(
     sample_output_dir = os.path.join(output_dir, sample_id)
     os.makedirs(sample_output_dir, exist_ok=True)
 
+    # Define schema
+    cols = [
+        "chrom",
+        "chromStart",
+        "chromEnd",
+        "mod_code",
+        "score_bed",
+        "strand",
+        "thickStart",
+        "thickEnd",
+        "color",
+        "valid_cov",
+        "percent_modified",
+        "n_mod",
+        "n_canonical",
+        "n_othermod",
+        "n_delete",
+        "n_fail",
+        "n_diff",
+        "n_nocall",
+    ]
+    categorical_cols = ["chrom", "mod_code", "strand", "color"]
+    int_cols = ["thickStart", "thickEnd"]
+    unsigned_int_cols = [
+        "chromStart",
+        "chromEnd",
+        "valid_cov",
+        "n_mod",
+        "n_canonical",
+        "n_othermod",
+        "n_delete",
+        "n_fail",
+        "n_diff",
+        "n_nocall",
+    ]
+    float_cols = ["score_bed"]
+
     try:
         # Enable StringCache for consistent categorical encoding
         pl.enable_string_cache()
@@ -365,12 +402,14 @@ def merge_modkit_files(
             print(sample_id, sample)
             result_status = sample["bed_file_sample"]["analysis_status"]
             while result_status == "initialized":
-                time.sleep(5)
+                time.sleep(1)
                 sample = mnpFlex.get_sample(sample_id)
                 result_status = sample["bed_file_sample"]["analysis_status"]
                 
             if result_status == "Analysis error":
                 print(f"Analysis error for {sample_id}")
+                mnpFlex.delete_sample(sample_id)
+                
                 #raise Exception(f"Analysis error for {sample_id}")
             else:
                 report_content = mnpFlex.get_sample_report(sample_id)
@@ -384,6 +423,8 @@ def merge_modkit_files(
                 else:
                     # Otherwise, print the response
                     print(report_content)
+                    
+                mnpFlex.delete_sample(sample_id)
             
         logging.debug(
             f"✅ Merged with optimized Polars and cache saved to: {output_file}"
