@@ -140,42 +140,9 @@ def merge_modkit_files(
         sample_id (str): Sample ID for organizing output files
         output_dir (str): Base output directory
     """
-    # Define schema
-    cols = [
-        "chrom",
-        "chromStart",
-        "chromEnd",
-        "mod_code",
-        "score_bed",
-        "strand",
-        "thickStart",
-        "thickEnd",
-        "color",
-        "valid_cov",
-        "percent_modified",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
-    categorical_cols = ["chrom", "mod_code", "strand", "color"]
-    int_cols = ["thickStart", "thickEnd"]
-    unsigned_int_cols = [
-        "chromStart",
-        "chromEnd",
-        "valid_cov",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
-    float_cols = ["score_bed"]
+    # Create sample-specific output directory
+    sample_output_dir = os.path.join(output_dir, sample_id)
+    os.makedirs(sample_output_dir, exist_ok=True)
 
     try:
         # Enable StringCache for consistent categorical encoding
@@ -183,7 +150,7 @@ def merge_modkit_files(
 
         # Cache or build PyRanges filter with improved caching
         cache_path = os.path.join(
-            output_dir, f"{os.path.basename(filter_bed_file)}.pgr_cache"
+            sample_output_dir, f"{os.path.basename(filter_bed_file)}.pgr_cache"
         )
         if os.path.exists(cache_path):
             with open(cache_path, "rb") as f:
@@ -362,15 +329,10 @@ def merge_modkit_files(
                 },
                 inplace=True,
             )
-            savepath = os.path.join(output_dir, f"{sample_id}.mnpflex.bed")
+            savepath = os.path.join(sample_output_dir, f"{sample_id}.mnpflex.bed")
             test_df.to_csv(
                 savepath, sep="\t", index=False, header=False
                         )
-            
-            # Print the length of the clean file
-            with open(f'{savepath}.clean', 'r') as f:
-                clean_file_length = sum(1 for _ in f)
-            print(f"Length of clean file: {clean_file_length} lines")
             
             print ("Sending file to mnpflex")
             mnpFlex = MnpFlexClient(base_url="https://mnp-flex.org", verify_ssl=False)
@@ -384,6 +346,11 @@ def merge_modkit_files(
                 os.path.dirname(os.path.abspath(resources.__file__)), "mnp_flex_sample_clean.bed"
             )
             mnpFlex.process_streaming(cpg_file, f'{savepath}', f'{savepath}.clean')
+            
+            # Print the length of the clean file
+            with open(f'{savepath}.clean', 'r') as f:
+                clean_file_length = sum(1 for _ in f)
+            print(f"Length of clean file: {clean_file_length} lines")
             
             # Upload a sample file
             response = mnpFlex.upload_sample(
@@ -410,13 +377,13 @@ def merge_modkit_files(
 
                 # If the response is binary content (e.g., a PDF), you can save it to a file
                 if isinstance(report_content, bytes):
-                    with open(f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf', 'wb') as file:
+                    report_path = os.path.join(sample_output_dir, f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf')
+                    with open(report_path, 'wb') as file:
                         file.write(report_content)
-                    print(f'Report saved as {sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf')
+                    print(f'Report saved as {report_path}')
                 else:
                     # Otherwise, print the response
                     print(report_content)
-            
             
         logging.debug(
             f"✅ Merged with optimized Polars and cache saved to: {output_file}"
