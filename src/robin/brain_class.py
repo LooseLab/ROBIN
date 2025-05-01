@@ -93,20 +93,21 @@ from robin.subpages.Sturgeon_object import (
     Sturgeon_object,
 )
 from robin.subpages.NanoDX_object import NanoDX_object
-from robin.subpages.RandomForest_object import RandomForest_object
+from robin.subpages.RandomForest_object import RandomForest_object, load_modkit_data
 from robin.subpages.CNV_object import CNVAnalysis
 from robin.subpages.TargetCoverage_object import TargetCoverage
 from robin.subpages.Fusion_object import FusionObject
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.ReadBam import ReadBam
 from robin.utilities.bed_file import MasterBedTree
+from robin.utilities.mnp_flex import APIClient as MnpFlexClient
 from robin.reporting.report import create_pdf
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
 
 from watchdog.observers import Observer
-from typing import List
-
+from typing import List, Optional
+from robin import resources
 
 import pyranges as pr  # For fast interval-based filtering
 
@@ -126,6 +127,7 @@ def merge_modkit_files(
     filter_bed_file: str,
     sample_id: str,
     output_dir: str,
+    mnpflex_config: Optional[dict],
 ) -> None:
     """
     Merge modkit files with improved caching and error handling.
@@ -330,6 +332,92 @@ def merge_modkit_files(
 
         # Save using Polars' efficient parquet writer
         grouped.write_parquet(output_file)
+        
+        # If we are running with mnp_flex, this would be a sensible place to send the file to the server.
+        if mnpflex_config:
+            print ("Prepare data for mnpflex")
+            test_df = load_modkit_data(output_file)
+            test_df.rename(
+                            columns={
+                                "chromStart": "start_pos",
+                                "chromEnd": "end_pos",
+                                "mod_code": "mod",
+                                "thickStart": "start_pos2",
+                                "thickEnd": "end_pos2",
+                                "color": "colour",
+                            },
+                            inplace=True,
+                        )
+            test_df.rename(
+                columns={
+                    "n_canonical": "Ncanon",
+                    "n_delete": "Ndel",
+                    "n_diff": "Ndiff",
+                    "n_fail": "Nfail",
+                    "n_mod": "Nmod",
+                    "n_nocall": "Nnocall",
+                    "n_othermod": "Nother",
+                    "valid_cov": "Nvalid",
+                    "percent_modified": "score",
+                },
+                inplace=True,
+            )
+            savepath = os.path.join(output_dir, f"{sample_id}.mnpflex.bed")
+            test_df.to_csv(
+                savepath, sep="\t", index=False, header=False
+                        )
+            
+            # Print the length of the clean file
+            with open(f'{savepath}.clean', 'r') as f:
+                clean_file_length = sum(1 for _ in f)
+            print(f"Length of clean file: {clean_file_length} lines")
+            
+            print ("Sending file to mnpflex")
+            mnpFlex = MnpFlexClient(base_url="https://mnp-flex.org", verify_ssl=False)
+            mnpFlex.authenticate(
+                username=mnpflex_config["mnpuser"],
+                password=mnpflex_config["mnppass"],
+                client_id="ROBIN",
+                client_secret="SECRET",
+            )
+            cpg_file = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)), "mnp_flex_sample_clean.bed"
+            )
+            mnpFlex.process_streaming(cpg_file, f'{savepath}', f'{savepath}.clean')
+            
+            # Upload a sample file
+            response = mnpFlex.upload_sample(
+                file_path=f'{savepath}.clean',
+                sample_name=f"{sample_id}.mnpFlex",
+                disclaimer_confirmed=True
+            )
+
+            print(response)
+            sample_id = response['id']
+            sample = mnpFlex.get_sample(sample_id)
+            print(sample_id, sample)
+            result_status = sample["bed_file_sample"]["analysis_status"]
+            while result_status == "initialized":
+                time.sleep(5)
+                sample = mnpFlex.get_sample(sample_id)
+                result_status = sample["bed_file_sample"]["analysis_status"]
+                
+            if result_status == "Analysis error":
+                print(f"Analysis error for {sample_id}")
+                #raise Exception(f"Analysis error for {sample_id}")
+            else:
+                report_content = mnpFlex.get_sample_report(sample_id)
+
+                # If the response is binary content (e.g., a PDF), you can save it to a file
+                if isinstance(report_content, bytes):
+                    with open(f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf', 'wb') as file:
+                        file.write(report_content)
+                    print(f'Report saved as {sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf')
+                else:
+                    # Otherwise, print the response
+                    print(report_content)
+            
+            
         logging.debug(
             f"✅ Merged with optimized Polars and cache saved to: {output_file}"
         )
@@ -538,6 +626,7 @@ class BrainMeth:
         bed_file=None,
         mainuuid=None,
         readfish_toml=None,
+        mnpflex_config=None,  # Add mnpflex_config parameter
     ):
         """
         Initialize the BrainMeth class.
@@ -555,6 +644,7 @@ class BrainMeth:
         :param minknow_connection: Connection to MinKNOW.
         :param reference: Reference genome.
         :param mainuuid: Main UUID for the application instance.
+        :param mnpflex_config: Configuration for MNPflex integration.
         """
         self.mainuuid = mainuuid
         self.force_sampleid = force_sampleid
@@ -573,6 +663,7 @@ class BrainMeth:
         self.reference = reference
         self.bed_file = bed_file
         self.observer = None
+        self.mnpflex_config = mnpflex_config  # Store mnpflex_config
         if self.browse:
             self.runsfolder = self.output
         self.sampleID = None
@@ -587,6 +678,7 @@ class BrainMeth:
             os.path.dirname(os.path.abspath(resources.__file__)),
             "sturg_nanodx_cpgs_0125.bed.gz",
         )
+        
         if self.reference:
             # ToDo: We need to pass through an instance of the MasterBedTree class here.
             self.master_bed_tree = MasterBedTree(
@@ -3200,6 +3292,7 @@ class BrainMeth:
                         self.cpgs_master_file,  # Use the parquet_path for the output file
                         sampleID,
                         self.output,
+                        dict(self.mnpflex_config),
                     )
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(

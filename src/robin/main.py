@@ -134,6 +134,7 @@ async def index() -> None:
         unique_id=UNIQUE_ID,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         telemetry_instance=TELEMETRY_INSTANCE,
+        mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
     )
     logging.info(f"Created GUI instance with telemetry: {GUI.telemetry is not None}")
     GUI.setup()
@@ -184,6 +185,7 @@ async def live_sample(sample_id: str) -> None:
         unique_id=UNIQUE_ID,
         sample_id=sample_id,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
+        mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
     )
     GUI.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
@@ -215,6 +217,7 @@ async def live() -> None:
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
+        mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
     )
     GUI.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
@@ -245,6 +248,7 @@ async def test() -> None:
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         unique_id=UNIQUE_ID,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
+        mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
     )
     GUI_browse.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI_browse))
@@ -283,6 +287,7 @@ async def startup() -> None:
         experiment_duration=app.storage.general[UNIQUE_ID]["experiment_duration"],
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         unique_id=UNIQUE_ID,
+        mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
     )
     MAINPAGE.setup()
     await MAINPAGE.start_analysis()
@@ -315,6 +320,7 @@ class Methnice:
         readfish_toml: Optional[Path],
         telemetry_instance=None,
         sample_id: Optional[str] = None,
+        mnpflex_config: Optional[dict] = None,
     ):
         self.force_sampleid = force_sampleid
         self.kit = kit
@@ -335,6 +341,7 @@ class Methnice:
         self.bed_file = bed_file
         self.readfish_toml = readfish_toml
         self.telemetry = telemetry_instance
+        self.mnpflex_config = mnpflex_config
         # Initialize news feed as a class variable
         self.news_feed = None
         if self.readfish_toml:
@@ -411,18 +418,16 @@ class Methnice:
                 reference=self.reference,
                 bed_file=self.bed_file,
                 readfish_toml=self.readfish_toml,
+                mnpflex_config=self.mnpflex_config
             )
 
             # Set up periodic telemetry updates if telemetry is enabled
             if self.telemetry:
-
                 def send_telemetry_update():
                     logging.info("Sending periodic telemetry update")
                     self.telemetry.send_run_telemetry(self)
 
-                ui.timer(
-                    120.0, send_telemetry_update, active=True
-                )  # Send update every minute
+                ui.timer(120.0, send_telemetry_update, active=True)  # Send update every minute
                 logging.info("Telemetry update timer initialized (1-minute interval)")
 
         except Exception as e:
@@ -477,6 +482,7 @@ class Methnice:
                 reference=self.reference,
                 bed_file=self.bed_file,
                 readfish_toml=self.readfish_toml,
+                mnpflex_config=self.mnpflex_config
             )
 
             with self.analysis_tab_pane:
@@ -697,11 +703,13 @@ def run_class(
     readfish_toml: Optional[Path],
     experiment_duration: int,
     telemetry=None,
+    mnpflex_config: Optional[dict] = None,
 ) -> None:
     """
     Set up and run the ROBIN application.
     """
     logging.info(f"run_class called with telemetry: {telemetry is not None}")
+    logging.info(f"run_class called with mnpflex_config: {mnpflex_config is not None}")
 
     try:
         app.storage.general.clear()
@@ -740,6 +748,7 @@ def run_class(
         "basecall_config": basecall_config,
         "readfish_toml": readfish_toml,
         "experiment_duration": experiment_duration,
+        "mnpflex": mnpflex_config,
     }
     app.storage.general[UNIQUE_ID]["samples"] = {}
     app.storage.general[UNIQUE_ID]["sample_list"] = observables.ObservableList([])
@@ -780,6 +789,7 @@ def run_class(
         readfish_toml=readfish_toml,
         unique_id=UNIQUE_ID,
         telemetry_instance=telemetry,
+        mnpflex_config=mnpflex_config,
     )
     logging.info(
         f"Created Methnice instance with telemetry: {global_methnice.telemetry is not None}"
@@ -842,8 +852,32 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
     """
     cfg = ConfigParser()
     try:
+        logging.info(f"Reading configuration file: {filename}")
         cfg.read(filename)
         options = dict(cfg["options"])
+        logging.info(f"Configuration options loaded: {list(options.keys())}")
+        
+        # Check for mnpflex configuration
+        mnpflex_config = {
+            "mnpsite": options.get("mnpsite"),
+            "mnpuser": options.get("mnpuser"),
+            "mnppass": options.get("mnppass")
+        }
+        
+        logging.info(f"MNPflex configuration found: {mnpflex_config}")
+        
+        # Store mnpflex configuration in app storage
+        if UNIQUE_ID not in app.storage.general:
+            app.storage.general[UNIQUE_ID] = {}
+        app.storage.general[UNIQUE_ID]["mnpflex"] = mnpflex_config
+        
+        # Log mnpflex configuration status
+        if all(mnpflex_config.values()):
+            logging.info("MNPflex configuration found in config file")
+        else:
+            missing = [k for k, v in mnpflex_config.items() if not v]
+            logging.warning(f"MNPflex configuration incomplete. Missing: {missing}")
+            
     except FileNotFoundError:
         logging.warning(f"Configuration file not found: {filename}")
         options = {}
@@ -855,6 +889,20 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
         options = {}
 
     ctx.default_map = options
+
+
+def is_mnpflex_configured() -> bool:
+    """
+    Check if MNPflex is configured in the application.
+    
+    Returns:
+        bool: True if MNPflex is configured, False otherwise
+    """
+    if UNIQUE_ID not in app.storage.general:
+        return False
+        
+    mnpflex_config = app.storage.general[UNIQUE_ID].get("mnpflex", {})
+    return all(mnpflex_config.values())
 
 
 @click.command()
@@ -1056,7 +1104,9 @@ def package_run(
     """
     Main entry point for the ROBIN package.
     """
-
+    # Set up logging first, before any other operations
+    setup_logging(log_level, log_file)
+    
     def handler(*args):
         print("Shutting down ROBIN... from ctrl-c")
         print(
@@ -1090,8 +1140,6 @@ def package_run(
                 sleep(1)
                 print(f"Active processes: {list(state.process_states.keys())}")
 
-    # signal.signal(signal.SIGINT, handler=handler)
-
     # Initialize telemetry based on opt-out setting
     if not no_telemetry:
         print("Telemetry collection enabled.")
@@ -1101,6 +1149,12 @@ def package_run(
         telemetry = None
         print("Telemetry collection disabled by user request.")
         logging.info("Telemetry disabled by user request")
+
+    # Get MNPflex configuration from app storage
+    mnpflex_config = None
+    if UNIQUE_ID in app.storage.general and "mnpflex" in app.storage.general[UNIQUE_ID]:
+        mnpflex_config = app.storage.general[UNIQUE_ID]["mnpflex"]
+        logging.info("MNPflex configuration loaded from app storage")
 
     # Collect run arguments for telemetry
     run_args = {
@@ -1112,6 +1166,7 @@ def package_run(
         "browse": browse,
         "exclude": exclude,
         "experiment_duration": experiment_duration,
+        "mnpflex_configured": mnpflex_config is not None,
     }
 
     # Try to send telemetry, fall back to local storage if endpoint unavailable
@@ -1122,8 +1177,6 @@ def package_run(
             telemetry.save_local_telemetry(run_args, output)
     else:
         logging.info("Telemetry collection is disabled")
-
-    setup_logging(log_level, log_file)
 
     # Get user acknowledgment before proceeding
     if not get_user_acknowledgment():
@@ -1157,6 +1210,7 @@ def package_run(
             ),
             experiment_duration=experiment_duration,
             telemetry=telemetry,
+            mnpflex_config=mnpflex_config,
         )
     else:
         logging.info(f"Watchfolder: {watchfolder}, Output: {output}")
@@ -1188,6 +1242,7 @@ def package_run(
             ),
             experiment_duration=experiment_duration,
             telemetry=telemetry,
+            mnpflex_config=mnpflex_config,
         )
 
     print("ROBIN has been launched and closed.")
