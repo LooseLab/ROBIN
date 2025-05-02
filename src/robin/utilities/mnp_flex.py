@@ -59,7 +59,6 @@ class APIClient:
 
         if response.status_code == 200:
             self.token = response.json().get("access_token")
-            print("Authentication successful.")
         else:
             raise Exception(f"Failed to authenticate: {response.json()}")
 

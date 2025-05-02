@@ -339,7 +339,7 @@ def merge_modkit_files(
         
         # If we are running with mnp_flex, this would be a sensible place to send the file to the server.
         if mnpflex_config:
-            print ("Prepare data for mnpflex")
+            logging.info("Prepare data for mnpflex")
             test_df = load_modkit_data(output_file)
             test_df.rename(
                             columns={
@@ -371,8 +371,8 @@ def merge_modkit_files(
                 savepath, sep="\t", index=False, header=False
                         )
             
-            print ("Sending file to mnpflex")
-            mnpFlex = MnpFlexClient(base_url="https://mnp-flex.org", verify_ssl=False)
+            logging.info("Sending file to mnpflex")
+            mnpFlex = MnpFlexClient(base_url="https://mnp-flex.org", verify_ssl=True)
             mnpFlex.authenticate(
                 username=mnpflex_config["mnpuser"],
                 password=mnpflex_config["mnppass"],
@@ -387,7 +387,7 @@ def merge_modkit_files(
             # Print the length of the clean file
             with open(f'{savepath}.clean', 'r') as f:
                 clean_file_length = sum(1 for _ in f)
-            print(f"Length of clean file: {clean_file_length} lines")
+            logging.info(f"Length of clean file: {clean_file_length} lines")
             
             # Upload a sample file
             response = mnpFlex.upload_sample(
@@ -396,10 +396,10 @@ def merge_modkit_files(
                 disclaimer_confirmed=True
             )
 
-            print(response)
+            logging.info(response)
             sample_id = response['id']
             sample = mnpFlex.get_sample(sample_id)
-            print(sample_id, sample)
+            logging.info(sample_id, sample)
             result_status = sample["bed_file_sample"]["analysis_status"]
             while result_status == "initialized":
                 time.sleep(1)
@@ -407,7 +407,7 @@ def merge_modkit_files(
                 result_status = sample["bed_file_sample"]["analysis_status"]
                 
             if result_status == "Analysis error":
-                print(f"Analysis error for {sample_id}")
+                logging.error(f"Analysis error for {sample_id}")
                 mnpFlex.delete_sample(sample_id)
                 
                 #raise Exception(f"Analysis error for {sample_id}")
@@ -419,10 +419,10 @@ def merge_modkit_files(
                     report_path = os.path.join(sample_output_dir, f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf')
                     with open(report_path, 'wb') as file:
                         file.write(report_content)
-                    print(f'Report saved as {report_path}')
+                    logging.info(f'Report saved as {report_path}')
                 else:
                     # Otherwise, print the response
-                    print(report_content)
+                    logging.info(report_content)
                     
                 mnpFlex.delete_sample(sample_id)
             
@@ -2544,6 +2544,10 @@ class BrainMeth:
                             fusionstab = ui.tab("Fusions")
                             if not selectedtab:
                                 selectedtab = fusionstab
+                        if self.mnpflex_config and all(self.mnpflex_config.values()):
+                            mnpflextab = ui.tab("MNPFlex")
+                            if not selectedtab:
+                                selectedtab = mnpflextab
 
                     with ui.tab_panels(tabs, value=selectedtab).classes("w-full"):
                         display_args = {
@@ -2553,7 +2557,6 @@ class BrainMeth:
                             "browse": self.browse,
                             "uuid": self.mainuuid,
                             "force_sampleid": self.force_sampleid,
-                            "sample_id": self.sampleID,
                         }
                         if not (
                             set(["sturgeon", "nanodx", "pannanodx", "forest"]).issubset(
@@ -2671,6 +2674,89 @@ class BrainMeth:
                                     await self.Fusion_panel.render_ui(
                                         sample_id=self.sampleID
                                     )
+
+                        if self.mnpflex_config and all(self.mnpflex_config.values()):
+                            with ui.tab_panel(mnpflextab).classes("w-full"):
+                                with ui.card().classes("rounded w-full"):
+                                    ui.label("MNPFlex Analysis").classes(
+                                        "text-sky-600 dark:text-white"
+                                    ).style(
+                                        "font-size: 150%; font-weight: 300"
+                                    ).tailwind(
+                                        "drop-shadow", "font-bold"
+                                    )
+                                    
+                                    # Add MNP-FLEX description and disclaimers
+                                    with ui.card().classes("w-full mb-4"):
+                                        ui.label("About MNP-FLEX").classes("text-lg font-semibold mb-2")
+                                        ui.label("MNP-FLEX is a methylation analysis platform that provides detailed insights into DNA methylation patterns. Visit ").classes("text-gray-700")
+                                        ui.link("https://mnp-flex.org/", "https://mnp-flex.org/", new_tab=True).classes("text-blue-600 hover:text-blue-800")
+                                        ui.label(" for more information.").classes("text-gray-700")
+                                        
+                                        with ui.column().classes("mt-4 space-y-2"):
+                                            ui.label("Important Notes:").classes("font-semibold text-gray-700")
+                                            ui.label("• Users must have their own MNP-FLEX account to use this service").classes("text-gray-600")
+                                            ui.label("• All results are for research use only").classes("text-gray-600")
+                                            ui.label("• Results are automatically downloaded as PDF reports").classes("text-gray-600")
+                                        
+                                        with ui.column().classes("mt-4 space-y-2"):
+                                            ui.label("Reference:").classes("font-semibold text-gray-700")
+                                            ui.label("MNP-FLEX is based on the following publication:").classes("text-gray-600")
+                                            with ui.row().classes("items-start gap-2"):
+                                                ui.icon("article").classes("text-blue-600 mt-1")
+                                                with ui.column():
+                                                    ui.link(
+                                                        "https://www.nature.com/articles/s41591-025-03562-5",
+                                                        "MNP-FLEX: A methylation-based platform for rapid and accurate classification of brain tumors",
+                                                        new_tab=True
+                                                    ).classes("text-blue-600 hover:text-blue-800")
+                                                    ui.label("Nature Medicine (2025)").classes("text-gray-600 text-sm")
+                                                    ui.label("DOI: 10.1038/s41591-025-03562-5").classes("text-gray-600 text-sm")
+
+                                    # Create a refreshable container for reports
+                                    @ui.refreshable
+                                    def show_mnpflex_reports():
+                                        # Fix path construction to avoid duplicate sample ID
+                                        sample_dir = self.output
+                                        try:
+                                            # Display the search path
+                                            with ui.card().classes("w-full mb-4"):
+                                                with ui.row().classes("items-center gap-2"):
+                                                    ui.icon("folder").classes("text-blue-600")
+                                                    ui.label("Searching for reports in:").classes("text-gray-600")
+                                                ui.label(sample_dir).classes("text-sm font-mono text-gray-700 ml-8 break-all")
+                                            
+                                            mnpflex_reports = [f for f in os.listdir(sample_dir) if f.endswith('.pdf') and 'mnpflex' in f.lower()]
+                                            if mnpflex_reports:
+                                                with ui.column().classes("w-full gap-4"):
+                                                    for report in sorted(mnpflex_reports, reverse=True):
+                                                        report_path = os.path.join(sample_dir, report)
+                                                        with ui.card().classes("w-full"):
+                                                            ui.label(f"Report: {report}").classes("text-lg font-semibold")
+                                                            ui.button("Download Report", on_click=lambda r=report_path: self.download_mnpflex_report(r)).classes("bg-blue-500 hover:bg-blue-600")
+                                            else:
+                                                ui.label("No MNPFlex reports available yet.").classes("text-gray-500")
+                                        except FileNotFoundError:
+                                            ui.label("Sample directory not found.").classes("text-gray-500")
+
+                                    # Initial display of reports
+                                    show_mnpflex_reports()
+
+                                    # Set up periodic refresh
+                                    refresh_timer = ui.timer(30.0, show_mnpflex_reports.refresh)  # Refresh every 30 seconds
+
+                                    # Clean up timer when tab is closed
+                                    def cleanup():
+                                        refresh_timer.active = False
+                                    
+                                    ui.on('disconnect', cleanup)
+
+                    async def download_mnpflex_report(self, report_path):
+                        """Download the MNPFlex report."""
+                        if os.path.exists(report_path):
+                            ui.download(report_path)
+                        else:
+                            ui.notify(f"Report not found at {report_path}", type="negative")
 
                     async def confirm_report_generation():
                         """
@@ -2816,30 +2902,21 @@ class BrainMeth:
             self.shutdown_background()
 
     def check_and_create_folder(self, path, folder_name=None):
-        """
-        Check if a folder exists and create it if necessary.
-
-        :param path: Base path.
-        :param folder_name: Folder name to create within the base path.
-        :return: Full path to the folder.
-        """
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"The specified path does not exist: {path}")
-
-        if self.force_sampleid:
-            folder_name = self.force_sampleid
-
+        """Check if a folder exists and create it if it doesn't."""
         if folder_name:
-            # Check if the path already ends with the folder_name
-            if path.endswith(folder_name):
-                return path
             full_path = os.path.join(path, folder_name)
-            if not os.path.exists(full_path):
-                os.makedirs(full_path)
-                logging.info(f"Folder created: {full_path}")
-            return full_path
         else:
-            return path
+            full_path = path
+        os.makedirs(full_path, exist_ok=True)
+        return full_path
+
+    async def download_mnpflex_report(self, report_name):
+        """Download the MNPFlex report."""
+        report_path = os.path.join(self.output, self.sampleID, report_name)
+        if os.path.exists(report_path):
+            ui.download(report_path)
+        else:
+            ui.notify(f"Report {report_name} not found", type="negative")
 
     def get_memory_usage(self, process_names_to_monitor=None):
         """
