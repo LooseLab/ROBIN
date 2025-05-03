@@ -115,6 +115,7 @@ from .core.state import state, ProcessType, ProcessState
 
 import pickle
 import polars as pl
+import json
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -420,8 +421,20 @@ def merge_modkit_files(
                     with open(report_path, 'wb') as file:
                         file.write(report_content)
                     logging.info(f'Report saved as {report_path}')
+                    
+                    # Extract and store data from the report
+                    from robin.reporting.pdf_extractor import PDFExtractor
+                    
+                    # Initialize PDF extractor with path in sample directory
+                    extractor = PDFExtractor(os.path.join(sample_output_dir, 'extracted_data'))
+                    
+                    # Extract data from the report
+                    data = extractor.extract_from_pdf(report_path)
+                    if data:
+                        # Save extracted data
+                        extractor.save_data(data)
+                        logging.info(f'Extracted and stored data from report: {report_path}')
                 else:
-                    # Otherwise, print the response
                     logging.info(report_content)
                     
                 mnpFlex.delete_sample(sample_id)
@@ -1267,10 +1280,248 @@ class BrainMeth:
                                 on_click=lambda i=item: ui.navigate.to(f"/live/{i}"),
                             )
 
+    def create_dynamic_classification_chart(self, key, y_max=1):
+        """Create a chart for a specific classification key (e.g., superfamily, family) with dynamic y-axis max."""
+        return ui.echart({
+            "backgroundColor": "transparent",
+            "title": {
+                "text": f"{key.title()} Classification Over Time",
+                "left": "center",
+                "top": 10,
+                "textStyle": {
+                    "fontSize": 16,
+                    "fontWeight": "normal",
+                    "color": "#000000",
+                },
+            },
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "line"},
+                "textStyle": {"fontSize": 14},
+            },
+            "grid": {
+                "left": "5%",
+                "right": "5%",
+                "bottom": "5%",
+                "top": "25%",
+                "containLabel": True,
+            },
+            "legend": {
+                "type": "scroll",
+                "orient": "horizontal",
+                "top": 45,
+                "width": "90%",
+                "left": "center",
+                "textStyle": {"fontSize": 12, "color": "#666666"},
+                "pageButtonPosition": "end",
+                "pageButtonGap": 5,
+                "pageButtonItemGap": 5,
+                "pageIconColor": "#666666",
+                "pageIconInactiveColor": "#aaa",
+                "pageIconSize": 12,
+                "pageTextStyle": {"color": "#666666"},
+                "itemGap": 25,
+                "itemWidth": 14,
+                "itemHeight": 14,
+                "selectedMode": True,
+            },
+            "xAxis": {
+                "type": "time",
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{yyyy}-{MM}-{dd} {HH}:{mm}",
+                    "color": "#666666",
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                },
+            },
+            "yAxis": {
+                "type": "value",
+                "min": 0,
+                "max": y_max,
+                "interval": y_max / 5 if y_max > 0 else 1,
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{value}",
+                    "color": "#666666",
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                },
+            },
+            "series": []
+        }).classes('w-full h-64')
+
+    def create_mgmt_chart(self):
+        """Create a chart for displaying MGMT methylation trends."""
+        return ui.echart({
+            "backgroundColor": "transparent",
+            "title": {
+                "text": "MGMT Methylation Over Time",
+                "left": "center",
+                "top": 10,
+                "textStyle": {
+                    "fontSize": 16,
+                    "fontWeight": "normal",
+                    "color": "#000000",
+                },
+            },
+            "tooltip": {
+                "trigger": "axis",
+                "axisPointer": {"type": "line"},
+                "textStyle": {"fontSize": 14},
+            },
+            "grid": {
+                "left": "5%",
+                "right": "5%",
+                "bottom": "5%",
+                "top": "25%",
+                "containLabel": True,
+            },
+            "xAxis": {
+                "type": "time",
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{yyyy}-{MM}-{dd} {HH}:{mm}",
+                    "color": "#666666",
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                },
+            },
+            "yAxis": {
+                "type": "value",
+                "min": 0,
+                "max": 100,
+                "interval": 20,
+                "axisLabel": {
+                    "fontSize": 12,
+                    "formatter": "{value}%",
+                    "color": "#666666",
+                },
+                "splitLine": {
+                    "show": True,
+                    "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                },
+            },
+            "series": [{
+                "name": "Methylation",
+                "type": "line",
+                "smooth": True,
+                "animation": False,
+                "symbolSize": 6,
+                "emphasis": {
+                    "focus": "series",
+                    "itemStyle": {"borderWidth": 2},
+                },
+                "lineStyle": {"width": 2, "color": "#007AFF"},
+                "itemStyle": {"color": "#007AFF"},
+                "data": []
+            }]
+        }).classes('w-full h-64')
+
+    def update_extracted_data_charts(self):
+        """Update dynamic charts with data from extracted_data.json."""
+        try:
+            logging.info("Starting chart update")
+            if not hasattr(self, 'classification_charts') or not hasattr(self, 'mgmt_chart'):
+                logging.warning("Charts not initialized")
+                return
+
+            json_path = os.path.join(self.output, 'extracted_data', 'extracted_data.json')
+            logging.info(f"Looking for data file at: {json_path}")
+            
+            if not os.path.exists(json_path):
+                logging.warning(f"No data file found at {json_path}")
+                return
+                
+            with open(json_path, 'r') as f:
+                data = json.load(f)
+                
+            if not data:
+                logging.warning("No data found in JSON file")
+                return
+                
+            logging.info(f"Processing {len(data)} data points")
+                
+            # Build a dict: key -> label -> list of (timestamp, score)
+            key_label_series = {}
+            mgmt_data = []
+            colors = ["#007AFF", "#34C759", "#FF9500", "#FF2D55", "#5856D6", "#FF3B30", "#5AC8FA", "#4CD964"]
+            for entry in data:
+                timestamp = entry.get('timestamp')
+                # Robustly handle missing classification
+                for key, info in entry.get('classification', {}).items():
+                    label = info.get('label')
+                    score = info.get('score')
+                    if label is None or score is None:
+                        continue
+                    if key not in key_label_series:
+                        key_label_series[key] = {}
+                    if label not in key_label_series[key]:
+                        key_label_series[key][label] = []
+                    key_label_series[key][label].append([timestamp, score])
+                # Robustly handle missing mgmt_info
+                mgmt = entry.get('mgmt_info', {})
+                avg = mgmt.get('average_methylation')
+                if avg is not None and timestamp is not None:
+                    mgmt_data.append([timestamp, avg])
+            # Sort all series by timestamp
+            for key in key_label_series:
+                for label in key_label_series[key]:
+                    key_label_series[key][label].sort()
+            mgmt_data.sort()
+            logging.info(f"Found classification keys: {list(key_label_series.keys())}")
+            for key in key_label_series:
+                for label in key_label_series[key]:
+                    logging.info(f"Key '{key}', label '{label}': {len(key_label_series[key][label])} points")
+            logging.info(f"Found {len(mgmt_data)} MGMT data points")
+
+            # Dynamically update or create charts for each key
+            for key, label_dict in key_label_series.items():
+                # Find the max score for this key
+                all_scores = [score for points in label_dict.values() for _, score in points]
+                y_max = max(all_scores) if all_scores else 1
+                y_max = max(1, int(y_max + 0.5))  # Round up for clarity
+                if key not in self.classification_charts:
+                    self.classification_charts[key] = self.create_dynamic_classification_chart(key, y_max=y_max)
+                chart = self.classification_charts[key]
+                # Update y-axis max and interval dynamically
+                chart.options["yAxis"]["max"] = y_max
+                chart.options["yAxis"]["interval"] = y_max / 5 if y_max > 0 else 1
+                chart_series = []
+                for idx, (label, data_points) in enumerate(label_dict.items()):
+                    chart_series.append({
+                        "name": label,
+                        "type": "line",
+                        "smooth": True,
+                        "animation": False,
+                        "symbolSize": 6,
+                        "emphasis": {
+                            "focus": "series",
+                            "itemStyle": {"borderWidth": 2},
+                        },
+                        "lineStyle": {"width": 2, "color": colors[idx % len(colors)]},
+                        "itemStyle": {"color": colors[idx % len(colors)]},
+                        "data": data_points
+                    })
+                chart.options["series"] = chart_series
+                chart.update()
+
+            # Update MGMT chart
+            if mgmt_data:
+                logging.info("Updating MGMT chart with %d points", len(mgmt_data))
+                self.mgmt_chart.options["series"][0]["data"] = mgmt_data
+                self.mgmt_chart.update()
+        except Exception as e:
+            logging.error(f"Error updating extracted data charts: {str(e)}", exc_info=True)
+
     async def information_panel(self, sample_id=None):
-        """
-        Display the main information panel with analysis results.
-        """
+        """Display the main information panel with analysis results."""
         try:
             logging.info(f"Starting information_panel with sample_id: {sample_id}")
             if sample_id:
@@ -2711,7 +2962,7 @@ class BrainMeth:
                                                         new_tab=True
                                                     ).classes("text-blue-600 hover:text-blue-800")
                                                     ui.label("Nature Medicine (2025)").classes("text-gray-600 text-sm")
-                                                    ui.label("DOI: 10.1038/s41591-025-03562-5").classes("text-gray-600 text-sm")
+                                                    ui.label("DOI: 10.1038/s41591-025-03562-5").classes("texray-600 text-sm")
 
                                     # Create a refreshable container for reports
                                     @ui.refreshable
@@ -2728,12 +2979,81 @@ class BrainMeth:
                                             
                                             mnpflex_reports = [f for f in os.listdir(sample_dir) if f.endswith('.pdf') and 'mnpflex' in f.lower()]
                                             if mnpflex_reports:
-                                                with ui.column().classes("w-full gap-4"):
-                                                    for report in sorted(mnpflex_reports, reverse=True):
-                                                        report_path = os.path.join(sample_dir, report)
-                                                        with ui.card().classes("w-full"):
-                                                            ui.label(f"Report: {report}").classes("text-lg font-semibold")
-                                                            ui.button("Download Report", on_click=lambda r=report_path: self.download_mnpflex_report(r)).classes("bg-blue-500 hover:bg-blue-600")
+                                                # Parse report information and sort by date
+                                                report_info = []
+                                                for report in mnpflex_reports:
+                                                    try:
+                                                        # Split filename into components
+                                                        parts = report.split('_')
+                                                        sample_id = parts[0]
+                                                        
+                                                        # Check if this is a new format file (with date and time)
+                                                        if len(parts) >= 5 and len(parts[3]) == 8 and len(parts[4].replace('.pdf', '')) == 6:
+                                                            sites = parts[2]
+                                                            date = parts[3]
+                                                            time = parts[4].replace('.pdf', '')
+                                                            
+                                                            # Convert date and time to datetime
+                                                            dt = datetime.strptime(f"{date}_{time}", "%Y%m%d_%H%M%S")
+                                                            formatted_date = dt.strftime("%Y-%m-%d %H:%M:%S")
+                                                        else:
+                                                            # Old format - use file modification time
+                                                            file_path = os.path.join(sample_dir, report)
+                                                            dt = datetime.fromtimestamp(os.path.getmtime(file_path))
+                                                            formatted_date = dt.strftime("%Y-%m-%d %H:%M:%S")
+                                                            
+                                                            # Try to extract sites if possible
+                                                            try:
+                                                                sites = parts[1].split('.')[-1]  # Get the number after mnpFlex
+                                                            except:
+                                                                sites = "N/A"
+                                                        
+                                                        report_info.append({
+                                                            'filename': report,
+                                                            'sample_id': sample_id,
+                                                            'sites': sites,
+                                                            'datetime': dt,
+                                                            'formatted_date': formatted_date
+                                                        })
+                                                    except Exception as e:
+                                                        logging.error(f"Error parsing report filename {report}: {str(e)}")
+                                                        continue
+                                                
+                                                # Sort by datetime, most recent first
+                                                report_info.sort(key=lambda x: x['datetime'], reverse=True)
+                                                
+                                                # Display most recent report prominently
+                                                if report_info:
+                                                    latest = report_info[0]
+                                                    with ui.card().classes("w-full mb-4 bg-blue-50"):
+                                                        ui.label("Latest Report").classes("text-lg font-semibold text-blue-800")
+                                                        with ui.row().classes("items-center gap-2"):
+                                                            ui.icon("description").classes("text-blue-600")
+                                                            ui.label(f"Sample: {latest['sample_id']}").classes("text-blue-800")
+                                                        with ui.row().classes("items-center gap-2"):
+                                                            ui.icon("schedule").classes("text-blue-600")
+                                                            ui.label(f"Generated: {latest['formatted_date']}").classes("text-blue-800")
+                                                        with ui.row().classes("items-center gap-2"):
+                                                            ui.icon("analytics").classes("text-blue-600")
+                                                            ui.label(f"Sites analyzed: {latest['sites']}").classes("text-blue-800")
+                                                        ui.button("Download Latest Report", 
+                                                                on_click=lambda r=os.path.join(sample_dir, latest['filename']): self.download_mnpflex_report(r)
+                                                        ).classes("bg-blue-600 hover:bg-blue-700 mt-2")
+                                                
+                                                # Display older reports in a compact form
+                                                if len(report_info) > 1:
+                                                    with ui.expansion("Previous Reports", icon="history").classes("w-full"):
+                                                        with ui.column().classes("w-full gap-2"):
+                                                            for report in report_info[1:]:
+                                                                with ui.card().classes("w-full"):
+                                                                    with ui.row().classes("items-center justify-between w-full"):
+                                                                        with ui.column().classes("gap-1"):
+                                                                            ui.label(f"Sample: {report['sample_id']}").classes("text-sm font-medium")
+                                                                            ui.label(f"Generated: {report['formatted_date']}").classes("text-sm text-gray-600")
+                                                                            ui.label(f"Sites: {report['sites']}").classes("text-sm text-gray-600")
+                                                                        ui.button("Download", 
+                                                                                on_click=lambda r=os.path.join(sample_dir, report['filename']): self.download_mnpflex_report(r)
+                                                                        ).classes("bg-gray-100 hover:bg-gray-200")
                                             else:
                                                 ui.label("No MNPFlex reports available yet.").classes("text-gray-500")
                                         except FileNotFoundError:
@@ -2744,6 +3064,19 @@ class BrainMeth:
 
                                     # Set up periodic refresh
                                     refresh_timer = ui.timer(30.0, show_mnpflex_reports.refresh)  # Refresh every 30 seconds
+
+                                    # Add extracted data visualization section
+                                    with ui.card().classes("w-full p-4 bg-white rounded-lg shadow-sm mt-4"):
+                                        with ui.expansion("Extracted Data Visualization", icon="analytics").classes("w-full"):
+                                            with ui.column().classes("w-full gap-4"):
+                                                # Create charts
+                                                self.classification_charts = {}
+                                                for key in ["superfamily", "family", "class", "subclass"]:  # or just [] to start empty
+                                                    self.classification_charts[key] = self.create_dynamic_classification_chart(key)
+                                                self.mgmt_chart = self.create_mgmt_chart()
+                                                
+                                                # Set up auto-refresh timer
+                                                ui.timer(10.0, self.update_extracted_data_charts)
 
                                     # Clean up timer when tab is closed
                                     def cleanup():
@@ -2858,6 +3191,7 @@ class BrainMeth:
                         icon="download",
                     )
 
+                    # Add report generation button
         except Exception as e:
             logging.error(f"Error rendering analysis UI: {str(e)}", exc_info=True)
             ui.notify(f"Error rendering analysis UI: {str(e)}", type="error")

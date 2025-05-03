@@ -17,6 +17,11 @@ import natsort
 
 from matplotlib import gridspec
 
+import logging
+from typing import Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
 # Define consistent color scheme and style
 MODERN_COLORS = {
     "primary": "#2C3E50",  # Dark blue-grey (matching report text)
@@ -491,3 +496,135 @@ def coverage_plot(df):
     plt.close(fig)  # Close the figure to free memory
     buf.seek(0)
     return buf
+
+
+def plot_classification_timeline(
+    df: pd.DataFrame,
+    classification_level: str = 'class',
+    title: Optional[str] = None
+) -> Tuple[plt.Figure, plt.Axes]:
+    """Plot classification changes over time.
+    
+    Args:
+        df: DataFrame containing classification data
+        classification_level: Level of classification to plot ('superfamily', 'family', 'class', 'subclass')
+        title: Optional title for the plot
+        
+    Returns:
+        Tuple of (figure, axes) objects
+    """
+    if df.empty:
+        logger.warning("No data available for plotting")
+        return None, None
+        
+    # Create figure and axes
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Plot classification scores
+    ax.plot(df['timestamp'], df[f'{classification_level}_score'], 
+            marker='o', linestyle='-', label='Score')
+    
+    # Add labels for each point
+    for x, y, label in zip(df['timestamp'], df[f'{classification_level}_score'], 
+                          df[f'{classification_level}_label']):
+        ax.annotate(label, (x, y), xytext=(5, 5), textcoords='offset points')
+    
+    # Customize plot
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Classification Score')
+    ax.set_title(title or f'{classification_level.title()} Classification Over Time')
+    ax.grid(True, alpha=0.3)
+    
+    # Rotate x-axis labels for better readability
+    plt.xticks(rotation=45)
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    return fig, ax
+
+
+def plot_mgmt_timeline(
+    df: pd.DataFrame,
+    title: Optional[str] = None
+) -> Tuple[plt.Figure, plt.Axes]:
+    """Plot MGMT methylation changes over time.
+    
+    Args:
+        df: DataFrame containing MGMT data
+        title: Optional title for the plot
+        
+    Returns:
+        Tuple of (figure, axes) objects
+    """
+    if df.empty:
+        logger.warning("No data available for plotting")
+        return None, None
+        
+    # Create figure and axes
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    # Plot methylation percentage
+    ax.plot(df['timestamp'], df['mgmt_methylation'], 
+            marker='o', linestyle='-', label='Methylation %')
+    
+    # Add status labels
+    for x, y, status in zip(df['timestamp'], df['mgmt_methylation'], df['mgmt_status']):
+        ax.annotate(status, (x, y), xytext=(5, 5), textcoords='offset points')
+    
+    # Customize plot
+    ax.set_xlabel('Time')
+    ax.set_ylabel('Methylation Percentage')
+    ax.set_title(title or 'MGMT Methylation Over Time')
+    ax.grid(True, alpha=0.3)
+    
+    # Rotate x-axis labels for better readability
+    plt.xticks(rotation=45)
+    
+    # Adjust layout
+    plt.tight_layout()
+    
+    return fig, ax
+
+
+def save_plot(fig: plt.Figure, output_path: str, dpi: int = 300):
+    """Save a plot to a file.
+    
+    Args:
+        fig: Figure object to save
+        output_path: Path to save the plot
+        dpi: DPI for the output image
+    """
+    try:
+        # Ensure output directory exists
+        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        
+        # Save plot
+        fig.savefig(output_path, dpi=dpi, bbox_inches='tight')
+        plt.close(fig)
+        
+    except Exception as e:
+        logger.error(f"Error saving plot to {output_path}: {str(e)}")
+
+
+def plot_to_bytes(fig: plt.Figure, format: str = 'png', dpi: int = 300) -> bytes:
+    """Convert a plot to bytes.
+    
+    Args:
+        fig: Figure object to convert
+        format: Output format ('png', 'jpg', etc.)
+        dpi: DPI for the output image
+        
+    Returns:
+        Bytes containing the plot image
+    """
+    try:
+        buf = io.BytesIO()
+        fig.savefig(buf, format=format, dpi=dpi, bbox_inches='tight')
+        plt.close(fig)
+        buf.seek(0)
+        return buf.getvalue()
+        
+    except Exception as e:
+        logger.error(f"Error converting plot to bytes: {str(e)}")
+        return None
