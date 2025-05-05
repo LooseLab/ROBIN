@@ -612,7 +612,7 @@ class TargetCoverage(BaseAnalysis):
         target_panel=None,
         reference=None,
         simtime=False,
-        enable_snp_calling=True,
+        enable_snp_calling=False,
         **kwargs,
     ):
         """

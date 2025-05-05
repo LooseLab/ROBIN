@@ -651,6 +651,7 @@ class BrainMeth:
         mainuuid=None,
         readfish_toml=None,
         mnpflex_config=None,
+        enable_snp_calling=False,
     ):
         """
         Initialize the BrainMeth class.
@@ -669,6 +670,7 @@ class BrainMeth:
         :param reference: Reference genome.
         :param mainuuid: Main UUID for the application instance.
         :param mnpflex_config: Configuration for MNP-FLEX integration.
+        :param enable_snp_calling: Whether to enable SNP calling for Coverage analysis.
         """
         self.mainuuid = mainuuid
         self.force_sampleid = force_sampleid
@@ -1006,6 +1008,7 @@ class BrainMeth:
                 bamqueue=self.bamfortargetcoverage,
                 target_panel=self.target_panel,
                 reference=self.reference,
+                enable_snp_calling=enable_snp_calling and self.reference is not None,
                 **common_args,
             )
             self.Target_Coverage.process_data()
@@ -2899,6 +2902,7 @@ class BrainMeth:
                                         summary=coverage,
                                         target_panel=self.target_panel,
                                         reference=self.reference,
+                                        enable_snp_calling=enable_snp_calling and self.reference is not None,
                                         **display_args,
                                     )
                                     await self.Target_Coverage.render_ui(
