@@ -670,7 +670,7 @@ class BrainMeth:
         :param reference: Reference genome.
         :param mainuuid: Main UUID for the application instance.
         :param mnpflex_config: Configuration for MNP-FLEX integration.
-        :param enable_snp_calling: Whether to enable SNP calling for Coverage analysis.
+        :param enable_snp_calling: Whether to enable SNP calling functionality.
         """
         self.mainuuid = mainuuid
         self.force_sampleid = force_sampleid
@@ -690,6 +690,7 @@ class BrainMeth:
         self.bed_file = bed_file
         self.observer = None
         self.mnpflex_config = mnpflex_config  # Store mnpflex_config
+        self.enable_snp_calling = enable_snp_calling  # Store enable_snp_calling
         if self.browse:
             self.runsfolder = self.output
         self.sampleID = None

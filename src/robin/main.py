@@ -425,7 +425,8 @@ class Methnice:
                 reference=self.reference,
                 bed_file=self.bed_file,
                 readfish_toml=self.readfish_toml,
-                mnpflex_config=self.mnpflex_config
+                mnpflex_config=self.mnpflex_config,
+                enable_snp_calling=self.enable_snp_calling
             )
 
             # Set up periodic telemetry updates if telemetry is enabled
