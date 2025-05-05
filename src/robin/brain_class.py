@@ -1008,7 +1008,7 @@ class BrainMeth:
                 bamqueue=self.bamfortargetcoverage,
                 target_panel=self.target_panel,
                 reference=self.reference,
-                enable_snp_calling=enable_snp_calling and self.reference is not None,
+                enable_snp_calling=self.enable_snp_calling and self.reference is not None,
                 **common_args,
             )
             self.Target_Coverage.process_data()
@@ -2902,7 +2902,7 @@ class BrainMeth:
                                         summary=coverage,
                                         target_panel=self.target_panel,
                                         reference=self.reference,
-                                        enable_snp_calling=enable_snp_calling and self.reference is not None,
+                                        enable_snp_calling=self.enable_snp_calling and self.reference is not None,
                                         **display_args,
                                     )
                                     await self.Target_Coverage.render_ui(
