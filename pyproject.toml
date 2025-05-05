@@ -62,6 +62,7 @@ dependencies = [
   "alive-progress>=3.1.5",
   "geocoder>=1.38.1",
   "polars",
+  "PyPDF2"
 ]
 
 [project.scripts]

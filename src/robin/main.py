@@ -135,6 +135,7 @@ async def index() -> None:
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         telemetry_instance=TELEMETRY_INSTANCE,
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
     )
     logging.info(f"Created GUI instance with telemetry: {GUI.telemetry is not None}")
     GUI.setup()
@@ -186,6 +187,7 @@ async def live_sample(sample_id: str) -> None:
         sample_id=sample_id,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
     )
     GUI.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
@@ -218,6 +220,7 @@ async def live() -> None:
         unique_id=UNIQUE_ID,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
     )
     GUI.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
@@ -249,6 +252,7 @@ async def test() -> None:
         unique_id=UNIQUE_ID,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
     )
     GUI_browse.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI_browse))
@@ -288,6 +292,7 @@ async def startup() -> None:
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         unique_id=UNIQUE_ID,
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
     )
     MAINPAGE.setup()
     await MAINPAGE.start_analysis()
@@ -321,6 +326,7 @@ class Methnice:
         telemetry_instance=None,
         sample_id: Optional[str] = None,
         mnpflex_config: Optional[dict] = None,
+        enable_snp_calling: bool = False,
     ):
         self.force_sampleid = force_sampleid
         self.kit = kit
@@ -342,6 +348,7 @@ class Methnice:
         self.readfish_toml = readfish_toml
         self.telemetry = telemetry_instance
         self.mnpflex_config = mnpflex_config
+        self.enable_snp_calling = enable_snp_calling
         # Initialize news feed as a class variable
         self.news_feed = None
         if self.readfish_toml:
@@ -711,6 +718,7 @@ def run_class(
     """
     logging.info(f"run_class called with telemetry: {telemetry is not None}")
     logging.info(f"run_class called with mnpflex_config: {mnpflex_config is not None}")
+    logging.info(f"run_class called with enable_snp_calling: {enable_snp_calling}")
 
     try:
         app.storage.general.clear()
@@ -731,11 +739,12 @@ def run_class(
     global TELEMETRY_INSTANCE
     TELEMETRY_INSTANCE = telemetry
 
+    # Initialize app storage
     app.storage.general[UNIQUE_ID] = {
-        "threads": threads,
         "force_sampleid": force_sampleid,
         "kit": kit,
         "centreID": centreID,
+        "threads": threads,
         "simtime": simtime,
         "watchfolder": watchfolder,
         "output": output,
