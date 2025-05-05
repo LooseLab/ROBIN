@@ -704,6 +704,7 @@ def run_class(
     experiment_duration: int,
     telemetry=None,
     mnpflex_config: Optional[dict] = None,
+    enable_snp_calling: bool = False,
 ) -> None:
     """
     Set up and run the ROBIN application.
@@ -749,6 +750,7 @@ def run_class(
         "readfish_toml": readfish_toml,
         "experiment_duration": experiment_duration,
         "mnpflex": mnpflex_config,
+        "enable_snp_calling": enable_snp_calling,
     }
     app.storage.general[UNIQUE_ID]["samples"] = {}
     app.storage.general[UNIQUE_ID]["sample_list"] = observables.ObservableList([])
@@ -790,6 +792,7 @@ def run_class(
         unique_id=UNIQUE_ID,
         telemetry_instance=telemetry,
         mnpflex_config=mnpflex_config,
+        enable_snp_calling=enable_snp_calling,
     )
     logging.info(
         f"Created Methnice instance with telemetry: {global_methnice.telemetry is not None}"
@@ -1071,6 +1074,13 @@ def is_mnpflex_configured() -> bool:
     default=False,
     help="Opt out of sending anonymous usage statistics.",
 )
+@click.option(
+    "--enable-snp-calling",
+    is_flag=True,
+    show_default=True,
+    default=False,
+    help="Enable SNP calling functionality (requires reference genome).",
+)
 @click.argument(
     "output",
     type=click.Path(
@@ -1100,6 +1110,7 @@ def package_run(
     readfish_toml: Optional[Path],
     experiment_duration: int,
     no_telemetry: bool,
+    enable_snp_calling: bool,
 ) -> None:
     """
     Main entry point for the ROBIN package.
@@ -1211,6 +1222,7 @@ def package_run(
             experiment_duration=experiment_duration,
             telemetry=telemetry,
             mnpflex_config=mnpflex_config,
+            enable_snp_calling=enable_snp_calling,
         )
     else:
         logging.info(f"Watchfolder: {watchfolder}, Output: {output}")
@@ -1243,6 +1255,7 @@ def package_run(
             experiment_duration=experiment_duration,
             telemetry=telemetry,
             mnpflex_config=mnpflex_config,
+            enable_snp_calling=enable_snp_calling,
         )
 
     print("ROBIN has been launched and closed.")

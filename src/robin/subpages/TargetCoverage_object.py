@@ -278,7 +278,7 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
     -------
     None
     """
-    state.start_process("clair3")
+    state.start_process("clair3", "variant_calling")
     state.set_process_state("clair3", ProcessState.RUNNING)
     # Debug: Log input file paths for verification.
     if showerrors:
@@ -486,7 +486,7 @@ def subset_bam(bamfile, targets, output):
 
 
 def sort_bam(bamfile, output, threads):
-    pysam.sort(f"-@{threads}", "-o", output, bamfile)
+    pysam.sort(f"-@{threads}", "-m", "100M", "-o", output, bamfile)
     pysam.index(f"{output}", f"{output}.bai")
 
 
@@ -612,7 +612,7 @@ class TargetCoverage(BaseAnalysis):
         target_panel=None,
         reference=None,
         simtime=False,
-        enable_snp_calling=False,
+        enable_snp_calling=True,
         **kwargs,
     ):
         """
@@ -713,8 +713,7 @@ class TargetCoverage(BaseAnalysis):
             )
             if not os.path.exists(workdirout):
                 os.mkdir(workdirout)
-            # bamfile, bedfile, workdir, workdirout, threads
-
+                
             # Wait for BAM file to exist with timeout
             timeout = 300  # 5 minutes timeout
             start_time = time.time()
@@ -726,12 +725,18 @@ class TargetCoverage(BaseAnalysis):
 
             if os.path.exists(f"{bamfile}"):
                 shutil.copy2(bamfile, f"{bamfile}2.bam")
-                shutil.copy2(f"{bamfile}.bai", f"{bamfile}2.bam.bai")
-
+                #shutil.copy2(f"{bamfile}.bai", f"{bamfile}2.bam.bai")
+            
+                await run.cpu_bound(
+                    sort_bam,
+                    f"{bamfile}2.bam",
+                    os.path.join(workdirout, "sorted_targets_exceeding.bam"),
+                    self.threads,
+                )
                 # shutil.copy2(bedfile, f"{bedfile}2")
                 await run.cpu_bound(
                     run_clair3,
-                    f"{bamfile}2.bam",
+                    os.path.join(workdirout, "sorted_targets_exceeding.bam"),
                     f"{bedfile}",
                     self.check_and_create_folder(self.output, self.sampleID),
                     workdirout,
@@ -741,7 +746,7 @@ class TargetCoverage(BaseAnalysis):
                 )
 
                 os.remove(f"{bamfile}2.bam")
-                os.remove(f"{bamfile}2.bam.bai")
+                #os.remove(f"{bamfile}2.bam.bai")
 
         self.clair3running = False
         # else:
@@ -1837,6 +1842,8 @@ class TargetCoverage(BaseAnalysis):
                 )
                 if not os.path.exists(clair3workdir):
                     os.mkdir(clair3workdir)
+                """
+                
 
                 await run.cpu_bound(
                     sort_bam,
@@ -1844,12 +1851,14 @@ class TargetCoverage(BaseAnalysis):
                     os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
                     self.threads,
                 )
+                """
 
                 if self.snp_calling:
                     self.SNPqueue.put(
                         [
                             run_list,
-                            os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
+                            self.targetbamfile[self.sampleID],
+                            #os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
                             os.path.join(
                                 self.check_and_create_folder(
                                     self.output, self.sampleID

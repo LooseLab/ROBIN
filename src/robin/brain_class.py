@@ -27,6 +27,7 @@ Key Components:
    - `CNVAnalysis`
    - `TargetCoverage`
    - `FusionObject`
+   - `MNPFlex_Object`
 
 4. **Utility Functions**:
 
@@ -53,7 +54,7 @@ Dependencies:
 
 - `nicegui` (ui, app, run)
 - `robin.utilities.bam_handler.BamEventHandler`
-- `robin.subpages` (MGMT_Object, Sturgeon_object, NanoDX_object, RandomForest_object, CNVAnalysis, TargetCoverage, FusionObject)
+- `robin.subpages` (MGMT_Object, Sturgeon_object, NanoDX_object, RandomForest_object, CNVAnalysis, TargetCoverage, FusionObject, MNPFlex_Object)
 - `robin.utilities.local_file_picker.LocalFilePicker`
 - `robin.utilities.ReadBam.ReadBam`
 - `watchdog.observers.Observer`
@@ -97,6 +98,7 @@ from robin.subpages.RandomForest_object import RandomForest_object, load_modkit_
 from robin.subpages.CNV_object import CNVAnalysis
 from robin.subpages.TargetCoverage_object import TargetCoverage
 from robin.subpages.Fusion_object import FusionObject
+from robin.subpages.MNPFlex_object import MNPFlex_Object
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.ReadBam import ReadBam
 from robin.utilities.bed_file import MasterBedTree
@@ -140,6 +142,7 @@ def merge_modkit_files(
         filter_bed_file (str): Path to BED file for filtering
         sample_id (str): Sample ID for organizing output files
         output_dir (str): Base output directory
+        mnpflex_config (Optional[dict]): Configuration for MNP-FLEX integration
     """
     # Create sample-specific output directory
     sample_output_dir = os.path.join(output_dir, sample_id)
@@ -338,21 +341,21 @@ def merge_modkit_files(
         # Save using Polars' efficient parquet writer
         grouped.write_parquet(output_file)
         
-        # If we are running with mnp_flex, this would be a sensible place to send the file to the server.
-        if mnpflex_config:
+        # If we are running with mnp_flex, send the file to the server
+        if mnpflex_config["mnpuser"] and mnpflex_config["mnppass"]:
             logging.info("Prepare data for mnpflex")
             test_df = load_modkit_data(output_file)
             test_df.rename(
-                            columns={
-                                "chromStart": "start_pos",
-                                "chromEnd": "end_pos",
-                                "mod_code": "mod",
-                                "thickStart": "start_pos2",
-                                "thickEnd": "end_pos2",
-                                "color": "colour",
-                            },
-                            inplace=True,
-                        )
+                columns={
+                    "chromStart": "start_pos",
+                    "chromEnd": "end_pos",
+                    "mod_code": "mod",
+                    "thickStart": "start_pos2",
+                    "thickEnd": "end_pos2",
+                    "color": "colour",
+                },
+                inplace=True,
+            )
             test_df.rename(
                 columns={
                     "n_canonical": "Ncanon",
@@ -370,7 +373,7 @@ def merge_modkit_files(
             savepath = os.path.join(sample_output_dir, f"{sample_id}.mnpflex.bed")
             test_df.to_csv(
                 savepath, sep="\t", index=False, header=False
-                        )
+            )
             
             logging.info("Sending file to mnpflex")
             mnpFlex = MnpFlexClient(base_url="https://mnp-flex.org", verify_ssl=True)
@@ -647,7 +650,7 @@ class BrainMeth:
         bed_file=None,
         mainuuid=None,
         readfish_toml=None,
-        mnpflex_config=None,  # Add mnpflex_config parameter
+        mnpflex_config=None,
     ):
         """
         Initialize the BrainMeth class.
@@ -665,7 +668,7 @@ class BrainMeth:
         :param minknow_connection: Connection to MinKNOW.
         :param reference: Reference genome.
         :param mainuuid: Main UUID for the application instance.
-        :param mnpflex_config: Configuration for MNPflex integration.
+        :param mnpflex_config: Configuration for MNP-FLEX integration.
         """
         self.mainuuid = mainuuid
         self.force_sampleid = force_sampleid
@@ -1692,6 +1695,10 @@ class BrainMeth:
                             mgmt = ui.column().classes("space-y-1")
                         if "fusion" not in self.exclude:
                             fusions = ui.column().classes("space-y-1")
+                            
+                        # Add summary containers for each analysis type above the tab panel
+                        if self.mnpflex_config and all(self.mnpflex_config.values()):
+                            mnpflexsummary = ui.column().classes("space-y-1")
 
                     # Add monitoring information panel - Now positioned after diagnosis cards
                     # Only show in live mode
@@ -2800,6 +2807,8 @@ class BrainMeth:
                             if not selectedtab:
                                 selectedtab = mnpflextab
 
+                    
+
                     with ui.tab_panels(tabs, value=selectedtab).classes("w-full"):
                         display_args = {
                             "threads": self.threads,
@@ -2929,167 +2938,21 @@ class BrainMeth:
                         if self.mnpflex_config and all(self.mnpflex_config.values()):
                             with ui.tab_panel(mnpflextab).classes("w-full"):
                                 with ui.card().classes("rounded w-full"):
-                                    ui.label("MNPFlex Analysis").classes(
-                                        "text-sky-600 dark:text-white"
-                                    ).style(
-                                        "font-size: 150%; font-weight: 300"
-                                    ).tailwind(
-                                        "drop-shadow", "font-bold"
+                                    self.MNPFlex = MNPFlex_Object(
+                                        analysis_name="MNPFLEX",
+                                        mnpflex_config=self.mnpflex_config,
+                                        summary=mnpflexsummary,
+                                        **display_args,
                                     )
-                                    
-                                    # Add MNP-FLEX description and disclaimers
-                                    with ui.card().classes("w-full mb-4"):
-                                        ui.label("About MNP-FLEX").classes("text-lg font-semibold mb-2")
-                                        ui.label("MNP-FLEX is a methylation analysis platform that provides detailed insights into DNA methylation patterns. Visit ").classes("text-gray-700")
-                                        ui.link("https://mnp-flex.org/", "https://mnp-flex.org/", new_tab=True).classes("text-blue-600 hover:text-blue-800")
-                                        ui.label(" for more information.").classes("text-gray-700")
-                                        
-                                        with ui.column().classes("mt-4 space-y-2"):
-                                            ui.label("Important Notes:").classes("font-semibold text-gray-700")
-                                            ui.label("• Users must have their own MNP-FLEX account to use this service").classes("text-gray-600")
-                                            ui.label("• All results are for research use only").classes("text-gray-600")
-                                            ui.label("• Results are automatically downloaded as PDF reports").classes("text-gray-600")
-                                        
-                                        with ui.column().classes("mt-4 space-y-2"):
-                                            ui.label("Reference:").classes("font-semibold text-gray-700")
-                                            ui.label("MNP-FLEX is based on the following publication:").classes("text-gray-600")
-                                            with ui.row().classes("items-start gap-2"):
-                                                ui.icon("article").classes("text-blue-600 mt-1")
-                                                with ui.column():
-                                                    ui.link(
-                                                        "https://www.nature.com/articles/s41591-025-03562-5",
-                                                        "MNP-FLEX: A methylation-based platform for rapid and accurate classification of brain tumors",
-                                                        new_tab=True
-                                                    ).classes("text-blue-600 hover:text-blue-800")
-                                                    ui.label("Nature Medicine (2025)").classes("text-gray-600 text-sm")
-                                                    ui.label("DOI: 10.1038/s41591-025-03562-5").classes("texray-600 text-sm")
+                                    await self.MNPFlex.render_ui(sample_id=self.sampleID)
 
-                                    # Create a refreshable container for reports
-                                    @ui.refreshable
-                                    def show_mnpflex_reports():
-                                        # Fix path construction to avoid duplicate sample ID
-                                        sample_dir = self.output
-                                        try:
-                                            # Display the search path
-                                            with ui.card().classes("w-full mb-4"):
-                                                with ui.row().classes("items-center gap-2"):
-                                                    ui.icon("folder").classes("text-blue-600")
-                                                    ui.label("Searching for reports in:").classes("text-gray-600")
-                                                ui.label(sample_dir).classes("text-sm font-mono text-gray-700 ml-8 break-all")
-                                            
-                                            mnpflex_reports = [f for f in os.listdir(sample_dir) if f.endswith('.pdf') and 'mnpflex' in f.lower()]
-                                            if mnpflex_reports:
-                                                # Parse report information and sort by date
-                                                report_info = []
-                                                for report in mnpflex_reports:
-                                                    try:
-                                                        # Split filename into components
-                                                        parts = report.split('_')
-                                                        sample_id = parts[0]
-                                                        
-                                                        # Check if this is a new format file (with date and time)
-                                                        if len(parts) >= 5 and len(parts[3]) == 8 and len(parts[4].replace('.pdf', '')) == 6:
-                                                            sites = parts[2]
-                                                            date = parts[3]
-                                                            time = parts[4].replace('.pdf', '')
-                                                            
-                                                            # Convert date and time to datetime
-                                                            dt = datetime.strptime(f"{date}_{time}", "%Y%m%d_%H%M%S")
-                                                            formatted_date = dt.strftime("%Y-%m-%d %H:%M:%S")
-                                                        else:
-                                                            # Old format - use file modification time
-                                                            file_path = os.path.join(sample_dir, report)
-                                                            dt = datetime.fromtimestamp(os.path.getmtime(file_path))
-                                                            formatted_date = dt.strftime("%Y-%m-%d %H:%M:%S")
-                                                            
-                                                            # Try to extract sites if possible
-                                                            try:
-                                                                sites = parts[1].split('.')[-1]  # Get the number after mnpFlex
-                                                            except:
-                                                                sites = "N/A"
-                                                        
-                                                        report_info.append({
-                                                            'filename': report,
-                                                            'sample_id': sample_id,
-                                                            'sites': sites,
-                                                            'datetime': dt,
-                                                            'formatted_date': formatted_date
-                                                        })
-                                                    except Exception as e:
-                                                        logging.error(f"Error parsing report filename {report}: {str(e)}")
-                                                        continue
-                                                
-                                                # Sort by datetime, most recent first
-                                                report_info.sort(key=lambda x: x['datetime'], reverse=True)
-                                                
-                                                # Display most recent report prominently
-                                                if report_info:
-                                                    latest = report_info[0]
-                                                    with ui.card().classes("w-full mb-4 bg-blue-50"):
-                                                        ui.label("Latest Report").classes("text-lg font-semibold text-blue-800")
-                                                        with ui.row().classes("items-center gap-2"):
-                                                            ui.icon("description").classes("text-blue-600")
-                                                            ui.label(f"Sample: {latest['sample_id']}").classes("text-blue-800")
-                                                        with ui.row().classes("items-center gap-2"):
-                                                            ui.icon("schedule").classes("text-blue-600")
-                                                            ui.label(f"Generated: {latest['formatted_date']}").classes("text-blue-800")
-                                                        with ui.row().classes("items-center gap-2"):
-                                                            ui.icon("analytics").classes("text-blue-600")
-                                                            ui.label(f"Sites analyzed: {latest['sites']}").classes("text-blue-800")
-                                                        ui.button("Download Latest Report", 
-                                                                on_click=lambda r=os.path.join(sample_dir, latest['filename']): self.download_mnpflex_report(r)
-                                                        ).classes("bg-blue-600 hover:bg-blue-700 mt-2")
-                                                
-                                                # Display older reports in a compact form
-                                                if len(report_info) > 1:
-                                                    with ui.expansion("Previous Reports", icon="history").classes("w-full"):
-                                                        with ui.column().classes("w-full gap-2"):
-                                                            for report in report_info[1:]:
-                                                                with ui.card().classes("w-full"):
-                                                                    with ui.row().classes("items-center justify-between w-full"):
-                                                                        with ui.column().classes("gap-1"):
-                                                                            ui.label(f"Sample: {report['sample_id']}").classes("text-sm font-medium")
-                                                                            ui.label(f"Generated: {report['formatted_date']}").classes("text-sm text-gray-600")
-                                                                            ui.label(f"Sites: {report['sites']}").classes("text-sm text-gray-600")
-                                                                        ui.button("Download", 
-                                                                                on_click=lambda r=os.path.join(sample_dir, report['filename']): self.download_mnpflex_report(r)
-                                                                        ).classes("bg-gray-100 hover:bg-gray-200")
-                                            else:
-                                                ui.label("No MNPFlex reports available yet.").classes("text-gray-500")
-                                        except FileNotFoundError:
-                                            ui.label("Sample directory not found.").classes("text-gray-500")
-
-                                    # Initial display of reports
-                                    show_mnpflex_reports()
-
-                                    # Set up periodic refresh
-                                    refresh_timer = ui.timer(30.0, show_mnpflex_reports.refresh)  # Refresh every 30 seconds
-
-                                    # Add extracted data visualization section
-                                    with ui.card().classes("w-full p-4 bg-white rounded-lg shadow-sm mt-4"):
-                                        with ui.expansion("Extracted Data Visualization", icon="analytics").classes("w-full"):
-                                            with ui.column().classes("w-full gap-4"):
-                                                # Create charts
-                                                self.classification_charts = {}
-                                                for key in ["superfamily", "family", "class", "subclass"]:  # or just [] to start empty
-                                                    self.classification_charts[key] = self.create_dynamic_classification_chart(key)
-                                                self.mgmt_chart = self.create_mgmt_chart()
-                                                
-                                                # Set up auto-refresh timer
-                                                ui.timer(10.0, self.update_extracted_data_charts)
-
-                                    # Clean up timer when tab is closed
-                                    def cleanup():
-                                        refresh_timer.active = False
-                                    
-                                    ui.on('disconnect', cleanup)
-
-                    async def download_mnpflex_report(self, report_path):
+                    async def download_mnpflex_report(self, report_name):
                         """Download the MNPFlex report."""
+                        report_path = os.path.join(self.output, self.sampleID, report_name)
                         if os.path.exists(report_path):
                             ui.download(report_path)
                         else:
-                            ui.notify(f"Report not found at {report_path}", type="negative")
+                            ui.notify(f"Report {report_name} not found", type="negative")
 
                     async def confirm_report_generation():
                         """
