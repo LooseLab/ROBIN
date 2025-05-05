@@ -60,7 +60,7 @@ import asyncio
 from robin.utilities.decompress import decompress_gzip_file
 from robin.subpages.base_analysis import BaseAnalysis
 
-from robin.core.state import state, ProcessState
+from robin.core.state import state, ProcessState, ProcessType
 
 os.environ["CI"] = "1"
 logger = logging.getLogger(__name__)
@@ -278,8 +278,6 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
     -------
     None
     """
-    state.start_process("clair3", "variant_calling")
-    state.set_process_state("clair3", ProcessState.RUNNING)
     # Debug: Log input file paths for verification.
     if showerrors:
         logger.info(f"Input BAM file: {bamfile}")
@@ -419,8 +417,6 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             # Parse the annotated VCF files.
             parse_vcf(os.path.join(workdirout, "snpsift_output.vcf"))
             parse_vcf(os.path.join(workdirout, "snpsift_indel_output.vcf"))
-            state.set_process_state("clair3", ProcessState.WAITING_FOR_DATA)
-            state.stop_process("clair3")
         except Exception as e:
             logger.error("Error running Clair3")
             logger.error(f"Error: {e}")
@@ -636,7 +632,7 @@ class TargetCoverage(BaseAnalysis):
             Arbitrary keyword arguments.
         """
         self.callthreshold = 10
-        self.clair3running = False
+        # self.clair3running = False  # Remove this variable
         self.targets_exceeding_threshold = {}
         self.targetbamfile = {}
         self.covtable = None
@@ -645,18 +641,17 @@ class TargetCoverage(BaseAnalysis):
         self.cov_df_main = {}
         self.bedcov_df_main = {}
         self.SNPqueue = queue.Queue()
+        self.pending_snp_jobs = 0  # Add counter for pending jobs
         self.reference = reference
         self.showerrors = showerrors
         self.simtime = simtime
         self.enable_snp_calling = enable_snp_calling
         self.snp_calling = False  # Will be set to True only if both reference is provided and enable_snp_calling is True
-
+        self.clair3_status_label = ui.label("Clair3 Idle")  # UI label for status
         if self.reference and self.enable_snp_calling:
             self.snp_calling = True
             self.SNP_timer_run()
-
         self.target_panel = target_panel
-
         if self.target_panel == "rCNS2":
             self.bedfile = os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)),
@@ -673,6 +668,24 @@ class TargetCoverage(BaseAnalysis):
             )
         self.check_docker_image()
         super().__init__(*args, **kwargs)
+        # Add a timer to refresh the Clair3 status label
+        ui.timer(1, self.update_clair3_status_label)
+
+    def update_clair3_status_label(self):
+        process_state = state.get_process_state("clair3")
+        if process_state == ProcessState.RUNNING:
+            status = f"Clair3 Running ({self.pending_snp_jobs} pending)"
+        elif process_state == ProcessState.STARTING:
+            status = f"Clair3 Starting ({self.pending_snp_jobs} pending)"
+        elif process_state == ProcessState.WAITING_FOR_DATA:
+            status = f"Clair3 Waiting for Data ({self.pending_snp_jobs} pending)"
+        else:
+            status = (
+                f"Clair3 Idle ({self.pending_snp_jobs} pending)"
+                if self.pending_snp_jobs > 0
+                else "Clair3 Idle"
+            )
+        self.clair3_status_label.text = status
 
     def is_docker_running(self):
         try:
@@ -702,56 +715,56 @@ class TargetCoverage(BaseAnalysis):
         """
         This function takes reads from the queue and adds them to the background thread for processing.
         """
+        # If Clair3 is already running, don't start another process
+        if state.get_process_state("clair3") == ProcessState.RUNNING:
+            self.snp_timer.active = True
+            return
         self.snp_timer.active = False
-        self.clair3running = True
-        if not self.SNPqueue.empty():
-            while not self.SNPqueue.empty():
-                gene_list, bamfile, bedfile = self.SNPqueue.get()
-
-            workdirout = os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID), "clair3"
-            )
-            if not os.path.exists(workdirout):
-                os.mkdir(workdirout)
-                
-            # Wait for BAM file to exist with timeout
-            timeout = 300  # 5 minutes timeout
-            start_time = time.time()
-            while not os.path.exists(f"{bamfile}"):
-                await asyncio.sleep(1)
-                if time.time() - start_time > timeout:
-                    logger.error(f"Timeout waiting for BAM file: {bamfile}")
-                    return
-
-            if os.path.exists(f"{bamfile}"):
-                shutil.copy2(bamfile, f"{bamfile}2.bam")
-                #shutil.copy2(f"{bamfile}.bai", f"{bamfile}2.bam.bai")
-            
-                await run.cpu_bound(
-                    sort_bam,
-                    f"{bamfile}2.bam",
-                    os.path.join(workdirout, "sorted_targets_exceeding.bam"),
-                    self.threads,
+        try:
+            if not self.SNPqueue.empty():
+                while not self.SNPqueue.empty():
+                    gene_list, bamfile, bedfile = self.SNPqueue.get()
+                    self.pending_snp_jobs -= 1  # Decrement counter when processing a job
+                workdirout = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID), "clair3"
                 )
-                # shutil.copy2(bedfile, f"{bedfile}2")
-                await run.cpu_bound(
-                    run_clair3,
-                    os.path.join(workdirout, "sorted_targets_exceeding.bam"),
-                    f"{bedfile}",
-                    self.check_and_create_folder(self.output, self.sampleID),
-                    workdirout,
-                    self.threads,
-                    self.reference,
-                    self.showerrors,
-                )
-
-                os.remove(f"{bamfile}2.bam")
-                #os.remove(f"{bamfile}2.bam.bai")
-
-        self.clair3running = False
-        # else:
-        #    await asyncio.sleep(1)
-        self.snp_timer.active = True
+                if not os.path.exists(workdirout):
+                    os.mkdir(workdirout)
+                # Wait for BAM file to exist with timeout
+                timeout = 300  # 5 minutes timeout
+                start_time = time.time()
+                while not os.path.exists(f"{bamfile}"):
+                    await asyncio.sleep(1)
+                    if time.time() - start_time > timeout:
+                        logger.error(f"Timeout waiting for BAM file: {bamfile}")
+                        return
+                if os.path.exists(f"{bamfile}"):
+                    shutil.copy2(bamfile, f"{bamfile}2.bam")
+                    # Set state to running before starting background job
+                    state.start_process("clair3", ProcessType.BATCH)
+                    state.set_process_state("clair3", ProcessState.RUNNING)
+                    await run.cpu_bound(
+                        sort_bam,
+                        f"{bamfile}2.bam",
+                        os.path.join(workdirout, "sorted_targets_exceeding.bam"),
+                        self.threads,
+                    )
+                    await run.cpu_bound(
+                        run_clair3,
+                        os.path.join(workdirout, "sorted_targets_exceeding.bam"),
+                        f"{bedfile}",
+                        self.check_and_create_folder(self.output, self.sampleID),
+                        workdirout,
+                        self.threads,
+                        self.reference,
+                        self.showerrors,
+                    )
+                    # Set state to waiting (or stopped) after job completes
+                    state.set_process_state("clair3", ProcessState.WAITING_FOR_DATA)
+                    state.stop_process("clair3")
+                    os.remove(f"{bamfile}2.bam")
+        finally:
+            self.snp_timer.active = True
 
     def setup_ui(self):
         if self.summary:
@@ -770,14 +783,8 @@ class TargetCoverage(BaseAnalysis):
                                 ui.label("--").classes(
                                     "px-2 py-1 rounded bg-gray-100 text-gray-600"
                                 )
-                                # Add Clair3 status indicator
-                                StatusLabel().bind_text_from(
-                                    self,
-                                    "clair3running",
-                                    backward=lambda v: (
-                                        "Clair3 Running" if v else "Clair3 Idle"
-                                    ),
-                                )
+                                # Use the shared status label
+                                self.clair3_status_label
 
                         # Right side - Coverage metrics
                         with ui.column().classes("gap-2 text-right"):
@@ -1821,12 +1828,7 @@ class TargetCoverage(BaseAnalysis):
         if self.sampleID not in self.targets_exceeding_threshold.keys():
             self.targets_exceeding_threshold[self.sampleID] = 0
         if self.reference:
-            # This code assumes that the number of targets exceeding the threshold will always change - but it is not guaranteed to. We need to run this each time (surely?)
-            if (
-                len(run_list)
-                > 0
-                # and not self.clair3running
-            ):
+            if len(run_list) > 0:
                 self.targets_exceeding_threshold[self.sampleID] = len(run_list)
                 run_list[["chrom", "startpos", "endpos"]].to_csv(
                     os.path.join(
@@ -1842,23 +1844,12 @@ class TargetCoverage(BaseAnalysis):
                 )
                 if not os.path.exists(clair3workdir):
                     os.mkdir(clair3workdir)
-                """
-                
-
-                await run.cpu_bound(
-                    sort_bam,
-                    self.targetbamfile[self.sampleID],
-                    os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
-                    self.threads,
-                )
-                """
 
                 if self.snp_calling:
                     self.SNPqueue.put(
                         [
                             run_list,
                             self.targetbamfile[self.sampleID],
-                            #os.path.join(clair3workdir, "sorted_targets_exceeding.bam"),
                             os.path.join(
                                 self.check_and_create_folder(
                                     self.output, self.sampleID
@@ -1867,6 +1858,7 @@ class TargetCoverage(BaseAnalysis):
                             ),
                         ]
                     )
+                    self.pending_snp_jobs += 1  # Increment counter when adding a job
 
         # ToDo: Reinstate this line later.
         # self.update_target_coverage_table()
@@ -1877,9 +1869,6 @@ class TargetCoverage(BaseAnalysis):
     async def rerun_snp_analysis(self):
         """
         Rerun the SNP calling analysis for the current sample.
-
-        This function triggers a new SNP analysis by adding the current target regions
-        to the SNP queue for processing.
         """
         if not self.reference:
             ui.notify(
@@ -1888,7 +1877,7 @@ class TargetCoverage(BaseAnalysis):
             )
             return
 
-        if self.clair3running:
+        if state.get_process_state("clair3") == ProcessState.RUNNING:
             ui.notify("SNP analysis is already running. Please wait.", type="warning")
             return
 
@@ -1968,6 +1957,7 @@ class TargetCoverage(BaseAnalysis):
 
         # Add to SNP queue
         self.SNPqueue.put([run_list, sorted_bam, bed_file])
+        self.pending_snp_jobs += 1  # Increment counter when adding a job
         ui.notify("SNP analysis rerun initiated", type="info")
 
     def show_previous_data(self):
@@ -2109,9 +2099,6 @@ class TargetCoverage(BaseAnalysis):
 
             if self.summary:
                 with self.summary:
-                    # Store the current Clair3 status
-                    clair3_status = self.clair3running
-
                     self.summary.clear()
                     with ui.card().classes("w-full p-4 mb-4"):
                         with ui.row().classes("w-full items-center justify-between"):
@@ -2125,7 +2112,6 @@ class TargetCoverage(BaseAnalysis):
                                         self.bedcov_df_main["bases"].sum()
                                         / self.bedcov_df_main["length"].sum()
                                     )
-
                                     # Determine quality level and styling
                                     if target_coverage >= 30:
                                         quality = "Excellent"
@@ -2143,7 +2129,6 @@ class TargetCoverage(BaseAnalysis):
                                         quality = "Insufficient"
                                         quality_color = "text-red-600"
                                         quality_bg = "bg-red-100"
-
                                     ui.label("Coverage Analysis").classes(
                                         "text-lg font-medium"
                                     )
@@ -2154,14 +2139,8 @@ class TargetCoverage(BaseAnalysis):
                                         ui.label(f"{target_coverage:.2f}x").classes(
                                             f"px-2 py-1 rounded {quality_bg} {quality_color}"
                                         )
-                                        # Add Clair3 status indicator back
-                                        StatusLabel().bind_text_from(
-                                            self,
-                                            "clair3running",
-                                            backward=lambda v: (
-                                                "Clair3 Running" if v else "Clair3 Idle"
-                                            ),
-                                        )
+                                        # Use the shared status label
+                                        self.clair3_status_label
 
                             # Right side - Coverage metrics
                             with ui.column().classes("gap-2 text-right"):
