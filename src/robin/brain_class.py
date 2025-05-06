@@ -345,6 +345,8 @@ def merge_modkit_files(
         if mnpflex_config["mnpuser"] and mnpflex_config["mnppass"]:
             logging.info("Prepare data for mnpflex")
             test_df = load_modkit_data(output_file)
+            logging.info(f"Loaded modkit data with shape: {test_df.shape}")
+            
             test_df.rename(
                 columns={
                     "chromStart": "start_pos",
@@ -370,10 +372,20 @@ def merge_modkit_files(
                 },
                 inplace=True,
             )
+            
+            # Log column names and data types
+            logging.info("Column names after renaming:")
+            logging.info(test_df.columns.tolist())
+            logging.info("Data types:")
+            logging.info(test_df.dtypes)
+            
             savepath = os.path.join(sample_output_dir, f"{sample_id}.mnpflex.bed")
             test_df.to_csv(
                 savepath, sep="\t", index=False, header=False
             )
+            
+            logging.info(f"Saved intermediate file to: {savepath}")
+            logging.info(f"Intermediate file size: {os.path.getsize(savepath)} bytes")
             
             logging.info("Sending file to mnpflex")
             mnpFlex = MnpFlexClient(base_url="https://mnp-flex.org", verify_ssl=True)
@@ -386,6 +398,8 @@ def merge_modkit_files(
             cpg_file = os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)), "mnp_flex_sample_clean.bed"
             )
+            
+            logging.info(f"Processing with reference file: {cpg_file}")
             mnpFlex.process_streaming(cpg_file, f'{savepath}', f'{savepath}.clean')
             
             # Print the length of the clean file
@@ -393,55 +407,65 @@ def merge_modkit_files(
                 clean_file_length = sum(1 for _ in f)
             logging.info(f"Length of clean file: {clean_file_length} lines")
             
-            # Upload a sample file
-            response = mnpFlex.upload_sample(
-                file_path=f'{savepath}.clean',
-                sample_name=f"{sample_id}.mnpFlex",
-                disclaimer_confirmed=True
-            )
-
-            logging.info(response)
-            sample_id = response['id']
-            sample = mnpFlex.get_sample(sample_id)
-            logging.info(sample_id, sample)
-            result_status = sample["bed_file_sample"]["analysis_status"]
-            while result_status == "initialized":
-                time.sleep(1)
-                sample = mnpFlex.get_sample(sample_id)
-                result_status = sample["bed_file_sample"]["analysis_status"]
-                
-            if result_status == "Analysis error":
-                logging.error(f"Analysis error for {sample_id}")
-                mnpFlex.delete_sample(sample_id)
-                
-                #raise Exception(f"Analysis error for {sample_id}")
-            else:
-                report_content = mnpFlex.get_sample_report(sample_id)
-
-                # If the response is binary content (e.g., a PDF), you can save it to a file
-                if isinstance(report_content, bytes):
-                    report_path = os.path.join(sample_output_dir, f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf')
-                    with open(report_path, 'wb') as file:
-                        file.write(report_content)
-                    logging.info(f'Report saved as {report_path}')
-                    
-                    # Extract and store data from the report
-                    from robin.reporting.pdf_extractor import PDFExtractor
-                    
-                    # Initialize PDF extractor with path in sample directory
-                    extractor = PDFExtractor(os.path.join(sample_output_dir, 'extracted_data'))
-                    
-                    # Extract data from the report
-                    data = extractor.extract_from_pdf(report_path)
-                    if data:
-                        # Save extracted data
-                        extractor.save_data(data)
-                        logging.info(f'Extracted and stored data from report: {report_path}')
-                else:
-                    logging.info(report_content)
-                    
-                mnpFlex.delete_sample(sample_id)
+            # Log first few lines of clean file
+            with open(f'{savepath}.clean', 'r') as f:
+                first_lines = [next(f) for _ in range(5)]
+                logging.info("First 5 lines of clean file:")
+                for line in first_lines:
+                    logging.info(line.strip())
             
+            # Upload a sample file
+            try:
+                response = mnpFlex.upload_sample(
+                    file_path=f'{savepath}.clean',
+                    sample_name=f"{sample_id}.mnpFlex",
+                    disclaimer_confirmed=True
+                )
+
+                logging.info(response)
+                sample_id = response['id']
+                sample = mnpFlex.get_sample(sample_id)
+                logging.info(sample_id, sample)
+                result_status = sample["bed_file_sample"]["analysis_status"]
+                while result_status == "initialized":
+                    time.sleep(1)
+                    sample = mnpFlex.get_sample(sample_id)
+                    result_status = sample["bed_file_sample"]["analysis_status"]
+                    
+                if result_status == "Analysis error":
+                    logging.error(f"Analysis error for {sample_id}")
+                    mnpFlex.delete_sample(sample_id)
+                else:
+                    report_content = mnpFlex.get_sample_report(sample_id)
+
+                    # If the response is binary content (e.g., a PDF), you can save it to a file
+                    if isinstance(report_content, bytes):
+                        report_path = os.path.join(sample_output_dir, f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf')
+                        with open(report_path, 'wb') as file:
+                            file.write(report_content)
+                        logging.info(f'Report saved as {report_path}')
+                        
+                        # Extract and store data from the report
+                        from robin.reporting.pdf_extractor import PDFExtractor
+                        
+                        # Initialize PDF extractor with path in sample directory
+                        extractor = PDFExtractor(os.path.join(sample_output_dir, 'extracted_data'))
+                        
+                        # Extract data from the report
+                        data = extractor.extract_from_pdf(report_path)
+                        if data:
+                            # Save extracted data
+                            extractor.save_data(data)
+                            logging.info(f'Extracted and stored data from report: {report_path}')
+                    else:
+                        logging.info(report_content)
+                        
+                    mnpFlex.delete_sample(sample_id)
+            except Exception as e:
+                logging.error(f"MNP-FLEX upload/analysis failed: {str(e)}")
+                logging.error("Continuing with processing despite MNP-FLEX error")
+                # Don't re-raise the exception - allow processing to continue
+
         logging.debug(
             f"✅ Merged with optimized Polars and cache saved to: {output_file}"
         )

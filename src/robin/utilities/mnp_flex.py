@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import pyranges as pr
 from collections import deque
+import logging
+import os
 
 
 
@@ -96,10 +98,25 @@ class APIClient:
         """
         url = f"{self.base_url}/api/v1/samples/"
         
+        # Log file details
+        logging.info(f"Preparing to upload file: {file_path}")
+        try:
+            file_size = os.path.getsize(file_path)
+            logging.info(f"File size: {file_size} bytes")
+            
+            # Check first few lines of file
+            with open(file_path, 'r') as f:
+                first_lines = [next(f) for _ in range(5)]
+                logging.info("First 5 lines of file:")
+                for line in first_lines:
+                    logging.info(line.strip())
+        except Exception as e:
+            logging.error(f"Error checking file: {str(e)}")
+        
         # Prepare the query parameters
         params = {
             'sample_name': sample_name,
-            'disclaimer_confirmed': str(disclaimer_confirmed).lower()  # Boolean values are usually passed as lowercase strings
+            'disclaimer_confirmed': str(disclaimer_confirmed).lower()
         }
         
         # Open the file in binary mode
@@ -107,19 +124,24 @@ class APIClient:
             files = {'file': (file_path, file)}
     
             # Send the POST request with the file and query parameters
+            logging.info(f"Sending PUT request to {url}")
+            logging.info(f"Parameters: {params}")
+            
             response = requests.put(
                 url,
-                headers=self.get_headers(),  # Include authentication headers
+                headers=self.get_headers(),
                 files=files,
-                params=params,  # Attach query parameters
-                verify=self.verify_ssl  # Use the SSL verification setting from the client
+                params=params,
+                verify=self.verify_ssl
             )
-    
-        # Check for a successful response
-        if response.status_code == 200:
-            return response.json()
-        else:
-            raise Exception(f"Failed to upload file: {response.status_code}, {response.text}")
+            
+            logging.info(f"Response status code: {response.status_code}")
+            logging.info(f"Response text: {response.text}")
+            
+            if response.status_code == 200:
+                return response.json()
+            else:
+                raise Exception(f"Failed to upload file: {response.status_code}, {response.text}")
 
 
     def get_sample(self, sample_id: int) -> Any:
@@ -176,7 +198,7 @@ class APIClient:
 
     def process_streaming(self, file1: str, file2: str, out_file: str) -> None:
         """
-        One‐pass merge‐join of sorted inputs.  If the inputs aren’t already
+        One‐pass merge‐join of sorted inputs.  If the inputs aren't already
         sorted, we sort them in‐memory first (O(N log N) time, O(N) memory).
         Windows with no matching CpGs in file2 are skipped entirely.
         """
