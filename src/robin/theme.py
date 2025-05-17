@@ -433,6 +433,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
     header_classes = "items-center duration-200 p-0 px-4 no-wrap"
     if batphone:
         header_classes += " batphone"
+    
     with ui.header(elevated=True).classes(header_classes):
         with ui.grid(columns=2).style("width: 100%"):
             with ui.row().classes(
@@ -506,11 +507,17 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                             ui.button("Quit", icon="logout", on_click=quitdialog.open)
                     ui.image(IMAGEFILE).style("width: 50px")
 
+    
+    with ui.column().classes("w-full h-full") as main_content:
+        pass
+    
     # Add the process status monitor between main content and footer
     with ui.column().classes(
         "w-full p-4 border-t border-gray-200 dark:border-gray-700"
     ):
         create_activity_monitor()
+        
+    
 
     # Create a footer with useful information and quit button
     footer_classes = "items-center"
@@ -556,8 +563,9 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
         ui.label("Not for diagnostic use.").classes(
             f"min-[{MENU_BREAKPOINT+1}px]:hidden"
         ).tailwind("text-sm font-italic")
-
-    yield
+    
+    with main_content:
+        yield
 
 
 async def cleanup_and_exit():
