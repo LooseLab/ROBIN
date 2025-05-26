@@ -135,7 +135,9 @@ async def index() -> None:
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         telemetry_instance=TELEMETRY_INSTANCE,
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
-        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get(
+            "enable_snp_calling", False
+        ),
     )
     logging.info(f"Created GUI instance with telemetry: {GUI.telemetry is not None}")
     GUI.setup()
@@ -187,7 +189,9 @@ async def live_sample(sample_id: str) -> None:
         sample_id=sample_id,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
-        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get(
+            "enable_snp_calling", False
+        ),
     )
     GUI.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
@@ -220,7 +224,9 @@ async def live() -> None:
         unique_id=UNIQUE_ID,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
-        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get(
+            "enable_snp_calling", False
+        ),
     )
     GUI.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
@@ -252,7 +258,9 @@ async def test() -> None:
         unique_id=UNIQUE_ID,
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
-        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get(
+            "enable_snp_calling", False
+        ),
     )
     GUI_browse.setup()
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI_browse))
@@ -292,7 +300,9 @@ async def startup() -> None:
         readfish_toml=app.storage.general[UNIQUE_ID]["readfish_toml"],
         unique_id=UNIQUE_ID,
         mnpflex_config=app.storage.general[UNIQUE_ID].get("mnpflex", None),
-        enable_snp_calling=app.storage.general[UNIQUE_ID].get("enable_snp_calling", False),
+        enable_snp_calling=app.storage.general[UNIQUE_ID].get(
+            "enable_snp_calling", False
+        ),
     )
     MAINPAGE.setup()
     await MAINPAGE.start_analysis()
@@ -426,16 +436,19 @@ class Methnice:
                 bed_file=self.bed_file,
                 readfish_toml=self.readfish_toml,
                 mnpflex_config=self.mnpflex_config,
-                enable_snp_calling=self.enable_snp_calling
+                enable_snp_calling=self.enable_snp_calling,
             )
 
             # Set up periodic telemetry updates if telemetry is enabled
             if self.telemetry:
+
                 def send_telemetry_update():
                     logging.info("Sending periodic telemetry update")
                     self.telemetry.send_run_telemetry(self)
 
-                ui.timer(120.0, send_telemetry_update, active=True)  # Send update every minute
+                ui.timer(
+                    120.0, send_telemetry_update, active=True
+                )  # Send update every minute
                 logging.info("Telemetry update timer initialized (1-minute interval)")
 
         except Exception as e:
@@ -490,7 +503,7 @@ class Methnice:
                 reference=self.reference,
                 bed_file=self.bed_file,
                 readfish_toml=self.readfish_toml,
-                mnpflex_config=self.mnpflex_config
+                mnpflex_config=self.mnpflex_config,
             )
 
             with self.analysis_tab_pane:
@@ -869,28 +882,28 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
         cfg.read(filename)
         options = dict(cfg["options"])
         logging.info(f"Configuration options loaded: {list(options.keys())}")
-        
+
         # Check for mnpflex configuration
         mnpflex_config = {
             "mnpsite": options.get("mnpsite"),
             "mnpuser": options.get("mnpuser"),
-            "mnppass": options.get("mnppass")
+            "mnppass": options.get("mnppass"),
         }
-        
+
         logging.info(f"MNPflex configuration found: {mnpflex_config}")
-        
+
         # Store mnpflex configuration in app storage
         if UNIQUE_ID not in app.storage.general:
             app.storage.general[UNIQUE_ID] = {}
         app.storage.general[UNIQUE_ID]["mnpflex"] = mnpflex_config
-        
+
         # Log mnpflex configuration status
         if all(mnpflex_config.values()):
             logging.info("MNPflex configuration found in config file")
         else:
             missing = [k for k, v in mnpflex_config.items() if not v]
             logging.warning(f"MNPflex configuration incomplete. Missing: {missing}")
-            
+
     except FileNotFoundError:
         logging.warning(f"Configuration file not found: {filename}")
         options = {}
@@ -907,13 +920,13 @@ def configure(ctx: click.Context, param: click.Parameter, filename: str) -> None
 def is_mnpflex_configured() -> bool:
     """
     Check if MNPflex is configured in the application.
-    
+
     Returns:
         bool: True if MNPflex is configured, False otherwise
     """
     if UNIQUE_ID not in app.storage.general:
         return False
-        
+
     mnpflex_config = app.storage.general[UNIQUE_ID].get("mnpflex", {})
     return all(mnpflex_config.values())
 
@@ -1127,7 +1140,7 @@ def package_run(
     """
     # Set up logging first, before any other operations
     setup_logging(log_level, log_file)
-    
+
     def handler(*args):
         print("Shutting down ROBIN... from ctrl-c")
         print(

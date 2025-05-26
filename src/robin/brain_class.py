@@ -109,7 +109,6 @@ from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
 from watchdog.observers import Observer
 from typing import List, Optional
-from robin import resources
 
 import pyranges as pr  # For fast interval-based filtering
 
@@ -340,13 +339,13 @@ def merge_modkit_files(
 
         # Save using Polars' efficient parquet writer
         grouped.write_parquet(output_file)
-        
+
         # If we are running with mnp_flex, send the file to the server
         if mnpflex_config["mnpuser"] and mnpflex_config["mnppass"]:
             logging.info("Prepare data for mnpflex")
             test_df = load_modkit_data(output_file)
             logging.info(f"Loaded modkit data with shape: {test_df.shape}")
-            
+
             test_df.rename(
                 columns={
                     "chromStart": "start_pos",
@@ -372,21 +371,19 @@ def merge_modkit_files(
                 },
                 inplace=True,
             )
-            
+
             # Log column names and data types
             logging.info("Column names after renaming:")
             logging.info(test_df.columns.tolist())
             logging.info("Data types:")
             logging.info(test_df.dtypes)
-            
+
             savepath = os.path.join(sample_output_dir, f"{sample_id}.mnpflex.bed")
-            test_df.to_csv(
-                savepath, sep="\t", index=False, header=False
-            )
-            
+            test_df.to_csv(savepath, sep="\t", index=False, header=False)
+
             logging.info(f"Saved intermediate file to: {savepath}")
             logging.info(f"Intermediate file size: {os.path.getsize(savepath)} bytes")
-            
+
             logging.info("Sending file to mnpflex")
             mnpFlex = MnpFlexClient(base_url="https://mnp-flex.org", verify_ssl=True)
             mnpFlex.authenticate(
@@ -396,34 +393,35 @@ def merge_modkit_files(
                 client_secret="SECRET",
             )
             cpg_file = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)), "mnp_flex_sample_clean.bed"
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "mnp_flex_sample_clean.bed",
             )
-            
+
             logging.info(f"Processing with reference file: {cpg_file}")
-            mnpFlex.process_streaming(cpg_file, f'{savepath}', f'{savepath}.clean')
-            
+            mnpFlex.process_streaming(cpg_file, f"{savepath}", f"{savepath}.clean")
+
             # Print the length of the clean file
-            with open(f'{savepath}.clean', 'r') as f:
+            with open(f"{savepath}.clean", "r") as f:
                 clean_file_length = sum(1 for _ in f)
             logging.info(f"Length of clean file: {clean_file_length} lines")
-            
+
             # Log first few lines of clean file
-            with open(f'{savepath}.clean', 'r') as f:
+            with open(f"{savepath}.clean", "r") as f:
                 first_lines = [next(f) for _ in range(5)]
                 logging.info("First 5 lines of clean file:")
                 for line in first_lines:
                     logging.info(line.strip())
-            
+
             # Upload a sample file
             try:
                 response = mnpFlex.upload_sample(
-                    file_path=f'{savepath}.clean',
+                    file_path=f"{savepath}.clean",
                     sample_name=f"{sample_id}.mnpFlex",
-                    disclaimer_confirmed=True
+                    disclaimer_confirmed=True,
                 )
 
                 logging.info(response)
-                sample_id = response['id']
+                sample_id = response["id"]
                 sample = mnpFlex.get_sample(sample_id)
                 logging.info(sample_id, sample)
                 result_status = sample["bed_file_sample"]["analysis_status"]
@@ -431,7 +429,7 @@ def merge_modkit_files(
                     time.sleep(1)
                     sample = mnpFlex.get_sample(sample_id)
                     result_status = sample["bed_file_sample"]["analysis_status"]
-                    
+
                 if result_status == "Analysis error":
                     logging.error(f"Analysis error for {sample_id}")
                     mnpFlex.delete_sample(sample_id)
@@ -440,26 +438,33 @@ def merge_modkit_files(
 
                     # If the response is binary content (e.g., a PDF), you can save it to a file
                     if isinstance(report_content, bytes):
-                        report_path = os.path.join(sample_output_dir, f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf')
-                        with open(report_path, 'wb') as file:
+                        report_path = os.path.join(
+                            sample_output_dir,
+                            f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
+                        )
+                        with open(report_path, "wb") as file:
                             file.write(report_content)
-                        logging.info(f'Report saved as {report_path}')
-                        
+                        logging.info(f"Report saved as {report_path}")
+
                         # Extract and store data from the report
                         from robin.reporting.pdf_extractor import PDFExtractor
-                        
+
                         # Initialize PDF extractor with path in sample directory
-                        extractor = PDFExtractor(os.path.join(sample_output_dir, 'extracted_data'))
-                        
+                        extractor = PDFExtractor(
+                            os.path.join(sample_output_dir, "extracted_data")
+                        )
+
                         # Extract data from the report
                         data = extractor.extract_from_pdf(report_path)
                         if data:
                             # Save extracted data
                             extractor.save_data(data)
-                            logging.info(f'Extracted and stored data from report: {report_path}')
+                            logging.info(
+                                f"Extracted and stored data from report: {report_path}"
+                            )
                     else:
                         logging.info(report_content)
-                        
+
                     mnpFlex.delete_sample(sample_id)
             except Exception as e:
                 logging.error(f"MNP-FLEX upload/analysis failed: {str(e)}")
@@ -729,7 +734,7 @@ class BrainMeth:
             os.path.dirname(os.path.abspath(resources.__file__)),
             "sturg_nanodx_cpgs_0125.bed.gz",
         )
-        
+
         if self.reference:
             # ToDo: We need to pass through an instance of the MasterBedTree class here.
             self.master_bed_tree = MasterBedTree(
@@ -1033,7 +1038,8 @@ class BrainMeth:
                 bamqueue=self.bamfortargetcoverage,
                 target_panel=self.target_panel,
                 reference=self.reference,
-                enable_snp_calling=self.enable_snp_calling and self.reference is not None,
+                enable_snp_calling=self.enable_snp_calling
+                and self.reference is not None,
                 **common_args,
             )
             self.Target_Coverage.process_data()
@@ -1313,182 +1319,201 @@ class BrainMeth:
 
     def create_dynamic_classification_chart(self, key, y_max=1):
         """Create a chart for a specific classification key (e.g., superfamily, family) with dynamic y-axis max."""
-        return ui.echart({
-            "backgroundColor": "transparent",
-            "title": {
-                "text": f"{key.title()} Classification Over Time",
-                "left": "center",
-                "top": 10,
-                "textStyle": {
-                    "fontSize": 16,
-                    "fontWeight": "normal",
-                    "color": "#000000",
+        return ui.echart(
+            {
+                "backgroundColor": "transparent",
+                "title": {
+                    "text": f"{key.title()} Classification Over Time",
+                    "left": "center",
+                    "top": 10,
+                    "textStyle": {
+                        "fontSize": 16,
+                        "fontWeight": "normal",
+                        "color": "#000000",
+                    },
                 },
-            },
-            "tooltip": {
-                "trigger": "axis",
-                "axisPointer": {"type": "line"},
-                "textStyle": {"fontSize": 14},
-            },
-            "grid": {
-                "left": "5%",
-                "right": "5%",
-                "bottom": "5%",
-                "top": "25%",
-                "containLabel": True,
-            },
-            "legend": {
-                "type": "scroll",
-                "orient": "horizontal",
-                "top": 45,
-                "width": "90%",
-                "left": "center",
-                "textStyle": {"fontSize": 12, "color": "#666666"},
-                "pageButtonPosition": "end",
-                "pageButtonGap": 5,
-                "pageButtonItemGap": 5,
-                "pageIconColor": "#666666",
-                "pageIconInactiveColor": "#aaa",
-                "pageIconSize": 12,
-                "pageTextStyle": {"color": "#666666"},
-                "itemGap": 25,
-                "itemWidth": 14,
-                "itemHeight": 14,
-                "selectedMode": True,
-            },
-            "xAxis": {
-                "type": "time",
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{yyyy}-{MM}-{dd} {HH}:{mm}",
-                    "color": "#666666",
+                "tooltip": {
+                    "trigger": "axis",
+                    "axisPointer": {"type": "line"},
+                    "textStyle": {"fontSize": 14},
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                "grid": {
+                    "left": "5%",
+                    "right": "5%",
+                    "bottom": "5%",
+                    "top": "25%",
+                    "containLabel": True,
                 },
-            },
-            "yAxis": {
-                "type": "value",
-                "min": 0,
-                "max": y_max,
-                "interval": y_max / 5 if y_max > 0 else 1,
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{value}",
-                    "color": "#666666",
+                "legend": {
+                    "type": "scroll",
+                    "orient": "horizontal",
+                    "top": 45,
+                    "width": "90%",
+                    "left": "center",
+                    "textStyle": {"fontSize": 12, "color": "#666666"},
+                    "pageButtonPosition": "end",
+                    "pageButtonGap": 5,
+                    "pageButtonItemGap": 5,
+                    "pageIconColor": "#666666",
+                    "pageIconInactiveColor": "#aaa",
+                    "pageIconSize": 12,
+                    "pageTextStyle": {"color": "#666666"},
+                    "itemGap": 25,
+                    "itemWidth": 14,
+                    "itemHeight": 14,
+                    "selectedMode": True,
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                "xAxis": {
+                    "type": "time",
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{yyyy}-{MM}-{dd} {HH}:{mm}",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
                 },
-            },
-            "series": []
-        }).classes('w-full h-64')
+                "yAxis": {
+                    "type": "value",
+                    "min": 0,
+                    "max": y_max,
+                    "interval": y_max / 5 if y_max > 0 else 1,
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{value}",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
+                },
+                "series": [],
+            }
+        ).classes("w-full h-64")
 
     def create_mgmt_chart(self):
         """Create a chart for displaying MGMT methylation trends."""
-        return ui.echart({
-            "backgroundColor": "transparent",
-            "title": {
-                "text": "MGMT Methylation Over Time",
-                "left": "center",
-                "top": 10,
-                "textStyle": {
-                    "fontSize": 16,
-                    "fontWeight": "normal",
-                    "color": "#000000",
+        return ui.echart(
+            {
+                "backgroundColor": "transparent",
+                "title": {
+                    "text": "MGMT Methylation Over Time",
+                    "left": "center",
+                    "top": 10,
+                    "textStyle": {
+                        "fontSize": 16,
+                        "fontWeight": "normal",
+                        "color": "#000000",
+                    },
                 },
-            },
-            "tooltip": {
-                "trigger": "axis",
-                "axisPointer": {"type": "line"},
-                "textStyle": {"fontSize": 14},
-            },
-            "grid": {
-                "left": "5%",
-                "right": "5%",
-                "bottom": "5%",
-                "top": "25%",
-                "containLabel": True,
-            },
-            "xAxis": {
-                "type": "time",
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{yyyy}-{MM}-{dd} {HH}:{mm}",
-                    "color": "#666666",
+                "tooltip": {
+                    "trigger": "axis",
+                    "axisPointer": {"type": "line"},
+                    "textStyle": {"fontSize": 14},
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                "grid": {
+                    "left": "5%",
+                    "right": "5%",
+                    "bottom": "5%",
+                    "top": "25%",
+                    "containLabel": True,
                 },
-            },
-            "yAxis": {
-                "type": "value",
-                "min": 0,
-                "max": 100,
-                "interval": 20,
-                "axisLabel": {
-                    "fontSize": 12,
-                    "formatter": "{value}%",
-                    "color": "#666666",
+                "xAxis": {
+                    "type": "time",
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{yyyy}-{MM}-{dd} {HH}:{mm}",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
                 },
-                "splitLine": {
-                    "show": True,
-                    "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                "yAxis": {
+                    "type": "value",
+                    "min": 0,
+                    "max": 100,
+                    "interval": 20,
+                    "axisLabel": {
+                        "fontSize": 12,
+                        "formatter": "{value}%",
+                        "color": "#666666",
+                    },
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"color": "#E0E0E0", "type": "dashed"},
+                    },
                 },
-            },
-            "series": [{
-                "name": "Methylation",
-                "type": "line",
-                "smooth": True,
-                "animation": False,
-                "symbolSize": 6,
-                "emphasis": {
-                    "focus": "series",
-                    "itemStyle": {"borderWidth": 2},
-                },
-                "lineStyle": {"width": 2, "color": "#007AFF"},
-                "itemStyle": {"color": "#007AFF"},
-                "data": []
-            }]
-        }).classes('w-full h-64')
+                "series": [
+                    {
+                        "name": "Methylation",
+                        "type": "line",
+                        "smooth": True,
+                        "animation": False,
+                        "symbolSize": 6,
+                        "emphasis": {
+                            "focus": "series",
+                            "itemStyle": {"borderWidth": 2},
+                        },
+                        "lineStyle": {"width": 2, "color": "#007AFF"},
+                        "itemStyle": {"color": "#007AFF"},
+                        "data": [],
+                    }
+                ],
+            }
+        ).classes("w-full h-64")
 
     def update_extracted_data_charts(self):
         """Update dynamic charts with data from extracted_data.json."""
         try:
             logging.info("Starting chart update")
-            if not hasattr(self, 'classification_charts') or not hasattr(self, 'mgmt_chart'):
+            if not hasattr(self, "classification_charts") or not hasattr(
+                self, "mgmt_chart"
+            ):
                 logging.warning("Charts not initialized")
                 return
 
-            json_path = os.path.join(self.output, 'extracted_data', 'extracted_data.json')
+            json_path = os.path.join(
+                self.output, "extracted_data", "extracted_data.json"
+            )
             logging.info(f"Looking for data file at: {json_path}")
-            
+
             if not os.path.exists(json_path):
                 logging.warning(f"No data file found at {json_path}")
                 return
-                
-            with open(json_path, 'r') as f:
+
+            with open(json_path, "r") as f:
                 data = json.load(f)
-                
+
             if not data:
                 logging.warning("No data found in JSON file")
                 return
-                
+
             logging.info(f"Processing {len(data)} data points")
-                
+
             # Build a dict: key -> label -> list of (timestamp, score)
             key_label_series = {}
             mgmt_data = []
-            colors = ["#007AFF", "#34C759", "#FF9500", "#FF2D55", "#5856D6", "#FF3B30", "#5AC8FA", "#4CD964"]
+            colors = [
+                "#007AFF",
+                "#34C759",
+                "#FF9500",
+                "#FF2D55",
+                "#5856D6",
+                "#FF3B30",
+                "#5AC8FA",
+                "#4CD964",
+            ]
             for entry in data:
-                timestamp = entry.get('timestamp')
+                timestamp = entry.get("timestamp")
                 # Robustly handle missing classification
-                for key, info in entry.get('classification', {}).items():
-                    label = info.get('label')
-                    score = info.get('score')
+                for key, info in entry.get("classification", {}).items():
+                    label = info.get("label")
+                    score = info.get("score")
                     if label is None or score is None:
                         continue
                     if key not in key_label_series:
@@ -1497,8 +1522,8 @@ class BrainMeth:
                         key_label_series[key][label] = []
                     key_label_series[key][label].append([timestamp, score])
                 # Robustly handle missing mgmt_info
-                mgmt = entry.get('mgmt_info', {})
-                avg = mgmt.get('average_methylation')
+                mgmt = entry.get("mgmt_info", {})
+                avg = mgmt.get("average_methylation")
                 if avg is not None and timestamp is not None:
                     mgmt_data.append([timestamp, avg])
             # Sort all series by timestamp
@@ -1509,37 +1534,48 @@ class BrainMeth:
             logging.info(f"Found classification keys: {list(key_label_series.keys())}")
             for key in key_label_series:
                 for label in key_label_series[key]:
-                    logging.info(f"Key '{key}', label '{label}': {len(key_label_series[key][label])} points")
+                    logging.info(
+                        f"Key '{key}', label '{label}': {len(key_label_series[key][label])} points"
+                    )
             logging.info(f"Found {len(mgmt_data)} MGMT data points")
 
             # Dynamically update or create charts for each key
             for key, label_dict in key_label_series.items():
                 # Find the max score for this key
-                all_scores = [score for points in label_dict.values() for _, score in points]
+                all_scores = [
+                    score for points in label_dict.values() for _, score in points
+                ]
                 y_max = max(all_scores) if all_scores else 1
                 y_max = max(1, int(y_max + 0.5))  # Round up for clarity
                 if key not in self.classification_charts:
-                    self.classification_charts[key] = self.create_dynamic_classification_chart(key, y_max=y_max)
+                    self.classification_charts[key] = (
+                        self.create_dynamic_classification_chart(key, y_max=y_max)
+                    )
                 chart = self.classification_charts[key]
                 # Update y-axis max and interval dynamically
                 chart.options["yAxis"]["max"] = y_max
                 chart.options["yAxis"]["interval"] = y_max / 5 if y_max > 0 else 1
                 chart_series = []
                 for idx, (label, data_points) in enumerate(label_dict.items()):
-                    chart_series.append({
-                        "name": label,
-                        "type": "line",
-                        "smooth": True,
-                        "animation": False,
-                        "symbolSize": 6,
-                        "emphasis": {
-                            "focus": "series",
-                            "itemStyle": {"borderWidth": 2},
-                        },
-                        "lineStyle": {"width": 2, "color": colors[idx % len(colors)]},
-                        "itemStyle": {"color": colors[idx % len(colors)]},
-                        "data": data_points
-                    })
+                    chart_series.append(
+                        {
+                            "name": label,
+                            "type": "line",
+                            "smooth": True,
+                            "animation": False,
+                            "symbolSize": 6,
+                            "emphasis": {
+                                "focus": "series",
+                                "itemStyle": {"borderWidth": 2},
+                            },
+                            "lineStyle": {
+                                "width": 2,
+                                "color": colors[idx % len(colors)],
+                            },
+                            "itemStyle": {"color": colors[idx % len(colors)]},
+                            "data": data_points,
+                        }
+                    )
                 chart.options["series"] = chart_series
                 chart.update()
 
@@ -1549,7 +1585,9 @@ class BrainMeth:
                 self.mgmt_chart.options["series"][0]["data"] = mgmt_data
                 self.mgmt_chart.update()
         except Exception as e:
-            logging.error(f"Error updating extracted data charts: {str(e)}", exc_info=True)
+            logging.error(
+                f"Error updating extracted data charts: {str(e)}", exc_info=True
+            )
 
     async def information_panel(self, sample_id=None):
         """Display the main information panel with analysis results."""
@@ -1723,7 +1761,7 @@ class BrainMeth:
                             mgmt = ui.column().classes("space-y-1")
                         if "fusion" not in self.exclude:
                             fusions = ui.column().classes("space-y-1")
-                            
+
                         # Add summary containers for each analysis type above the tab panel
                         if self.mnpflex_config and all(self.mnpflex_config.values()):
                             mnpflexsummary = ui.column().classes("space-y-1")
@@ -2835,8 +2873,6 @@ class BrainMeth:
                             if not selectedtab:
                                 selectedtab = mnpflextab
 
-                    
-
                     with ui.tab_panels(tabs, value=selectedtab).classes("w-full"):
                         display_args = {
                             "threads": self.threads,
@@ -2927,7 +2963,8 @@ class BrainMeth:
                                         summary=coverage,
                                         target_panel=self.target_panel,
                                         reference=self.reference,
-                                        enable_snp_calling=self.enable_snp_calling and self.reference is not None,
+                                        enable_snp_calling=self.enable_snp_calling
+                                        and self.reference is not None,
                                         **display_args,
                                     )
                                     await self.Target_Coverage.render_ui(
@@ -2973,15 +3010,21 @@ class BrainMeth:
                                         summary=mnpflexsummary,
                                         **display_args,
                                     )
-                                    await self.MNPFlex.render_ui(sample_id=self.sampleID)
+                                    await self.MNPFlex.render_ui(
+                                        sample_id=self.sampleID
+                                    )
 
                     async def download_mnpflex_report(self, report_name):
                         """Download the MNPFlex report."""
-                        report_path = os.path.join(self.output, self.sampleID, report_name)
+                        report_path = os.path.join(
+                            self.output, self.sampleID, report_name
+                        )
                         if os.path.exists(report_path):
                             ui.download(report_path)
                         else:
-                            ui.notify(f"Report {report_name} not found", type="negative")
+                            ui.notify(
+                                f"Report {report_name} not found", type="negative"
+                            )
 
                     async def confirm_report_generation():
                         """
@@ -3363,7 +3406,8 @@ class BrainMeth:
 
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
-                if len(files_by_sample[sample_id]) >= 10:
+                # The length of bams we allow to be processed at once will influence memory usage.
+                if len(files_by_sample[sample_id]) >= 50:
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
                         f"Processing batch of {files_to_process} files for sample {sample_id}"

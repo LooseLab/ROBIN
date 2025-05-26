@@ -226,7 +226,7 @@ class PerformanceMetrics:
             with ui.row().classes("w-full items-center justify-between mb-4"):
                 ui.label("Performance Metrics").classes("text-lg font-medium")
                 with ui.button(icon="help_outline", color="gray").props("flat round"):
-                    with ui.menu() as menu:
+                    with ui.menu():
                         with ui.card().classes("p-4 text-sm"):
                             ui.label("Performance Metrics Legend").classes(
                                 "font-medium mb-2"
@@ -292,7 +292,7 @@ class PerformanceMetrics:
             # Create a container for stats with pre-defined labels
             with ui.column().classes("w-full") as stats_container:
                 # Create a grid for the statistics with pre-defined structure
-                with ui.grid(columns=2).classes("w-full gap-1") as stats_grid:
+                with ui.grid(columns=2).classes("w-full gap-1"):
                     # Headers (static)
                     ui.label("Statistic").classes("text-sm font-medium text-gray-600")
                     ui.label(f"Time ({unit})").classes(
@@ -300,13 +300,13 @@ class PerformanceMetrics:
                     )
 
                     # Create value labels that will be updated
-                    min_label = ui.label("Min").classes("text-sm")
+                    ui.label("Min").classes("text-sm")
                     min_value = ui.label("--").classes("text-sm text-right")
-                    max_label = ui.label("Max").classes("text-sm")
+                    ui.label("Max").classes("text-sm")
                     max_value = ui.label("--").classes("text-sm text-right")
-                    mean_label = ui.label("Mean").classes("text-sm")
+                    ui.label("Mean").classes("text-sm")
                     mean_value = ui.label("--").classes("text-sm text-right")
-                    median_label = ui.label("Median").classes("text-sm")
+                    ui.label("Median").classes("text-sm")
                     median_value = ui.label("--").classes("text-sm text-right")
 
             # Store the value labels for updates

@@ -724,7 +724,9 @@ class TargetCoverage(BaseAnalysis):
             if not self.SNPqueue.empty():
                 while not self.SNPqueue.empty():
                     gene_list, bamfile, bedfile = self.SNPqueue.get()
-                    self.pending_snp_jobs -= 1  # Decrement counter when processing a job
+                    self.pending_snp_jobs -= (
+                        1  # Decrement counter when processing a job
+                    )
                 workdirout = os.path.join(
                     self.check_and_create_folder(self.output, self.sampleID), "clair3"
                 )

@@ -29,15 +29,9 @@ from nicegui import ui, run, app
 import time
 import threading
 import logging
+import traceback
 
-# Configure logger
-logger = logging.getLogger(__name__)
 
-# Create console handler with formatting
-console_handler = logging.StreamHandler()
-formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
-console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
 
 # MinKNOW API Imports
 import minknow_api.manager_pb2 as manager_pb2
@@ -59,6 +53,14 @@ import uuid
 
 from datetime import datetime, timedelta
 
+# Configure logger
+logger = logging.getLogger(__name__)
+
+# Create console handler with formatting
+console_handler = logging.StreamHandler()
+formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+console_handler.setFormatter(formatter)
+logger.addHandler(console_handler)
 
 # We need `find_protocol` to search for the required protocol given a kit + product code.
 
@@ -975,7 +977,8 @@ class Position(MinKNOWFish):
                         self.connection.acquisition.get_current_acquisition_run()
                     )
                     if current_acquisition and hasattr(current_acquisition, "run_info"):
-                        run_info = current_acquisition.run_info
+                        #ToDo: Check if this is needed
+                        _run_info = current_acquisition.run_info
 
                         # Get progress information
                         progress = self.connection.acquisition.get_progress()
@@ -1172,7 +1175,8 @@ class Position(MinKNOWFish):
                                 if hasattr(d, "get")
                                 else getattr(d, key, default)
                             )
-                        except:
+                        except Exception as e:
+                            logger.error(f"Error getting yield info: {str(e)}")
                             return default
 
                     self.read_count_label.text = (

@@ -32,7 +32,7 @@ def header_footer_canvas_factory(sample_id, centreID, styles, fonts_dir):
             self._startPage()
 
         def save(self):
-            page_count = len(self.pages)
+            #page_count = len(self.pages)
             for page in self.pages:
                 self.__dict__.update(page)
                 self._draw_header_footer()

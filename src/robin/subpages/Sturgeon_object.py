@@ -398,6 +398,7 @@ def map_methyl_calls_to_probes_chr(
 
     return probes_df
 
+
 class Sturgeon_object(BaseAnalysis):
     """
     A class for processing and visualizing Sturgeon methylation analysis results.

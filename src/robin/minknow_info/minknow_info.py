@@ -43,13 +43,12 @@ from typing import Sequence
 import uuid
 
 
-
-
-
 # We need `find_protocol` to search for the required protocol given a kit + product code.
 from minknow_api.tools import protocols
 
 UNIQUE_ID: str = str(uuid.uuid4())
+
+logger = logging.getLogger(__name__)
 
 
 class ExperimentSpec(object):

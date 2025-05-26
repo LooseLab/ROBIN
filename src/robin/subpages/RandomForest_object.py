@@ -32,14 +32,9 @@ import tempfile
 import time
 import pandas as pd
 from nicegui import ui, app, run
-from robin import theme, resources
-import pysam
+from robin import resources
 import logging
 from robin import models
-from sturgeon.callmapping import (
-    merge_probes_methyl_calls,
-    probes_methyl_calls_to_bed,
-)
 
 from robin import submodules
 
@@ -883,24 +878,3 @@ class RandomForest_object(BaseAnalysis):
         state.stop_process("Random Forest Analysis")
         await super().stop_analysis()
 
-
-def test_ui():
-    my_connection = None
-    with theme.frame("Copy Number Variation Interactive", my_connection):
-        ui.button("start", on_click=start)
-        ui.button("stop", on_click=stop)
-        TestObject = RandomForest_object(progress=True, batch=True)
-    path = "/users/mattloose/datasets/ds1305_Intraop0006_A/20231123_1233_P2S-00770-A_PAS59057_b1e841e7/bam_pass"
-    # path = "tests/static/bam"
-    directory = os.fsencode(path)
-    for file in os.listdir(directory):
-        filename = os.fsdecode(file)
-        if filename.endswith(".bam"):
-            TestObject.add_bam(os.path.join(path, filename))
-            time.sleep(0.001)
-    ui.run(port=8082, reload=False)
-
-
-
-if __name__ in ("__main__", "__mp_main__"):
-    test_ui()

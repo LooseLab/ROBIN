@@ -59,6 +59,12 @@ import tempfile
 from robin import models, theme, resources
 import logging
 
+from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
+from robin.utilities.merge_bedmethyl import (
+    collapse_bedmethyl,
+)
+from typing import List, Tuple, Optional, Dict, Any
+
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
@@ -94,11 +100,7 @@ if lines[line_number - 1].strip() == target_content.strip():
 else:
     logger.info(f"Line {line_number} was not modified.")
 
-from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
-from robin.utilities.merge_bedmethyl import (
-    collapse_bedmethyl,
-)
-from typing import List, Tuple, Optional, Dict, Any
+
 
 
 def load_modkit_data(parquet_path):

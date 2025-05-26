@@ -520,30 +520,13 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
         # Determine tuple length dynamically
         if len(node_data_list[0]) == 5:
             chroms = {d[0] for d in node_data_list}
-            positions = [d[1] for d in node_data_list]
-            strands = {d[2] for d in node_data_list}
-            sv_types = {d[3] for d in node_data_list}
             read_names = {d[4] for d in node_data_list}
         else:  # Case where group_by_sv=False, no SV_TYPE in tuple
             chroms = {d[0] for d in node_data_list}
-            positions = [d[1] for d in node_data_list]
-            strands = {d[2] for d in node_data_list}
-            sv_types = {"UNKNOWN"}  # No explicit SV type available
             read_names = {d[3] for d in node_data_list}
-
-        min_pos = min(positions)
-        max_pos = max(positions)
 
         if 100 > len(read_names) > 2 and len(chroms) < 4:
             counter += 1
-            # if "chr9" in chroms:
-            #    print(f"\nCONNECTED COMPONENT #{i}")
-            #    print(f"  Chromosome(s): {chroms}")
-            #    print(f"  Positions: from {min_pos} to {max_pos}")
-            #    print(f"  Strands: {strands}")
-            #    print(f"  SV Types: {sv_types}")
-            #    print(f"  Distinct read names: {len(read_names)} => {read_names}")
-
             bin_size = 1000
             df = pd.DataFrame(
                 node_data_list, columns=["chrom", "pos", "strand", "sv_type", "qname"]
@@ -555,13 +538,8 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
             df["max_bin"] = (
                 np.where(df["strand"] == "+", df["bin"] + 5, df["bin"] + 1) * bin_size
             )
-            # if "chr9" in chroms:
-            #    print(df)
             df.drop(columns=["pos", "qname", "bin"], inplace=True)
             df.drop_duplicates(inplace=True)
-            # if "chr9" in chroms:
-            #    print(collapse_overlaps(df))
-            # print(dataframe_to_bed_lines(collapse_overlaps(df)))
             if len(dataframe_to_bed_lines(collapse_overlaps(df))) < 5:
                 bed_lines.extend(dataframe_to_bed_lines(collapse_overlaps(df)))
 
@@ -686,7 +664,6 @@ def extract_bam_info(bam_file):
     read_ends = []
     strands = []
     mapping_qualities = []
-    is_primary = []
     is_secondary = []
     is_supplementary = []
 
@@ -701,7 +678,6 @@ def extract_bam_info(bam_file):
         read_ends.append(read.query_alignment_end)
         strands.append("-" if read.is_reverse else "+")
         mapping_qualities.append(read.mapping_quality)
-        # is_primary.append(read.is_primary)
         is_secondary.append(read.is_secondary)
         is_supplementary.append(read.is_supplementary)
 
@@ -719,7 +695,6 @@ def extract_bam_info(bam_file):
             "read_end": read_ends,
             "strand": strands,
             "mapping_quality": mapping_qualities,
-            # 'is_primary': is_primary,
             "is_secondary": is_secondary,
             "is_supplementary": is_supplementary,
         }
@@ -734,7 +709,8 @@ def collapse_ranges(df, max_distance):
     current_range = None
 
     for _, row in df.iterrows():
-        chromosome, start, end = row["chromosome"], row["start"], row["end"]
+        # Only unpack what we need
+        start, end = row["start"], row["end"]
 
         if current_range is None:
             current_range = row
@@ -1792,9 +1768,6 @@ class FusionObject(BaseAnalysis):
             # Remove rows containing NA values
             lines = lines.dropna()
 
-            # Dict to store ax
-            axdict = {}
-
             if len(result) > 1:
                 gene_table = self.gene_table
                 with ui.pyplot(figsize=(19, 5)).classes("w-full"):
@@ -1927,8 +1900,6 @@ class FusionObject(BaseAnalysis):
                     gene_counter = Counter()
 
                     for index, row in lines.iterrows():
-                        xyB = (row["Join_Start"], row["rank"])
-                        xyA = (row["Join_End"], row["rankB"])
                         gene_counter[row["gene"]] += 1
                         gene_counter[row["Join_Gene"]] += 1
 

@@ -1168,7 +1168,7 @@ class CNVAnalysis(BaseAnalysis):
                     self.update_plots()
 
                 # Create toggle with options as a dict and pass on_change in constructor
-                color_toggle = ui.toggle(
+                ui.toggle(
                     options={"chromosome": "Chromosome", "value": "Up/Down"},
                     value="chromosome",
                     on_change=toggle_color_mode,
@@ -2764,7 +2764,7 @@ class CNVAnalysis(BaseAnalysis):
                                 status_color = (
                                     "text-blue-600" if is_male else "text-pink-600"
                                 )
-                                status_bg = "bg-blue-100" if is_male else "bg-pink-100"
+                                #status_bg = "bg-blue-100" if is_male else "bg-pink-100"
                                 if is_male:
                                     ui.icon("man").classes("text-4xl text-blue-500")
                                 else:
@@ -2939,11 +2939,11 @@ class CNVAnalysis(BaseAnalysis):
             self.update_plots()
 
             bedcontent = ""
-            local_update = False
+            #local_update = False
             for chrom in natsort.natsorted(self.CNVResults):
                 if len(self.CNVResults[chrom]["bed_data"]) > 0:
                     bedcontent += f'{self.CNVResults[chrom]["bed_data_breakpoints"]}\n'
-                    local_update = True
+                    #local_update = True
 
             # self.NewBed.load_from_string(bedcontent, merge=False, source_type="CNV")
 

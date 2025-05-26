@@ -599,18 +599,7 @@ class CNVSection(ReportSection):
             # Create summary of whole chromosome events and gene-containing events
             logger.debug("Creating CNV summary")
 
-            # Define header style for tables
-            header_style = ParagraphStyle(
-                "TableHeader",
-                parent=self.styles.styles["Normal"],
-                fontSize=8,
-                fontName="Helvetica-Bold",
-                textColor=self.styles.COLORS["primary"],
-                alignment=1,  # Center alignment
-                leading=10,
-                spaceAfter=4,
-                spaceBefore=4,
-            )
+            
 
             # Add whole chromosome and arm events summary
             whole_chr_events = []
@@ -795,8 +784,7 @@ class CNVSection(ReportSection):
 
             # Initialize variables for plot layout
             self.current_row = []
-            plots_per_row = 2
-
+            
             try:
                 # Generate all chromosome plots at once
                 logger.debug("Generating individual chromosome plots")
