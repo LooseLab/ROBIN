@@ -32,7 +32,6 @@ import logging
 import traceback
 
 
-
 # MinKNOW API Imports
 import minknow_api.manager_pb2 as manager_pb2
 from robin.minknow_info.minKNOWhistograms import MinknowHistograms
@@ -977,7 +976,7 @@ class Position(MinKNOWFish):
                         self.connection.acquisition.get_current_acquisition_run()
                     )
                     if current_acquisition and hasattr(current_acquisition, "run_info"):
-                        #ToDo: Check if this is needed
+                        # ToDo: Check if this is needed
                         _run_info = current_acquisition.run_info
 
                         # Get progress information

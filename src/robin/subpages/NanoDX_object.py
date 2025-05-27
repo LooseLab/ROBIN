@@ -62,7 +62,6 @@ from robin.utilities.merge_bedmethyl import collapse_bedmethyl
 from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
 
 
-
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
@@ -97,8 +96,6 @@ if lines[line_number - 1].strip() == target_content.strip():
     logger.info(f"Line {line_number} was modified.")
 else:
     logger.info(f"Line {line_number} was not modified.")
-
-
 
 
 def load_modkit_data(parquet_path):
@@ -267,7 +264,6 @@ class NanoDX_object(BaseAnalysis):
         else:
             self.storefile = "NanoDX_scores.csv"
         #    self.output = f"{self.output}_PanCan"
-
 
     def setup_ui(self) -> None:
         """
@@ -801,7 +797,7 @@ class NanoDX_object(BaseAnalysis):
             self.nanodx_time_chart.options["series"] = []
             self.nanodx_time_chart.update()
 
-    #async def stop_analysis(self):
+    # async def stop_analysis(self):
     #    """Stop the NanoDX analysis."""
     #    await super().stop_analysis()
 

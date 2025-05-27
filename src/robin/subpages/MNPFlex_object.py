@@ -701,7 +701,9 @@ class MNPFlex_Object(BaseAnalysis):
                                 try:
                                     sites = parts[1].split(".")[-1]
                                 except Exception as e:
-                                    print(f"Error parsing report filename {report}: {e}")
+                                    print(
+                                        f"Error parsing report filename {report}: {e}"
+                                    )
                                     sites = "N/A"
 
                             report_info.append(

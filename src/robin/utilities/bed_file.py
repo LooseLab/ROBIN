@@ -1058,15 +1058,15 @@ def index_page() -> None:
     else:
         print("original_bed_tree3 is None")
 
-    #output = "/Users/mattloose/GIT/robin_dev/robin/single_sample_results/ds1305_CNVDetection_0048_a/"
-    #output2 = "/Users/mattloose/GIT/robin_dev/robin/single_sample_results/ds1305_CNVDetection_40_b/"
-    #CNVResults = np.load(
+    # output = "/Users/mattloose/GIT/robin_dev/robin/single_sample_results/ds1305_CNVDetection_0048_a/"
+    # output2 = "/Users/mattloose/GIT/robin_dev/robin/single_sample_results/ds1305_CNVDetection_40_b/"
+    # CNVResults = np.load(
     #    os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
-    #).item()
+    # ).item()
 
-    #CNVResults2 = np.load(
+    # CNVResults2 = np.load(
     #    os.path.join(output2, "ruptures.npy"), allow_pickle="TRUE"
-    #).item()
+    # ).item()
 
     with theme.frame(
         "<strong><font color='#000000'>R</font></strong>apid nanop<strong><font color='#000000'>O</font></strong>re <strong><font color='#000000'>B</font></strong>rain intraoperat<strong><font color='#000000'>I</font></strong>ve classificatio<strong><font color='#000000'>N</font></strong>",

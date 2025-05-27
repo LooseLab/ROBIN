@@ -599,8 +599,6 @@ class CNVSection(ReportSection):
             # Create summary of whole chromosome events and gene-containing events
             logger.debug("Creating CNV summary")
 
-            
-
             # Add whole chromosome and arm events summary
             whole_chr_events = []
             arm_events = []
@@ -784,7 +782,7 @@ class CNVSection(ReportSection):
 
             # Initialize variables for plot layout
             self.current_row = []
-            
+
             try:
                 # Generate all chromosome plots at once
                 logger.debug("Generating individual chromosome plots")

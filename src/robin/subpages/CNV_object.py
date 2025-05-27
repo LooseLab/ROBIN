@@ -1179,12 +1179,16 @@ class CNVAnalysis(BaseAnalysis):
 
                 # Add y-axis scale toggle
                 ui.label("Y-axis scale:").classes("text-sm ml-4")
-                
+
                 def toggle_y_axis_scale(e):
                     self.y_axis_log = e.value == "log"
                     # Update only the first plot (scatter_echart)
-                    self.scatter_echart.options["yAxis"][0]["logBase"] = 10 if self.y_axis_log else None
-                    self.scatter_echart.options["yAxis"][0]["type"] = "log" if self.y_axis_log else "value"
+                    self.scatter_echart.options["yAxis"][0]["logBase"] = (
+                        10 if self.y_axis_log else None
+                    )
+                    self.scatter_echart.options["yAxis"][0]["type"] = (
+                        "log" if self.y_axis_log else "value"
+                    )
                     ui.update(self.scatter_echart)
 
                 # Create toggle for y-axis scale
@@ -1786,7 +1790,7 @@ class CNVAnalysis(BaseAnalysis):
         """
         # Determine if this is the first plot (scatter_echart)
         is_first_plot = title == "CNV"
-        
+
         # Set default y-axis limits
         if is_first_plot and self.y_axis_log:
             y_min = 0.1  # Minimum value for log scale (since log(0) is undefined)
@@ -1845,8 +1849,14 @@ class CNVAnalysis(BaseAnalysis):
                     },
                     "yAxis": [
                         {
-                            "type": "log" if (is_first_plot and self.y_axis_log) else "value",
-                            "logBase": 10 if (is_first_plot and self.y_axis_log) else None,
+                            "type": (
+                                "log"
+                                if (is_first_plot and self.y_axis_log)
+                                else "value"
+                            ),
+                            "logBase": (
+                                10 if (is_first_plot and self.y_axis_log) else None
+                            ),
                             "name": "Ploidy",
                             "position": "left",
                             "min": y_min,
@@ -1898,7 +1908,9 @@ class CNVAnalysis(BaseAnalysis):
                             "right": 50,
                             "startValue": y_min,
                             "endValue": y_max,  # Will be set dynamically
-                            "minValueSpan": 0.1 if (is_first_plot and self.y_axis_log) else None,
+                            "minValueSpan": (
+                                0.1 if (is_first_plot and self.y_axis_log) else None
+                            ),
                             "maxValueSpan": None,  # Will be set dynamically
                             "borderColor": "#E5E5EA",
                             "backgroundColor": "#F5F5F7",
@@ -1987,7 +1999,9 @@ class CNVAnalysis(BaseAnalysis):
 
             # Set initial min and max values for the x-axis
             min_value = min_value  # This can be modified later based on gene targeting
-            max_value = "dataMax"  # Placeholder to automatically determine the maximum value
+            max_value = (
+                "dataMax"  # Placeholder to automatically determine the maximum value
+            )
 
             # If a specific gene is targeted, adjust the plot to focus on the region around that gene
             if gene_target:
@@ -2169,17 +2183,33 @@ class CNVAnalysis(BaseAnalysis):
                             # Calculate global std across all autosomes
                             all_autosome_values = []
                             for chrom in result.cnv:
-                                if chrom.startswith("chr") and chrom[3:].isdigit():  # Only autosomes
+                                if (
+                                    chrom.startswith("chr") and chrom[3:].isdigit()
+                                ):  # Only autosomes
                                     all_autosome_values.extend(result.cnv[chrom])
-                            std_val = np.std(all_autosome_values) if all_autosome_values else 1.0
+                            std_val = (
+                                np.std(all_autosome_values)
+                                if all_autosome_values
+                                else 1.0
+                            )
                         else:
                             # For regular CNV plots, calculate global mean and std across autosomes
                             all_autosome_values = []
                             for chrom in result.cnv:
-                                if chrom.startswith("chr") and chrom[3:].isdigit():  # Only autosomes
+                                if (
+                                    chrom.startswith("chr") and chrom[3:].isdigit()
+                                ):  # Only autosomes
                                     all_autosome_values.extend(result.cnv[chrom])
-                            mean_val = np.mean(all_autosome_values) if all_autosome_values else expected_ploidy
-                            std_val = np.std(all_autosome_values) if all_autosome_values else 1.0
+                            mean_val = (
+                                np.mean(all_autosome_values)
+                                if all_autosome_values
+                                else expected_ploidy
+                            )
+                            std_val = (
+                                np.std(all_autosome_values)
+                                if all_autosome_values
+                                else 1.0
+                            )
 
                         # Create three data arrays - one for values above threshold, one for below, and one for normal
                         data_above = []
@@ -2189,8 +2219,10 @@ class CNVAnalysis(BaseAnalysis):
                         for pos, val in data:
                             # Calculate z-score using global statistics
                             z_score = (val - mean_val) / std_val if std_val > 0 else 0
-                            
-                            if abs(z_score) > 0.5:  # Changed from 1.0 to 0.5 standard deviations
+
+                            if (
+                                abs(z_score) > 0.5
+                            ):  # Changed from 1.0 to 0.5 standard deviations
                                 if z_score > 0:
                                     data_above.append([pos, val])
                                 else:
@@ -2200,33 +2232,41 @@ class CNVAnalysis(BaseAnalysis):
 
                         # Add blue points (values > 1 std above mean)
                         if data_above:
-                            plot_to_update.options["series"].append({
-                                "type": "scatter",
-                                "name": f"Significant {('Gain' if is_difference_plot else 'High')} ({contig})",
-                                "data": data_above,
-                                "symbolSize": 5,
-                                "itemStyle": {"color": "#007AFF"},  # Blue color
-                            })
+                            plot_to_update.options["series"].append(
+                                {
+                                    "type": "scatter",
+                                    "name": f"Significant {('Gain' if is_difference_plot else 'High')} ({contig})",
+                                    "data": data_above,
+                                    "symbolSize": 5,
+                                    "itemStyle": {"color": "#007AFF"},  # Blue color
+                                }
+                            )
 
                         # Add red points (values > 1 std below mean)
                         if data_below:
-                            plot_to_update.options["series"].append({
-                                "type": "scatter",
-                                "name": f"Significant {('Loss' if is_difference_plot else 'Low')} ({contig})",
-                                "data": data_below,
-                                "symbolSize": 5,
-                                "itemStyle": {"color": "#FF3B30"},  # Red color
-                            })
+                            plot_to_update.options["series"].append(
+                                {
+                                    "type": "scatter",
+                                    "name": f"Significant {('Loss' if is_difference_plot else 'Low')} ({contig})",
+                                    "data": data_below,
+                                    "symbolSize": 5,
+                                    "itemStyle": {"color": "#FF3B30"},  # Red color
+                                }
+                            )
 
                         # Add gray points for normal values (within 1 std of mean)
                         if data_normal:
-                            plot_to_update.options["series"].append({
-                                "type": "scatter",
-                                "name": f"Normal ({contig})",
-                                "data": data_normal,
-                                "symbolSize": 3,  # Slightly smaller for normal points
-                                "itemStyle": {"color": "#8E8E93"},  # iOS system gray
-                            })
+                            plot_to_update.options["series"].append(
+                                {
+                                    "type": "scatter",
+                                    "name": f"Normal ({contig})",
+                                    "data": data_normal,
+                                    "symbolSize": 3,  # Slightly smaller for normal points
+                                    "itemStyle": {
+                                        "color": "#8E8E93"
+                                    },  # iOS system gray
+                                }
+                            )
 
                     # Add gene information to the dropdown options for the current chromosome
                     for index, gene in self.gene_bed[
@@ -2307,7 +2347,9 @@ class CNVAnalysis(BaseAnalysis):
                             max_value = end_pos + 2_000_000
 
                         if min_value < 0:
-                            min_value = 0  # Ensure the minimum x-axis value is not negative
+                            min_value = (
+                                0  # Ensure the minimum x-axis value is not negative
+                            )
 
                 # Update the plot title to reflect the selected chromosome
                 if "Difference" in title:
@@ -2395,17 +2437,29 @@ class CNVAnalysis(BaseAnalysis):
                         # Calculate global std across all autosomes
                         all_autosome_values = []
                         for chrom in result.cnv:
-                            if chrom.startswith("chr") and chrom[3:].isdigit():  # Only autosomes
+                            if (
+                                chrom.startswith("chr") and chrom[3:].isdigit()
+                            ):  # Only autosomes
                                 all_autosome_values.extend(result.cnv[chrom])
-                        std_val = np.std(all_autosome_values) if all_autosome_values else 1.0
+                        std_val = (
+                            np.std(all_autosome_values) if all_autosome_values else 1.0
+                        )
                     else:
                         # For regular CNV plots, calculate global mean and std across autosomes
                         all_autosome_values = []
                         for chrom in result.cnv:
-                            if chrom.startswith("chr") and chrom[3:].isdigit():  # Only autosomes
+                            if (
+                                chrom.startswith("chr") and chrom[3:].isdigit()
+                            ):  # Only autosomes
                                 all_autosome_values.extend(result.cnv[chrom])
-                        mean_val = np.mean(all_autosome_values) if all_autosome_values else expected_ploidy
-                        std_val = np.std(all_autosome_values) if all_autosome_values else 1.0
+                        mean_val = (
+                            np.mean(all_autosome_values)
+                            if all_autosome_values
+                            else expected_ploidy
+                        )
+                        std_val = (
+                            np.std(all_autosome_values) if all_autosome_values else 1.0
+                        )
 
                     # Create three data arrays - one for values above threshold, one for below, and one for normal
                     data_above = []
@@ -2415,8 +2469,10 @@ class CNVAnalysis(BaseAnalysis):
                     for pos, val in data:
                         # Calculate z-score using global statistics
                         z_score = (val - mean_val) / std_val if std_val > 0 else 0
-                        
-                        if abs(z_score) > 0.25:  # Changed from 1.0 to 0.25 standard deviations
+
+                        if (
+                            abs(z_score) > 0.25
+                        ):  # Changed from 1.0 to 0.25 standard deviations
                             if z_score > 0:
                                 data_above.append([pos, val])
                             else:
@@ -2426,33 +2482,39 @@ class CNVAnalysis(BaseAnalysis):
 
                     # Add blue points (values > 1 std above mean)
                     if data_above:
-                        plot_to_update.options["series"].append({
-                            "type": "scatter",
-                            "name": f"Significant {('Gain' if is_difference_plot else 'High')} ({contig})",
-                            "data": data_above,
-                            "symbolSize": 5,
-                            "itemStyle": {"color": "#007AFF"},  # Blue color
-                        })
+                        plot_to_update.options["series"].append(
+                            {
+                                "type": "scatter",
+                                "name": f"Significant {('Gain' if is_difference_plot else 'High')} ({contig})",
+                                "data": data_above,
+                                "symbolSize": 5,
+                                "itemStyle": {"color": "#007AFF"},  # Blue color
+                            }
+                        )
 
                     # Add red points (values > 1 std below mean)
                     if data_below:
-                        plot_to_update.options["series"].append({
-                            "type": "scatter",
-                            "name": f"Significant {('Loss' if is_difference_plot else 'Low')} ({contig})",
-                            "data": data_below,
-                            "symbolSize": 5,
-                            "itemStyle": {"color": "#FF3B30"},  # Red color
-                        })
+                        plot_to_update.options["series"].append(
+                            {
+                                "type": "scatter",
+                                "name": f"Significant {('Loss' if is_difference_plot else 'Low')} ({contig})",
+                                "data": data_below,
+                                "symbolSize": 5,
+                                "itemStyle": {"color": "#FF3B30"},  # Red color
+                            }
+                        )
 
                     # Add gray points for normal values (within 1 std of mean)
                     if data_normal:
-                        plot_to_update.options["series"].append({
-                            "type": "scatter",
-                            "name": f"Normal ({contig})",
-                            "data": data_normal,
-                            "symbolSize": 3,  # Slightly smaller for normal points
-                            "itemStyle": {"color": "#8E8E93"},  # iOS system gray
-                        })
+                        plot_to_update.options["series"].append(
+                            {
+                                "type": "scatter",
+                                "name": f"Normal ({contig})",
+                                "data": data_normal,
+                                "symbolSize": 3,  # Slightly smaller for normal points
+                                "itemStyle": {"color": "#8E8E93"},  # iOS system gray
+                            }
+                        )
 
                 # Add gene information to the dropdown options and highlight gene regions in the plot
                 for index, gene in self.gene_bed[
@@ -2702,12 +2764,14 @@ class CNVAnalysis(BaseAnalysis):
             for chrom, cnv in result.cnv.items():
                 if chrom != "chrM" and re.match(r"^chr(\d+|X|Y)$", chrom):
                     all_values.extend(cnv)
-            
+
             if all_values:
                 # Calculate y-axis limits
-                data_min = max(0.1, min(all_values)) if self.y_axis_log else min(all_values)
+                data_min = (
+                    max(0.1, min(all_values)) if self.y_axis_log else min(all_values)
+                )
                 data_max = max(all_values)
-                
+
                 # Add some padding to the max value and round up to nearest integer
                 if self.y_axis_log:
                     # For log scale, multiply by a factor and round up
@@ -2715,19 +2779,20 @@ class CNVAnalysis(BaseAnalysis):
                 else:
                     # For linear scale, add a percentage and round up
                     y_max = math.ceil(data_max * 1.1)
-                
+
                 # Update y-axis limits
-                plot_to_update.options["yAxis"][0].update({
-                    "min": data_min,
-                    "max": y_max
-                })
-                
+                plot_to_update.options["yAxis"][0].update(
+                    {"min": data_min, "max": y_max}
+                )
+
                 # Update zoom settings
-                plot_to_update.options["dataZoom"][1].update({
-                    "startValue": data_min,
-                    "endValue": y_max,
-                    "maxValueSpan": y_max - data_min
-                })
+                plot_to_update.options["dataZoom"][1].update(
+                    {
+                        "startValue": data_min,
+                        "endValue": y_max,
+                        "maxValueSpan": y_max - data_min,
+                    }
+                )
 
     def create_summary_card(
         self, xy_estimate: str, bin_width: int, variance: float
@@ -2773,7 +2838,7 @@ class CNVAnalysis(BaseAnalysis):
                                 status_color = (
                                     "text-blue-600" if is_male else "text-pink-600"
                                 )
-                                #status_bg = "bg-blue-100" if is_male else "bg-pink-100"
+                                # status_bg = "bg-blue-100" if is_male else "bg-pink-100"
                                 if is_male:
                                     ui.icon("man").classes("text-4xl text-blue-500")
                                 else:
@@ -2948,11 +3013,11 @@ class CNVAnalysis(BaseAnalysis):
             self.update_plots()
 
             bedcontent = ""
-            #local_update = False
+            # local_update = False
             for chrom in natsort.natsorted(self.CNVResults):
                 if len(self.CNVResults[chrom]["bed_data"]) > 0:
                     bedcontent += f'{self.CNVResults[chrom]["bed_data_breakpoints"]}\n'
-                    #local_update = True
+                    # local_update = True
 
             # self.NewBed.load_from_string(bedcontent, merge=False, source_type="CNV")
 
@@ -3550,41 +3615,47 @@ class CNVAnalysis(BaseAnalysis):
     def toggle_y_axis_scale(self, e):
         """Update y-axis scale and zoom settings when toggle changes."""
         self.y_axis_log = e.value == "log"
-        
+
         # Get current data to calculate new limits
-        if hasattr(self, 'result') and self.result and self.result.cnv:
+        if hasattr(self, "result") and self.result and self.result.cnv:
             all_values = []
             for chrom, cnv in self.result.cnv.items():
                 if chrom != "chrM" and re.match(r"^chr(\d+|X|Y)$", chrom):
                     all_values.extend(cnv)
-            
+
             if all_values:
                 # Calculate new y-axis limits
-                data_min = max(0.1, min(all_values)) if self.y_axis_log else min(all_values)
+                data_min = (
+                    max(0.1, min(all_values)) if self.y_axis_log else min(all_values)
+                )
                 data_max = max(all_values)
-                
+
                 # Add padding to max value and round up to nearest integer
                 if self.y_axis_log:
                     y_max = math.ceil(data_max * 1.2)
                 else:
                     y_max = math.ceil(data_max * 1.1)
-                
+
                 # Update y-axis settings
-                self.scatter_echart.options["yAxis"][0].update({
-                    "type": "log" if self.y_axis_log else "value",
-                    "logBase": 10 if self.y_axis_log else None,
-                    "min": data_min,
-                    "max": y_max
-                })
-                
+                self.scatter_echart.options["yAxis"][0].update(
+                    {
+                        "type": "log" if self.y_axis_log else "value",
+                        "logBase": 10 if self.y_axis_log else None,
+                        "min": data_min,
+                        "max": y_max,
+                    }
+                )
+
                 # Update zoom settings
-                self.scatter_echart.options["dataZoom"][1].update({
-                    "startValue": data_min,
-                    "endValue": y_max,
-                    "minValueSpan": 0.1 if self.y_axis_log else None,
-                    "maxValueSpan": y_max - data_min
-                })
-                
+                self.scatter_echart.options["dataZoom"][1].update(
+                    {
+                        "startValue": data_min,
+                        "endValue": y_max,
+                        "minValueSpan": 0.1 if self.y_axis_log else None,
+                        "maxValueSpan": y_max - data_min,
+                    }
+                )
+
                 ui.update(self.scatter_echart)
 
 

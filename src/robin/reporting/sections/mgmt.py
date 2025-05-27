@@ -14,7 +14,9 @@ from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
 
 import logging
+
 logger = logging.getLogger(__name__)
+
 
 class MGMTSection(ReportSection):
     """Section containing the MGMT methylation analysis."""
