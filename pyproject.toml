@@ -62,7 +62,11 @@ dependencies = [
   "alive-progress>=3.1.5",
   "geocoder>=1.38.1",
   "polars",
-  "PyPDF2"
+  "PyPDF2",
+  "mkdocs>=1.5.0",
+  "mkdocs-material>=9.5.0",
+  "pymdown-extensions>=10.0.0",
+  "mkdocs-minify-plugin>=0.7.0"
 ]
 
 [project.scripts]
