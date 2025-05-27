@@ -1,6 +1,6 @@
 # Installation
 
-This guide will help you install ROBIN and its dependencies.
+This guide will help you install ROBIN and its dependencies from source.
 
 ## Prerequisites
 
@@ -8,30 +8,42 @@ This guide will help you install ROBIN and its dependencies.
 - Python 3.8 or higher
 - Git
 - Git LFS
-- Conda (recommended for installation)
+- Conda (recommended for environment management)
 
-## Installation Methods
+## Step 1: Clone the Repository
 
-### Recommended Installation (Using Conda)
+First, clone the ROBIN repository and initialize required components:
 
-The recommended way to install ROBIN is using the provided conda environment files:
-
-1. For Linux users:
 ```bash
-conda env create -f robin.yml
+git clone https://github.com/LooseLab/robin.git
+cd robin
+git lfs install
+git lfs pull
+git submodule update --init --recursive
 ```
 
-2. For macOS users:
-```bash
-conda env create -f robin_osx.yml
-```
+## Step 2: Set Up the Environment
 
-3. Activate the environment:
+Create and activate the conda environment:
+
+- For Linux:
+  ```bash
+  conda env create -f robin.yml
+  ```
+- For macOS:
+  ```bash
+  conda env create -f robin_osx.yml
+  ```
+
+Activate the environment:
 ```bash
 conda activate robin
 ```
 
-4. For macOS users, you will need to install the GenomicRanges R package. Launch R and run:
+## Step 3: Additional macOS Setup
+
+If you are on macOS, you will need to install the GenomicRanges R package. Launch R and run:
+
 ```R
 if (!require("BiocManager", quietly = TRUE))
     install.packages("BiocManager")
@@ -39,40 +51,17 @@ if (!require("BiocManager", quietly = TRUE))
 BiocManager::install("GenomicRanges")
 ```
 
-5. Finally, install the package:
+## Step 4: Install ROBIN
+
+Install the ROBIN Python package in editable mode (recommended for development and updates):
+
 ```bash
-pip install .
-```
-
-### From Source
-
-To install from source:
-
-1. Clone the repository and initialize required components:
-```bash
-git clone https://github.com/LooseLab/robin/
-cd ROBIN
-git lfs install
-git lfs pull
-git submodule update --init --recursive
-```
-
-2. Create and activate the conda environment as described above.
-
-3. Install the package:
-```bash
-pip install .
+pip install -e .
 ```
 
 ## Dependencies
 
-ROBIN has several dependencies that will be automatically installed through the conda environment:
-
-- R packages (including GenomicRanges for macOS users)
-- Python packages
-- readfish
-- ont-pyguppy-client-lib (Linux only)
-- And other required packages (see robin.yml or robin_osx.yml for full list)
+ROBIN's dependencies (Python, R, and third-party tools) are managed by the conda environment files (`robin.yml` or `robin_osx.yml`). See these files for the full list.
 
 ## Verification
 
@@ -86,21 +75,44 @@ robin --version
 
 ### Common Issues
 
-1. **Docker Requirements**
-   - Ensure Docker is installed and running on your system
-   - Verify Docker has sufficient permissions to run containers
+1. **Docker Requirements:**  
+   Ensure Docker is installed and running on your system.  
+   Verify Docker has sufficient permissions to run containers.
 
-2. **Git LFS Issues**
-   - If you encounter issues with large files, ensure Git LFS is properly installed and initialized
-   - Run `git lfs install` if you haven't already
+1. **Git LFS Issues:**  
+   If you encounter issues with large files, ensure Git LFS is properly installed and initialized.  
+   Run `git lfs install` if you haven't already.
 
-3. **Permission Errors**
-   - If you encounter permission errors during installation, ensure you have appropriate permissions for Docker and the installation directory
+1. **Permission Errors:**  
+   If you encounter permission errors during installation, ensure you have appropriate permissions for Docker and the installation directory.
 
-4. **macOS Specific Issues**
-   - If you encounter issues with R packages on macOS, ensure you've installed GenomicRanges as described above
-   - Some tools may have different requirements on macOS vs Linux
+1. **macOS Specific Issues:**  
+   If you encounter issues with R packages on macOS, ensure you've installed GenomicRanges as described above.
+
+### MinKNOW API Version Mismatch
+
+If you encounter an error such as:
+
+```text
+ImportError: cannot import name 'ReadEndReason' from 'minknow_api.statistics_pb2'
+```
+
+This usually means there is a mismatch between the version of the `minknow_api` Python package and the version of MinKNOW installed on your system. ROBIN requires that the `minknow_api` version matches the MinKNOW version running on your GridION or other device.
+
+**Solution:**
+Check your MinKNOW version.
+
+Install the matching version of the `minknow_api` Python package. For example, if you are running MinKNOW 6.2.x, install the corresponding API version:
+
+   ```bash
+   pip install minknow-api==6.2.1
+   ```
+
+You can find more information and available versions at the [nanoporetech/minknow_api GitHub repository](https://github.com/nanoporetech/minknow_api).
+
+For more details, see the discussion in [ROBIN issue #121](https://github.com/LooseLab/ROBIN/issues/121).
 
 ## Next Steps
 
-After installation, proceed to the [Quick Start Guide](quickstart.md) to begin using ROBIN. 
+- Proceed to the [Quick Start Guide](quickstart.md) to begin using ROBIN.
+- Return to the [Home page](../index.md). 

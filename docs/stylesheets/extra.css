@@ -1,0 +1,159 @@
+/* Custom styles for ROBIN documentation */
+
+:root {
+    --md-primary-fg-color: #2E7D32;
+    --md-primary-fg-color--light: #4CAF50;
+    --md-primary-fg-color--dark: #1B5E20;
+    --md-accent-fg-color: #81C784;
+}
+
+/* Grid layout for statistics and features */
+.grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr); /* Always 3 columns */
+    gap: 1rem;
+    margin: 1rem 0;
+}
+
+@media (max-width: 900px) {
+    .grid {
+        grid-template-columns: 1fr; /* Stack on small screens */
+    }
+}
+
+.grid-item {
+    background: white;
+    padding: 1.5rem;
+    border-radius: 8px;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(46, 125, 50, 0.1);
+    border: 1px solid rgba(76, 175, 80, 0.1);
+    transition: transform 0.2s ease;
+}
+
+.grid-item:hover {
+    transform: translateY(-2px);
+}
+
+.grid-item h3 {
+    color: var(--md-primary-fg-color);
+    font-size: 2.5rem;
+    font-weight: bold;
+    margin-bottom: 0.5rem;
+    line-height: 1;
+}
+
+.stat-number {
+    display: block;
+    font-size: 2.5rem;
+    font-weight: bold;
+    color: var(--md-primary-fg-color);
+    margin-bottom: 0.5rem;
+}
+
+/* Mission statement styling */
+.md-typeset h1 {
+    color: var(--md-primary-fg-color);
+    margin-bottom: 1rem;
+}
+
+.md-typeset h2 {
+    color: var(--md-primary-fg-color);
+    margin: 2rem 0 1rem;
+}
+
+/* Warning and note boxes */
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+    border-color: #ffa000;
+}
+
+.md-typeset .warning > .admonition-title,
+.md-typeset .warning > summary {
+    background-color: rgba(255, 160, 0, 0.1);
+}
+
+.md-typeset .warning > .admonition-title::before,
+.md-typeset .warning > summary::before {
+    background-color: #ffa000;
+}
+
+/* Links */
+.md-typeset a {
+    color: var(--md-primary-fg-color);
+    text-decoration: none;
+    border-bottom: 1px dotted var(--md-primary-fg-color);
+    transition: all 0.2s ease;
+}
+
+.md-typeset a:hover {
+    color: var(--md-primary-fg-color--light);
+    border-bottom-style: solid;
+}
+
+/* Logo */
+.md-header__button.md-logo img {
+    height: 2rem;
+}
+
+/* Footer */
+.md-footer {
+    background-color: var(--md-primary-fg-color);
+    color: white;
+}
+
+.md-footer a {
+    color: white;
+    border-bottom: none;
+}
+
+.md-footer a:hover {
+    color: white;
+    text-decoration: underline;
+}
+
+/* Source attribution */
+.md-typeset em {
+    color: #666;
+    font-style: normal;
+    font-size: 0.9rem;
+}
+
+/* Lists */
+.md-typeset ul li {
+    margin-bottom: 0.5rem;
+}
+
+/* Patient resources section */
+.md-typeset .patient-resources ul {
+    margin: 1rem 0 1.5rem 1.5rem;
+}
+
+.md-typeset .patient-resources .emphasis {
+    font-style: italic;
+    color: #666;
+    border-top: 1px solid #eee;
+    padding-top: 1rem;
+    margin-top: 1rem;
+}
+
+/* Make the grid full-width on desktop */
+.md-typeset .grid {
+    max-width: 100%;
+    width: 100vw;
+    margin-left: 50%;
+    transform: translateX(-50%);
+    box-sizing: border-box;
+    padding-left: 2rem;
+    padding-right: 2rem;
+}
+
+@media (max-width: 900px) {
+    .md-typeset .grid {
+        width: 100%;
+        margin-left: 0;
+        transform: none;
+        padding-left: 0.5rem;
+        padding-right: 0.5rem;
+    }
+} 
