@@ -1,0 +1,86 @@
+site_name: ROBIN
+site_description: Rapid nanopore brain intraoperative classification
+site_author: Matt Loose
+repo_url: https://github.com/looselab/robin
+repo_name: looselab/robin
+
+theme:
+  name: material
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - search.highlight
+    - search.share
+    - content.code.copy
+  palette:
+    - scheme: default
+      primary: green
+      accent: light-green
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: green
+      accent: light-green
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  logo: images/ROBIN_logo_small.png
+  favicon: images/ROBIN_logo_small.png
+  font:
+    text: Roboto
+    code: Roboto Mono
+
+extra_css:
+  - stylesheets/extra.css
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - admonition
+  - footnotes
+  - toc:
+      permalink: true
+  - pymdownx.arithmatex:
+      generic: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - attr_list
+  - md_in_html
+
+plugins:
+  - search
+  - minify:
+      minify_html: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Installation: getting-started/installation.md
+    - ROBIN Quickstart: getting-started/quickstart.md
+    - Library Preparation: getting-started/library-preparation.md
+    - MinKNOW Configuration: getting-started/minknow-configuration.md
+  # Commenting out sections that don't have files yet
+  # - User Guide:
+  #   - Overview: user-guide/overview.md
+  #   - Configuration: user-guide/configuration.md
+  #   - Usage: user-guide/usage.md
+  # - API Reference:
+  #   - Core Functions: api/core.md
+  #   - Utilities: api/utilities.md
+  # - Development:
+  #   - Contributing: development/contributing.md
+  #   - Building from Source: development/building.md
+  # - About:
+  #   - License: about/license.md
+  #   - Citation: about/citation.md 
