@@ -29,29 +29,39 @@ At the time of writing, the following model is the one used for base calling.
 ### 2. Adaptive Sampling Settings
 
 Configure adaptive sampling with the following settings:
+
 - Use the bed file: `panel_11092024_5kb_pad.bed`
+
 - Use the same reference file as used by ROBIN.
+
 - Use the "enrich" mode.
 
 
 ### 3. Alignment Settings
 
 ROBIN requires BAM files to be aligned to a reference.
+
 - Use the same reference file as for the Adaptive Sampling Settings and ROBIN.
 
 
 ### 4. Output Settings
 
 Configure the following output settings:
+
 - Ensure BAM file output and set to either 8000 reads per file or one file per minute.
+
 - Optional - disable pod5 output. 
+
 - Disable FastQ output.
 
 ### 5. Sample Settings
 
 For each run:
+
 1. Set a unique sample ID (this will be used by ROBIN for output organization)
+
 2. Any experiment ID can be used. ROBIN ignores this. However, it can be useful to use the experiment ID to group related experiments and use this folder to point ROBIN too to monitor specific subsets of data.
+
 3. Set the experiment duration (typically 24 hours for CNS tumor analysis)
 
 

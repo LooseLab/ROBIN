@@ -12,6 +12,14 @@ robin --threads 2 -r /path/to/reference/hg38.fa -w /path/to/watchfolder /path/to
 
 This will start the ROBIN interface, which provides a graphical user interface for real-time nanopore data analysis.
 
+A typical watchfolder on a p2i would be:
+
+```bash
+/data/<experiment_id>/<sample_id>
+```
+
+ROBIN can watch multiple runs at once. So, if you are running two experiments on the same day on a p2i if you give them the same experiment_id, ROBIN will split the results into two runs in the GUI according to the <sample_id>. You do not (in principle...) need to run separate instances of ROBIN.
+
 ## Reference Genome Selection
 
 ROBIN requires the use of the human reference genome in hg38/GRCh38 format. For optimal results, we recommend using the `no_alt_analysis_set` version of the reference genome, which excludes alternative loci and decoy sequences. This version is specifically designed for variant calling and analysis.
