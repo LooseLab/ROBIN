@@ -58,19 +58,22 @@ Configure the following output settings:
 
 For each run:
 
-1. Set a unique sample ID (this will be used by ROBIN for output organization)
+- Set a unique sample ID (this will be used by ROBIN for output organization)
 
-2. Any experiment ID can be used. ROBIN ignores this. However, it can be useful to use the experiment ID to group related experiments and use this folder to point ROBIN too to monitor specific subsets of data.
+- Any experiment ID can be used. ROBIN ignores this. However, it can be useful to use the experiment ID to group related experiments and use this folder to point ROBIN too to monitor specific subsets of data.
 
-3. Set the experiment duration (typically 24 hours for CNS tumor analysis)
+= Set the experiment duration (typically 24 hours for CNS tumor analysis)
 
 
 ## Starting a Run
 
-1. Configure MinKNOW with the settings above
-1. Begin the MinKNOW run
-1. Start ROBIN and give it the output folder that MinKNOW will be writing data to.
-1. ROBIN will automatically detect and process the BAM files
+- Configure MinKNOW with the settings above
+
+- Begin the MinKNOW run
+
+- Start ROBIN and give it the output folder that MinKNOW will be writing data to.
+
+- ROBIN will automatically detect and process the BAM files
 
 ## Troubleshooting
 
@@ -78,8 +81,10 @@ For each run:
 
 After configuring MinKNOW:
 1. Start ROBIN as described in the [ROBIN Quickstart](quickstart.md)
-2. Begin your MinKNOW run
-3. Monitor the analysis in the ROBIN interface
+
+1. Begin your MinKNOW run
+
+1. Monitor the analysis in the ROBIN interface
 
 ## Additional Resources
 
