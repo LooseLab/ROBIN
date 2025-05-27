@@ -58,6 +58,8 @@ import pandas as pd
 import tempfile
 from robin import models, theme, resources
 import logging
+from robin.utilities.merge_bedmethyl import collapse_bedmethyl
+from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
 
 
 
