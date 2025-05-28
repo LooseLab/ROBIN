@@ -1,17 +1,18 @@
-name: robin_dev
+name: robin_dev2
 channels:
+  - nanoporetech
   - bioconda
   - conda-forge
   - defaults
 dependencies:
   - git-lfs
   - r-base
-  #- bioconductor-genomicranges
+  - bioconda::bioconductor-genomicranges
   - bioconda::snpsift
   - bioconda::snpeff
   - bioconda::samtools
   - bioconda::bedtools
-  - ont-modkit
+  - nanoporetech::modkit >=0.4.3
   - r-optparse
   - r-data.table
   - conda-forge::r-ranger

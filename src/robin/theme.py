@@ -38,6 +38,8 @@ from packaging import version
 import requests
 import asyncio
 import logging
+import subprocess
+import importlib.metadata
 
 from nicegui import ui, app, events, core
 import nicegui.air
@@ -491,6 +493,10 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                                 "Browse Historic Data",
                                 lambda: ui.navigate.to("/browse"),
                             )
+                            ui.menu_item(
+                                "Workflow",
+                                lambda: ui.navigate.to("/workflow"),
+                            )
                             ui.separator()
                             ui.switch("Allow Remote Access").classes(
                                 "ml-4 bg-transparent"
@@ -656,9 +662,166 @@ def my_page():
         ui.label("Welcome to the Application")
 
 
-# ToDo: The shutdown should be handled in the main.py file. So a gui triggered shutdown needs to set a flag in the main.py file.
-#      Then the main.py file can trigger the shutdown and handle the cleanup.
-#      The issue is that the nicegui shutdown event is immedately called when the app.shutdown() is called and I need to complete some running code first.
+@ui.page("/workflow")
+def workflow_page():
+    """Display the ROBIN workflow diagram."""
+    with frame(
+        "ROBIN Workflow",
+        smalltitle="Workflow",
+    ):
+        # Get versions for the diagram
+        modkit_version = get_modkit_version()
+        sturgeon_version = get_sturgeon_version()
+        crossnn_version = get_crossnn_version()
+        cnv_from_bam_version = get_cnv_from_bam_version()
+
+        ui.mermaid(f'''
+flowchart TD
+    %% Style definitions
+    classDef minKNOW fill:#f5fafd80,stroke:#339af0,stroke-width:1px,color:#1c7ed6,font-size:14px,font-weight:500
+    classDef robin fill:#f6fcf7,stroke:#495057,stroke-width:1px,color:#388e3c,font-size:14px,font-weight:500
+    classDef classifier fill:#fff0f699,stroke:#e64980,stroke-width:1px,color:#c2255c,font-size:14px,font-weight:500
+    classDef analysis fill:#fff4e699,stroke:#fd7e14,stroke-width:1px,color:#e8590c,font-size:14px,font-weight:500
+    classDef output fill:#ebfbee99,stroke:#40c057,stroke-width:1px,color:#2b8a3e,font-size:14px,font-weight:500
+    classDef headerLabel fill:#ffffff00,stroke:#ffffff00,color:#222,font-size:18px,font-weight:700
+
+    %% Custom header nodes
+    robinLabel["<b>R.O.B.I.N v{__about__.__version__}</b>"]:::headerLabel
+    minKNOWLabel["<b>MinKNOW Pipeline</b>"]:::headerLabel
+
+    %% MinKNOW pipeline
+    subgraph MinKNOW[" "]
+        sequencing["Sequencing"]
+        adaptive["Adaptive Sampling"]
+        alignment["Alignment"]
+        bam["BAM Files"]
+    end
+    minKNOWLabel -.-> MinKNOW
+
+    %% R.O.B.I.N. pipeline
+    subgraph ROBIN[" "]
+        runInfo["Extract Run Information"]
+        groupRuns["Group by Run"]
+        mergeBam["Merge BAM Files"]
+        methylation["Extract Methylation<br>(modkit v{modkit_version})"]
+        individualBam["Process BAMs Individually"]
+        cnv["CNV Analysis<br>(CNV from BAM v{cnv_from_bam_version})"]
+        fusion["Fusion Analysis"]
+        mgmt["MGMT Analysis"]
+        coverage["Coverage Analysis"]
+        snv["Optional SNP/V Analysis<br>(ClairS-To)"]
+        crossnnCNS["CrossNN - CNS<br>({crossnn_version})"]
+        crossnnPan["CrossNN - PanCancer<br>({crossnn_version})"]
+        sturgeon["Sturgeon<br>({sturgeon_version})"]
+        randomForest["Random Forest"]
+        integrate["Integrate Results"]
+        report["Report Generation"]
+    end
+    robinLabel -.-> ROBIN
+
+    %% Connections
+    sequencing --> adaptive
+    adaptive --> alignment
+    alignment --> bam
+    bam --> runInfo
+    runInfo --> groupRuns
+
+    %% Split after groupRuns
+    groupRuns -->|"For methylation"| mergeBam
+    groupRuns -->|"For other analyses"| individualBam
+
+    mergeBam --> methylation
+    methylation --> crossnnCNS & crossnnPan & sturgeon & randomForest
+    crossnnCNS --> integrate
+    crossnnPan --> integrate
+    sturgeon --> integrate
+    randomForest --> integrate
+
+    individualBam --> cnv & fusion & mgmt & coverage
+    coverage --> snv
+
+    integrate --> report
+    cnv --> report
+    fusion --> report
+    mgmt --> report
+    snv --> report
+
+    %% Styling
+    class sequencing,adaptive,alignment,bam minKNOW
+    class runInfo,groupRuns,mergeBam,individualBam,integrate robin
+    class crossnnCNS,crossnnPan,sturgeon,randomForest classifier
+    class cnv,fusion,mgmt,coverage,snv analysis
+    class report output
+    %% Subgraph background coloring
+    style MinKNOW fill:#f5fafd80,stroke:#339af0,stroke-width:2px
+    style ROBIN fill:#f6fcf7,stroke:#388e3c,stroke-width:2px
+''', config={'theme': 'redux', 'look': 'neo', 'flowchart': {'curve': 'basis', 'defaultRenderer': 'elk'}}).classes('w-full')
+
+
+def get_modkit_version():
+    """Get the version of modkit installed."""
+    try:
+        result = subprocess.run(["modkit", "--version"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return "unknown"
+    except:
+        return "unknown"
+
+def get_sturgeon_version():
+    """Get the version of sturgeon installed."""
+    try:
+        result = subprocess.run(["sturgeon", "--version"], capture_output=True, text=True)
+        if result.returncode == 0:
+            return result.stdout.strip()
+        return "unknown"
+    except:
+        try:
+            return importlib.metadata.version("sturgeon")
+        except:
+            return "unknown"
+
+def get_crossnn_version():
+    """Get the version of CrossNN installed."""
+    try:
+        return importlib.metadata.version("nanoDX")
+    except:
+        try:
+            result = subprocess.run(
+                ["git", "describe", "--tags"],
+                cwd=os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "submodules/nanoDX",
+                ),
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            return "unknown"
+        except:
+            return "unknown"
+
+def get_cnv_from_bam_version():
+    """Get the version of CNV from BAM installed."""
+    try:
+        return importlib.metadata.version("cnv_from_bam")
+    except:
+        try:
+            result = subprocess.run(
+                ["git", "describe", "--tags"],
+                cwd=os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "submodules/cnv_from_bam",
+                ),
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return result.stdout.strip()
+            return "unknown"
+        except:
+            return "unknown"
 
 
 def main():

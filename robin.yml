@@ -11,7 +11,7 @@ dependencies:
   - bioconda::snpeff
   - bioconda::samtools
   - bioconda::bedtools
-  - bioconda::ont-modkit==0.3.0
+  - nanoporetech::modkit
   - r-optparse
   - r-data.table
   - conda-forge::r-ranger
@@ -28,5 +28,5 @@ dependencies:
     - psutil
     #- git+https://github.com/LooseLab/robin
 variables:
-  _JAVA_OPTIONS: -Xmx2g
+  _JAVA_OPTIONS: -Xmx8g
 
