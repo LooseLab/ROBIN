@@ -1,4 +1,4 @@
-name: robin_dev2
+name: robin_osx
 channels:
   - nanoporetech
   - bioconda
