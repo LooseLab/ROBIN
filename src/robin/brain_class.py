@@ -506,19 +506,19 @@ def run_modkit(sortfile: str, temp: str, threads: int) -> None:
         "--filter-threshold",
         "0.73",
         "--chunk-size",
-        "1",
+        str(threads),
         "--interval-size",
-        "10000000",
+        "25000000",
         "--combine-mods",
         sortfile,
         temp,
         # "--suppress-progress"
     ]
-
+    
     # Run the command
+    #output = subprocess.run(cmd, capture_output=True, text=True)
     subprocess.run(cmd, capture_output=True, text=True)
-
-
+    
 def run_samtools_sort(
     file: str, tomerge: List[str], sortfile: str, threads: int
 ) -> None:
@@ -3407,7 +3407,7 @@ class BrainMeth:
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
                 # The length of bams we allow to be processed at once will influence memory usage.
-                if len(files_by_sample[sample_id]) >= 50:
+                if len(files_by_sample[sample_id]) >= 20:
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
                         f"Processing batch of {files_to_process} files for sample {sample_id}"
@@ -3543,7 +3543,7 @@ class BrainMeth:
             logging.info(
                 f"Processing {num_bam_files_seen} BAM files for sample ID: {sampleID}"
             )
-
+            
             # Ensure counters exist for this sample
             analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
             for analysis in analyses:
@@ -3589,7 +3589,7 @@ class BrainMeth:
             # Write the updated length of the tomerge list to the output file
             with open(tomerge_length_file, "w") as f:
                 f.write(f"Length of tomerge list: {new_count}\n")
-
+                
             tempbam = tempfile.NamedTemporaryFile(
                 dir=self.check_and_create_folder(self.output, sampleID),
                 suffix=".bam",
@@ -3703,7 +3703,6 @@ class BrainMeth:
                                 f"Error updating counters for {analysis}: {str(e)}"
                             )
                         if state.shutdown_event:
-                            print("Terminate detected, stopping process_sample_files")
                             state.set_process_state(
                                 "Merge Bam Analysis", ProcessState.STOPPED
                             )
