@@ -21,7 +21,9 @@ import pandas as pd
 import logging
 from nicegui import ui
 from pathlib import Path
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Tuple
+import psutil
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +65,9 @@ class PerformanceMetrics:
             "timestamps": [],
             "bam_file_sizes": [],
             "bam_file_names": [],
+            "python_ram_usage": [],  # New metric for Python RAM usage
+            "r_ram_usage": [],      # New metric for R RAM usage
+            "ram_timestamps": [],    # New timestamps for RAM measurements
         }
 
         # Update with any provided metrics
@@ -74,8 +79,10 @@ class PerformanceMetrics:
         # UI components
         self.performance_container = None
         self.performance_chart = None
+        self.ram_chart = None  # New chart for RAM usage
         self.stats_cards = {}
         self.ui_initialized = False
+        self.ram_tracking_timer = None  # Timer for RAM tracking
 
         logger.info("Performance metrics initialized")
 
@@ -146,82 +153,87 @@ class PerformanceMetrics:
         logger.info(f"Recorded metrics for operation at {current_time}")
         self.save_metrics()
 
-    def save_metrics(self) -> None:
-        """Save performance metrics to disk."""
-        try:
-            # Verify all arrays are the same length
-            lengths = {
-                key: len(values)
-                for key, values in self.metrics.items()
-                if isinstance(values, list)
-            }
-            if not all(length == lengths["timestamps"] for length in lengths.values()):
-                logger.error("Arrays are not the same length before saving")
-                return
-
-            # Save numpy arrays
-            for key, values in self.metrics.items():
-                if isinstance(values, list) and values:
-                    np.save(self.perf_dir / f"{key}.npy", np.array(values))
-
-            # Save CSV
-            perf_df = pd.DataFrame(
-                {
-                    "timestamp": self.metrics["timestamps"],
-                    "file_name": self.metrics["bam_file_names"],
-                    "file_size_mb": [
-                        size / (1024 * 1024) if size is not None else None
-                        for size in self.metrics["bam_file_sizes"]
-                    ],
-                    "bam_merge_time_s": self.metrics["bam_merge_times"],
-                    "df_merge_time_s": self.metrics["df_merge_times"],
-                    "total_processing_time_s": self.metrics["total_processing_times"],
-                }
-            )
-            perf_df.to_csv(self.perf_dir / "performance_metrics.csv", index=False)
-
-            logger.info("Performance metrics saved successfully")
-
-        except Exception as e:
-            logger.error(f"Error saving performance metrics: {e}")
-
-    def load_metrics(self) -> bool:
+    def start_ram_tracking(self, interval_seconds: int = 30) -> None:
         """
-        Load performance metrics from disk.
+        Start tracking RAM usage at regular intervals.
+
+        Parameters
+        ----------
+        interval_seconds : int
+            Interval in seconds between RAM usage measurements
+        """
+        if self.ram_tracking_timer is None:
+            self.ram_tracking_timer = ui.timer(interval_seconds, self._track_ram_usage)
+            logger.info(f"Started RAM tracking with {interval_seconds}s interval")
+
+    def stop_ram_tracking(self) -> None:
+        """Stop tracking RAM usage."""
+        if self.ram_tracking_timer is not None:
+            self.ram_tracking_timer.active = False
+            self.ram_tracking_timer = None
+            logger.info("Stopped RAM tracking")
+
+    def _get_r_memory_usage(self) -> Optional[float]:
+        """
+        Get memory usage of R processes in MB.
 
         Returns
         -------
-        bool
-            True if metrics were loaded successfully, False otherwise
+        Optional[float]
+            Total memory usage of R processes in MB, or None if no R processes found
         """
         try:
-            if not self.perf_dir.exists():
-                return False
-
-            # Load numpy arrays with allow_pickle=True
-            for key in self.metrics.keys():
-                file_path = self.perf_dir / f"{key}.npy"
-                if file_path.exists():
-                    self.metrics[key] = np.load(file_path, allow_pickle=True).tolist()
-
-            # Load additional data from CSV
-            csv_path = self.perf_dir / "performance_metrics.csv"
-            if csv_path.exists():
-                perf_df = pd.read_csv(csv_path)
-                for col in perf_df.columns:
-                    if col not in self.metrics:
-                        self.metrics[col] = perf_df[col].tolist()
-
-            logger.info("Performance metrics loaded successfully")
-            return True
-
+            # Use ps to find R processes and their memory usage
+            result = subprocess.run(
+                ["ps", "-eo", "pid,comm,rss"],
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            # Parse output to find R processes
+            total_r_memory = 0
+            for line in result.stdout.splitlines()[1:]:  # Skip header
+                parts = line.split()
+                if len(parts) >= 3 and "R" in parts[1]:
+                    # RSS is in KB, convert to MB
+                    total_r_memory += float(parts[2]) / 1024
+            
+            return total_r_memory if total_r_memory > 0 else None
         except Exception as e:
-            logger.error(f"Error loading performance metrics: {e}")
-            return False
+            logger.error(f"Error getting R memory usage: {e}")
+            return None
 
-    def create_ui(self) -> None:
-        """Create the performance metrics UI components."""
-        with ui.card().classes("w-full p-4 mb-4") as self.performance_container:
+    def _track_ram_usage(self) -> None:
+        """Track RAM usage of Python and R processes."""
+        try:
+            current_time = time.time() * 1000  # Convert to milliseconds
+            
+            # Get Python process memory usage
+            python_memory = psutil.Process().memory_info().rss / (1024 * 1024)  # Convert to MB
+            
+            # Get R process memory usage
+            r_memory = self._get_r_memory_usage()
+            
+            # Record metrics
+            self.metrics["python_ram_usage"].append(python_memory)
+            self.metrics["r_ram_usage"].append(r_memory)
+            self.metrics["ram_timestamps"].append(current_time)
+            
+            # Save metrics
+            self.save_metrics()
+            
+            # Update UI if initialized
+            if self.ui_initialized and self.ram_chart is not None:
+                self._update_ram_chart()
+                
+        except Exception as e:
+            logger.error(f"Error tracking RAM usage: {e}")
+
+    def create_ui(self, parent=None) -> None:
+        """Create the performance metrics UI components. If parent is provided, use it as the context."""
+        context = parent if parent is not None else ui.card().classes("w-full p-4 mb-4")
+        with context as self.performance_container:
             # Header with title and legend
             with ui.row().classes("w-full items-center justify-between mb-4"):
                 ui.label("Performance Metrics").classes("text-lg font-medium")
@@ -270,9 +282,15 @@ class PerformanceMetrics:
                     "Total time for complete BAM processing pipeline",
                 )
 
-            # Time series chart
-            with ui.card().classes("w-full p-4 border rounded-lg shadow-sm"):
-                self._create_time_series_chart()
+            # Time series charts
+            with ui.grid(columns=2).classes("w-full gap-4"):
+                # Processing times chart
+                with ui.card().classes("w-full p-4 border rounded-lg shadow-sm"):
+                    self._create_time_series_chart()
+                
+                # RAM usage chart
+                with ui.card().classes("w-full p-4 border rounded-lg shadow-sm"):
+                    self._create_ram_chart()
 
         self.ui_initialized = True
         logger.info("Performance metrics UI created")
@@ -450,6 +468,151 @@ class PerformanceMetrics:
             }
         ).style("height: 300px")
 
+    def _create_ram_chart(self) -> None:
+        """Create the RAM usage time series chart."""
+        self.ram_chart = ui.echart(
+            {
+                "backgroundColor": "transparent",
+                "textStyle": {
+                    "fontFamily": "SF Pro Text, -apple-system, BlinkMacSystemFont, Helvetica, Arial, sans-serif",
+                    "fontSize": 12,
+                },
+                "grid": {
+                    "left": "5%",
+                    "right": "5%",
+                    "bottom": "5%",
+                    "top": "15%",
+                    "containLabel": True,
+                },
+                "title": {
+                    "text": "RAM Usage Over Time",
+                    "left": "center",
+                    "top": 5,
+                    "textStyle": {
+                        "fontSize": 16,
+                        "fontWeight": "500",
+                        "color": "#1D1D1F",
+                    },
+                },
+                "legend": {
+                    "data": ["Python RAM Usage", "R RAM Usage"],
+                    "top": 35,
+                    "textStyle": {"color": "#86868B"},
+                },
+                "tooltip": {
+                    "trigger": "axis",
+                    "backgroundColor": "rgba(255, 255, 255, 0.9)",
+                    "borderColor": "#E5E5EA",
+                    "textStyle": {"color": "#1D1D1F"},
+                    ":formatter": """
+                    function(params) {
+                        if (!params || !params.length || !params[0].value) return '';
+                        
+                        var date = new Date(params[0].value[0]);
+                        var timeStr = date.toLocaleTimeString();
+                        var result = timeStr + '<br/>';
+                        
+                        params.forEach(function(param) {
+                            if (param && param.value) {
+                                var color = param.color;
+                                var marker = '<span style="display:inline-block;margin-right:4px;border-radius:10px;width:10px;height:10px;background-color:' + color + '"></span>';
+                                var value = param.value[1];
+                                var valueStr = value !== null && value !== undefined ? value.toFixed(2) + ' MB' : 'N/A';
+                                result += marker + param.seriesName + ': ' + valueStr + '<br/>';
+                            }
+                        });
+                        
+                        return result;
+                    }
+                """,
+                },
+                "xAxis": {
+                    "type": "time",
+                    "axisLabel": {
+                        "color": "#86868B",
+                        "fontSize": 12,
+                        "formatter": "{HH}:{mm}:{ss}",
+                    },
+                },
+                "yAxis": {
+                    "type": "value",
+                    "name": "Memory (MB)",
+                    "nameTextStyle": {
+                        "color": "#86868B",
+                        "fontSize": 12,
+                        "padding": [0, 30, 0, 0],
+                    },
+                    "axisLabel": {"color": "#86868B"},
+                    "splitLine": {
+                        "show": True,
+                        "lineStyle": {"type": "dashed", "color": "#E5E5EA"},
+                    },
+                },
+                "series": [
+                    {
+                        "name": "Python RAM Usage",
+                        "type": "line",
+                        "smooth": True,
+                        "showSymbol": True,
+                        "connectNulls": True,
+                        "data": [],
+                        "lineStyle": {"width": 2, "color": "#007AFF"},
+                        "itemStyle": {"color": "#007AFF"},
+                    },
+                    {
+                        "name": "R RAM Usage",
+                        "type": "line",
+                        "smooth": True,
+                        "showSymbol": True,
+                        "connectNulls": True,
+                        "data": [],
+                        "lineStyle": {"width": 2, "color": "#FF9500"},
+                        "itemStyle": {"color": "#FF9500"},
+                    },
+                ],
+            }
+        ).style("height: 300px")
+
+    def _update_ram_chart(self) -> None:
+        """Update the RAM usage chart with current data."""
+        if not self.ui_initialized or self.ram_chart is None:
+            return
+
+        try:
+            if "ram_timestamps" in self.metrics and self.metrics["ram_timestamps"]:
+                # Filter out None values and create valid data points
+                valid_indices = [
+                    i for i, t in enumerate(self.metrics["ram_timestamps"]) if t is not None
+                ]
+
+                if valid_indices:
+                    timestamps = [self.metrics["ram_timestamps"][i] for i in valid_indices]
+
+                    # Get valid data points for each series
+                    python_data = []
+                    r_data = []
+                    
+                    for i, ts in enumerate(timestamps):
+                        if i < len(self.metrics["python_ram_usage"]):
+                            python_data.append([ts, self.metrics["python_ram_usage"][i]])
+                        else:
+                            python_data.append([ts, None])
+                            
+                        if i < len(self.metrics["r_ram_usage"]):
+                            r_data.append([ts, self.metrics["r_ram_usage"][i]])
+                        else:
+                            r_data.append([ts, None])
+
+                    # Update chart series data
+                    self.ram_chart.options["series"][0]["data"] = python_data
+                    self.ram_chart.options["series"][1]["data"] = r_data
+
+                    # Update the chart
+                    self.ram_chart.update()
+
+        except Exception as e:
+            logger.error(f"Error updating RAM chart: {e}")
+
     def update_ui(self) -> None:
         """Update the performance metrics UI with current data."""
         if not self.ui_initialized:
@@ -514,8 +677,87 @@ class PerformanceMetrics:
                     # Update the chart with the modified options
                     self.performance_chart.update()
 
+            # Update RAM chart
+            self._update_ram_chart()
+
         except Exception as e:
             logger.error(f"Error updating performance metrics UI: {e}")
+
+    def save_metrics(self) -> None:
+        """Save performance metrics to disk."""
+        try:
+            # Verify all arrays are the same length
+            lengths = {
+                key: len(values)
+                for key, values in self.metrics.items()
+                if isinstance(values, list)
+            }
+            if not all(length == lengths["timestamps"] for length in lengths.values()):
+                logger.error("Arrays are not the same length before saving")
+                return
+
+            # Save numpy arrays
+            for key, values in self.metrics.items():
+                if isinstance(values, list) and values:
+                    np.save(self.perf_dir / f"{key}.npy", np.array(values))
+
+            # Save CSV
+            perf_df = pd.DataFrame(
+                {
+                    "timestamp": self.metrics["timestamps"],
+                    "file_name": self.metrics["bam_file_names"],
+                    "file_size_mb": [
+                        size / (1024 * 1024) if size is not None else None
+                        for size in self.metrics["bam_file_sizes"]
+                    ],
+                    "bam_merge_time_s": self.metrics["bam_merge_times"],
+                    "df_merge_time_s": self.metrics["df_merge_times"],
+                    "total_processing_time_s": self.metrics["total_processing_times"],
+                    "python_ram_mb": self.metrics["python_ram_usage"],
+                    "r_ram_mb": self.metrics["r_ram_usage"],
+                    "ram_timestamp": self.metrics["ram_timestamps"],
+                }
+            )
+            perf_df.to_csv(self.perf_dir / "performance_metrics.csv", index=False)
+
+            logger.info("Performance metrics saved successfully")
+
+        except Exception as e:
+            logger.error(f"Error saving performance metrics: {e}")
+
+    def load_metrics(self) -> bool:
+        """
+        Load performance metrics from disk.
+
+        Returns
+        -------
+        bool
+            True if metrics were loaded successfully, False otherwise
+        """
+        try:
+            if not self.perf_dir.exists():
+                return False
+
+            # Load numpy arrays with allow_pickle=True
+            for key in self.metrics.keys():
+                file_path = self.perf_dir / f"{key}.npy"
+                if file_path.exists():
+                    self.metrics[key] = np.load(file_path, allow_pickle=True).tolist()
+
+            # Load additional data from CSV
+            csv_path = self.perf_dir / "performance_metrics.csv"
+            if csv_path.exists():
+                perf_df = pd.read_csv(csv_path)
+                for col in perf_df.columns:
+                    if col not in self.metrics:
+                        self.metrics[col] = perf_df[col].tolist()
+
+            logger.info("Performance metrics loaded successfully")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error loading performance metrics: {e}")
+            return False
 
     def get_stats(self) -> Dict[str, Dict[str, float]]:
         """

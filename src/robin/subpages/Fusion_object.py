@@ -67,7 +67,6 @@ from matplotlib.ticker import FuncFormatter
 from robin.subpages.base_analysis import BaseAnalysis
 from robin.utilities.decompress import decompress_gzip_file
 from robin.utilities.bed_file import MasterBedTree
-from robin.utilities.performance_metrics import PerformanceMetrics
 from collections import Counter, defaultdict
 import time
 from robin.core.state import state, ProcessState
@@ -929,8 +928,6 @@ class FusionObject(BaseAnalysis):
     ):
         # Initialize base class first
         super().__init__(*args, **kwargs)
-        # Remove state tracking for Fusion Analysis
-        # state.start_process("Fusion Analysis", ProcessType.BATCH)
         state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
 
         self.target_panel = target_panel
@@ -956,36 +953,6 @@ class FusionObject(BaseAnalysis):
         self.fusionplot_all = None
         self.fusiontable = None
         self.fusiontable_all = None
-
-        # Initialize performance metrics
-        if hasattr(self, "output") and hasattr(self, "sampleID"):
-            # Create a fusion-specific subdirectory for performance metrics
-            fusion_perf_dir = os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID),
-                "performance_fusion",  # Distinct directory for fusion metrics
-            )
-            os.makedirs(fusion_perf_dir, exist_ok=True)
-
-            self.performance_metrics = PerformanceMetrics(
-                output_dir=fusion_perf_dir,  # Use fusion-specific directory
-                metrics={
-                    "fusion_bam_merge_time": [],  # Renamed to be fusion-specific
-                    "fusion_detection_time": [],  # Renamed to be fusion-specific
-                    "sv_detection_time": [],  # Unique to fusion object
-                    "fusion_total_time": [],  # Renamed to be fusion-specific
-                    "fusion_timestamps": [],  # Renamed to be fusion-specific
-                    "fusion_bam_sizes": [],  # Renamed to be fusion-specific
-                    "fusion_bam_names": [],  # Renamed to be fusion-specific
-                },
-            )
-            logger.info("Initialized fusion performance metrics dictionary")
-        else:
-            logger.warning(
-                "Output directory or sampleID not available during initialization"
-            )
-            self.performance_metrics = None
-
-        self.performance_ui_initialized = False
 
         self.gene_gff3_2 = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
@@ -1072,36 +1039,6 @@ class FusionObject(BaseAnalysis):
         """
         app.config.request_timeout = 10  # Increase timeout to 10 seconds
 
-        # Initialize performance metrics if not already initialized
-        if (
-            self.performance_metrics is None
-            and hasattr(self, "output")
-            and hasattr(self, "sampleID")
-        ):
-            logger.info("Initializing performance metrics")
-            # Create a fusion-specific subdirectory for performance metrics
-            fusion_perf_dir = os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID),
-                "performance_fusion",  # Distinct directory for fusion metrics
-            )
-            os.makedirs(fusion_perf_dir, exist_ok=True)
-
-            self.performance_metrics = PerformanceMetrics(
-                output_dir=fusion_perf_dir,
-                metrics={
-                    "fusion_bam_merge_time": [],
-                    "fusion_detection_time": [],
-                    "sv_detection_time": [],
-                    "fusion_total_time": [],
-                    "fusion_timestamps": [],
-                    "fusion_bam_sizes": [],
-                    "fusion_bam_names": [],
-                },
-            )
-            logger.info(
-                f"Performance metrics initialized with output directory: {fusion_perf_dir}"
-            )
-
         if self.summary:
             with self.summary:
                 with ui.card().classes("w-full p-4 mb-4"):
@@ -1150,29 +1087,6 @@ class FusionObject(BaseAnalysis):
                 "Events are identified on a streaming basis derived from reads with supplementary alignments. "
                 "The plots are indicative of the presence of events and should be interpreted with care."
             ).style("font-size: 125%; font-weight: 300")
-
-            # Create performance metrics UI if initialized
-            if self.performance_metrics is not None:
-                logger.info("Creating performance metrics UI")
-                try:
-                    # Create a container for performance metrics
-                    self.performance_metrics.create_ui()
-                    # Set the flag to indicate UI is initialized
-                    self.performance_ui_initialized = True
-                    logger.info("Performance metrics UI created successfully")
-
-                    # Load any existing metrics
-                    self.performance_metrics.load_metrics()
-                    logger.info("Existing performance metrics loaded")
-
-                    # Update UI with loaded metrics
-                    self.performance_metrics.update_ui()
-                    logger.info("Performance metrics UI updated with loaded data")
-                except Exception as e:
-                    logger.error(f"Error creating performance metrics UI: {str(e)}")
-                    self.performance_ui_initialized = False
-            else:
-                logger.warning("Performance metrics not initialized during UI setup")
 
             with ui.tabs().classes("w-full") as tabs:
                 one = ui.tab("Within Target Fusions").style(
@@ -1907,18 +1821,10 @@ class FusionObject(BaseAnalysis):
         """
         Processes a BAM file and identifies fusion candidates and structural variants.
         """
-        # Remove state tracking for Fusion Analysis
-        # state.start_process("Fusion Analysis", ProcessType.BATCH)
         state.set_process_state("Fusion Analysis", ProcessState.RUNNING)
         try:
-            start_time = time.time()
-            bam_processing_start = None
             try:
                 logger.info(f"Starting BAM processing for file: {bamfile}")
-
-                # Track BAM file size
-                bam_size = os.path.getsize(bamfile)
-                logger.info(f"BAM file size: {bam_size / (1024*1024):.2f} MB")
 
                 if has_supplementary(bamfile):
                     # Create temporary files
@@ -1940,13 +1846,8 @@ class FusionObject(BaseAnalysis):
                     )
 
                     try:
-                        bam_processing_start = (
-                            time.time()
-                        )  # Start timing BAM processing
-
                         # Process fusion candidates
                         logger.info(f"Processing BAM file for fusions: {bamfile}")
-                        fusion_start_time = time.time()
                         fusion_candidates, fusion_candidates_all = await run.cpu_bound(
                             fusion_work,
                             self.threads,
@@ -1958,14 +1859,11 @@ class FusionObject(BaseAnalysis):
                             tempmappings.name,
                             tempallmappings.name,
                         )
-                        fusion_time = time.time() - fusion_start_time
-                        logger.info(f"Fusion detection time: {fusion_time:.2f} seconds")
 
                         # Process genome-wide structural variants
                         logger.info(
                             f"Processing BAM file for structural variants: {bamfile}"
                         )
-                        sv_start_time = time.time()
                         sv_csv_file = os.path.join(
                             self.check_and_create_folder(self.output, self.sampleID),
                             "sv_master.csv",
@@ -1981,10 +1879,6 @@ class FusionObject(BaseAnalysis):
                             sv_reads,
                             max_proximity=50000,
                             group_by_sv=True,
-                        )
-                        sv_time = time.time() - sv_start_time
-                        logger.info(
-                            f"Structural variant detection time: {sv_time:.2f} seconds"
                         )
 
                         if len(bed_lines) > 0:
@@ -2162,95 +2056,6 @@ class FusionObject(BaseAnalysis):
                             # Update fusion tables
                             self.fusion_table()
                             self.fusion_table_all()
-
-                            # Calculate processing times
-                            bam_processing_time = (
-                                time.time() - bam_processing_start
-                                if bam_processing_start
-                                else 0
-                            )
-                            total_time = time.time() - start_time
-                            logger.info(
-                                f"BAM processing time: {bam_processing_time:.2f} seconds"
-                            )
-                            logger.info(
-                                f"Total processing time: {total_time:.2f} seconds"
-                            )
-
-                            # Record metrics if performance metrics is initialized
-                            if self.performance_metrics is not None:
-                                logger.info("Recording performance metrics")
-                                # Check if sampleID has changed since last metrics recording
-                                current_output_dir = os.path.join(
-                                    self.check_and_create_folder(
-                                        self.output, self.sampleID
-                                    ),
-                                    "performance_fusion",
-                                )
-                                os.makedirs(current_output_dir, exist_ok=True)
-
-                                if (
-                                    current_output_dir
-                                    != self.performance_metrics.output_dir
-                                ):
-                                    logger.info(
-                                        "SampleID changed, reinitializing performance metrics"
-                                    )
-                                    self.performance_metrics = PerformanceMetrics(
-                                        output_dir=current_output_dir,
-                                        metrics={
-                                            "fusion_bam_merge_time": [],
-                                            "fusion_detection_time": [],
-                                            "sv_detection_time": [],
-                                            "fusion_total_time": [],
-                                            "fusion_timestamps": [],
-                                            "fusion_bam_sizes": [],
-                                            "fusion_bam_names": [],
-                                        },
-                                    )
-                                    # Load any existing metrics for the new sample
-                                    self.performance_metrics.load_metrics()
-                                    # Recreate UI if needed
-                                    if not self.performance_ui_initialized:
-                                        self.performance_metrics.create_ui()
-                                        self.performance_ui_initialized = True
-
-                                # Record metrics
-                                self.performance_metrics.record_metrics(
-                                    processing_time=total_time,
-                                    file_path=bamfile,
-                                    additional_metrics={
-                                        "fusion_bam_merge_time": bam_processing_time
-                                        - fusion_time
-                                        - sv_time,
-                                        "fusion_detection_time": fusion_time,
-                                        "sv_detection_time": sv_time,
-                                        "fusion_total_time": total_time,
-                                        "fusion_timestamps": time.time() * 1000,
-                                        "fusion_bam_sizes": bam_size,
-                                        "fusion_bam_names": os.path.basename(bamfile),
-                                    },
-                                )
-
-                                # Save metrics after recording
-                                self.performance_metrics.save_metrics()
-                                logger.info("Performance metrics saved successfully")
-
-                                # Update UI if it's initialized
-                                if self.performance_ui_initialized:
-                                    logger.info("Updating performance metrics UI")
-                                    self.performance_metrics.update_ui()
-                                else:
-                                    logger.warning(
-                                        "Performance metrics UI not initialized, attempting to initialize"
-                                    )
-                                    self.performance_metrics.create_ui()
-                                    self.performance_ui_initialized = True
-                                    self.performance_metrics.update_ui()
-                            else:
-                                logger.warning(
-                                    "Performance metrics not initialized, skipping metrics recording"
-                                )
 
                     except Exception as e:
                         logger.error(f"Error processing BAM file: {str(e)}")

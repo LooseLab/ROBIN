@@ -40,6 +40,9 @@ import asyncio
 import logging
 import subprocess
 import importlib.metadata
+import time
+import plotly.graph_objects as go
+from datetime import datetime
 
 from nicegui import ui, app, events, core
 import nicegui.air
@@ -153,6 +156,41 @@ HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
 # Read the CSS styles for the application
 STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 
+# Global RAM history for background tracking (now only for ROBIN)
+ram_history = {
+    'robin': [],
+    'peak': [],
+    'timestamps': [],
+    'max_points': 60,  # 30 minutes at 30s intervals
+}
+
+# Track the current peak in a mutable container
+current_peak = [0]
+
+def get_robin_ram_usage():
+    process = psutil.Process(os.getpid())
+    ram_gb = process.memory_info().rss / (1024 * 1024 * 1024)
+    for child in process.children(recursive=True):
+        try:
+            ram_gb += child.memory_info().rss / (1024 * 1024 * 1024)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return round(ram_gb, 2)
+
+def collect_ram_usage():
+    robin_ram = get_robin_ram_usage()
+    current_time = datetime.now().strftime("%H:%M:%S")
+    ram_history['robin'].append(robin_ram)
+    ram_history['timestamps'].append(current_time)
+    # Update peak
+    current_peak[0] = max(current_peak[0], robin_ram)
+    ram_history['peak'].append(current_peak[0])
+    current_peak[0] = 0  # Reset for next interval
+    # Keep only the last N points
+    max_points = ram_history['max_points']
+    for key in ['robin', 'peak', 'timestamps']:
+        ram_history[key] = ram_history[key][-max_points:]
+
 
 def create_activity_monitor():
     """
@@ -170,6 +208,9 @@ def create_activity_monitor():
                 self.columns = {}  # Dictionary to store column containers
                 self.indicators = {}  # Dictionary to store process indicators
                 self.is_shutting_down = False
+                self.performance_metrics_container = None
+                self.ram_history = {'robin': [], 'timestamps': []}  # Store RAM usage history
+                self.max_history_points = 60  # Store 30 minutes of data (30s * 60)
 
                 # Initialize process states
                 for process_type in ProcessType:
@@ -189,7 +230,7 @@ def create_activity_monitor():
                 for status_type, color_class, is_spinning in [
                     ("Running", "primary", True),  # Blue
                     ("Waiting", "warning", False),  # Orange
-                    ("Starting", "info", True),  # Light Blue
+                    ("Starting", "info", True),  # Light Blue, spinning
                     ("Error", "negative", False),  # Red
                     ("Finished", "positive", False),  # Green
                 ]:
@@ -201,6 +242,63 @@ def create_activity_monitor():
                         else:
                             progress.value = 100
                         ui.label(status_type).style("font-size: 0.75rem")
+
+            # Add performance metrics UI
+            with ui.card().classes("w-full p-4 mb-4"):
+                ui.label("System Performance").classes("text-lg font-medium mb-4")
+                # Create a container for performance metrics that will be populated by the Brain class
+                status.performance_metrics_container = ui.column().classes("w-full gap-4")
+                
+                # Add RAM usage graph using ECharts
+                with ui.card().classes("w-full p-4"):
+                    ui.label("ROBIN RAM Usage").classes("text-lg font-medium mb-4")
+
+                    # Initial ECharts options for two lines (current and peak)
+                    ram_echart_options = {
+                        "backgroundColor": "transparent",
+                        "title": {"text": "ROBIN RAM Usage", "left": "center"},
+                        "tooltip": {"trigger": "axis"},
+                        "legend": {"data": ["ROBIN", "Peak"], "top": 30},
+                        "xAxis": {
+                            "type": "category",
+                            "name": "Time",
+                            "axisLabel": {"rotate": 45},
+                            "data": [],
+                        },
+                        "yAxis": {
+                            "type": "value",
+                            "name": "RAM Usage (GB)",
+                            "axisLabel": {"formatter": "{value} GB"},
+                        },
+                        "series": [
+                            {
+                                "name": "ROBIN",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                            },
+                            {
+                                "name": "Peak",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "lineStyle": {"type": "dashed"},
+                            },
+                        ],
+                    }
+
+                    ram_chart = ui.echart(ram_echart_options).classes("w-full h-64")
+
+                    def update_ram_echart():
+                        ram_chart.options["xAxis"]["data"] = ram_history['timestamps']
+                        ram_chart.options["series"][0]["data"] = ram_history['robin']
+                        ram_chart.options["series"][1]["data"] = ram_history['peak']
+                        ram_chart.update()
+
+                    # UI timer just for refreshing the plot
+                    ui.timer(10.0, update_ram_echart)
 
             # Create the grid for process types
             grid = ui.grid(columns=4).classes("w-full gap-4")
@@ -851,3 +949,39 @@ if __name__ in {"__main__", "__mp_main__"}:
     # import doctest
     # doctest.testmod()
     main()
+
+def get_process_ram_usage():
+    """Get RAM usage for Python and R processes."""
+    python_ram = 0
+    r_ram = 0
+    
+    for proc in psutil.process_iter(['pid', 'name', 'memory_info']):
+        try:
+            # Get process name and memory info
+            name = proc.info['name'].lower()
+            mem_info = proc.info['memory_info']
+            
+            # Skip if memory_info is None
+            if mem_info is None:
+                continue
+                
+            # Calculate RAM usage in GB
+            ram_gb = mem_info.rss / (1024 * 1024 * 1024)  # Convert bytes to GB
+            
+            # Only count processes that are actually using memory
+            if ram_gb > 0:
+                if 'python' in name:
+                    python_ram += ram_gb
+                elif 'r' in name or 'Rscript' in name:
+                    r_ram += ram_gb
+                    
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+        except Exception as e:
+            logging.debug(f"Error getting memory info for process {proc.info.get('name', 'unknown')}: {str(e)}")
+            continue
+    
+    return round(python_ram, 2), round(r_ram, 2)  # Round to 2 decimal places for cleaner display
+
+# Start the background timer ONCE at app startup
+ui.timer(30.0, collect_ram_usage)
