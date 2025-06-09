@@ -3407,7 +3407,7 @@ class BrainMeth:
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
                 # The length of bams we allow to be processed at once will influence memory usage.
-                if len(files_by_sample[sample_id]) >= 20:
+                if len(files_by_sample[sample_id]) >= 5:  #This can be changed at any time
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
                         f"Processing batch of {files_to_process} files for sample {sample_id}"

@@ -3,6 +3,7 @@ import click
 import os
 import sys
 import logging
+import memray
 from datetime import datetime
 import asyncio
 from time import sleep
@@ -23,6 +24,7 @@ from robin.utilities.news_feed import NewsFeed
 from robin.__about__ import __version__
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 from .core.state import state, ProcessType, ProcessState
+
 
 DEV_TESTING: bool = False
 
@@ -1138,6 +1140,7 @@ def package_run(
     """
     Main entry point for the ROBIN package.
     """
+
     # Set up logging first, before any other operations
     setup_logging(log_level, log_file)
 
@@ -1252,6 +1255,7 @@ def package_run(
         if output is None:
             logging.error("Output is required when --browse is not set.")
             sys.exit(1)
+        
         run_class(
             port=port,
             force_sampleid=force_sampleid,

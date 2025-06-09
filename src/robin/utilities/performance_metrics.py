@@ -153,7 +153,7 @@ class PerformanceMetrics:
         logger.info(f"Recorded metrics for operation at {current_time}")
         self.save_metrics()
 
-    def start_ram_tracking(self, interval_seconds: int = 30) -> None:
+    def start_ram_tracking(self, interval_seconds: int = 10) -> None:
         """
         Start tracking RAM usage at regular intervals.
 

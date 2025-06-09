@@ -1,11 +1,128 @@
 import numpy as np
 from collections import defaultdict
 from typing import Dict, List, Tuple
+import mmap
+import os
+import tempfile
+import struct
+import array
+from pathlib import Path
+import json
+import shutil
+import pickle
+
+
+class MemoryMappedStorage:
+    """
+    Handles efficient storage of genomic position data using memory-mapped files.
+    This class provides a way to store large arrays of genomic positions on disk
+    while maintaining efficient access patterns.
+    """
+    def __init__(self, temp_dir: str = None):
+        self.temp_dir = temp_dir or tempfile.gettempdir()
+        self.storage_dir = Path(self.temp_dir) / "robin_cnv_storage"
+        self.storage_dir.mkdir(exist_ok=True)
+        self.mapped_files = {}
+        self.position_arrays = {}
+        
+    def _get_file_path(self, chromosome: str) -> Path:
+        return self.storage_dir / f"{chromosome}_positions.bin"
+        
+    def store_positions(self, chromosome: str, positions: List[Tuple[int, int]]) -> None:
+        """Store position data for a chromosome using memory mapping."""
+        if not positions:
+            return
+            
+        file_path = self._get_file_path(chromosome)
+        # Convert positions to a flat array of integers
+        flat_data = array.array('Q')  # Using unsigned long long (8 bytes) for positions
+        for pos, val in positions:
+            flat_data.extend([pos, val])
+            
+        # Write to file
+        with open(file_path, 'wb') as f:
+            # Write number of positions as header
+            f.write(struct.pack('Q', len(positions)))
+            flat_data.tofile(f)
+            
+    def load_positions(self, chromosome: str) -> List[Tuple[int, int]]:
+        """Load position data for a chromosome using memory mapping."""
+        file_path = self._get_file_path(chromosome)
+        if not file_path.exists():
+            return []
+            
+        with open(file_path, 'rb') as f:
+            # Read number of positions from header
+            num_positions = struct.unpack('Q', f.read(8))[0]
+            # Memory map the file
+            mm = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+            # Read the data
+            positions = []
+            for _ in range(num_positions):
+                pos = struct.unpack('Q', mm.read(8))[0]
+                val = struct.unpack('Q', mm.read(8))[0]
+                positions.append((pos, val))
+            mm.close()
+        return positions
+        
+    def clear(self, chromosome: str = None) -> None:
+        """Clear stored data for a specific chromosome or all chromosomes."""
+        if chromosome:
+            file_path = self._get_file_path(chromosome)
+            if file_path.exists():
+                file_path.unlink()
+        else:
+            for file in self.storage_dir.glob("*_positions.bin"):
+                file.unlink()
+                
+    def save_state(self, output_path: str) -> None:
+        """Save the current state of all stored data to a directory."""
+        output_dir = Path(output_path)
+        output_dir.mkdir(exist_ok=True)
+        
+        # Save metadata about stored chromosomes
+        metadata = {
+            'temp_dir': str(self.temp_dir),
+            'chromosomes': [f.stem.split('_')[0] for f in self.storage_dir.glob("*_positions.bin")]
+        }
+        
+        with open(output_dir / 'storage_metadata.pkl', 'wb') as f:
+            pickle.dump(metadata, f)
+            
+        # Copy all position files to the output directory
+        for file in self.storage_dir.glob("*_positions.bin"):
+            shutil.copy2(file, output_dir / file.name)
+            
+    def load_state(self, input_path: str) -> None:
+        """Load state from a saved directory."""
+        input_dir = Path(input_path)
+        if not input_dir.exists():
+            raise FileNotFoundError(f"State directory not found: {input_path}")
+            
+        # Load metadata
+        try:
+            with open(input_dir / 'storage_metadata.pkl', 'rb') as f:
+                metadata = pickle.load(f)
+        except (FileNotFoundError, pickle.UnpicklingError):
+            # Fallback to JSON if pickle file doesn't exist or is corrupted
+            try:
+                with open(input_dir / 'storage_metadata.json', 'r') as f:
+                    metadata = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                metadata = {'temp_dir': str(self.temp_dir), 'chromosomes': []}
+            
+        # Clear existing data
+        self.clear()
+        
+        # Copy position files to storage directory
+        for file in input_dir.glob("*_positions.bin"):
+            shutil.copy2(file, self.storage_dir / file.name)
 
 
 class CNVChangeDetectorTracker:
     """
     Tracks and analyzes copy number variation (CNV) breakpoints in genomic data.
+    Uses memory-mapped storage for efficient memory usage.
 
     This class handles the detection and tracking of CNV breakpoints across different chromosomes.
     It uses a binning approach to manage large genomic data efficiently, allowing for the analysis
@@ -18,7 +135,7 @@ class CNVChangeDetectorTracker:
         coordinates (Dict[str, Dict[str, any]]): A dictionary storing breakpoint data and analysis results.
     """
 
-    def __init__(self, base_proportion: float = 0.01, bin_width: int = 1_000_000):
+    def __init__(self, base_proportion: float = 0.01, bin_width: int = 1_000_000, temp_dir: str = None):
         """
         Initializes the CNVChangeDetectorTracker with a specified base proportion and bin width.
 
@@ -32,6 +149,9 @@ class CNVChangeDetectorTracker:
             bin_width  # Used to track the largest bin width during updates
         )
 
+        self.storage = MemoryMappedStorage(temp_dir)
+        
+        # Store only essential metadata in memory
         self.coordinates: Dict[str, Dict[str, any]] = (
             {}
         )  # Stores CNV data per chromosome
@@ -86,34 +206,27 @@ class CNVChangeDetectorTracker:
         for entry in local_breakpoints:
             breakpointlist.append((entry["start"], entry["end"]))
 
-        self.ruptures_breakpoints[entry["name"]] = breakpointlist
+        self.ruptures_breakpoints[chromosome] = breakpointlist
 
-        # Convert the increments dictionary to NumPy arrays for efficient processing
+        # Process positions and store in memory-mapped file
         positions_array = np.array(list(increments.keys()))
         values_array = np.array(list(increments.values()))
-
-        # Sort positions to ensure proper ordering of breakpoints
         sorted_indices = np.argsort(positions_array)
         sorted_positions = positions_array[sorted_indices]
         sorted_values = values_array[sorted_indices]
+        
+        # Store positions in memory-mapped file
+        positions = list(zip(sorted_positions, np.cumsum(sorted_values)))
+        self.storage.store_positions(chromosome, positions)
 
-        # Initialize chromosome data if not already present
-        self._initialize_chromosome(chromosome, length)
+        # Initialize chromosome metadata if needed
+        if chromosome not in self.coordinates:
+            self._initialize_chromosome(chromosome, length)
 
-        # Process positions and calculate cumulative values
-        positions = self.coordinates[chromosome]["positions"]
-        cumulative_values = np.cumsum(sorted_values)
-        final_positions = np.vstack((sorted_positions, cumulative_values)).T
-
-        # Store the processed positions and values
-        positions.extend(map(tuple, final_positions))
-
-        # Recalculate the threshold and update BED data
+        # Recalculate threshold and update BED data
         self._calculate_threshold(chromosome)
         self.coordinates[chromosome]["bed_data"] = self.get_bed_targets(chromosome)
-        self.coordinates[chromosome]["bed_data_breakpoints"] = (
-            self.get_bed_targets_breakpoints(chromosome)
-        )
+        self.coordinates[chromosome]["bed_data_breakpoints"] = self.get_bed_targets_breakpoints(chromosome)
 
     def _initialize_chromosome(self, chromosome: str, length: int) -> None:
         """
@@ -124,7 +237,6 @@ class CNVChangeDetectorTracker:
             length (int): The total length of the chromosome.
         """
         self.coordinates[chromosome] = {
-            "positions": [],
             "length": length,
             "target": self._calculate_scaled_proportion(length),
             "threshold": 0,
@@ -180,7 +292,9 @@ class CNVChangeDetectorTracker:
 
         while length > target:
             self._init_positions(chromosome)
-            for pos, depth in data["positions"]:
+            # Load positions from memory-mapped storage
+            positions = self.storage.load_positions(chromosome)
+            for pos, depth in positions:
                 self.update(chromosome, 1 if depth > data["threshold"] else 0, pos)
             length = self.get_cumulative_sum(chromosome)
             data["threshold"] += 1
@@ -319,3 +433,63 @@ class CNVChangeDetectorTracker:
             ]
             return "\n".join(bed_lines)
         return ""
+
+    def __del__(self):
+        """Clean up memory-mapped files when the object is destroyed."""
+        self.storage.clear()
+
+    def save_state(self, output_path: str) -> None:
+        """Save the current state of the tracker."""
+        # Save the memory-mapped storage state
+        self.storage.save_state(output_path)
+        
+        # Convert coordinates to a serializable format
+        serializable_coordinates = {}
+        for chrom, data in self.coordinates.items():
+            serializable_coordinates[chrom] = {
+                k: float(v) if isinstance(v, np.float32) else v
+                for k, v in data.items()
+                if k not in ['positions']  # Skip positions as they're stored in memory-mapped files
+            }
+        
+        # Save the metadata using pickle for better handling of complex types
+        metadata = {
+            'base_proportion': self.base_proportion,
+            'bin_width': self.bin_width,
+            'max_bin_width': self.max_bin_width,
+            'coordinates': serializable_coordinates,
+            'ruptures_breakpoints': dict(self.ruptures_breakpoints)  # Convert to regular dict
+        }
+        
+        with open(Path(output_path) / 'tracker_metadata.pkl', 'wb') as f:
+            pickle.dump(metadata, f)
+            
+    def load_state(self, input_path: str) -> None:
+        """Load state from a saved directory."""
+        # Load the memory-mapped storage state
+        self.storage.load_state(input_path)
+        
+        # Load the metadata
+        try:
+            with open(Path(input_path) / 'tracker_metadata.pkl', 'rb') as f:
+                metadata = pickle.load(f)
+        except (FileNotFoundError, pickle.UnpicklingError):
+            # Fallback to JSON if pickle file doesn't exist or is corrupted
+            try:
+                with open(Path(input_path) / 'tracker_metadata.json', 'r') as f:
+                    metadata = json.load(f)
+            except (FileNotFoundError, json.JSONDecodeError):
+                # If both files are missing or corrupted, initialize with defaults
+                metadata = {
+                    'base_proportion': self.base_proportion,
+                    'bin_width': self.bin_width,
+                    'max_bin_width': self.max_bin_width,
+                    'coordinates': {},
+                    'ruptures_breakpoints': {}
+                }
+            
+        self.base_proportion = metadata['base_proportion']
+        self.bin_width = metadata['bin_width']
+        self.max_bin_width = metadata['max_bin_width']
+        self.coordinates = metadata['coordinates']
+        self.ruptures_breakpoints = metadata['ruptures_breakpoints']

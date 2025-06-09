@@ -160,8 +160,12 @@ STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 ram_history = {
     'robin': [],
     'peak': [],
+    'available': [],  # Available system memory
+    'free': [],      # Free system memory
+    'swap_used': [], # Used swap memory
+    'swap_total': [], # Total swap memory
     'timestamps': [],
-    'max_points': 60,  # 30 minutes at 30s intervals
+    'max_points': 2880,  # 24 hours at 30s intervals (24 * 60 * 2)
 }
 
 # Track the current peak in a mutable container
@@ -180,15 +184,32 @@ def get_robin_ram_usage():
 def collect_ram_usage():
     robin_ram = get_robin_ram_usage()
     current_time = datetime.now().strftime("%H:%M:%S")
+    
+    # Get system memory info
+    mem = psutil.virtual_memory()
+    available_gb = round(mem.available / (1024 * 1024 * 1024), 2)  # Convert to GB
+    free_gb = round(mem.free / (1024 * 1024 * 1024), 2)  # Convert to GB
+    
+    # Get swap memory info
+    swap = psutil.swap_memory()
+    swap_used_gb = round(swap.used / (1024 * 1024 * 1024), 2)  # Convert to GB
+    swap_total_gb = round(swap.total / (1024 * 1024 * 1024), 2)  # Convert to GB
+    
     ram_history['robin'].append(robin_ram)
+    ram_history['available'].append(available_gb)
+    ram_history['free'].append(free_gb)
+    ram_history['swap_used'].append(swap_used_gb)
+    ram_history['swap_total'].append(swap_total_gb)
     ram_history['timestamps'].append(current_time)
+    
     # Update peak
     current_peak[0] = max(current_peak[0], robin_ram)
     ram_history['peak'].append(current_peak[0])
     current_peak[0] = 0  # Reset for next interval
+    
     # Keep only the last N points
     max_points = ram_history['max_points']
-    for key in ['robin', 'peak', 'timestamps']:
+    for key in ['robin', 'peak', 'available', 'free', 'swap_used', 'swap_total', 'timestamps']:
         ram_history[key] = ram_history[key][-max_points:]
 
 
@@ -251,25 +272,58 @@ def create_activity_monitor():
                 
                 # Add RAM usage graph using ECharts
                 with ui.card().classes("w-full p-4"):
-                    ui.label("ROBIN RAM Usage").classes("text-lg font-medium mb-4")
+                    ui.label("Memory Usage").classes("text-lg font-medium mb-4")
 
                     # Initial ECharts options for two lines (current and peak)
                     ram_echart_options = {
                         "backgroundColor": "transparent",
-                        "title": {"text": "ROBIN RAM Usage", "left": "center"},
+                        "title": {"text": "Memory Usage (24h)", "left": "center"},
                         "tooltip": {"trigger": "axis"},
-                        "legend": {"data": ["ROBIN", "Peak"], "top": 30},
+                        "legend": {
+                            "data": ["ROBIN", "Peak", "Available", "Free", "Swap Used", "Swap Total"],
+                            "top": 30
+                        },
                         "xAxis": {
                             "type": "category",
                             "name": "Time",
-                            "axisLabel": {"rotate": 45},
+                            "axisLabel": {"rotate": 45, "formatter": "{value}"},
                             "data": [],
                         },
-                        "yAxis": {
-                            "type": "value",
-                            "name": "RAM Usage (GB)",
-                            "axisLabel": {"formatter": "{value} GB"},
-                        },
+                        "yAxis": [
+                            {
+                                "type": "value",
+                                "name": "Memory (GB)",
+                                "axisLabel": {"formatter": "{value} GB"},
+                                "min": 0,
+                                "max": "dataMax",
+                                "position": "left",
+                            },
+                            {
+                                "type": "value",
+                                "name": "Swap (GB)",
+                                "axisLabel": {"formatter": "{value} GB"},
+                                "min": 0,
+                                "max": "dataMax",
+                                "position": "right",
+                            }
+                        ],
+                        "dataZoom": [
+                            {
+                                "type": "slider",
+                                "show": True,
+                                "xAxisIndex": [0],
+                                "start": 0,
+                                "end": 100,
+                                "height": 20,
+                                "bottom": 0,
+                            },
+                            {
+                                "type": "inside",
+                                "xAxisIndex": [0],
+                                "start": 0,
+                                "end": 100,
+                            },
+                        ],
                         "series": [
                             {
                                 "name": "ROBIN",
@@ -277,6 +331,8 @@ def create_activity_monitor():
                                 "smooth": True,
                                 "data": [],
                                 "showSymbol": False,
+                                "sampling": "lttb",  # Use LTTB sampling for better performance
+                                "yAxisIndex": 0,
                             },
                             {
                                 "name": "Peak",
@@ -285,6 +341,50 @@ def create_activity_monitor():
                                 "data": [],
                                 "showSymbol": False,
                                 "lineStyle": {"type": "dashed"},
+                                "sampling": "lttb",  # Use LTTB sampling for better performance
+                                "yAxisIndex": 0,
+                            },
+                            {
+                                "name": "Available",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "sampling": "lttb",
+                                "lineStyle": {"type": "dotted"},
+                                "yAxisIndex": 0,
+                            },
+                            {
+                                "name": "Free",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "sampling": "lttb",
+                                "lineStyle": {"type": "dotted"},
+                                "yAxisIndex": 0,
+                            },
+                            {
+                                "name": "Swap Used",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "sampling": "lttb",
+                                "lineStyle": {"type": "dashed"},
+                                "yAxisIndex": 1,
+                                "itemStyle": {"color": "#ff6b6b"},  # Red color for swap
+                            },
+                            {
+                                "name": "Swap Total",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "sampling": "lttb",
+                                "lineStyle": {"type": "dashed"},
+                                "yAxisIndex": 1,
+                                "itemStyle": {"color": "#ff8787"},  # Lighter red for total swap
                             },
                         ],
                     }
@@ -295,6 +395,10 @@ def create_activity_monitor():
                         ram_chart.options["xAxis"]["data"] = ram_history['timestamps']
                         ram_chart.options["series"][0]["data"] = ram_history['robin']
                         ram_chart.options["series"][1]["data"] = ram_history['peak']
+                        ram_chart.options["series"][2]["data"] = ram_history['available']
+                        ram_chart.options["series"][3]["data"] = ram_history['free']
+                        ram_chart.options["series"][4]["data"] = ram_history['swap_used']
+                        ram_chart.options["series"][5]["data"] = ram_history['swap_total']
                         ram_chart.update()
 
                     # UI timer just for refreshing the plot
@@ -984,4 +1088,4 @@ def get_process_ram_usage():
     return round(python_ram, 2), round(r_ram, 2)  # Round to 2 decimal places for cleaner display
 
 # Start the background timer ONCE at app startup
-ui.timer(30.0, collect_ram_usage)
+ui.timer(10.0, collect_ram_usage)
