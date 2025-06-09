@@ -420,55 +420,78 @@ def merge_modkit_files(
                     disclaimer_confirmed=True,
                 )
 
-                logging.info(response)
+                logging.info(f"MNP-FLEX upload successful: {response}")
                 sample_id = response["id"]
                 sample = mnpFlex.get_sample(sample_id)
-                logging.info(sample_id, sample)
+                logging.info(f"Sample details: {sample}")
                 result_status = sample["bed_file_sample"]["analysis_status"]
-                while result_status == "initialized":
+                
+                # Add timeout for analysis completion
+                max_wait_time = 300  # 5 minutes
+                start_time = time.time()
+                while result_status == "initialized" and (time.time() - start_time) < max_wait_time:
                     time.sleep(1)
-                    sample = mnpFlex.get_sample(sample_id)
-                    result_status = sample["bed_file_sample"]["analysis_status"]
+                    try:
+                        sample = mnpFlex.get_sample(sample_id)
+                        result_status = sample["bed_file_sample"]["analysis_status"]
+                    except Exception as e:
+                        logging.error(f"Error checking analysis status: {str(e)}")
+                        break
 
-                if result_status == "Analysis error":
+                if (time.time() - start_time) >= max_wait_time:
+                    logging.error("Analysis timed out after 5 minutes")
+                    mnpFlex.delete_sample(sample_id)
+                elif result_status == "Analysis error":
                     logging.error(f"Analysis error for {sample_id}")
                     mnpFlex.delete_sample(sample_id)
                 else:
-                    report_content = mnpFlex.get_sample_report(sample_id)
+                    try:
+                        report_content = mnpFlex.get_sample_report(sample_id)
 
-                    # If the response is binary content (e.g., a PDF), you can save it to a file
-                    if isinstance(report_content, bytes):
-                        report_path = os.path.join(
-                            sample_output_dir,
-                            f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
-                        )
-                        with open(report_path, "wb") as file:
-                            file.write(report_content)
-                        logging.info(f"Report saved as {report_path}")
-
-                        # Extract and store data from the report
-                        from robin.reporting.pdf_extractor import PDFExtractor
-
-                        # Initialize PDF extractor with path in sample directory
-                        extractor = PDFExtractor(
-                            os.path.join(sample_output_dir, "extracted_data")
-                        )
-
-                        # Extract data from the report
-                        data = extractor.extract_from_pdf(report_path)
-                        if data:
-                            # Save extracted data
-                            extractor.save_data(data)
-                            logging.info(
-                                f"Extracted and stored data from report: {report_path}"
+                        # If the response is binary content (e.g., a PDF), save it to a file
+                        if isinstance(report_content, bytes):
+                            report_path = os.path.join(
+                                sample_output_dir,
+                                f'{sample["sample_name"]}_{clean_file_length}_{datetime.now().strftime("%Y%m%d_%H%M%S")}.pdf',
                             )
-                    else:
-                        logging.info(report_content)
+                            with open(report_path, "wb") as file:
+                                file.write(report_content)
+                            logging.info(f"Report saved as {report_path}")
 
-                    mnpFlex.delete_sample(sample_id)
+                            try:
+                                # Extract and store data from the report
+                                from robin.reporting.pdf_extractor import PDFExtractor
+
+                                # Initialize PDF extractor with path in sample directory
+                                extractor = PDFExtractor(
+                                    os.path.join(sample_output_dir, "extracted_data")
+                                )
+
+                                # Extract data from the report
+                                data = extractor.extract_from_pdf(report_path)
+                                if data:
+                                    # Save extracted data
+                                    extractor.save_data(data)
+                                    logging.info(
+                                        f"Extracted and stored data from report: {report_path}"
+                                    )
+                            except Exception as e:
+                                logging.error(f"Error extracting PDF data: {str(e)}")
+                        else:
+                            logging.info(f"Report content: {report_content}")
+
+                    except Exception as e:
+                        logging.error(f"Error getting/saving report: {str(e)}")
+                    finally:
+                        try:
+                            mnpFlex.delete_sample(sample_id)
+                        except Exception as e:
+                            logging.error(f"Error deleting sample: {str(e)}")
+
             except Exception as e:
-                logging.error(f"MNP-FLEX upload/analysis failed: {str(e)}")
-                logging.error("Continuing with processing despite MNP-FLEX error")
+                # Log the error but don't let it crash the process
+                logging.error("MNP-FLEX upload/analysis failed", exc_info=True)
+                logging.info("Continuing with processing despite MNP-FLEX error")
                 # Don't re-raise the exception - allow processing to continue
 
         logging.debug(
