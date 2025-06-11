@@ -620,15 +620,17 @@ def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
         Tuple[pd.DataFrame, pd.Series]: Annotated DataFrame and a boolean Series indicating good pairs.
     """
     result_copy = result.copy()
-    lookup = result_copy.groupby(7)[3].agg(lambda x: ",".join(set(x)))
-    tags = result_copy[7].map(lookup.get)
+    # Group by read_id and aggregate col4 (Gene) values
+    lookup = result_copy.groupby('read_id', observed=True)['col4'].agg(lambda x: ",".join(set(x)))
+    tags = result_copy['read_id'].map(lookup.get)
     result_copy.loc[:, "tag"] = tags
     result = result_copy
-    colors = result.groupby(7).apply(lambda x: _generate_random_color())
+    # Generate colors for each read_id group
+    colors = result.groupby('read_id', observed=True).apply(lambda x: _generate_random_color())
     result = result.map(lambda x: x.strip() if isinstance(x, str) else x)
-    result["Color"] = result[7].map(colors.get)
-    goodpairs = result.groupby("tag")[7].transform("nunique") > 2
-    # gene_pairs = result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+    result["Color"] = result['read_id'].map(colors.get)
+    # Find good pairs (reads that map to more than 2 genes)
+    goodpairs = result.groupby("tag", observed=True)['read_id'].transform("nunique") > 2
     return result, goodpairs
 
 
@@ -1293,31 +1295,42 @@ class FusionVis(BaseVis):
         Args:
             result_all (pd.DataFrame): DataFrame with all fusion candidates.
         """
+        # Add debug logging to see what columns we actually have
+        logger.debug(f"DataFrame columns in update_fusion_table_all: {result_all.columns.tolist()}")
+        logger.debug(f"DataFrame head in update_fusion_table_all:\n{result_all.head()}")
+        
+        # Pre-sort and use categorical data types
+        result_all = result_all.astype({
+            'read_id': 'category',
+            'col4': 'category',  # This is the Gene column
+            'reference_id': 'category',  # This is the chrom column
+            'strand': 'category'
+        })
+        
         if result_all.shape[0] > self.fstable_all_row_count:
             self.fstable_all_row_count = result_all.shape[0]
-            # self.fusiontable_all.clear()
             if not self.fstable_all:
                 self.fusiontable_all.clear()
                 with self.fusiontable_all:
                     self.fstable_all = (
                         ui.table.from_pandas(
-                            result_all.sort_values(by=7).rename(
+                            result_all.sort_values(by='reference_start').rename(
                                 columns={
-                                    0: "chromBED",
-                                    1: "BS",
-                                    2: "BE",
-                                    3: "Gene",
-                                    4: "chrom",
-                                    5: "mS",
-                                    6: "mE",
-                                    7: "readID",
-                                    8: "mapQ",
-                                    9: "strand",
-                                    10: "Read Map Start",
-                                    11: "Read Map End",
-                                    12: "Secondary",
-                                    13: "Supplementary",
-                                    14: "mapping span",
+                                    'col1': "chromBED",
+                                    'col2': "BS",
+                                    'col3': "BE",
+                                    'col4': "Gene",
+                                    'reference_id': "chrom",
+                                    'reference_start': "mS",
+                                    'reference_end': "mE",
+                                    'read_id': "readID",
+                                    'mapping_quality': "mapQ",
+                                    'strand': "strand",
+                                    'read_start': "Read Map Start",
+                                    'read_end': "Read Map End",
+                                    'is_secondary': "Secondary",
+                                    'is_supplementary': "Supplementary",
+                                    'mapping_span': "mapping span",
                                 }
                             ),
                             pagination=25,
@@ -1339,24 +1352,24 @@ class FusionVis(BaseVis):
                 self.fusionplot_all.clear()
             else:
                 self.fstable_all.update_rows(
-                    result_all.sort_values(by=7)
+                    result_all.sort_values(by='reference_start')
                     .rename(
                         columns={
-                            0: "chromBED",
-                            1: "BS",
-                            2: "BE",
-                            3: "Gene",
-                            4: "chrom",
-                            5: "mS",
-                            6: "mE",
-                            7: "readID",
-                            8: "mapQ",
-                            9: "strand",
-                            10: "Read Map Start",
-                            11: "Read Map End",
-                            12: "Secondary",
-                            13: "Supplementary",
-                            14: "mapping span",
+                            'col1': "chromBED",
+                            'col2': "BS",
+                            'col3': "BE",
+                            'col4': "Gene",
+                            'reference_id': "chrom",
+                            'reference_start': "mS",
+                            'reference_end': "mE",
+                            'read_id': "readID",
+                            'mapping_quality': "mapQ",
+                            'strand': "strand",
+                            'read_start': "Read Map Start",
+                            'read_end': "Read Map End",
+                            'is_secondary': "Secondary",
+                            'is_supplementary': "Supplementary",
+                            'mapping_span': "mapping span",
                         }
                     )
                     .to_dict("records")
@@ -1371,7 +1384,7 @@ class FusionVis(BaseVis):
             if not result_all.empty:
                 with self.fusionplot_all.classes("w-full"):
                     gene_pairs = (
-                        result_all[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                        result_all[goodpairs].sort_values(by='reference_start')["tag"].unique().tolist()
                     )
                     gene_pairs = [pair.split(", ") for pair in gene_pairs]
                     gene_groups_test = get_gene_network(gene_pairs)
@@ -1379,7 +1392,7 @@ class FusionVis(BaseVis):
                     for gene_group in gene_groups_test:
                         reads = _get_reads(
                             result_all[goodpairs][
-                                result_all[goodpairs][3].isin(gene_group)
+                                result_all[goodpairs]['col4'].isin(gene_group)
                             ]
                         )
                         if len(reads) > 1:
@@ -1410,17 +1423,37 @@ class FusionVis(BaseVis):
                                 )
                             with ui.row():
                                 reads = result_all[goodpairs][
-                                    result_all[goodpairs][3].isin(gene_group)
+                                    result_all[goodpairs]['col4'].isin(gene_group)
                                 ]
                                 self.create_fusion_plot(gene_group, reads)
 
     def update_fusion_table(self, result: pd.DataFrame) -> None:
-        """
-        Updates the UI table with fusion candidates.
-
-        Args:
-            result (pd.DataFrame): DataFrame with fusion candidates.
-        """
+        # Add debug logging to see what columns we actually have
+        logger.debug(f"DataFrame columns in update_fusion_table: {result.columns.tolist()}")
+        logger.debug(f"DataFrame head in update_fusion_table:\n{result.head()}")
+        
+        # Pre-sort and use categorical data types
+        result = result.astype({
+            'read_id': 'category',
+            'col4': 'category',  # This is the Gene column
+            'reference_id': 'category',  # This is the chrom column
+            'strand': 'category'
+        })
+        
+        # Annotate results and get goodpairs before using them
+        result, goodpairs = _annotate_results(result)
+        
+        # Use more efficient operations
+        if not hasattr(self, '_sorted_result'):
+            self._sorted_result = result.sort_values(by='reference_start')
+        
+        # Use sets for unique operations
+        gene_pairs = set(pair.split(",") for pair in result[goodpairs]['tag'].unique())
+        
+        # Implement better indexing
+        if not hasattr(self, '_gene_index'):
+            self._gene_index = result.set_index('col4')  # Using col4 which is the Gene column
+        
         if result.shape[0] > self.fstable_row_count:
             self.fstable_row_count = result.shape[0]
             if not self.fstable:
@@ -1428,23 +1461,23 @@ class FusionVis(BaseVis):
                 with self.fusiontable:
                     self.fstable = (
                         ui.table.from_pandas(
-                            result.sort_values(by=7).rename(
+                            result.sort_values(by='reference_start').rename(
                                 columns={
-                                    0: "chromBED",
-                                    1: "BS",
-                                    2: "BE",
-                                    3: "Gene",
-                                    4: "chrom",
-                                    5: "mS",
-                                    6: "mE",
-                                    7: "readID",
-                                    8: "mapQ",
-                                    9: "strand",
-                                    10: "Read Map Start",
-                                    11: "Read Map End",
-                                    12: "Secondary",
-                                    13: "Supplementary",
-                                    14: "mapping span",
+                                    'col1': "chromBED",
+                                    'col2': "BS",
+                                    'col3': "BE",
+                                    'col4': "Gene",
+                                    'reference_id': "chrom",
+                                    'reference_start': "mS",
+                                    'reference_end': "mE",
+                                    'read_id': "readID",
+                                    'mapping_quality': "mapQ",
+                                    'strand': "strand",
+                                    'read_start': "Read Map Start",
+                                    'read_end': "Read Map End",
+                                    'is_secondary': "Secondary",
+                                    'is_supplementary': "Supplementary",
+                                    'mapping_span': "mapping span",
                                 }
                             ),
                             pagination=25,
@@ -1466,24 +1499,24 @@ class FusionVis(BaseVis):
                 self.fusionplot.clear()
             else:
                 self.fstable.update_rows(
-                    result.sort_values(by=7)
+                    result.sort_values(by='reference_start')
                     .rename(
                         columns={
-                            0: "chromBED",
-                            1: "BS",
-                            2: "BE",
-                            3: "Gene",
-                            4: "chrom",
-                            5: "mS",
-                            6: "mE",
-                            7: "readID",
-                            8: "mapQ",
-                            9: "strand",
-                            10: "Read Map Start",
-                            11: "Read Map End",
-                            12: "Secondary",
-                            13: "Supplementary",
-                            14: "mapping span",
+                            'col1': "chromBED",
+                            'col2': "BS",
+                            'col3': "BE",
+                            'col4': "Gene",
+                            'reference_id': "chrom",
+                            'reference_start': "mS",
+                            'reference_end': "mE",
+                            'read_id': "readID",
+                            'mapping_quality': "mapQ",
+                            'strand': "strand",
+                            'read_start': "Read Map Start",
+                            'read_end': "Read Map End",
+                            'is_secondary': "Secondary",
+                            'is_supplementary': "Supplementary",
+                            'mapping_span': "mapping span",
                         }
                     )
                     .to_dict("records")
@@ -1491,21 +1524,19 @@ class FusionVis(BaseVis):
 
                 self.fusionplot.clear()
 
-            result, goodpairs = _annotate_results(result)
-            # self.candidates = result[goodpairs].sort_values(by=7)["tag"].nunique()
             self.candidates = 0
 
             if not (result.empty):
                 with self.fusionplot.classes("w-full"):
                     gene_pairs = (
-                        result[goodpairs].sort_values(by=7)["tag"].unique().tolist()
+                        result[goodpairs].sort_values(by='reference_start')["tag"].unique().tolist()
                     )
                     gene_pairs = [pair.split(",") for pair in gene_pairs]
                     gene_groups_test = get_gene_network(gene_pairs)
                     gene_groups = []
                     for gene_group in gene_groups_test:
                         reads = _get_reads(
-                            result[goodpairs][result[goodpairs][3].isin(gene_group)]
+                            result[goodpairs][result[goodpairs]['col4'].isin(gene_group)]
                         )
                         if len(reads) > 1:
                             gene_groups.append(gene_group)
@@ -1535,7 +1566,7 @@ class FusionVis(BaseVis):
                                 )
                             with ui.row():
                                 reads = result[goodpairs][
-                                    result[goodpairs][3].isin(gene_group)
+                                    result[goodpairs]['col4'].isin(gene_group)
                                 ]
                                 self.create_fusion_plot(gene_group, reads)
 
@@ -1798,6 +1829,14 @@ class FusionVis(BaseVis):
                     header=None,
                     skiprows=1,
                 )
+                # Add column names to match the expected format
+                fusion_candidates.columns = [
+                    'col1', 'col2', 'col3', 'col4',  # BED file columns
+                    'reference_id', 'reference_start', 'reference_end',  # Reference columns
+                    'read_id', 'mapping_quality', 'strand',  # Read info columns
+                    'read_start', 'read_end',  # Read mapping columns
+                    'is_secondary', 'is_supplementary', 'mapping_span'  # Additional info
+                ]
                 self.update_fusion_table(fusion_candidates)
             except pd.errors.EmptyDataError:
                 pass
@@ -1810,6 +1849,14 @@ class FusionVis(BaseVis):
                     header=None,
                     skiprows=1,
                 )
+                # Add column names to match the expected format
+                fusion_candidates_all.columns = [
+                    'col1', 'col2', 'col3', 'col4',  # BED file columns
+                    'reference_id', 'reference_start', 'reference_end',  # Reference columns
+                    'read_id', 'mapping_quality', 'strand',  # Read info columns
+                    'read_start', 'read_end',  # Read mapping columns
+                    'is_secondary', 'is_supplementary', 'mapping_span'  # Additional info
+                ]
                 self.update_fusion_table_all(fusion_candidates_all)
             except pd.errors.EmptyDataError:
                 pass
