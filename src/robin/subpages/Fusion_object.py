@@ -64,7 +64,7 @@ from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
 import matplotlib
 from matplotlib.ticker import FuncFormatter
-from robin.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis, BaseVis
 from robin.utilities.decompress import decompress_gzip_file
 from robin.utilities.bed_file import MasterBedTree
 from collections import Counter, defaultdict
@@ -891,7 +891,7 @@ def fusion_work(
     return fusion_candidates, fusion_candidates_all
 
 
-class FusionObject(BaseAnalysis):
+class FusionVis(BaseVis):
     """
     FusionObject handles the gene fusion identification process, including setting up the GUI
     and processing BAM files asynchronously.
@@ -1286,26 +1286,6 @@ class FusionObject(BaseAnalysis):
         else:
             ui.timer(30, lambda: self.show_previous_data())
 
-    def fusion_table_all(self) -> None:
-        """
-        Displays all fusion candidates in a table format.
-        """
-        # if not self.fusion_candidates_all.empty:
-        if self.sampleID in self.fusion_candidates_all.keys():
-            uniques_all = self.fusion_candidates_all[self.sampleID][
-                "read_id"
-            ].duplicated(keep=False)
-            doubles_all = self.fusion_candidates_all[self.sampleID][uniques_all]
-            counts_all = doubles_all.groupby("read_id")["col4"].transform("nunique")
-            result_all = doubles_all[counts_all > 1]
-            result_all.to_csv(
-                os.path.join(
-                    self.check_and_create_folder(self.output, self.sampleID),
-                    "fusion_candidates_all.csv",
-                ),
-                index=False,
-            )
-
     def update_fusion_table_all(self, result_all: pd.DataFrame) -> None:
         """
         Updates the UI table with all fusion candidates.
@@ -1433,27 +1413,6 @@ class FusionObject(BaseAnalysis):
                                     result_all[goodpairs][3].isin(gene_group)
                                 ]
                                 self.create_fusion_plot(gene_group, reads)
-
-    def fusion_table(self) -> None:
-        """
-        Displays fusion candidates in a table format.
-        """
-        # if not self.fusion_candidates.empty:
-        if self.sampleID in self.fusion_candidates.keys():
-            uniques = self.fusion_candidates[self.sampleID]["read_id"].duplicated(
-                keep=False
-            )
-            doubles = self.fusion_candidates[self.sampleID][uniques]
-            counts = doubles.groupby("read_id")["col4"].transform("nunique")
-            result = doubles[counts > 1]
-            result.to_csv(
-                os.path.join(
-                    self.check_and_create_folder(self.output, self.sampleID),
-                    "fusion_candidates_master.csv",
-                ),
-                index=False,
-            )
-        # self.update_fusion_table(result)
 
     def update_fusion_table(self, result: pd.DataFrame) -> None:
         """
@@ -1817,6 +1776,364 @@ class FusionObject(BaseAnalysis):
                         gene_counter[row["gene"]] += 1
                         gene_counter[row["Join_Gene"]] += 1
 
+    def show_previous_data(self) -> None:
+        """
+        Displays previously analyzed data from the specified output folder.
+        """
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == "sample_ids":
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
+
+        # Load fusion candidates
+        if self.check_file_time(os.path.join(output, "fusion_candidates_master.csv")):
+            try:
+                fusion_candidates = pd.read_csv(
+                    os.path.join(output, "fusion_candidates_master.csv"),
+                    dtype=str,
+                    header=None,
+                    skiprows=1,
+                )
+                self.update_fusion_table(fusion_candidates)
+            except pd.errors.EmptyDataError:
+                pass
+
+        if self.check_file_time(os.path.join(output, "fusion_candidates_all.csv")):
+            try:
+                fusion_candidates_all = pd.read_csv(
+                    os.path.join(output, "fusion_candidates_all.csv"),
+                    dtype=str,
+                    header=None,
+                    skiprows=1,
+                )
+                self.update_fusion_table_all(fusion_candidates_all)
+            except pd.errors.EmptyDataError:
+                pass
+
+        # Load structural variants
+        if self.check_file_time(os.path.join(output, "structural_variants.csv")):
+            try:
+                # Read CSV with string dtype for location columns
+                sv_df = pd.read_csv(
+                    os.path.join(output, "structural_variants.csv"),
+                    dtype={
+                        "Primary Location": str,
+                        "Partner Location": str,
+                        "Full Location": str,
+                    },
+                )
+                # Replace NaN values with 'N/A' in string columns
+                str_columns = ["Primary Location", "Partner Location", "Full Location"]
+                for col in str_columns:
+                    sv_df[col] = sv_df[col].fillna("N/A")
+
+                if not sv_df.empty:
+                    self.sv_count = len(sv_df)
+                    # Only update UI elements if they exist
+                    if hasattr(self, "sv_plot") and self.sv_plot is not None:
+                        self.sv_plot.clear()
+                        with self.sv_plot:
+                            self.create_sv_plot(sv_df, self.sampleID)
+                    if (
+                        hasattr(self, "sv_table_container")
+                        and self.sv_table_container is not None
+                    ):
+                        self.update_sv_table(sv_df)
+            except pd.errors.EmptyDataError:
+                pass
+
+    def update_sv_table(self, sv_df: pd.DataFrame) -> None:
+        """
+        Updates the structural variant table in the UI.
+
+        Args:
+            sv_df (pd.DataFrame): DataFrame containing structural variant data.
+        """
+        if not hasattr(self, "sv_table_container") or self.sv_table_container is None:
+            return
+
+        self.sv_table_container.clear()
+        with self.sv_table_container:
+            self.sv_table = (
+                ui.table.from_pandas(
+                    sv_df,
+                    pagination=25,
+                )
+                .props("dense")
+                .classes("w-full")
+                .style("height: 900px")
+                .style("font-size: 100%; font-weight: 300")
+            )
+            for col in self.sv_table.columns:
+                col["sortable"] = True
+
+            with self.sv_table.add_slot("top-right"):
+                with ui.input(placeholder="Search").props("type=search").bind_value(
+                    self.sv_table, "filter"
+                ).add_slot("append"):
+                    ui.icon("search")
+
+    def create_sv_plot(self, sv_df: pd.DataFrame, sample_id: str) -> None:
+        """
+        Creates a plot visualizing structural variants.
+
+        Args:
+            sv_df (pd.DataFrame): DataFrame containing structural variant data.
+            sample_id (str): Sample identifier.
+        """
+        with ui.card().classes("w-full no-shadow border-[2px]"):
+            pass
+            """
+            with ui.pyplot(figsize=(19, 12)).classes("w-full"):
+                plt.rcParams["figure.constrained_layout.use"] = True
+                plt.rcParams["figure.constrained_layout.h_pad"] = 0.05
+                plt.rcParams["figure.constrained_layout.w_pad"] = 0.05
+
+                # Create a figure with three subplots
+                fig, (ax1, ax2, ax3) = plt.subplots(3, 1, height_ratios=[2, 1, 1])
+
+                # Plot 1: SV Type Distribution
+                sv_counts = sv_df['Event Type'].value_counts()
+                colors = plt.cm.Set3(np.linspace(0, 1, len(sv_counts)))
+                sv_counts.plot(kind='bar', ax=ax1, color=colors)
+                ax1.set_title('Structural Variant Type Distribution')
+                ax1.set_xlabel('Event Type')
+                ax1.set_ylabel('Count')
+                plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+                # Plot 2: Primary Chromosome Distribution
+                primary_chroms = []
+                for loc in sv_df['Primary Location']:
+                    if pd.notna(loc) and loc != 'N/A':
+                        try:
+                            chrom = loc.split(':')[0]
+                            primary_chroms.append(chrom)
+                        except (AttributeError, IndexError):
+                            continue
+
+                if primary_chroms:
+                    chrom_counts = pd.Series(primary_chroms).value_counts()
+                    # Sort chromosomes naturally
+                    chrom_counts = chrom_counts.reindex(sorted(chrom_counts.index, key=lambda x: int(x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25')) if x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25').isdigit() else float('inf')))
+                    chrom_counts.plot(kind='bar', ax=ax2, color='skyblue')
+                    ax2.set_title('Primary Chromosome Distribution')
+                    ax2.set_xlabel('Chromosome')
+                    ax2.set_ylabel('Count')
+                    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
+                else:
+                    ax2.set_visible(False)
+
+                # Plot 3: Partner Chromosome Distribution (for translocations)
+                partner_chroms = []
+                for loc in sv_df['Partner Location']:
+                    if pd.notna(loc) and loc != 'N/A':
+                        try:
+                            chrom = loc.split(':')[0]
+                            partner_chroms.append(chrom)
+                        except (AttributeError, IndexError):
+                            continue
+
+                if partner_chroms:
+                    partner_counts = pd.Series(partner_chroms).value_counts()
+                    # Sort chromosomes naturally
+                    partner_counts = partner_counts.reindex(sorted(partner_counts.index, key=lambda x: int(x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25')) if x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25').isdigit() else float('inf')))
+                    partner_counts.plot(kind='bar', ax=ax3, color='lightgreen')
+                    ax3.set_title('Partner Chromosome Distribution (Translocations)')
+                    ax3.set_xlabel('Chromosome')
+                    ax3.set_ylabel('Count')
+                    plt.setp(ax3.xaxis.get_majorticklabels(), rotation=45, ha='right')
+                else:
+                    ax3.set_visible(False)
+            """
+
+
+class FusionObject(BaseAnalysis):
+    """
+    FusionObject handles the gene fusion identification process, including setting up the GUI
+    and processing BAM files asynchronously.
+
+    Attributes:
+        target_panel (str): Name of the target panel.
+        fusion_candidates (pd.DataFrame): DataFrame with fusion candidates.
+        fusion_candidates_all (pd.DataFrame): DataFrame with all fusion candidates.
+        structural_variants (dict): Dictionary to store structural variants.
+        sv_count (int): Counter for structural variants.
+        fstable_all (ui.Table): UI table for displaying all fusion candidates.
+        fstable (ui.Table): UI table for displaying fusion candidates.
+        sv_table (ui.Table): UI table for displaying structural variants.
+        fstable_all_row_count (int): Row count for all fusion candidates table.
+        all_candidates (int): Number of all fusion candidates.
+        fstable_row_count (int): Row count for fusion candidates table.
+        candidates (int): Number of fusion candidates.
+        gene_gff3_2 (str): Path to the GFF3 file with gene annotations.
+        gene_bed (str): Path to the gene BED file.
+        all_gene_bed (str): Path to the BED file with all genes.
+        gene_table (pd.DataFrame): DataFrame with gene annotations.
+        gene_table_small (pd.DataFrame): Filtered DataFrame with gene annotations.
+    """
+
+    def __init__(
+        self,
+        *args,
+        target_panel=None,
+        reference_file: Optional[str] = None,
+        bed_file: Optional[str] = None,
+        readfish_toml: Optional[Path] = None,
+        master_bed_tree: Optional[MasterBedTree] = None,
+        **kwargs,
+    ):
+        # Initialize base class first
+        super().__init__(*args, **kwargs)
+        state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
+
+        self.target_panel = target_panel
+        self.reference_file = reference_file
+        self.bed_file = bed_file
+        self.readfish_toml = readfish_toml
+        self.fusion_candidates = {}
+        self.fusion_candidates_all = {}
+        self.structural_variants = {}  # Store structural variants
+        self.sv_count = 0  # Counter for structural variants
+        self.fstable_all = None
+        self.fstable = None
+        self.sv_table = None  # Table for structural variants
+        self.fstable_all_row_count = 0
+        self.all_candidates = 0
+        self.fstable_row_count = 0
+        self.candidates = 0
+
+        # Initialize UI elements
+        self.sv_plot = None
+        self.sv_table_container = None
+        self.fusionplot = None
+        self.fusionplot_all = None
+        self.fusiontable = None
+        self.fusiontable_all = None
+
+        self.gene_gff3_2 = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "gencode.v45.basic.annotation.gff3",
+        )
+
+        if self.target_panel == "rCNS2":
+            self.gene_bed = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "rCNS2_panel_name_uniq.bed",
+            )
+        elif self.target_panel == "AML":
+            self.gene_bed = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "AML_panel_name_uniq.bed",
+            )
+
+        self.all_gene_bed = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)), "all_genes2.bed"
+        )
+
+        datafile = f"{self.target_panel}_data.csv.gz"
+
+        if os.path.isfile(
+            os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), datafile)
+        ):
+            self.gene_table = pd.read_csv(
+                os.path.join(
+                    os.path.dirname(os.path.abspath(resources.__file__)), datafile
+                )
+            )
+        else:
+            # logging.info(
+            #    f"This looks like the first time you have run the {self.target_panel} panel."
+            # )
+            # logging.info("Parsing GFF3")
+            self.gene_table = gff3_parser.parse_gff3(
+                self.gene_gff3_2, verbose=False, parse_attributes=True
+            )
+
+            self.gene_table_small = self.gene_table[
+                self.gene_table["Type"].isin(["gene", "exon", "CDS"])
+            ]
+            self.gene_table_small = self.gene_table_small.drop(
+                [
+                    "Score",
+                    "Phase",
+                    "havana_gene",
+                    "transcript_support_level",
+                    "ont",
+                    "transcript_id",
+                    "hgnc_id",
+                    "protein_id",
+                    "havana_transcript",
+                    "exon_number",
+                    "artif_dupl",
+                    "exon_id",
+                    "gene_type",
+                    "ID",
+                    "gene_id",
+                    "level",
+                    "ccdsid",
+                    "tag",
+                    "transcript_name",
+                    "Parent",
+                ],
+                axis=1,
+            )
+            self.gene_table_small.to_csv(
+                os.path.join(
+                    os.path.dirname(os.path.abspath(resources.__file__)), datafile
+                ),
+                index=False,
+                compression="gzip",
+            )
+            self.gene_table = self.gene_table_small
+
+        # self.NewBed = NewBed
+        self.master_bed_tree = master_bed_tree
+
+    def fusion_table_all(self) -> None:
+        """
+        Displays all fusion candidates in a table format.
+        """
+        # if not self.fusion_candidates_all.empty:
+        if self.sampleID in self.fusion_candidates_all.keys():
+            uniques_all = self.fusion_candidates_all[self.sampleID][
+                "read_id"
+            ].duplicated(keep=False)
+            doubles_all = self.fusion_candidates_all[self.sampleID][uniques_all]
+            counts_all = doubles_all.groupby("read_id")["col4"].transform("nunique")
+            result_all = doubles_all[counts_all > 1]
+            result_all.to_csv(
+                os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "fusion_candidates_all.csv",
+                ),
+                index=False,
+            )
+
+    def fusion_table(self) -> None:
+        """
+        Displays fusion candidates in a table format.
+        """
+        # if not self.fusion_candidates.empty:
+        if self.sampleID in self.fusion_candidates.keys():
+            uniques = self.fusion_candidates[self.sampleID]["read_id"].duplicated(
+                keep=False
+            )
+            doubles = self.fusion_candidates[self.sampleID][uniques]
+            counts = doubles.groupby("read_id")["col4"].transform("nunique")
+            result = doubles[counts > 1]
+            result.to_csv(
+                os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "fusion_candidates_master.csv",
+                ),
+                index=False,
+            )
+        # self.update_fusion_table(result)
+
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
         Processes a BAM file and identifies fusion candidates and structural variants.
@@ -2073,179 +2390,7 @@ class FusionObject(BaseAnalysis):
         finally:
             state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
 
-    def show_previous_data(self) -> None:
-        """
-        Displays previously analyzed data from the specified output folder.
-        """
-        if not self.browse:
-            for item in app.storage.general[self.mainuuid]:
-                if item == "sample_ids":
-                    for sample in app.storage.general[self.mainuuid][item]:
-                        self.sampleID = sample
-            output = self.output
-        if self.browse:
-            output = self.check_and_create_folder(self.output, self.sampleID)
-
-        # Load fusion candidates
-        if self.check_file_time(os.path.join(output, "fusion_candidates_master.csv")):
-            try:
-                fusion_candidates = pd.read_csv(
-                    os.path.join(output, "fusion_candidates_master.csv"),
-                    dtype=str,
-                    header=None,
-                    skiprows=1,
-                )
-                self.update_fusion_table(fusion_candidates)
-            except pd.errors.EmptyDataError:
-                pass
-
-        if self.check_file_time(os.path.join(output, "fusion_candidates_all.csv")):
-            try:
-                fusion_candidates_all = pd.read_csv(
-                    os.path.join(output, "fusion_candidates_all.csv"),
-                    dtype=str,
-                    header=None,
-                    skiprows=1,
-                )
-                self.update_fusion_table_all(fusion_candidates_all)
-            except pd.errors.EmptyDataError:
-                pass
-
-        # Load structural variants
-        if self.check_file_time(os.path.join(output, "structural_variants.csv")):
-            try:
-                # Read CSV with string dtype for location columns
-                sv_df = pd.read_csv(
-                    os.path.join(output, "structural_variants.csv"),
-                    dtype={
-                        "Primary Location": str,
-                        "Partner Location": str,
-                        "Full Location": str,
-                    },
-                )
-                # Replace NaN values with 'N/A' in string columns
-                str_columns = ["Primary Location", "Partner Location", "Full Location"]
-                for col in str_columns:
-                    sv_df[col] = sv_df[col].fillna("N/A")
-
-                if not sv_df.empty:
-                    self.sv_count = len(sv_df)
-                    # Only update UI elements if they exist
-                    if hasattr(self, "sv_plot") and self.sv_plot is not None:
-                        self.sv_plot.clear()
-                        with self.sv_plot:
-                            self.create_sv_plot(sv_df, self.sampleID)
-                    if (
-                        hasattr(self, "sv_table_container")
-                        and self.sv_table_container is not None
-                    ):
-                        self.update_sv_table(sv_df)
-            except pd.errors.EmptyDataError:
-                pass
-
-    def update_sv_table(self, sv_df: pd.DataFrame) -> None:
-        """
-        Updates the structural variant table in the UI.
-
-        Args:
-            sv_df (pd.DataFrame): DataFrame containing structural variant data.
-        """
-        if not hasattr(self, "sv_table_container") or self.sv_table_container is None:
-            return
-
-        self.sv_table_container.clear()
-        with self.sv_table_container:
-            self.sv_table = (
-                ui.table.from_pandas(
-                    sv_df,
-                    pagination=25,
-                )
-                .props("dense")
-                .classes("w-full")
-                .style("height: 900px")
-                .style("font-size: 100%; font-weight: 300")
-            )
-            for col in self.sv_table.columns:
-                col["sortable"] = True
-
-            with self.sv_table.add_slot("top-right"):
-                with ui.input(placeholder="Search").props("type=search").bind_value(
-                    self.sv_table, "filter"
-                ).add_slot("append"):
-                    ui.icon("search")
-
-    def create_sv_plot(self, sv_df: pd.DataFrame, sample_id: str) -> None:
-        """
-        Creates a plot visualizing structural variants.
-
-        Args:
-            sv_df (pd.DataFrame): DataFrame containing structural variant data.
-            sample_id (str): Sample identifier.
-        """
-        with ui.card().classes("w-full no-shadow border-[2px]"):
-            pass
-            """
-            with ui.pyplot(figsize=(19, 12)).classes("w-full"):
-                plt.rcParams["figure.constrained_layout.use"] = True
-                plt.rcParams["figure.constrained_layout.h_pad"] = 0.05
-                plt.rcParams["figure.constrained_layout.w_pad"] = 0.05
-
-                # Create a figure with three subplots
-                fig, (ax1, ax2, ax3) = plt.subplots(3, 1, height_ratios=[2, 1, 1])
-
-                # Plot 1: SV Type Distribution
-                sv_counts = sv_df['Event Type'].value_counts()
-                colors = plt.cm.Set3(np.linspace(0, 1, len(sv_counts)))
-                sv_counts.plot(kind='bar', ax=ax1, color=colors)
-                ax1.set_title('Structural Variant Type Distribution')
-                ax1.set_xlabel('Event Type')
-                ax1.set_ylabel('Count')
-                plt.setp(ax1.xaxis.get_majorticklabels(), rotation=45, ha='right')
-
-                # Plot 2: Primary Chromosome Distribution
-                primary_chroms = []
-                for loc in sv_df['Primary Location']:
-                    if pd.notna(loc) and loc != 'N/A':
-                        try:
-                            chrom = loc.split(':')[0]
-                            primary_chroms.append(chrom)
-                        except (AttributeError, IndexError):
-                            continue
-
-                if primary_chroms:
-                    chrom_counts = pd.Series(primary_chroms).value_counts()
-                    # Sort chromosomes naturally
-                    chrom_counts = chrom_counts.reindex(sorted(chrom_counts.index, key=lambda x: int(x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25')) if x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25').isdigit() else float('inf')))
-                    chrom_counts.plot(kind='bar', ax=ax2, color='skyblue')
-                    ax2.set_title('Primary Chromosome Distribution')
-                    ax2.set_xlabel('Chromosome')
-                    ax2.set_ylabel('Count')
-                    plt.setp(ax2.xaxis.get_majorticklabels(), rotation=45, ha='right')
-                else:
-                    ax2.set_visible(False)
-
-                # Plot 3: Partner Chromosome Distribution (for translocations)
-                partner_chroms = []
-                for loc in sv_df['Partner Location']:
-                    if pd.notna(loc) and loc != 'N/A':
-                        try:
-                            chrom = loc.split(':')[0]
-                            partner_chroms.append(chrom)
-                        except (AttributeError, IndexError):
-                            continue
-
-                if partner_chroms:
-                    partner_counts = pd.Series(partner_chroms).value_counts()
-                    # Sort chromosomes naturally
-                    partner_counts = partner_counts.reindex(sorted(partner_counts.index, key=lambda x: int(x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25')) if x.replace('chr', '').replace('X', '23').replace('Y', '24').replace('M', '25').isdigit() else float('inf')))
-                    partner_counts.plot(kind='bar', ax=ax3, color='lightgreen')
-                    ax3.set_title('Partner Chromosome Distribution (Translocations)')
-                    ax3.set_xlabel('Chromosome')
-                    ax3.set_ylabel('Count')
-                    plt.setp(ax3.xaxis.get_majorticklabels(), rotation=45, ha='right')
-                else:
-                    ax3.set_visible(False)
-            """
+    
 
     async def stop_analysis(self):
         """Stop the fusion analysis."""

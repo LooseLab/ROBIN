@@ -58,7 +58,7 @@ import queue
 import docker
 import asyncio
 from robin.utilities.decompress import decompress_gzip_file
-from robin.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis, BaseVis
 
 from robin.core.state import state, ProcessState, ProcessType
 
@@ -563,7 +563,7 @@ class StatusLabel(ui.label):
             self.classes(replace="px-2 py-1 rounded bg-gray-100 text-gray-600")
 
 
-class TargetCoverage(BaseAnalysis):
+class TargetCoverageVis(BaseVis):
     """
     Target Coverage Analysis Class
 
@@ -662,11 +662,6 @@ class TargetCoverage(BaseAnalysis):
                 os.path.dirname(os.path.abspath(resources.__file__)),
                 "AML_panel_name_uniq.bed",
             )
-        if not self.is_docker_running():
-            raise SystemExit(
-                "Docker is not running on this computer. Either don't track coverage or start docker. If you are on a mac you may need to enable the standard docker socket - see https://github.com/gh640/wait-for-docker/issues/12#issuecomment-1551456057"
-            )
-        self.check_docker_image()
         super().__init__(*args, **kwargs)
         # Add a timer to refresh the Clair3 status label
         ui.timer(1, self.update_clair3_status_label)
@@ -686,87 +681,6 @@ class TargetCoverage(BaseAnalysis):
                 else "Clair3 Idle"
             )
         self.clair3_status_label.text = status
-
-    def is_docker_running(self):
-        try:
-            client = docker.from_env()
-            client.ping()
-            return True
-        except (docker.errors.DockerException, docker.errors.APIError):
-            return False
-
-    def check_docker_image(self):
-        client = docker.from_env()
-        status = False
-        for image in client.images.list():
-            if "hkubal/clairs-to:latest" in image.tags:
-                logger.info("Docker image found.")
-                status = True
-                return
-        if not status:
-            logger.info("Docker image not found. Pulling...")
-            client.images.pull("hkubal/clairs-to:latest")
-            logger.info("Docker image pulled.")
-
-    def SNP_timer_run(self):
-        self.snp_timer = ui.timer(10, self._snp_worker)
-
-    async def _snp_worker(self):
-        """
-        This function takes reads from the queue and adds them to the background thread for processing.
-        """
-        # If Clair3 is already running, don't start another process
-        if state.get_process_state("clair3") == ProcessState.RUNNING:
-            self.snp_timer.active = True
-            return
-        self.snp_timer.active = False
-        try:
-            if not self.SNPqueue.empty():
-                while not self.SNPqueue.empty():
-                    gene_list, bamfile, bedfile = self.SNPqueue.get()
-                    self.pending_snp_jobs -= (
-                        1  # Decrement counter when processing a job
-                    )
-                workdirout = os.path.join(
-                    self.check_and_create_folder(self.output, self.sampleID), "clair3"
-                )
-                if not os.path.exists(workdirout):
-                    os.mkdir(workdirout)
-                # Wait for BAM file to exist with timeout
-                timeout = 300  # 5 minutes timeout
-                start_time = time.time()
-                while not os.path.exists(f"{bamfile}"):
-                    await asyncio.sleep(1)
-                    if time.time() - start_time > timeout:
-                        logger.error(f"Timeout waiting for BAM file: {bamfile}")
-                        return
-                if os.path.exists(f"{bamfile}"):
-                    shutil.copy2(bamfile, f"{bamfile}2.bam")
-                    # Set state to running before starting background job
-                    state.start_process("clair3", ProcessType.BATCH)
-                    state.set_process_state("clair3", ProcessState.RUNNING)
-                    await run.cpu_bound(
-                        sort_bam,
-                        f"{bamfile}2.bam",
-                        os.path.join(workdirout, "sorted_targets_exceeding.bam"),
-                        self.threads,
-                    )
-                    await run.cpu_bound(
-                        run_clair3,
-                        os.path.join(workdirout, "sorted_targets_exceeding.bam"),
-                        f"{bedfile}",
-                        self.check_and_create_folder(self.output, self.sampleID),
-                        workdirout,
-                        self.threads,
-                        self.reference,
-                        self.showerrors,
-                    )
-                    # Set state to waiting (or stopped) after job completes
-                    state.set_process_state("clair3", ProcessState.WAITING_FOR_DATA)
-                    state.stop_process("clair3")
-                    os.remove(f"{bamfile}2.bam")
-        finally:
-            self.snp_timer.active = True
 
     def setup_ui(self):
         if self.summary:
@@ -1680,288 +1594,6 @@ class TargetCoverage(BaseAnalysis):
         else:
             self.covtable.update_rows(self.target_coverage_df.to_dict(orient="records"))
 
-    async def process_bam(self, bamfile, timestamp):
-        """
-        Process a BAM file and update coverage statistics.
-
-        Parameters
-        ----------
-        bamfile : str
-            Path to the BAM file to process
-        timestamp : float
-            Timestamp when the BAM file was generated
-        """
-        # loop = asyncio.get_event_loop()
-        # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
-        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
-
-        tempbamfile = tempfile.NamedTemporaryFile(
-            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
-        )
-        # await loop.run_in_executor(
-        #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
-        # )
-        # run_bedtools(bamfile, self.bedfile, tempbamfile.name)
-        await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
-        # )
-
-        if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
-            if self.sampleID not in self.targetbamfile.keys():
-                self.targetbamfile[self.sampleID] = os.path.join(
-                    self.check_and_create_folder(self.output, self.sampleID),
-                    "target.bam",
-                )
-                shutil.copy2(tempbamfile.name, self.targetbamfile[self.sampleID])
-                os.remove(f"{tempbamfile.name}.bai")
-            else:
-                tempbamholder = tempfile.NamedTemporaryFile(
-                    dir=self.check_and_create_folder(self.output, self.sampleID),
-                    suffix=".bam",
-                )
-                pysam.cat(
-                    "-o",
-                    tempbamholder.name,
-                    self.targetbamfile[self.sampleID],
-                    tempbamfile.name,
-                )
-                shutil.copy2(tempbamholder.name, self.targetbamfile[self.sampleID])
-                try:
-                    os.remove(f"{tempbamholder.name}.bai")
-                except FileNotFoundError:
-                    pass
-        else:
-            os.remove(f"{tempbamfile.name}.bai")
-
-        try:
-            os.remove(
-                f"{tempbamfile.name}.bai"
-            )  # Ensure removal of .bai file if exists
-        except FileNotFoundError:
-            pass
-
-        if self.sampleID not in self.cov_df_main.keys():
-            self.cov_df_main[self.sampleID] = newcovdf
-            self.bedcov_df_main[self.sampleID] = bedcovdf
-        else:
-            self.cov_df_main[self.sampleID], self.bedcov_df_main[self.sampleID] = (
-                await run.cpu_bound(
-                    run_bedmerge,
-                    newcovdf,
-                    self.cov_df_main[self.sampleID],
-                    bedcovdf,
-                    self.bedcov_df_main[self.sampleID],
-                )
-            )
-
-        bases = self.cov_df_main[self.sampleID]["covbases"].sum()
-        genome = self.cov_df_main[self.sampleID]["endpos"].sum()
-        coverage = bases / genome
-
-        # Handle timestamp based on simulation time setting
-        if self.simtime and timestamp:
-            currenttime = timestamp * 1000
-        else:
-            currenttime = time.time() * 1000
-
-        if self.sampleID not in self.coverage_over_time.keys():
-            self.coverage_over_time[self.sampleID] = np.empty((0, 2))
-        self.coverage_over_time[self.sampleID] = np.vstack(
-            [self.coverage_over_time[self.sampleID], [(currenttime, coverage)]]
-        )
-
-        np.save(
-            os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID),
-                "coverage_time_chart.npy",
-            ),
-            self.coverage_over_time[self.sampleID],
-        )
-
-        self.cov_df_main[self.sampleID].to_csv(
-            os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID),
-                "coverage_main.csv",
-            ),
-            index=False,
-        )
-        # await asyncio.sleep(0.01)
-
-        # self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
-        self.bedcov_df_main[self.sampleID].to_csv(
-            os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID),
-                "bed_coverage_main.csv",
-            ),
-            index=False,
-        )
-        # await asyncio.sleep(0.01)
-        # self.update_coverage_time_plot(self.cov_df_main, timestamp)
-        # await asyncio.sleep(0.01)
-        self.target_coverage_df = self.bedcov_df_main[self.sampleID]
-        self.target_coverage_df["length"] = (
-            self.target_coverage_df["endpos"] - self.target_coverage_df["startpos"] + 1
-        )
-
-        self.target_coverage_df["coverage"] = (
-            self.target_coverage_df["bases"] / self.target_coverage_df["length"]
-        )
-        self.target_coverage_df.to_csv(
-            os.path.join(
-                self.check_and_create_folder(self.output, self.sampleID),
-                "target_coverage.csv",
-            ),
-            index=False,
-        )
-        # if self.summary:
-        #    with self.summary:
-        #        self.summary.clear()
-        #        with ui.row():
-        #            ui.label("Coverage Depths - ")
-        #            ui.label(
-        #                f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
-        #            )
-        #            ui.label(
-        #                f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
-        #            )
-        run_list = self.target_coverage_df[
-            self.target_coverage_df["coverage"].ge(self.callthreshold)
-        ]
-
-        if self.sampleID not in self.targets_exceeding_threshold.keys():
-            self.targets_exceeding_threshold[self.sampleID] = 0
-        if self.reference:
-            if len(run_list) > 0:
-                self.targets_exceeding_threshold[self.sampleID] = len(run_list)
-                run_list[["chrom", "startpos", "endpos"]].to_csv(
-                    os.path.join(
-                        self.check_and_create_folder(self.output, self.sampleID),
-                        "targets_exceeding_threshold.bed",
-                    ),
-                    sep="\t",
-                    header=None,
-                    index=None,
-                )
-                clair3workdir = os.path.join(
-                    self.check_and_create_folder(self.output, self.sampleID), "clair3"
-                )
-                if not os.path.exists(clair3workdir):
-                    os.mkdir(clair3workdir)
-
-                if self.snp_calling:
-                    self.SNPqueue.put(
-                        [
-                            run_list,
-                            self.targetbamfile[self.sampleID],
-                            os.path.join(
-                                self.check_and_create_folder(
-                                    self.output, self.sampleID
-                                ),
-                                "targets_exceeding_threshold.bed",
-                            ),
-                        ]
-                    )
-                    self.pending_snp_jobs += 1  # Increment counter when adding a job
-
-        # ToDo: Reinstate this line later.
-        # self.update_target_coverage_table()
-
-        # await asyncio.sleep(0.5)
-        self.running = False
-
-    async def rerun_snp_analysis(self):
-        """
-        Rerun the SNP calling analysis for the current sample.
-        """
-        if not self.reference:
-            ui.notify(
-                "Reference genome not provided. SNP calling is disabled.",
-                type="warning",
-            )
-            return
-
-        if state.get_process_state("clair3") == ProcessState.RUNNING:
-            ui.notify("SNP analysis is already running. Please wait.", type="warning")
-            return
-
-        # Enable SNP calling for this run
-        self.snp_calling = True
-        if not hasattr(self, "SNP_timer") or not self.SNP_timer.active:
-            self.SNP_timer_run()
-
-        output = self.check_and_create_folder(self.output, self.sampleID)
-        clair3workdir = os.path.join(output, "clair3")
-
-        if not os.path.exists(clair3workdir):
-            os.mkdir(clair3workdir)
-
-        # Get the current target regions that exceed threshold
-        run_list = self.target_coverage_df[
-            self.target_coverage_df["coverage"].ge(self.callthreshold)
-        ]
-
-        if len(run_list) == 0:
-            ui.notify(
-                "No regions currently exceed the coverage threshold.", type="warning"
-            )
-            return
-
-        # Check if we have access to the BAM file
-        if self.sampleID not in self.targetbamfile or not os.path.exists(
-            self.targetbamfile[self.sampleID]
-        ):
-            ui.notify("Target BAM file not found. Cannot rerun analysis.", type="error")
-            return
-
-        # Verify BAM file integrity
-        try:
-            # Check if BAM file is being written to
-            initial_size = os.path.getsize(self.targetbamfile[self.sampleID])
-            await asyncio.sleep(1)  # Wait 1 second
-            if os.path.getsize(self.targetbamfile[self.sampleID]) != initial_size:
-                ui.notify(
-                    "BAM file is still being written. Please wait and try again.",
-                    type="warning",
-                )
-                return
-
-            # Try to open the BAM file to verify it's not corrupted
-            with pysam.AlignmentFile(self.targetbamfile[self.sampleID], "rb") as bam:
-                if bam.count() == 0:
-                    ui.notify(
-                        "BAM file appears to be empty or corrupted.", type="error"
-                    )
-                    return
-        except Exception as e:
-            ui.notify(f"Error verifying BAM file: {str(e)}", type="error")
-            return
-
-        # Save the target regions to a new BED file
-        bed_file = os.path.join(output, "targets_exceeding_threshold.bed")
-        run_list[["chrom", "startpos", "endpos"]].to_csv(
-            bed_file,
-            sep="\t",
-            header=None,
-            index=None,
-        )
-
-        # Sort the BAM file
-        sorted_bam = os.path.join(clair3workdir, "sorted_targets_exceeding_rerun.bam")
-        try:
-            await run.cpu_bound(
-                sort_bam,
-                self.targetbamfile[self.sampleID],
-                sorted_bam,
-                self.threads,
-            )
-        except Exception as e:
-            ui.notify(f"Error sorting BAM file: {str(e)}", type="error")
-            return
-
-        # Add to SNP queue
-        self.SNPqueue.put([run_list, sorted_bam, bed_file])
-        self.pending_snp_jobs += 1  # Increment counter when adding a job
-        ui.notify("SNP analysis rerun initiated", type="info")
-
     def show_previous_data(self):
         """
         Display previously generated coverage analysis results.
@@ -2351,6 +1983,497 @@ class TargetCoverage(BaseAnalysis):
                             "type=search"
                         ).bind_value(self.indeltable, "filter").add_slot("append"):
                             ui.icon("search")
+
+
+
+class TargetCoverage(BaseAnalysis):
+    """
+    Target Coverage Analysis Class
+
+    This class provides functionality for analyzing and visualizing coverage data
+    from targeted sequencing experiments. It includes real-time monitoring,
+    quality assessment, and variant calling capabilities.
+
+    Parameters
+    ----------
+    showerrors : bool, optional
+        Whether to display error messages, by default False
+    target_panel : str, optional
+        Name of the target panel to use (e.g., "rCNS2", "AML")
+    reference : str, optional
+        Path to the reference genome for variant calling
+    simtime : bool, optional
+        Whether to use simulation time instead of real time for timestamps
+    enable_snp_calling : bool, optional
+        Whether to enable SNP calling functionality, by default False
+
+    Attributes
+    ----------
+    callthreshold : int
+        Minimum coverage threshold for variant calling
+    clair3running : bool
+        Flag indicating if variant calling is in progress
+    targets_exceeding_threshold : dict
+        Tracks regions exceeding coverage threshold
+    coverage_over_time : dict
+        Stores coverage progression data
+
+    Notes
+    -----
+    Requires Docker for variant calling functionality.
+    Implements Apple HIG principles for data visualization.
+    """
+
+    def __init__(
+        self,
+        *args,
+        showerrors=False,
+        target_panel=None,
+        reference=None,
+        simtime=False,
+        enable_snp_calling=False,
+        **kwargs,
+    ):
+        """
+        Initialize the TargetCoverage analysis object.
+
+        Parameters
+        ----------
+        *args
+            Variable length argument list.
+        showerrors : bool, optional
+            Whether to display error messages, by default False
+        target_panel : str, optional
+            Name of the target panel to use
+        reference : str, optional
+            Path to the reference genome
+        simtime : bool, optional
+            Whether to use simulation time instead of real time for timestamps
+        enable_snp_calling : bool, optional
+            Whether to enable SNP calling functionality, by default False
+        **kwargs
+            Arbitrary keyword arguments.
+        """
+        self.callthreshold = 10
+        # self.clair3running = False  # Remove this variable
+        self.targets_exceeding_threshold = {}
+        self.targetbamfile = {}
+        self.covtable = None
+        self.covtable_row_count = 0
+        self.coverage_over_time = {}  # np.empty((0, 2))
+        self.cov_df_main = {}
+        self.bedcov_df_main = {}
+        self.SNPqueue = queue.Queue()
+        self.pending_snp_jobs = 0  # Add counter for pending jobs
+        self.reference = reference
+        self.showerrors = showerrors
+        self.simtime = simtime
+        self.enable_snp_calling = enable_snp_calling
+        self.snp_calling = False  # Will be set to True only if both reference is provided and enable_snp_calling is True
+        self.clair3_status_label = ui.label("Clair3 Idle")  # UI label for status
+        if self.reference and self.enable_snp_calling:
+            self.snp_calling = True
+            self.SNP_timer_run()
+        self.target_panel = target_panel
+        if self.target_panel == "rCNS2":
+            self.bedfile = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "rCNS2_panel_name_uniq.bed",
+            )
+        elif self.target_panel == "AML":
+            self.bedfile = os.path.join(
+                os.path.dirname(os.path.abspath(resources.__file__)),
+                "AML_panel_name_uniq.bed",
+            )
+        if not self.is_docker_running():
+            raise SystemExit(
+                "Docker is not running on this computer. Either don't track coverage or start docker. If you are on a mac you may need to enable the standard docker socket - see https://github.com/gh640/wait-for-docker/issues/12#issuecomment-1551456057"
+            )
+        self.check_docker_image()
+        super().__init__(*args, **kwargs)
+        # Add a timer to refresh the Clair3 status label
+        ui.timer(1, self.update_clair3_status_label)
+
+    def update_clair3_status_label(self):
+        process_state = state.get_process_state("clair3")
+        if process_state == ProcessState.RUNNING:
+            status = f"Clair3 Running ({self.pending_snp_jobs} pending)"
+        elif process_state == ProcessState.STARTING:
+            status = f"Clair3 Starting ({self.pending_snp_jobs} pending)"
+        elif process_state == ProcessState.WAITING_FOR_DATA:
+            status = f"Clair3 Waiting for Data ({self.pending_snp_jobs} pending)"
+        else:
+            status = (
+                f"Clair3 Idle ({self.pending_snp_jobs} pending)"
+                if self.pending_snp_jobs > 0
+                else "Clair3 Idle"
+            )
+        self.clair3_status_label.text = status
+
+    def is_docker_running(self):
+        try:
+            client = docker.from_env()
+            client.ping()
+            return True
+        except (docker.errors.DockerException, docker.errors.APIError):
+            return False
+
+    def check_docker_image(self):
+        client = docker.from_env()
+        status = False
+        for image in client.images.list():
+            if "hkubal/clairs-to:latest" in image.tags:
+                logger.info("Docker image found.")
+                status = True
+                return
+        if not status:
+            logger.info("Docker image not found. Pulling...")
+            client.images.pull("hkubal/clairs-to:latest")
+            logger.info("Docker image pulled.")
+
+    def SNP_timer_run(self):
+        self.snp_timer = ui.timer(10, self._snp_worker)
+
+    async def _snp_worker(self):
+        """
+        This function takes reads from the queue and adds them to the background thread for processing.
+        """
+        # If Clair3 is already running, don't start another process
+        if state.get_process_state("clair3") == ProcessState.RUNNING:
+            self.snp_timer.active = True
+            return
+        self.snp_timer.active = False
+        try:
+            if not self.SNPqueue.empty():
+                while not self.SNPqueue.empty():
+                    gene_list, bamfile, bedfile = self.SNPqueue.get()
+                    self.pending_snp_jobs -= (
+                        1  # Decrement counter when processing a job
+                    )
+                workdirout = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID), "clair3"
+                )
+                if not os.path.exists(workdirout):
+                    os.mkdir(workdirout)
+                # Wait for BAM file to exist with timeout
+                timeout = 300  # 5 minutes timeout
+                start_time = time.time()
+                while not os.path.exists(f"{bamfile}"):
+                    await asyncio.sleep(1)
+                    if time.time() - start_time > timeout:
+                        logger.error(f"Timeout waiting for BAM file: {bamfile}")
+                        return
+                if os.path.exists(f"{bamfile}"):
+                    shutil.copy2(bamfile, f"{bamfile}2.bam")
+                    # Set state to running before starting background job
+                    state.start_process("clair3", ProcessType.BATCH)
+                    state.set_process_state("clair3", ProcessState.RUNNING)
+                    await run.cpu_bound(
+                        sort_bam,
+                        f"{bamfile}2.bam",
+                        os.path.join(workdirout, "sorted_targets_exceeding.bam"),
+                        self.threads,
+                    )
+                    await run.cpu_bound(
+                        run_clair3,
+                        os.path.join(workdirout, "sorted_targets_exceeding.bam"),
+                        f"{bedfile}",
+                        self.check_and_create_folder(self.output, self.sampleID),
+                        workdirout,
+                        self.threads,
+                        self.reference,
+                        self.showerrors,
+                    )
+                    # Set state to waiting (or stopped) after job completes
+                    state.set_process_state("clair3", ProcessState.WAITING_FOR_DATA)
+                    state.stop_process("clair3")
+                    os.remove(f"{bamfile}2.bam")
+        finally:
+            self.snp_timer.active = True
+
+
+    async def process_bam(self, bamfile, timestamp):
+        """
+        Process a BAM file and update coverage statistics.
+
+        Parameters
+        ----------
+        bamfile : str
+            Path to the BAM file to process
+        timestamp : float
+            Timestamp when the BAM file was generated
+        """
+        # loop = asyncio.get_event_loop()
+        # newcovdf, bedcovdf = await loop.run_in_executor(None, get_covdfs, bamfile)
+        newcovdf, bedcovdf = await run.cpu_bound(get_covdfs, bamfile)
+
+        tempbamfile = tempfile.NamedTemporaryFile(
+            dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
+        )
+        # await loop.run_in_executor(
+        #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
+        # )
+        # run_bedtools(bamfile, self.bedfile, tempbamfile.name)
+        #await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
+        # )
+        run_bedtools(bamfile, self.bedfile, tempbamfile.name)
+
+        if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
+            if self.sampleID not in self.targetbamfile.keys():
+                self.targetbamfile[self.sampleID] = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID),
+                    "target.bam",
+                )
+                shutil.copy2(tempbamfile.name, self.targetbamfile[self.sampleID])
+                os.remove(f"{tempbamfile.name}.bai")
+            else:
+                tempbamholder = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, self.sampleID),
+                    suffix=".bam",
+                )
+                pysam.cat(
+                    "-o",
+                    tempbamholder.name,
+                    self.targetbamfile[self.sampleID],
+                    tempbamfile.name,
+                )
+                shutil.copy2(tempbamholder.name, self.targetbamfile[self.sampleID])
+                try:
+                    os.remove(f"{tempbamholder.name}.bai")
+                except FileNotFoundError:
+                    pass
+        else:
+            os.remove(f"{tempbamfile.name}.bai")
+
+        try:
+            os.remove(
+                f"{tempbamfile.name}.bai"
+            )  # Ensure removal of .bai file if exists
+        except FileNotFoundError:
+            pass
+
+        if self.sampleID not in self.cov_df_main.keys():
+            self.cov_df_main[self.sampleID] = newcovdf
+            self.bedcov_df_main[self.sampleID] = bedcovdf
+        else:
+            self.cov_df_main[self.sampleID], self.bedcov_df_main[self.sampleID] = (
+                #await run.cpu_bound(
+                run_bedmerge(
+                    newcovdf,
+                    self.cov_df_main[self.sampleID],
+                    bedcovdf,
+                    self.bedcov_df_main[self.sampleID],
+                )
+            )
+ 
+        bases = self.cov_df_main[self.sampleID]["covbases"].sum()
+        genome = self.cov_df_main[self.sampleID]["endpos"].sum()
+        coverage = bases / genome
+
+        # Handle timestamp based on simulation time setting
+        if self.simtime and timestamp:
+            currenttime = timestamp * 1000
+        else:
+            currenttime = time.time() * 1000
+
+        if self.sampleID not in self.coverage_over_time.keys():
+            self.coverage_over_time[self.sampleID] = np.empty((0, 2))
+        self.coverage_over_time[self.sampleID] = np.vstack(
+            [self.coverage_over_time[self.sampleID], [(currenttime, coverage)]]
+        )
+
+        np.save(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "coverage_time_chart.npy",
+            ),
+            self.coverage_over_time[self.sampleID],
+        )
+
+        self.cov_df_main[self.sampleID].to_csv(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "coverage_main.csv",
+            ),
+            index=False,
+        )
+        # await asyncio.sleep(0.01)
+
+        # self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
+        self.bedcov_df_main[self.sampleID].to_csv(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "bed_coverage_main.csv",
+            ),
+            index=False,
+        )
+        # await asyncio.sleep(0.01)
+        # self.update_coverage_time_plot(self.cov_df_main, timestamp)
+        # await asyncio.sleep(0.01)
+        self.target_coverage_df = self.bedcov_df_main[self.sampleID]
+        self.target_coverage_df["length"] = (
+            self.target_coverage_df["endpos"] - self.target_coverage_df["startpos"] + 1
+        )
+
+        self.target_coverage_df["coverage"] = (
+            self.target_coverage_df["bases"] / self.target_coverage_df["length"]
+        )
+        self.target_coverage_df.to_csv(
+            os.path.join(
+                self.check_and_create_folder(self.output, self.sampleID),
+                "target_coverage.csv",
+            ),
+            index=False,
+        )
+        # if self.summary:
+        #    with self.summary:
+        #        self.summary.clear()
+        #        with ui.row():
+        #            ui.label("Coverage Depths - ")
+        #            ui.label(
+        #                f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
+        #            )
+        #            ui.label(
+        #                f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
+        #            )
+        run_list = self.target_coverage_df[
+            self.target_coverage_df["coverage"].ge(self.callthreshold)
+        ]
+
+        if self.sampleID not in self.targets_exceeding_threshold.keys():
+            self.targets_exceeding_threshold[self.sampleID] = 0
+        if self.reference:
+            if len(run_list) > 0:
+                self.targets_exceeding_threshold[self.sampleID] = len(run_list)
+                run_list[["chrom", "startpos", "endpos"]].to_csv(
+                    os.path.join(
+                        self.check_and_create_folder(self.output, self.sampleID),
+                        "targets_exceeding_threshold.bed",
+                    ),
+                    sep="\t",
+                    header=None,
+                    index=None,
+                )
+                clair3workdir = os.path.join(
+                    self.check_and_create_folder(self.output, self.sampleID), "clair3"
+                )
+                if not os.path.exists(clair3workdir):
+                    os.mkdir(clair3workdir)
+
+                if self.snp_calling:
+                    self.SNPqueue.put(
+                        [
+                            run_list,
+                            self.targetbamfile[self.sampleID],
+                            os.path.join(
+                                self.check_and_create_folder(
+                                    self.output, self.sampleID
+                                ),
+                                "targets_exceeding_threshold.bed",
+                            ),
+                        ]
+                    )
+                    self.pending_snp_jobs += 1  # Increment counter when adding a job
+
+        # ToDo: Reinstate this line later.
+        # self.update_target_coverage_table()
+
+        # await asyncio.sleep(0.5)
+        self.running = False
+
+    async def rerun_snp_analysis(self):
+        """
+        Rerun the SNP calling analysis for the current sample.
+        """
+        if not self.reference:
+            ui.notify(
+                "Reference genome not provided. SNP calling is disabled.",
+                type="warning",
+            )
+            return
+
+        if state.get_process_state("clair3") == ProcessState.RUNNING:
+            ui.notify("SNP analysis is already running. Please wait.", type="warning")
+            return
+
+        # Enable SNP calling for this run
+        self.snp_calling = True
+        if not hasattr(self, "SNP_timer") or not self.SNP_timer.active:
+            self.SNP_timer_run()
+
+        output = self.check_and_create_folder(self.output, self.sampleID)
+        clair3workdir = os.path.join(output, "clair3")
+
+        if not os.path.exists(clair3workdir):
+            os.mkdir(clair3workdir)
+
+        # Get the current target regions that exceed threshold
+        run_list = self.target_coverage_df[
+            self.target_coverage_df["coverage"].ge(self.callthreshold)
+        ]
+
+        if len(run_list) == 0:
+            ui.notify(
+                "No regions currently exceed the coverage threshold.", type="warning"
+            )
+            return
+
+        # Check if we have access to the BAM file
+        if self.sampleID not in self.targetbamfile or not os.path.exists(
+            self.targetbamfile[self.sampleID]
+        ):
+            ui.notify("Target BAM file not found. Cannot rerun analysis.", type="error")
+            return
+
+        # Verify BAM file integrity
+        try:
+            # Check if BAM file is being written to
+            initial_size = os.path.getsize(self.targetbamfile[self.sampleID])
+            await asyncio.sleep(1)  # Wait 1 second
+            if os.path.getsize(self.targetbamfile[self.sampleID]) != initial_size:
+                ui.notify(
+                    "BAM file is still being written. Please wait and try again.",
+                    type="warning",
+                )
+                return
+
+            # Try to open the BAM file to verify it's not corrupted
+            with pysam.AlignmentFile(self.targetbamfile[self.sampleID], "rb") as bam:
+                if bam.count() == 0:
+                    ui.notify(
+                        "BAM file appears to be empty or corrupted.", type="error"
+                    )
+                    return
+        except Exception as e:
+            ui.notify(f"Error verifying BAM file: {str(e)}", type="error")
+            return
+
+        # Save the target regions to a new BED file
+        bed_file = os.path.join(output, "targets_exceeding_threshold.bed")
+        run_list[["chrom", "startpos", "endpos"]].to_csv(
+            bed_file,
+            sep="\t",
+            header=None,
+            index=None,
+        )
+
+        # Sort the BAM file
+        sorted_bam = os.path.join(clair3workdir, "sorted_targets_exceeding_rerun.bam")
+        try:
+            await run.cpu_bound(
+                sort_bam,
+                self.targetbamfile[self.sampleID],
+                sorted_bam,
+                self.threads,
+            )
+        except Exception as e:
+            ui.notify(f"Error sorting BAM file: {str(e)}", type="error")
+            return
+
+        # Add to SNP queue
+        self.SNPqueue.put([run_list, sorted_bam, bed_file])
+        self.pending_snp_jobs += 1  # Increment counter when adding a job
+        ui.notify("SNP analysis rerun initiated", type="info")
 
 
 def test_me(

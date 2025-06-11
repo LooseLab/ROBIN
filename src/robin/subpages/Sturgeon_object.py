@@ -26,7 +26,7 @@ The module requires proper configuration of input/output directories and
 assumes the presence of necessary model files for Sturgeon predictions.
 """
 
-from robin.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis, BaseVis 
 import os
 import sys
 import tempfile
@@ -462,93 +462,6 @@ class Sturgeon_object(BaseAnalysis):
         # Remove state tracking for Sturgeon Analysis
         # state.start_process("Sturgeon Analysis", ProcessType.BATCH)
 
-    def setup_ui(self):
-        """
-        Set up the user interface components for Sturgeon visualization.
-
-        This method creates and arranges the UI cards and grids for displaying
-        Sturgeon analysis results. It sets up:
-        - Main card with dark theme
-        - Grid layout for charts
-        - Sturgeon classification chart
-        - Time series chart
-        - Initial classification label
-
-        Notes
-        -----
-        The layout is responsive and adjusts based on the MENU_BREAKPOINT value.
-        """
-        self.card = ui.card().classes("dark:bg-black w-full p-2")
-        with self.card:
-            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
-                with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg p-2"
-                ):
-                    self.create_sturgeon_chart("Sturgeon")
-                with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg p-2"
-                ):
-                    self.create_sturgeon_time_chart("Sturgeon Time Series")
-        if self.summary:
-            with self.summary:
-                ui.label("Sturgeon classification: Unknown")
-        if self.browse:
-            self.show_previous_data()
-        else:
-            ui.timer(5, lambda: self.show_previous_data())
-
-    def show_previous_data(self):
-        """
-        Load and display previously generated Sturgeon analysis results.
-        """
-        if not self.browse:
-            for item in app.storage.general[self.mainuuid]:
-                if item == "sample_ids":
-                    for sample in app.storage.general[self.mainuuid][item]:
-                        self.sampleID = sample
-            output = self.output
-        if self.browse:
-            output = self.check_and_create_folder(self.output, self.sampleID)
-
-        if self.check_file_time(os.path.join(output, "sturgeon_scores.csv")):
-            self.sturgeon_df_store = pd.read_csv(
-                os.path.join(os.path.join(output, "sturgeon_scores.csv")),
-                index_col=0,
-            )
-            columns_greater_than_threshold = (
-                self.sturgeon_df_store > self.threshold
-            ).any()
-            columns_not_greater_than_threshold = ~columns_greater_than_threshold
-            result = self.sturgeon_df_store.columns[
-                columns_not_greater_than_threshold
-            ].tolist()
-            self.update_sturgeon_time_chart(self.sturgeon_df_store.drop(columns=result))
-            lastrow = self.sturgeon_df_store.iloc[-1].drop("number_probes")
-            lastrow_plot = lastrow.sort_values(ascending=False).head(10)
-            lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-
-            # Update summary with new card
-            if self.summary:
-                with self.summary:
-                    self.summary.clear()
-                    classification_text = (
-                        f"Sturgeon classification: {lastrow_plot_top.index[0]}"
-                    )
-                    self.create_summary_card(
-                        classification_text=classification_text,
-                        confidence_value=lastrow_plot_top.values[0],
-                        features_found=int(
-                            self.sturgeon_df_store.iloc[-1]["number_probes"]
-                        ),
-                    )
-
-            self.update_sturgeon_plot(
-                lastrow_plot.index.to_list(),
-                list(lastrow_plot.values),
-                "All",
-                self.sturgeon_df_store.iloc[-1]["number_probes"],
-            )
-
     async def process_bam(self, bamfile, timestamp):
         """Process BAM files for Sturgeon analysis."""
         state.set_process_state("Sturgeon Analysis", ProcessState.RUNNING)
@@ -649,6 +562,163 @@ class Sturgeon_object(BaseAnalysis):
             self.running = False
         finally:
             state.set_process_state("Sturgeon Analysis", ProcessState.WAITING_FOR_DATA)
+
+    async def stop_analysis(self):
+        """Stop the Sturgeon analysis."""
+        state.set_process_state("Sturgeon Analysis", ProcessState.STOPPING)
+        state.stop_process("Sturgeon Analysis")
+        await super().stop_analysis()
+        
+        
+class SturgeonVis(BaseVis):
+    """
+    A class for processing and visualizing Sturgeon methylation analysis results.
+
+    This class extends BaseAnalysis to provide specialized functionality for
+    Sturgeon methylation analysis. It handles real-time processing of BAM files,
+    methylation data extraction, and visualization of results.
+
+    Parameters
+    ----------
+    *args
+        Variable length argument list passed to BaseAnalysis
+    **kwargs
+        Arbitrary keyword arguments passed to BaseAnalysis
+
+    Attributes
+    ----------
+    sturgeon_df_store : dict
+        Store for Sturgeon dataframes
+    threshold : float
+        Confidence threshold for predictions (default: 0.05)
+    first_run : dict
+        Tracks first run status for each sample
+    modelfile : str
+        Path to the Sturgeon model file
+    dataDir : dict
+        Dictionary of temporary directories for data
+    bedDir : dict
+        Dictionary of temporary directories for BED files
+    st_num_probes : dict
+        Dictionary tracking number of probes per sample
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.sturgeon_df_store = {}
+        self.threshold = 0.05
+        self.first_run = {}
+        self.modelfile = os.path.join(
+            os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
+        )
+        self.dataDir = {}
+        self.bedDir = {}
+        self.st_num_probes = {}
+        reference_genome = "hg38"
+        self.probes_file = os.path.join(
+            os.path.dirname(sturgeon.__file__),
+            "include/static",
+            "probes_{}.bed".format(reference_genome),
+        )
+
+        # Set Sturgeon-specific confidence thresholds
+        # Sturgeon typically gives higher confidence scores, so adjust thresholds accordingly
+        kwargs["high_confidence_threshold"] = (
+            0.8  # Sturgeon-specific high confidence threshold
+        )
+        kwargs["medium_confidence_threshold"] = (
+            0.6  # Sturgeon-specific medium confidence threshold
+        )
+
+        super().__init__(*args, **kwargs)
+        # Remove state tracking for Sturgeon Analysis
+        # state.start_process("Sturgeon Analysis", ProcessType.BATCH)
+
+    def setup_ui(self):
+        """
+        Set up the user interface components for Sturgeon visualization.
+
+        This method creates and arranges the UI cards and grids for displaying
+        Sturgeon analysis results. It sets up:
+        - Main card with dark theme
+        - Grid layout for charts
+        - Sturgeon classification chart
+        - Time series chart
+        - Initial classification label
+
+        Notes
+        -----
+        The layout is responsive and adjusts based on the MENU_BREAKPOINT value.
+        """
+        self.card = ui.card().classes("dark:bg-black w-full p-2")
+        with self.card:
+            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg p-2"
+                ):
+                    self.create_sturgeon_chart("Sturgeon")
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 dark:bg-black shadow-lg rounded-lg p-2"
+                ):
+                    self.create_sturgeon_time_chart("Sturgeon Time Series")
+        if self.summary:
+            with self.summary:
+                ui.label("Sturgeon classification: Unknown")
+        if self.browse:
+            self.show_previous_data()
+        else:
+            ui.timer(5, lambda: self.show_previous_data())
+
+    def show_previous_data(self):
+        """
+        Load and display previously generated Sturgeon analysis results.
+        """
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == "sample_ids":
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
+
+        if self.check_file_time(os.path.join(output, "sturgeon_scores.csv")):
+            self.sturgeon_df_store = pd.read_csv(
+                os.path.join(os.path.join(output, "sturgeon_scores.csv")),
+                index_col=0,
+            )
+            columns_greater_than_threshold = (
+                self.sturgeon_df_store > self.threshold
+            ).any()
+            columns_not_greater_than_threshold = ~columns_greater_than_threshold
+            result = self.sturgeon_df_store.columns[
+                columns_not_greater_than_threshold
+            ].tolist()
+            self.update_sturgeon_time_chart(self.sturgeon_df_store.drop(columns=result))
+            lastrow = self.sturgeon_df_store.iloc[-1].drop("number_probes")
+            lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+            lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+
+            # Update summary with new card
+            if self.summary:
+                with self.summary:
+                    self.summary.clear()
+                    classification_text = (
+                        f"Sturgeon classification: {lastrow_plot_top.index[0]}"
+                    )
+                    self.create_summary_card(
+                        classification_text=classification_text,
+                        confidence_value=lastrow_plot_top.values[0],
+                        features_found=int(
+                            self.sturgeon_df_store.iloc[-1]["number_probes"]
+                        ),
+                    )
+
+            self.update_sturgeon_plot(
+                lastrow_plot.index.to_list(),
+                list(lastrow_plot.values),
+                "All",
+                self.sturgeon_df_store.iloc[-1]["number_probes"],
+            )
 
     def create_sturgeon_chart(self, title):
         """
@@ -920,11 +990,6 @@ class Sturgeon_object(BaseAnalysis):
 
         self.sturgeon_time_chart.update()
 
-    async def stop_analysis(self):
-        """Stop the Sturgeon analysis."""
-        state.set_process_state("Sturgeon Analysis", ProcessState.STOPPING)
-        state.stop_process("Sturgeon Analysis")
-        await super().stop_analysis()
 
 
 def test_me(
