@@ -650,7 +650,6 @@ class TargetCoverageVis(BaseVis):
         self.clair3_status_label = ui.label("Clair3 Idle")  # UI label for status
         if self.reference and self.enable_snp_calling:
             self.snp_calling = True
-            self.SNP_timer_run()
         self.target_panel = target_panel
         if self.target_panel == "rCNS2":
             self.bedfile = os.path.join(
@@ -2073,7 +2072,6 @@ class TargetCoverage(BaseAnalysis):
         self.clair3_status_label = ui.label("Clair3 Idle")  # UI label for status
         if self.reference and self.enable_snp_calling:
             self.snp_calling = True
-            self.SNP_timer_run()
         self.target_panel = target_panel
         if self.target_panel == "rCNS2":
             self.bedfile = os.path.join(

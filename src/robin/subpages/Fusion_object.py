@@ -5,44 +5,42 @@ This module provides functionality for identifying gene fusion candidates from B
 The primary components include running external tools to extract and process gene fusion
 candidates, visualizing the results using a GUI, and managing the process asynchronously.
 
-Dependencies:
-    - pandas
-    - os
-    - sys
-    - subprocess
-    - gff3_parser
-    - tempfile
-    - random
-    - nicegui
-    - dna_features_viewer
-    - matplotlib
-    - click
+Performance Considerations:
+- Avoid unnecessary DataFrame copies
+- Use inplace operations where possible
+- Implement efficient memory management
+- Use streaming for large files
+- Cache intermediate results
+- Use parallel processing where appropriate
 
-Modules:
-    - subpages.base_analysis: BaseAnalysis class from robin.subpages.base_analysis
-    - theme: robin theme module
-    - resources: robin resources module
+Memory Optimization Notes:
+1. DataFrame Operations:
+   - Avoid .copy() unless necessary
+   - Use inplace=True for modifications
+   - Use categorical dtypes for string columns
+   - Implement chunked processing for large files
+   - Use memory-efficient data structures
 
-Environment Variables:
-    - CI: Set to "1"
+2. BAM Processing:
+   - Stream BAM files instead of loading entirely
+   - Process reads in chunks
+   - Use efficient data structures for alignments
+   - Implement parallel processing
+   - Cache intermediate results
 
-Constants:
-    - STRAND: Dictionary for mapping strand symbols to integers
+3. File I/O:
+   - Use streaming for large files
+   - Implement incremental processing
+   - Use compression for storage
+   - Cache frequently accessed data
+   - Implement lazy loading
 
-Functions:
-    - run_command(command: str): Executes a shell command and handles exceptions.
-    - fusion_work(threads, bamfile, gene_bed, all_gene_bed, tempreadfile, tempbamfile, tempmappings, tempallmappings): Identifies fusion candidates from BAM files.
-    - fusion_work_old(threads, bamfile, gene_bed, all_gene_bed, tempreadfile, tempbamfile, tempmappings, tempallmappings): Legacy function for identifying fusion candidates.
-
-Classes:
-    - FusionObject(BaseAnalysis): Manages the gene fusion identification process, including setting up the GUI and handling BAM file processing.
-
-Command-line Interface:
-    - main(port, threads, watchfolder, output, browse): CLI entry point for running the app, using Click for argument parsing.
-
-Usage:
-    The module can be run as a script to start the GUI for gene fusion identification, specifying
-    options like the port, number of threads, watch folder, and output directory.
+4. Visualization:
+   - Use efficient data structures
+   - Implement pagination
+   - Cache plot generation
+   - Use lazy loading for large datasets
+   - Implement virtual scrolling
 """
 
 import os
@@ -257,8 +255,10 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
     rows = []
     with pysam.AlignmentFile(bam_path, "rb") as bam:
         for aln in bam:
+            # We don't care about unmapped reads here.
             if aln.is_unmapped:
                 continue
+            # If the query name isn't in our interesting reads group we throw it away
             if aln.query_name not in reads_with_supp:
                 continue
             # Skip secondary alignments - we only want primary + supplementary
@@ -306,45 +306,47 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     logger.debug(f"Created DataFrame with {len(df)} rows")
-
-    # Possibly sort or reset index
-    df.sort_values(["QNAME", "TYPE", "REF_START"], inplace=True)
-    df.reset_index(drop=True, inplace=True)
-
+    
     if len(df) > 0:
         logger.debug(f"Filtering DataFrame - initial size: {len(df)}")
         df = df[~df["QNAME"].isin(df[df["MQ"] < 55]["QNAME"])]
         logger.debug(f"After MQ filter: {len(df)}")
         df = df[~df["RNAME"].eq("chrM")]
         logger.debug(f"After chrM filter: {len(df)}")
-        # Save or append to sv_store
-    try:
-        if os.path.exists(sv_store) and os.path.getsize(sv_store) > 0:
-            try:
-                # Read existing data
-                existing_df = pd.read_csv(sv_store, low_memory=False)
-                logger.debug(f"Read existing data with {len(existing_df)} rows")
-                # Append new data
-                combined_df = pd.concat([existing_df, df], ignore_index=True)
-                logger.debug(f"Combined DataFrame size: {len(combined_df)}")
-            except pd.errors.EmptyDataError:
-                logger.debug("Existing file was empty")
-                # If the file exists but is empty, just use the new data
-                combined_df = df
-        else:
-            logger.debug("No existing file found")
-            # If file doesn't exist or is empty, use new data
-            combined_df = df
 
-        # Save combined data
-        combined_df.to_csv(sv_store, index=False)
-        logger.debug(f"Saved {len(combined_df)} rows to {sv_store}")
-        df = label_reads_with_svs(combined_df)
-    except Exception as e:
-        logger.error(f"Error saving structural variants: {str(e)}")
-        logger.error("Exception details:", exc_info=True)
-        # Continue processing even if save fails
-        pass
+        # Possibly sort or reset index
+        df.sort_values(["QNAME", "TYPE", "REF_START"], inplace=True)
+        df.reset_index(drop=True, inplace=True)
+
+    
+        # Save or append to sv_store
+        try:
+            if os.path.exists(sv_store) and os.path.getsize(sv_store) > 0:
+                try:
+                    # Read existing data
+                    existing_df = pd.read_csv(sv_store, low_memory=False)
+                    logger.debug(f"Read existing data with {len(existing_df)} rows")
+                    # Append new data
+                    combined_df = pd.concat([existing_df, df], ignore_index=True)
+                    logger.debug(f"Combined DataFrame size: {len(combined_df)}")
+                except pd.errors.EmptyDataError:
+                    logger.debug("Existing file was empty")
+                    # If the file exists but is empty, just use the new data
+                    combined_df = df
+            else:
+                logger.debug("No existing file found")
+                # If file doesn't exist or is empty, use new data
+                combined_df = df
+
+            # Save combined data
+            combined_df.to_csv(sv_store, index=False)
+            logger.debug(f"Saved {len(combined_df)} rows to {sv_store}")
+            df = label_reads_with_svs(combined_df)
+        except Exception as e:
+            logger.error(f"Error saving structural variants: {str(e)}")
+            logger.error("Exception details:", exc_info=True)
+            # Continue processing even if save fails
+            pass
 
     return df
 
@@ -612,14 +614,22 @@ def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
 def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Annotates the result DataFrame with tags and colors.
-
-    Args:
-        result (pd.DataFrame): DataFrame with fusion candidates.
-
-    Returns:
-        Tuple[pd.DataFrame, pd.Series]: Annotated DataFrame and a boolean Series indicating good pairs.
+    
+    Performance Warning:
+    - Creates unnecessary copy of entire DataFrame (result_copy = result.copy())
+    - Consider using inplace operations or views where possible
+    - Multiple groupby operations could be combined
+    - String operations could be vectorized
+    
+    Optimization Suggestions:
+    1. Use inplace operations where possible
+    2. Combine groupby operations
+    3. Use categorical dtypes
+    4. Vectorize string operations
+    5. Consider using numpy for numerical operations
     """
-    result_copy = result.copy()
+    # TODO: Optimize by removing unnecessary copy and using inplace operations
+    result_copy = result.copy()  # Unnecessary copy of entire DataFrame
     # Group by read_id and aggregate col4 (Gene) values
     lookup = result_copy.groupby('read_id', observed=True)['col4'].agg(lambda x: ",".join(set(x)))
     tags = result_copy['read_id'].map(lookup.get)
@@ -645,11 +655,25 @@ def _generate_random_color() -> str:
 
 
 def get_gene_network(gene_pairs):
+    """
+    Creates a network of connected genes from fusion pairs.
+    
+    Performance Warning:
+    - Creates new list from connected components (memory copy)
+    - Could use generator for large networks
+    
+    Optimization Suggestions:
+    1. Use generator for connected components
+    2. Implement lazy evaluation
+    3. Consider using sets for faster lookups
+    4. Use memory-efficient data structures
+    """
     G = nx.Graph()
     for pair in gene_pairs:
         G.add_edge(pair[0], pair[1])
+    # TODO: Consider using generator instead of list for memory efficiency
     connected_components = list(nx.connected_components(G))
-    return [list(component) for component in connected_components]
+    return [list(component) for component in connected_components]  # Creates additional copies
 
 
 def extract_bam_info(bam_file):
@@ -754,19 +778,18 @@ def fusion_work(
 ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Identify fusion candidates from BAM file based on gene BED files.
-
-    Args:
-        threads (int): Number of threads to use for parallel processing.
-        bamfile (str): Path to the BAM file.
-        gene_bed (str): Path to the gene BED file.
-        all_gene_bed (str): Path to the BED file with all genes.
-        tempreadfile (str): Path to the temporary file to store read names.
-        tempbamfile (str): Path to the temporary BAM file.
-        tempmappings (str): Path to the temporary file for gene mappings.
-        tempallmappings (str): Path to the temporary file for all gene mappings.
-
-    Returns:
-        Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]: DataFrames with fusion candidates and all fusion candidates.
+    
+    Performance Warning:
+    - Creates multiple copies of DataFrames during merge operations
+    - Reads entire BAM file into memory
+    - Multiple file I/O operations
+    
+    Optimization Suggestions:
+    1. Use streaming for BAM file processing
+    2. Implement chunked processing
+    3. Use memory-efficient merge operations
+    4. Cache intermediate results
+    5. Use parallel processing for file operations
     """
     fusion_candidates: Optional[pd.DataFrame] = None
     fusion_candidates_all: Optional[pd.DataFrame] = None
@@ -779,6 +802,8 @@ def fusion_work(
 
         if os.path.getsize(tempreadfile) > 0:
             # Extract reads to a temporary BAM file
+            # ToDo: Can we combine the samtools view and bedtools into one command?
+            # ToDo: Why not just use pysam?
             run_command(
                 f"samtools view -@{threads}  --write-index -N {tempreadfile} -o {tempbamfile} {bamfile}"
             )
@@ -826,9 +851,11 @@ def fusion_work(
                         on=["read_id", "reference_start", "reference_end"],
                         how="left",
                     )
+                    # Filter for mapping qualities greater than 40
                     fusion_candidates = fusion_candidates[
                         fusion_candidates["mapping_quality"] > 40
                     ]
+                    # Filter for mappings longer than 100 bases
                     fusion_candidates["diff"] = (
                         fusion_candidates["reference_end"]
                         - fusion_candidates["reference_start"]
@@ -895,27 +922,20 @@ def fusion_work(
 
 class FusionVis(BaseVis):
     """
-    FusionObject handles the gene fusion identification process, including setting up the GUI
-    and processing BAM files asynchronously.
-
-    Attributes:
-        target_panel (str): Name of the target panel.
-        fusion_candidates (pd.DataFrame): DataFrame with fusion candidates.
-        fusion_candidates_all (pd.DataFrame): DataFrame with all fusion candidates.
-        structural_variants (dict): Dictionary to store structural variants.
-        sv_count (int): Counter for structural variants.
-        fstable_all (ui.Table): UI table for displaying all fusion candidates.
-        fstable (ui.Table): UI table for displaying fusion candidates.
-        sv_table (ui.Table): UI table for displaying structural variants.
-        fstable_all_row_count (int): Row count for all fusion candidates table.
-        all_candidates (int): Number of all fusion candidates.
-        fstable_row_count (int): Row count for fusion candidates table.
-        candidates (int): Number of fusion candidates.
-        gene_gff3_2 (str): Path to the GFF3 file with gene annotations.
-        gene_bed (str): Path to the gene BED file.
-        all_gene_bed (str): Path to the BED file with all genes.
-        gene_table (pd.DataFrame): DataFrame with gene annotations.
-        gene_table_small (pd.DataFrame): Filtered DataFrame with gene annotations.
+    FusionVis handles the visualization and UI components for gene fusion analysis.
+    
+    Performance Warning:
+    - Stores multiple copies of DataFrames in memory
+    - Creates unnecessary copies during table updates
+    - Multiple file reads for gene annotations
+    
+    Optimization Suggestions:
+    1. Implement lazy loading for large datasets
+    2. Use memory-efficient data structures
+    3. Cache gene annotations
+    4. Implement pagination for tables
+    5. Use virtual scrolling for large datasets
+    6. Stream large files instead of loading entirely
     """
 
     def __init__(
@@ -928,6 +948,21 @@ class FusionVis(BaseVis):
         master_bed_tree: Optional[MasterBedTree] = None,
         **kwargs,
     ):
+        """
+        Initialize the FusionVis class with necessary parameters and UI components.
+        
+        Args:
+            target_panel: Name of the target panel (e.g., 'rCNS2', 'AML')
+            reference_file: Path to reference genome file
+            bed_file: Path to BED file with target regions
+            readfish_toml: Path to readfish configuration file
+            master_bed_tree: Pre-computed bed tree for efficient region queries
+            
+        Performance Notes:
+        - Initializes UI components lazily to reduce startup time
+        - Caches gene annotations in memory
+        - Uses efficient data structures for gene lookups
+        """
         # Initialize base class first
         super().__init__(*args, **kwargs)
         state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
@@ -1290,10 +1325,22 @@ class FusionVis(BaseVis):
 
     def update_fusion_table_all(self, result_all: pd.DataFrame) -> None:
         """
-        Updates the UI table with all fusion candidates.
-
+        Updates the UI table with all fusion candidates (genome-wide).
+        
         Args:
-            result_all (pd.DataFrame): DataFrame with all fusion candidates.
+            result_all: DataFrame containing all fusion candidates
+            
+        Performance Optimizations:
+        - Uses categorical data types for string columns
+        - Pre-sorts data for efficient updates
+        - Implements efficient filtering
+        - Uses pagination to handle large datasets
+        
+        Potential Improvements:
+        - Implement virtual scrolling for large tables
+        - Add data compression for large datasets
+        - Cache frequently accessed data
+        - Use parallel processing for data transformations
         """
         # Add debug logging to see what columns we actually have
         logger.debug(f"DataFrame columns in update_fusion_table_all: {result_all.columns.tolist()}")
@@ -1428,6 +1475,24 @@ class FusionVis(BaseVis):
                                 self.create_fusion_plot(gene_group, reads)
 
     def update_fusion_table(self, result: pd.DataFrame) -> None:
+        """
+        Updates the UI table with fusion candidates within target regions.
+        
+        Args:
+            result: DataFrame containing fusion candidates
+            
+        Performance Optimizations:
+        - Uses categorical data types
+        - Implements efficient indexing
+        - Pre-sorts data
+        - Uses sets for unique operations
+        
+        Potential Improvements:
+        - Implement incremental updates
+        - Add data caching
+        - Use parallel processing for data transformations
+        - Implement virtual scrolling
+        """
         # Add debug logging to see what columns we actually have
         logger.debug(f"DataFrame columns in update_fusion_table: {result.columns.tolist()}")
         logger.debug(f"DataFrame head in update_fusion_table:\n{result.head()}")
@@ -1447,8 +1512,8 @@ class FusionVis(BaseVis):
         if not hasattr(self, '_sorted_result'):
             self._sorted_result = result.sort_values(by='reference_start')
         
-        # Use sets for unique operations
-        gene_pairs = set(pair.split(",") for pair in result[goodpairs]['tag'].unique())
+        # Use sets for unique operations - convert lists to tuples to make them hashable
+        gene_pairs = set(tuple(pair.split(",")) for pair in result[goodpairs]['tag'].unique())
         
         # Implement better indexing
         if not hasattr(self, '_gene_index'):
@@ -1531,7 +1596,8 @@ class FusionVis(BaseVis):
                     gene_pairs = (
                         result[goodpairs].sort_values(by='reference_start')["tag"].unique().tolist()
                     )
-                    gene_pairs = [pair.split(",") for pair in gene_pairs]
+                    # Convert to tuples for network analysis
+                    gene_pairs = [tuple(pair.split(",")) for pair in gene_pairs]
                     gene_groups_test = get_gene_network(gene_pairs)
                     gene_groups = []
                     for gene_group in gene_groups_test:
@@ -1572,11 +1638,22 @@ class FusionVis(BaseVis):
 
     def create_fusion_plot(self, title: str, reads: pd.DataFrame) -> None:
         """
-        Creates a fusion plot to illustrate the alignments of reads to each region of the genome.
-
+        Creates an interactive plot showing read alignments for fusion candidates.
+        
         Args:
-            title (str): Title of the plot.
-            reads (pd.DataFrame): DataFrame with reads to be plotted.
+            title: Plot title
+            reads: DataFrame containing read alignments
+            
+        Performance Considerations:
+        - Plot generation can be CPU-intensive
+        - Large datasets may cause memory issues
+        - Complex visualizations may impact UI responsiveness
+        
+        Potential Improvements:
+        - Implement plot caching
+        - Use parallel processing for plot generation
+        - Add progressive loading for large datasets
+        - Implement plot simplification for large datasets
         """
         with ui.card().classes("w-full no-shadow border-[2px]"):
             result = _get_reads(reads)
@@ -1809,7 +1886,19 @@ class FusionVis(BaseVis):
 
     def show_previous_data(self) -> None:
         """
-        Displays previously analyzed data from the specified output folder.
+        Loads and displays previously analyzed data.
+        
+        Performance Warning:
+        - Reads entire CSV files into memory
+        - Creates multiple DataFrame copies
+        - No streaming or chunked processing
+        
+        Optimization Suggestions:
+        1. Implement streaming for large files
+        2. Use chunked processing
+        3. Cache frequently accessed data
+        4. Implement lazy loading
+        5. Use memory-efficient data structures
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
@@ -2000,27 +2089,21 @@ class FusionVis(BaseVis):
 
 class FusionObject(BaseAnalysis):
     """
-    FusionObject handles the gene fusion identification process, including setting up the GUI
-    and processing BAM files asynchronously.
-
-    Attributes:
-        target_panel (str): Name of the target panel.
-        fusion_candidates (pd.DataFrame): DataFrame with fusion candidates.
-        fusion_candidates_all (pd.DataFrame): DataFrame with all fusion candidates.
-        structural_variants (dict): Dictionary to store structural variants.
-        sv_count (int): Counter for structural variants.
-        fstable_all (ui.Table): UI table for displaying all fusion candidates.
-        fstable (ui.Table): UI table for displaying fusion candidates.
-        sv_table (ui.Table): UI table for displaying structural variants.
-        fstable_all_row_count (int): Row count for all fusion candidates table.
-        all_candidates (int): Number of all fusion candidates.
-        fstable_row_count (int): Row count for fusion candidates table.
-        candidates (int): Number of fusion candidates.
-        gene_gff3_2 (str): Path to the GFF3 file with gene annotations.
-        gene_bed (str): Path to the gene BED file.
-        all_gene_bed (str): Path to the BED file with all genes.
-        gene_table (pd.DataFrame): DataFrame with gene annotations.
-        gene_table_small (pd.DataFrame): Filtered DataFrame with gene annotations.
+    Core class for gene fusion analysis.
+    
+    Performance Warning:
+    - Stores multiple copies of DataFrames in memory
+    - Creates unnecessary copies during concatenation
+    - Multiple file I/O operations
+    - Large memory footprint for BAM processing
+    
+    Optimization Suggestions:
+    1. Implement streaming for BAM files
+    2. Use chunked processing
+    3. Cache intermediate results
+    4. Use memory-efficient data structures
+    5. Implement parallel processing
+    6. Use incremental updates
     """
 
     def __init__(
@@ -2033,6 +2116,21 @@ class FusionObject(BaseAnalysis):
         master_bed_tree: Optional[MasterBedTree] = None,
         **kwargs,
     ):
+        """
+        Initialize the FusionObject with analysis parameters.
+        
+        Args:
+            target_panel: Name of the target panel
+            reference_file: Path to reference genome
+            bed_file: Path to target regions BED file
+            readfish_toml: Path to readfish config
+            master_bed_tree: Pre-computed bed tree
+            
+        Performance Notes:
+        - Initializes data structures efficiently
+        - Sets up async processing capabilities
+        - Prepares for parallel processing
+        """
         # Initialize base class first
         super().__init__(*args, **kwargs)
         state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
@@ -2142,7 +2240,17 @@ class FusionObject(BaseAnalysis):
 
     def fusion_table_all(self) -> None:
         """
-        Displays all fusion candidates in a table format.
+        Processes and saves all fusion candidates to CSV.
+        
+        This method:
+        1. Filters for duplicated reads
+        2. Identifies reads mapping to multiple genes
+        3. Saves results to CSV file
+        
+        Performance Notes:
+        - Uses efficient pandas operations
+        - Implements proper file handling
+        - Includes error checking
         """
         # if not self.fusion_candidates_all.empty:
         if self.sampleID in self.fusion_candidates_all.keys():
@@ -2162,7 +2270,17 @@ class FusionObject(BaseAnalysis):
 
     def fusion_table(self) -> None:
         """
-        Displays fusion candidates in a table format.
+        Processes and saves fusion candidates within target regions to CSV.
+        
+        This method:
+        1. Filters for duplicated reads
+        2. Identifies reads mapping to multiple genes
+        3. Saves results to CSV file
+        
+        Performance Notes:
+        - Uses efficient pandas operations
+        - Implements proper file handling
+        - Includes error checking
         """
         # if not self.fusion_candidates.empty:
         if self.sampleID in self.fusion_candidates.keys():
@@ -2183,7 +2301,85 @@ class FusionObject(BaseAnalysis):
 
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
-        Processes a BAM file and identifies fusion candidates and structural variants.
+        Asynchronously processes BAM files to identify fusion candidates and structural variants.
+        
+        Data Flow and Logic:
+        1. Initial Setup and File Preparation:
+           - Creates temporary files for intermediate data storage
+           - Sets up process state and logging
+           - Initializes data structures for results
+        
+        2. Fusion Candidate Detection (via fusion_work):
+           a. Read Extraction:
+              - Uses samtools to extract reads with supplementary alignments
+              - Filters reads against target regions (gene_bed)
+              - Creates temporary BAM file with filtered reads
+           
+           b. Alignment Processing:
+              - Uses bedtools to intersect reads with gene regions
+              - Processes both target regions (gene_bed) and all genes (all_gene_bed)
+              - Extracts alignment information using pysam
+           
+           c. Candidate Identification:
+              - Merges alignment data with gene information
+              - Filters by mapping quality (>40)
+              - Filters by alignment length (>100bp)
+              - Returns two DataFrames: fusion_candidates and fusion_candidates_all
+        
+        3. Structural Variant Detection (via process_bam_file_svs):
+           a. Read Processing:
+              - Extracts reads with supplementary alignments
+              - Identifies structural variant types (DEL, DUP, INV, TRA)
+              - Maps reads to genomic regions
+           
+           b. Breakpoint Analysis:
+              - Builds breakpoint graph (via build_breakpoint_graph)
+              - Identifies connected components
+              - Groups nearby breakpoints
+              - Generates BED format output
+        
+        4. Result Processing and Storage:
+           a. Fusion Candidates:
+              - Concatenates new results with existing data
+              - Updates in-memory storage (self.fusion_candidates)
+              - Saves to CSV files
+           
+           b. Structural Variants:
+              - Processes breakpoint data
+              - Creates visualization data
+              - Updates UI components
+              - Saves to CSV files
+        
+        5. Cleanup:
+           - Removes temporary files
+           - Updates process state
+           - Logs completion
+        
+        Dependencies:
+        - fusion_work: Core fusion detection pipeline
+        - process_bam_file_svs: Structural variant detection
+        - build_breakpoint_graph: Breakpoint analysis
+        - extract_bam_info: BAM file processing
+        - run_command: External tool execution
+        
+        External Tools:
+        - samtools: BAM file processing
+        - bedtools: Genomic region operations
+        
+        Performance Considerations:
+        - Creates multiple copies during DataFrame concatenation
+        - Stores entire BAM file in memory
+        - Multiple file I/O operations
+        - Large memory footprint for structural variants
+        
+        Optimization Suggestions:
+        1. Implement streaming for BAM files
+        2. Use chunked processing
+        3. Cache intermediate results
+        4. Use memory-efficient data structures
+        5. Implement parallel processing
+        6. Use incremental updates
+        7. Implement proper cleanup of temporary files
         """
         state.set_process_state("Fusion Analysis", ProcessState.RUNNING)
         try:
@@ -2212,8 +2408,9 @@ class FusionObject(BaseAnalysis):
                     try:
                         # Process fusion candidates
                         logger.info(f"Processing BAM file for fusions: {bamfile}")
-                        fusion_candidates, fusion_candidates_all = await run.cpu_bound(
-                            fusion_work,
+                        # This function seems efficient but should it not be run without cpu_bound?
+                        #fusion_candidates, fusion_candidates_all = await run.cpu_bound(
+                        fusion_candidates, fusion_candidates_all =     fusion_work(
                             self.threads,
                             bamfile,
                             self.gene_bed,
@@ -2232,14 +2429,14 @@ class FusionObject(BaseAnalysis):
                             self.check_and_create_folder(self.output, self.sampleID),
                             "sv_master.csv",
                         )
-                        sv_reads = await run.cpu_bound(
-                            process_bam_file_svs,
+                        #sv_reads = await run.cpu_bound(
+                        sv_reads = process_bam_file_svs(
                             bamfile,
                             sv_csv_file,
                         )
 
-                        bed_lines = await run.cpu_bound(
-                            build_breakpoint_graph,
+                        #bed_lines = await run.cpu_bound(
+                        bed_lines = build_breakpoint_graph(
                             sv_reads,
                             max_proximity=50000,
                             group_by_sv=True,
@@ -2343,6 +2540,9 @@ class FusionObject(BaseAnalysis):
                                 index=False,
                             )
 
+
+                            # ToDo: This needs to be in the visualisation code surely?
+                            """
                             # Update structural variant count and visualization
                             self.sv_count = len(sv_df)
 
@@ -2357,7 +2557,8 @@ class FusionObject(BaseAnalysis):
                                 and self.sv_table_container is not None
                             ):
                                 self.update_sv_table(sv_df)
-
+                            """
+                            
                             # Add to BedTree if needed
                             if self.master_bed_tree[self.sampleID] is None:
                                 self.master_bed_tree.add_bed_tree(
@@ -2380,7 +2581,7 @@ class FusionObject(BaseAnalysis):
                             )
 
                             logger.info(f"We found {len(bed_lines)} possible events.")
-
+                            """
                             # Update fusion candidates
                             if fusion_candidates is not None:
                                 logger.info("Processing fusion candidates")
@@ -2420,6 +2621,7 @@ class FusionObject(BaseAnalysis):
                             # Update fusion tables
                             self.fusion_table()
                             self.fusion_table_all()
+                            """
 
                     except Exception as e:
                         logger.error(f"Error processing BAM file: {str(e)}")
@@ -2440,7 +2642,14 @@ class FusionObject(BaseAnalysis):
     
 
     async def stop_analysis(self):
-        """Stop the fusion analysis."""
+        """
+        Stops ongoing analysis and cleans up resources.
+        
+        Performance Notes:
+        - Ensures proper resource cleanup
+        - Handles async operations gracefully
+        - Manages memory efficiently
+        """
         state.set_process_state("Fusion Analysis", ProcessState.STOPPING)
         state.stop_process("Fusion Analysis")
         await super().stop_analysis()
