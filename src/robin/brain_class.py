@@ -574,7 +574,7 @@ class BrainMeth:
             )
             self.observer = Observer()
             self.observer.schedule(self.event_handler, self.watchfolder, recursive=True)
-            self.check_existing_bams_timer = ui.timer(
+            self.check_existing_bams_timer = app.timer(
                 1, callback=self.check_existing_bams, once=True
             )
 
@@ -584,7 +584,7 @@ class BrainMeth:
             self.observer.start()
             state.set_process_state("File Observer", ProcessState.RUNNING)
 
-            self.background_process_bams_timer = ui.timer(
+            self.background_process_bams_timer = app.timer(
                 1, callback=self.background_process_bams, once=True
             )
 
