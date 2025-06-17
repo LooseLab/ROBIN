@@ -26,7 +26,7 @@ The module requires proper configuration of input/output directories and
 assumes the presence of necessary model files for Sturgeon predictions.
 """
 
-from robin.subpages.base_analysis import BaseAnalysis, BaseVis 
+from robin.subpages.base_analysis import BaseAnalysis, BaseVis
 import os
 import sys
 import tempfile
@@ -494,6 +494,7 @@ class Sturgeon_object(BaseAnalysis):
                     self.check_and_create_folder(self.output, sampleID),
                     f"{sampleID}.parquet",
                 )
+
                 async def sturgeon_bam_background_work(sampleID, parquet_path):
                     try:
                         if self.check_file_time(parquet_path):
@@ -502,7 +503,9 @@ class Sturgeon_object(BaseAnalysis):
                                 "tomerge_length.txt",
                             )
                             with open(tomerge_length_file, "r") as f:
-                                tomerge_length = int(f.readline().strip().split(": ")[1])
+                                tomerge_length = int(
+                                    f.readline().strip().split(": ")[1]
+                                )
 
                             merged_modkit_df = await run.cpu_bound(
                                 load_modkit_data, parquet_path
@@ -520,7 +523,9 @@ class Sturgeon_object(BaseAnalysis):
                                 self.probes_file,
                             )
 
-                            diagnosis = await run.cpu_bound(predict_sample_from_dataframe,result_df)
+                            diagnosis = await run.cpu_bound(
+                                predict_sample_from_dataframe, result_df
+                            )
                             self.st_num_probes[sampleID] = diagnosis.iloc[-1][
                                 "number_probes"
                             ]
@@ -541,7 +546,9 @@ class Sturgeon_object(BaseAnalysis):
                                 )
                                 self.sturgeon_df_store[sampleID].to_csv(
                                     os.path.join(
-                                        self.check_and_create_folder(self.output, sampleID),
+                                        self.check_and_create_folder(
+                                            self.output, sampleID
+                                        ),
                                         "sturgeon_scores.csv",
                                     )
                                 )
@@ -558,8 +565,10 @@ class Sturgeon_object(BaseAnalysis):
                         # print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
                     except Exception as e:
                         logger.error(f"Error in process_bam (sturgeon): {e}")
-                
-                await background_tasks.create(sturgeon_bam_background_work(sampleID, parquet_path))
+
+                await background_tasks.create(
+                    sturgeon_bam_background_work(sampleID, parquet_path)
+                )
 
             self.running = False
         finally:
@@ -570,8 +579,8 @@ class Sturgeon_object(BaseAnalysis):
         state.set_process_state("Sturgeon Analysis", ProcessState.STOPPING)
         state.stop_process("Sturgeon Analysis")
         await super().stop_analysis()
-        
-        
+
+
 class SturgeonVis(BaseVis):
     """
     A class for processing and visualizing Sturgeon methylation analysis results.
@@ -991,7 +1000,6 @@ class SturgeonVis(BaseVis):
         )
 
         self.sturgeon_time_chart.update()
-
 
 
 def test_me(

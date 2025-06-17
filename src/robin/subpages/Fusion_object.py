@@ -66,7 +66,6 @@ from robin.subpages.base_analysis import BaseAnalysis, BaseVis
 from robin.utilities.decompress import decompress_gzip_file
 from robin.utilities.bed_file import MasterBedTree
 from collections import Counter, defaultdict
-import time
 from robin.core.state import state, ProcessState
 
 matplotlib.use("agg")
@@ -306,7 +305,7 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
 
     df = pd.DataFrame(rows)
     logger.debug(f"Created DataFrame with {len(df)} rows")
-    
+
     if len(df) > 0:
         logger.debug(f"Filtering DataFrame - initial size: {len(df)}")
         df = df[~df["QNAME"].isin(df[df["MQ"] < 55]["QNAME"])]
@@ -318,7 +317,6 @@ def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
         df.sort_values(["QNAME", "TYPE", "REF_START"], inplace=True)
         df.reset_index(drop=True, inplace=True)
 
-    
         # Save or append to sv_store
         try:
             if os.path.exists(sv_store) and os.path.getsize(sv_store) > 0:
@@ -614,13 +612,13 @@ def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
 def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     """
     Annotates the result DataFrame with tags and colors.
-    
+
     Performance Warning:
     - Creates unnecessary copy of entire DataFrame (result_copy = result.copy())
     - Consider using inplace operations or views where possible
     - Multiple groupby operations could be combined
     - String operations could be vectorized
-    
+
     Optimization Suggestions:
     1. Use inplace operations where possible
     2. Combine groupby operations
@@ -631,16 +629,20 @@ def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     # TODO: Optimize by removing unnecessary copy and using inplace operations
     result_copy = result.copy()  # Unnecessary copy of entire DataFrame
     # Group by read_id and aggregate col4 (Gene) values
-    lookup = result_copy.groupby('read_id', observed=True)['col4'].agg(lambda x: ",".join(set(x)))
-    tags = result_copy['read_id'].map(lookup.get)
+    lookup = result_copy.groupby("read_id", observed=True)["col4"].agg(
+        lambda x: ",".join(set(x))
+    )
+    tags = result_copy["read_id"].map(lookup.get)
     result_copy.loc[:, "tag"] = tags
     result = result_copy
     # Generate colors for each read_id group
-    colors = result.groupby('read_id', observed=True).apply(lambda x: _generate_random_color())
+    colors = result.groupby("read_id", observed=True).apply(
+        lambda x: _generate_random_color()
+    )
     result = result.map(lambda x: x.strip() if isinstance(x, str) else x)
-    result["Color"] = result['read_id'].map(colors.get)
+    result["Color"] = result["read_id"].map(colors.get)
     # Find good pairs (reads that map to more than 2 genes)
-    goodpairs = result.groupby("tag", observed=True)['read_id'].transform("nunique") > 2
+    goodpairs = result.groupby("tag", observed=True)["read_id"].transform("nunique") > 2
     return result, goodpairs
 
 
@@ -657,11 +659,11 @@ def _generate_random_color() -> str:
 def get_gene_network(gene_pairs):
     """
     Creates a network of connected genes from fusion pairs.
-    
+
     Performance Warning:
     - Creates new list from connected components (memory copy)
     - Could use generator for large networks
-    
+
     Optimization Suggestions:
     1. Use generator for connected components
     2. Implement lazy evaluation
@@ -673,7 +675,9 @@ def get_gene_network(gene_pairs):
         G.add_edge(pair[0], pair[1])
     # TODO: Consider using generator instead of list for memory efficiency
     connected_components = list(nx.connected_components(G))
-    return [list(component) for component in connected_components]  # Creates additional copies
+    return [
+        list(component) for component in connected_components
+    ]  # Creates additional copies
 
 
 def extract_bam_info(bam_file):
@@ -778,12 +782,12 @@ def fusion_work(
 ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Identify fusion candidates from BAM file based on gene BED files.
-    
+
     Performance Warning:
     - Creates multiple copies of DataFrames during merge operations
     - Reads entire BAM file into memory
     - Multiple file I/O operations
-    
+
     Optimization Suggestions:
     1. Use streaming for BAM file processing
     2. Implement chunked processing
@@ -923,12 +927,12 @@ def fusion_work(
 class FusionVis(BaseVis):
     """
     FusionVis handles the visualization and UI components for gene fusion analysis.
-    
+
     Performance Warning:
     - Stores multiple copies of DataFrames in memory
     - Creates unnecessary copies during table updates
     - Multiple file reads for gene annotations
-    
+
     Optimization Suggestions:
     1. Implement lazy loading for large datasets
     2. Use memory-efficient data structures
@@ -950,14 +954,14 @@ class FusionVis(BaseVis):
     ):
         """
         Initialize the FusionVis class with necessary parameters and UI components.
-        
+
         Args:
             target_panel: Name of the target panel (e.g., 'rCNS2', 'AML')
             reference_file: Path to reference genome file
             bed_file: Path to BED file with target regions
             readfish_toml: Path to readfish configuration file
             master_bed_tree: Pre-computed bed tree for efficient region queries
-            
+
         Performance Notes:
         - Initializes UI components lazily to reduce startup time
         - Caches gene annotations in memory
@@ -1326,16 +1330,16 @@ class FusionVis(BaseVis):
     def update_fusion_table_all(self, result_all: pd.DataFrame) -> None:
         """
         Updates the UI table with all fusion candidates (genome-wide).
-        
+
         Args:
             result_all: DataFrame containing all fusion candidates
-            
+
         Performance Optimizations:
         - Uses categorical data types for string columns
         - Pre-sorts data for efficient updates
         - Implements efficient filtering
         - Uses pagination to handle large datasets
-        
+
         Potential Improvements:
         - Implement virtual scrolling for large tables
         - Add data compression for large datasets
@@ -1343,17 +1347,21 @@ class FusionVis(BaseVis):
         - Use parallel processing for data transformations
         """
         # Add debug logging to see what columns we actually have
-        logger.debug(f"DataFrame columns in update_fusion_table_all: {result_all.columns.tolist()}")
+        logger.debug(
+            f"DataFrame columns in update_fusion_table_all: {result_all.columns.tolist()}"
+        )
         logger.debug(f"DataFrame head in update_fusion_table_all:\n{result_all.head()}")
-        
+
         # Pre-sort and use categorical data types
-        result_all = result_all.astype({
-            'read_id': 'category',
-            'col4': 'category',  # This is the Gene column
-            'reference_id': 'category',  # This is the chrom column
-            'strand': 'category'
-        })
-        
+        result_all = result_all.astype(
+            {
+                "read_id": "category",
+                "col4": "category",  # This is the Gene column
+                "reference_id": "category",  # This is the chrom column
+                "strand": "category",
+            }
+        )
+
         if result_all.shape[0] > self.fstable_all_row_count:
             self.fstable_all_row_count = result_all.shape[0]
             if not self.fstable_all:
@@ -1361,23 +1369,23 @@ class FusionVis(BaseVis):
                 with self.fusiontable_all:
                     self.fstable_all = (
                         ui.table.from_pandas(
-                            result_all.sort_values(by='reference_start').rename(
+                            result_all.sort_values(by="reference_start").rename(
                                 columns={
-                                    'col1': "chromBED",
-                                    'col2': "BS",
-                                    'col3': "BE",
-                                    'col4': "Gene",
-                                    'reference_id': "chrom",
-                                    'reference_start': "mS",
-                                    'reference_end': "mE",
-                                    'read_id': "readID",
-                                    'mapping_quality': "mapQ",
-                                    'strand': "strand",
-                                    'read_start': "Read Map Start",
-                                    'read_end': "Read Map End",
-                                    'is_secondary': "Secondary",
-                                    'is_supplementary': "Supplementary",
-                                    'mapping_span': "mapping span",
+                                    "col1": "chromBED",
+                                    "col2": "BS",
+                                    "col3": "BE",
+                                    "col4": "Gene",
+                                    "reference_id": "chrom",
+                                    "reference_start": "mS",
+                                    "reference_end": "mE",
+                                    "read_id": "readID",
+                                    "mapping_quality": "mapQ",
+                                    "strand": "strand",
+                                    "read_start": "Read Map Start",
+                                    "read_end": "Read Map End",
+                                    "is_secondary": "Secondary",
+                                    "is_supplementary": "Supplementary",
+                                    "mapping_span": "mapping span",
                                 }
                             ),
                             pagination=25,
@@ -1399,24 +1407,24 @@ class FusionVis(BaseVis):
                 self.fusionplot_all.clear()
             else:
                 self.fstable_all.update_rows(
-                    result_all.sort_values(by='reference_start')
+                    result_all.sort_values(by="reference_start")
                     .rename(
                         columns={
-                            'col1': "chromBED",
-                            'col2': "BS",
-                            'col3': "BE",
-                            'col4': "Gene",
-                            'reference_id': "chrom",
-                            'reference_start': "mS",
-                            'reference_end': "mE",
-                            'read_id': "readID",
-                            'mapping_quality': "mapQ",
-                            'strand': "strand",
-                            'read_start': "Read Map Start",
-                            'read_end': "Read Map End",
-                            'is_secondary': "Secondary",
-                            'is_supplementary': "Supplementary",
-                            'mapping_span': "mapping span",
+                            "col1": "chromBED",
+                            "col2": "BS",
+                            "col3": "BE",
+                            "col4": "Gene",
+                            "reference_id": "chrom",
+                            "reference_start": "mS",
+                            "reference_end": "mE",
+                            "read_id": "readID",
+                            "mapping_quality": "mapQ",
+                            "strand": "strand",
+                            "read_start": "Read Map Start",
+                            "read_end": "Read Map End",
+                            "is_secondary": "Secondary",
+                            "is_supplementary": "Supplementary",
+                            "mapping_span": "mapping span",
                         }
                     )
                     .to_dict("records")
@@ -1431,7 +1439,10 @@ class FusionVis(BaseVis):
             if not result_all.empty:
                 with self.fusionplot_all.classes("w-full"):
                     gene_pairs = (
-                        result_all[goodpairs].sort_values(by='reference_start')["tag"].unique().tolist()
+                        result_all[goodpairs]
+                        .sort_values(by="reference_start")["tag"]
+                        .unique()
+                        .tolist()
                     )
                     gene_pairs = [pair.split(", ") for pair in gene_pairs]
                     gene_groups_test = get_gene_network(gene_pairs)
@@ -1439,7 +1450,7 @@ class FusionVis(BaseVis):
                     for gene_group in gene_groups_test:
                         reads = _get_reads(
                             result_all[goodpairs][
-                                result_all[goodpairs]['col4'].isin(gene_group)
+                                result_all[goodpairs]["col4"].isin(gene_group)
                             ]
                         )
                         if len(reads) > 1:
@@ -1470,23 +1481,23 @@ class FusionVis(BaseVis):
                                 )
                             with ui.row():
                                 reads = result_all[goodpairs][
-                                    result_all[goodpairs]['col4'].isin(gene_group)
+                                    result_all[goodpairs]["col4"].isin(gene_group)
                                 ]
                                 self.create_fusion_plot(gene_group, reads)
 
     def update_fusion_table(self, result: pd.DataFrame) -> None:
         """
         Updates the UI table with fusion candidates within target regions.
-        
+
         Args:
             result: DataFrame containing fusion candidates
-            
+
         Performance Optimizations:
         - Uses categorical data types
         - Implements efficient indexing
         - Pre-sorts data
         - Uses sets for unique operations
-        
+
         Potential Improvements:
         - Implement incremental updates
         - Add data caching
@@ -1494,31 +1505,39 @@ class FusionVis(BaseVis):
         - Implement virtual scrolling
         """
         # Add debug logging to see what columns we actually have
-        logger.debug(f"DataFrame columns in update_fusion_table: {result.columns.tolist()}")
+        logger.debug(
+            f"DataFrame columns in update_fusion_table: {result.columns.tolist()}"
+        )
         logger.debug(f"DataFrame head in update_fusion_table:\n{result.head()}")
-        
+
         # Pre-sort and use categorical data types
-        result = result.astype({
-            'read_id': 'category',
-            'col4': 'category',  # This is the Gene column
-            'reference_id': 'category',  # This is the chrom column
-            'strand': 'category'
-        })
-        
+        result = result.astype(
+            {
+                "read_id": "category",
+                "col4": "category",  # This is the Gene column
+                "reference_id": "category",  # This is the chrom column
+                "strand": "category",
+            }
+        )
+
         # Annotate results and get goodpairs before using them
         result, goodpairs = _annotate_results(result)
-        
+
         # Use more efficient operations
-        if not hasattr(self, '_sorted_result'):
-            self._sorted_result = result.sort_values(by='reference_start')
-        
+        if not hasattr(self, "_sorted_result"):
+            self._sorted_result = result.sort_values(by="reference_start")
+
         # Use sets for unique operations - convert lists to tuples to make them hashable
-        gene_pairs = set(tuple(pair.split(",")) for pair in result[goodpairs]['tag'].unique())
-        
+        gene_pairs = set(
+            tuple(pair.split(",")) for pair in result[goodpairs]["tag"].unique()
+        )
+
         # Implement better indexing
-        if not hasattr(self, '_gene_index'):
-            self._gene_index = result.set_index('col4')  # Using col4 which is the Gene column
-        
+        if not hasattr(self, "_gene_index"):
+            self._gene_index = result.set_index(
+                "col4"
+            )  # Using col4 which is the Gene column
+
         if result.shape[0] > self.fstable_row_count:
             self.fstable_row_count = result.shape[0]
             if not self.fstable:
@@ -1526,23 +1545,23 @@ class FusionVis(BaseVis):
                 with self.fusiontable:
                     self.fstable = (
                         ui.table.from_pandas(
-                            result.sort_values(by='reference_start').rename(
+                            result.sort_values(by="reference_start").rename(
                                 columns={
-                                    'col1': "chromBED",
-                                    'col2': "BS",
-                                    'col3': "BE",
-                                    'col4': "Gene",
-                                    'reference_id': "chrom",
-                                    'reference_start': "mS",
-                                    'reference_end': "mE",
-                                    'read_id': "readID",
-                                    'mapping_quality': "mapQ",
-                                    'strand': "strand",
-                                    'read_start': "Read Map Start",
-                                    'read_end': "Read Map End",
-                                    'is_secondary': "Secondary",
-                                    'is_supplementary': "Supplementary",
-                                    'mapping_span': "mapping span",
+                                    "col1": "chromBED",
+                                    "col2": "BS",
+                                    "col3": "BE",
+                                    "col4": "Gene",
+                                    "reference_id": "chrom",
+                                    "reference_start": "mS",
+                                    "reference_end": "mE",
+                                    "read_id": "readID",
+                                    "mapping_quality": "mapQ",
+                                    "strand": "strand",
+                                    "read_start": "Read Map Start",
+                                    "read_end": "Read Map End",
+                                    "is_secondary": "Secondary",
+                                    "is_supplementary": "Supplementary",
+                                    "mapping_span": "mapping span",
                                 }
                             ),
                             pagination=25,
@@ -1564,24 +1583,24 @@ class FusionVis(BaseVis):
                 self.fusionplot.clear()
             else:
                 self.fstable.update_rows(
-                    result.sort_values(by='reference_start')
+                    result.sort_values(by="reference_start")
                     .rename(
                         columns={
-                            'col1': "chromBED",
-                            'col2': "BS",
-                            'col3': "BE",
-                            'col4': "Gene",
-                            'reference_id': "chrom",
-                            'reference_start': "mS",
-                            'reference_end': "mE",
-                            'read_id': "readID",
-                            'mapping_quality': "mapQ",
-                            'strand': "strand",
-                            'read_start': "Read Map Start",
-                            'read_end': "Read Map End",
-                            'is_secondary': "Secondary",
-                            'is_supplementary': "Supplementary",
-                            'mapping_span': "mapping span",
+                            "col1": "chromBED",
+                            "col2": "BS",
+                            "col3": "BE",
+                            "col4": "Gene",
+                            "reference_id": "chrom",
+                            "reference_start": "mS",
+                            "reference_end": "mE",
+                            "read_id": "readID",
+                            "mapping_quality": "mapQ",
+                            "strand": "strand",
+                            "read_start": "Read Map Start",
+                            "read_end": "Read Map End",
+                            "is_secondary": "Secondary",
+                            "is_supplementary": "Supplementary",
+                            "mapping_span": "mapping span",
                         }
                     )
                     .to_dict("records")
@@ -1594,7 +1613,10 @@ class FusionVis(BaseVis):
             if not (result.empty):
                 with self.fusionplot.classes("w-full"):
                     gene_pairs = (
-                        result[goodpairs].sort_values(by='reference_start')["tag"].unique().tolist()
+                        result[goodpairs]
+                        .sort_values(by="reference_start")["tag"]
+                        .unique()
+                        .tolist()
                     )
                     # Convert to tuples for network analysis
                     gene_pairs = [tuple(pair.split(",")) for pair in gene_pairs]
@@ -1602,7 +1624,9 @@ class FusionVis(BaseVis):
                     gene_groups = []
                     for gene_group in gene_groups_test:
                         reads = _get_reads(
-                            result[goodpairs][result[goodpairs]['col4'].isin(gene_group)]
+                            result[goodpairs][
+                                result[goodpairs]["col4"].isin(gene_group)
+                            ]
                         )
                         if len(reads) > 1:
                             gene_groups.append(gene_group)
@@ -1632,23 +1656,23 @@ class FusionVis(BaseVis):
                                 )
                             with ui.row():
                                 reads = result[goodpairs][
-                                    result[goodpairs]['col4'].isin(gene_group)
+                                    result[goodpairs]["col4"].isin(gene_group)
                                 ]
                                 self.create_fusion_plot(gene_group, reads)
 
     def create_fusion_plot(self, title: str, reads: pd.DataFrame) -> None:
         """
         Creates an interactive plot showing read alignments for fusion candidates.
-        
+
         Args:
             title: Plot title
             reads: DataFrame containing read alignments
-            
+
         Performance Considerations:
         - Plot generation can be CPU-intensive
         - Large datasets may cause memory issues
         - Complex visualizations may impact UI responsiveness
-        
+
         Potential Improvements:
         - Implement plot caching
         - Use parallel processing for plot generation
@@ -1887,12 +1911,12 @@ class FusionVis(BaseVis):
     def show_previous_data(self) -> None:
         """
         Loads and displays previously analyzed data.
-        
+
         Performance Warning:
         - Reads entire CSV files into memory
         - Creates multiple DataFrame copies
         - No streaming or chunked processing
-        
+
         Optimization Suggestions:
         1. Implement streaming for large files
         2. Use chunked processing
@@ -1920,11 +1944,21 @@ class FusionVis(BaseVis):
                 )
                 # Add column names to match the expected format
                 fusion_candidates.columns = [
-                    'col1', 'col2', 'col3', 'col4',  # BED file columns
-                    'reference_id', 'reference_start', 'reference_end',  # Reference columns
-                    'read_id', 'mapping_quality', 'strand',  # Read info columns
-                    'read_start', 'read_end',  # Read mapping columns
-                    'is_secondary', 'is_supplementary', 'mapping_span'  # Additional info
+                    "col1",
+                    "col2",
+                    "col3",
+                    "col4",  # BED file columns
+                    "reference_id",
+                    "reference_start",
+                    "reference_end",  # Reference columns
+                    "read_id",
+                    "mapping_quality",
+                    "strand",  # Read info columns
+                    "read_start",
+                    "read_end",  # Read mapping columns
+                    "is_secondary",
+                    "is_supplementary",
+                    "mapping_span",  # Additional info
                 ]
                 self.update_fusion_table(fusion_candidates)
             except pd.errors.EmptyDataError:
@@ -1940,11 +1974,21 @@ class FusionVis(BaseVis):
                 )
                 # Add column names to match the expected format
                 fusion_candidates_all.columns = [
-                    'col1', 'col2', 'col3', 'col4',  # BED file columns
-                    'reference_id', 'reference_start', 'reference_end',  # Reference columns
-                    'read_id', 'mapping_quality', 'strand',  # Read info columns
-                    'read_start', 'read_end',  # Read mapping columns
-                    'is_secondary', 'is_supplementary', 'mapping_span'  # Additional info
+                    "col1",
+                    "col2",
+                    "col3",
+                    "col4",  # BED file columns
+                    "reference_id",
+                    "reference_start",
+                    "reference_end",  # Reference columns
+                    "read_id",
+                    "mapping_quality",
+                    "strand",  # Read info columns
+                    "read_start",
+                    "read_end",  # Read mapping columns
+                    "is_secondary",
+                    "is_supplementary",
+                    "mapping_span",  # Additional info
                 ]
                 self.update_fusion_table_all(fusion_candidates_all)
             except pd.errors.EmptyDataError:
@@ -2090,13 +2134,13 @@ class FusionVis(BaseVis):
 class FusionObject(BaseAnalysis):
     """
     Core class for gene fusion analysis.
-    
+
     Performance Warning:
     - Stores multiple copies of DataFrames in memory
     - Creates unnecessary copies during concatenation
     - Multiple file I/O operations
     - Large memory footprint for BAM processing
-    
+
     Optimization Suggestions:
     1. Implement streaming for BAM files
     2. Use chunked processing
@@ -2118,14 +2162,14 @@ class FusionObject(BaseAnalysis):
     ):
         """
         Initialize the FusionObject with analysis parameters.
-        
+
         Args:
             target_panel: Name of the target panel
             reference_file: Path to reference genome
             bed_file: Path to target regions BED file
             readfish_toml: Path to readfish config
             master_bed_tree: Pre-computed bed tree
-            
+
         Performance Notes:
         - Initializes data structures efficiently
         - Sets up async processing capabilities
@@ -2241,12 +2285,12 @@ class FusionObject(BaseAnalysis):
     def fusion_table_all(self) -> None:
         """
         Processes and saves all fusion candidates to CSV.
-        
+
         This method:
         1. Filters for duplicated reads
         2. Identifies reads mapping to multiple genes
         3. Saves results to CSV file
-        
+
         Performance Notes:
         - Uses efficient pandas operations
         - Implements proper file handling
@@ -2271,12 +2315,12 @@ class FusionObject(BaseAnalysis):
     def fusion_table(self) -> None:
         """
         Processes and saves fusion candidates within target regions to CSV.
-        
+
         This method:
         1. Filters for duplicated reads
         2. Identifies reads mapping to multiple genes
         3. Saves results to CSV file
-        
+
         Performance Notes:
         - Uses efficient pandas operations
         - Implements proper file handling
@@ -2302,76 +2346,76 @@ class FusionObject(BaseAnalysis):
     async def process_bam(self, bamfile: str, timestamp: str) -> None:
         """
         Asynchronously processes BAM files to identify fusion candidates and structural variants.
-        
+
         Data Flow and Logic:
         1. Initial Setup and File Preparation:
            - Creates temporary files for intermediate data storage
            - Sets up process state and logging
            - Initializes data structures for results
-        
+
         2. Fusion Candidate Detection (via fusion_work):
            a. Read Extraction:
               - Uses samtools to extract reads with supplementary alignments
               - Filters reads against target regions (gene_bed)
               - Creates temporary BAM file with filtered reads
-           
+
            b. Alignment Processing:
               - Uses bedtools to intersect reads with gene regions
               - Processes both target regions (gene_bed) and all genes (all_gene_bed)
               - Extracts alignment information using pysam
-           
+
            c. Candidate Identification:
               - Merges alignment data with gene information
               - Filters by mapping quality (>40)
               - Filters by alignment length (>100bp)
               - Returns two DataFrames: fusion_candidates and fusion_candidates_all
-        
+
         3. Structural Variant Detection (via process_bam_file_svs):
            a. Read Processing:
               - Extracts reads with supplementary alignments
               - Identifies structural variant types (DEL, DUP, INV, TRA)
               - Maps reads to genomic regions
-           
+
            b. Breakpoint Analysis:
               - Builds breakpoint graph (via build_breakpoint_graph)
               - Identifies connected components
               - Groups nearby breakpoints
               - Generates BED format output
-        
+
         4. Result Processing and Storage:
            a. Fusion Candidates:
               - Concatenates new results with existing data
               - Updates in-memory storage (self.fusion_candidates)
               - Saves to CSV files
-           
+
            b. Structural Variants:
               - Processes breakpoint data
               - Creates visualization data
               - Updates UI components
               - Saves to CSV files
-        
+
         5. Cleanup:
            - Removes temporary files
            - Updates process state
            - Logs completion
-        
+
         Dependencies:
         - fusion_work: Core fusion detection pipeline
         - process_bam_file_svs: Structural variant detection
         - build_breakpoint_graph: Breakpoint analysis
         - extract_bam_info: BAM file processing
         - run_command: External tool execution
-        
+
         External Tools:
         - samtools: BAM file processing
         - bedtools: Genomic region operations
-        
+
         Performance Considerations:
         - Creates multiple copies during DataFrame concatenation
         - Stores entire BAM file in memory
         - Multiple file I/O operations
         - Large memory footprint for structural variants
-        
+
         Optimization Suggestions:
         1. Implement streaming for BAM files
         2. Use chunked processing
@@ -2408,23 +2452,30 @@ class FusionObject(BaseAnalysis):
                     try:
                         # Process fusion candidates
                         logger.info(f"Processing BAM file for fusions: {bamfile}")
+
                         # This function seems efficient but should it not be run without cpu_bound?
-                        #fusion_candidates, fusion_candidates_all = await run.cpu_bound(
+                        # fusion_candidates, fusion_candidates_all = await run.cpu_bound(
                         async def fusion_background_work(bamfile):
-                            fusion_candidates, fusion_candidates_all = await run.cpu_bound(
-                                fusion_work,
-                                self.threads,
-                                bamfile,
-                                self.gene_bed,
-                                self.all_gene_bed,
-                                tempreadfile.name,
-                                tempbamfile.name,
-                                tempmappings.name,
-                                tempallmappings.name,
+                            fusion_candidates, fusion_candidates_all = (
+                                await run.cpu_bound(
+                                    fusion_work,
+                                    self.threads,
+                                    bamfile,
+                                    self.gene_bed,
+                                    self.all_gene_bed,
+                                    tempreadfile.name,
+                                    tempbamfile.name,
+                                    tempmappings.name,
+                                    tempallmappings.name,
+                                )
                             )
                             return fusion_candidates, fusion_candidates_all
-                        
-                        fusion_candidates, fusion_candidates_all = await background_tasks.create(fusion_background_work(bamfile))
+
+                        fusion_candidates, fusion_candidates_all = (
+                            await background_tasks.create(
+                                fusion_background_work(bamfile)
+                            )
+                        )
 
                         # Process genome-wide structural variants
                         logger.info(
@@ -2434,6 +2485,7 @@ class FusionObject(BaseAnalysis):
                             self.check_and_create_folder(self.output, self.sampleID),
                             "sv_master.csv",
                         )
+
                         async def sv_background_work(bamfile, sv_csv_file):
                             sv_reads = await run.cpu_bound(
                                 process_bam_file_svs,
@@ -2441,7 +2493,10 @@ class FusionObject(BaseAnalysis):
                                 sv_csv_file,
                             )
                             return sv_reads
-                        sv_reads = await background_tasks.create(sv_background_work(bamfile, sv_csv_file))
+
+                        sv_reads = await background_tasks.create(
+                            sv_background_work(bamfile, sv_csv_file)
+                        )
 
                         async def bed_background_work(sv_reads):
                             bed_lines = await run.cpu_bound(
@@ -2451,8 +2506,10 @@ class FusionObject(BaseAnalysis):
                                 group_by_sv=True,
                             )
                             return bed_lines
-                        
-                        bed_lines = await background_tasks.create(bed_background_work(sv_reads))
+
+                        bed_lines = await background_tasks.create(
+                            bed_background_work(sv_reads)
+                        )
 
                         if len(bed_lines) > 0:
                             # Convert bed lines to DataFrame for visualization
@@ -2552,7 +2609,6 @@ class FusionObject(BaseAnalysis):
                                 index=False,
                             )
 
-
                             # ToDo: This needs to be in the visualisation code surely?
                             """
                             # Update structural variant count and visualization
@@ -2570,7 +2626,7 @@ class FusionObject(BaseAnalysis):
                             ):
                                 self.update_sv_table(sv_df)
                             """
-                            
+
                             # Add to BedTree if needed
                             if self.master_bed_tree[self.sampleID] is None:
                                 self.master_bed_tree.add_bed_tree(
@@ -2651,12 +2707,10 @@ class FusionObject(BaseAnalysis):
         finally:
             state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
 
-    
-
     async def stop_analysis(self):
         """
         Stops ongoing analysis and cleans up resources.
-        
+
         Performance Notes:
         - Ensures proper resource cleanup
         - Handles async operations gracefully

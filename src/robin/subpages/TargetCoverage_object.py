@@ -1984,7 +1984,6 @@ class TargetCoverageVis(BaseVis):
                             ui.icon("search")
 
 
-
 class TargetCoverage(BaseAnalysis):
     """
     Target Coverage Analysis Class
@@ -2069,7 +2068,7 @@ class TargetCoverage(BaseAnalysis):
         self.simtime = simtime
         self.enable_snp_calling = enable_snp_calling
         self.snp_calling = False  # Will be set to True only if both reference is provided and enable_snp_calling is True
-        #self.clair3_status_label = ui.label("Clair3 Idle")  # UI label for status
+        # self.clair3_status_label = ui.label("Clair3 Idle")  # UI label for status
         if self.reference and self.enable_snp_calling:
             self.snp_calling = True
         self.target_panel = target_panel
@@ -2090,7 +2089,7 @@ class TargetCoverage(BaseAnalysis):
         self.check_docker_image()
         super().__init__(*args, **kwargs)
         # Add a timer to refresh the Clair3 status label
-        #ui.timer(1, self.update_clair3_status_label)
+        # ui.timer(1, self.update_clair3_status_label)
 
     def update_clair3_status_label(self):
         process_state = state.get_process_state("clair3")
@@ -2189,7 +2188,6 @@ class TargetCoverage(BaseAnalysis):
         finally:
             self.snp_timer.active = True
 
-
     async def process_bam(self, bamfile, timestamp):
         """
         Process a BAM file and update coverage statistics.
@@ -2208,11 +2206,12 @@ class TargetCoverage(BaseAnalysis):
         tempbamfile = tempfile.NamedTemporaryFile(
             dir=self.check_and_create_folder(self.output, self.sampleID), suffix=".bam"
         )
+
         # await loop.run_in_executor(
         #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
         # )
         # run_bedtools(bamfile, self.bedfile, tempbamfile.name)
-        #await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
+        # await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
         # )
         async def run_bedtools(bamfile, bedfile, tempbamfile):
             """
@@ -2246,8 +2245,10 @@ class TargetCoverage(BaseAnalysis):
                 pysam.index(tempbamfile)
             except Exception as e:
                 logger.error(f"Error in run_bedtools: {e}")
-                
-        await background_tasks.create(run_bedtools(bamfile, self.bedfile, tempbamfile.name))
+
+        await background_tasks.create(
+            run_bedtools(bamfile, self.bedfile, tempbamfile.name)
+        )
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if self.sampleID not in self.targetbamfile.keys():
@@ -2288,7 +2289,7 @@ class TargetCoverage(BaseAnalysis):
             self.bedcov_df_main[self.sampleID] = bedcovdf
         else:
             self.cov_df_main[self.sampleID], self.bedcov_df_main[self.sampleID] = (
-                #await run.cpu_bound(
+                # await run.cpu_bound(
                 run_bedmerge(
                     newcovdf,
                     self.cov_df_main[self.sampleID],
@@ -2296,7 +2297,7 @@ class TargetCoverage(BaseAnalysis):
                     self.bedcov_df_main[self.sampleID],
                 )
             )
- 
+
         bases = self.cov_df_main[self.sampleID]["covbases"].sum()
         genome = self.cov_df_main[self.sampleID]["endpos"].sum()
         coverage = bases / genome
@@ -2313,7 +2314,8 @@ class TargetCoverage(BaseAnalysis):
             [self.coverage_over_time[self.sampleID], [(currenttime, coverage)]]
         )
 
-        await run.io_bound(np.save,
+        await run.io_bound(
+            np.save,
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
                 "coverage_time_chart.npy",
@@ -2328,7 +2330,7 @@ class TargetCoverage(BaseAnalysis):
             ),
             index=False,
         )
-        
+
         self.bedcov_df_main[self.sampleID].to_csv(
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
@@ -2336,7 +2338,7 @@ class TargetCoverage(BaseAnalysis):
             ),
             index=False,
         )
-        
+
         self.target_coverage_df = self.bedcov_df_main[self.sampleID]
         self.target_coverage_df["length"] = (
             self.target_coverage_df["endpos"] - self.target_coverage_df["startpos"] + 1
@@ -2352,7 +2354,7 @@ class TargetCoverage(BaseAnalysis):
             ),
             index=False,
         )
-        
+
         run_list = self.target_coverage_df[
             self.target_coverage_df["coverage"].ge(self.callthreshold)
         ]

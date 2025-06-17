@@ -53,12 +53,14 @@ class BrainMeth:
 
         # Initialize performance metrics
         self.performance_metrics = PerformanceMetrics(
-            metrics_dir=os.path.join(self.config.get_app_data_dir(), "performance_metrics")
+            metrics_dir=os.path.join(
+                self.config.get_app_data_dir(), "performance_metrics"
+            )
         )
-        
+
         # Start RAM tracking with 30-second intervals
         self.performance_metrics.start_ram_tracking(interval_seconds=30)
-        
+
         # Set up UI update timer for performance metrics
         ui.timer(1.0, self._update_performance_metrics_ui)
 
@@ -147,19 +149,24 @@ class BrainMeth:
 
     def _update_performance_metrics_ui(self):
         """Update the performance metrics UI in the Process Status panel."""
-        if hasattr(self.config, 'process_status') and self.config.process_status.performance_metrics_container:
+        if (
+            hasattr(self.config, "process_status")
+            and self.config.process_status.performance_metrics_container
+        ):
             # Clear existing content
             self.config.process_status.performance_metrics_container.clear()
             # Create new performance metrics UI in the correct container
-            self.performance_metrics.create_ui(parent=self.config.process_status.performance_metrics_container)
+            self.performance_metrics.create_ui(
+                parent=self.config.process_status.performance_metrics_container
+            )
 
     def shutdown(self):
         """Clean up resources before shutdown."""
         # Stop RAM tracking
         self.performance_metrics.stop_ram_tracking()
-        
+
         # Save final metrics
         self.performance_metrics.save_metrics()
-        
+
         # Existing shutdown code
         self.background_processor.shutdown()

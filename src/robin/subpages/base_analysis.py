@@ -73,18 +73,19 @@ from collections import Counter
 import os
 import logging
 import asyncio
-from datetime import datetime
 
 from robin.core.state import state, ProcessType, ProcessState
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
+
 class BaseVis:
     """
     Base class for visualization components of BAM file analysis.
     Handles all UI and visualization-related functionality.
     """
+
     def __init__(
         self,
         threads: int = 1,
@@ -128,7 +129,7 @@ class BaseVis:
         self.setup_ui()
         if self.progress and not self.browse:
             self.progress_bars()
-            
+
     def check_file_time(self, file_path: str) -> bool:
         """
         Check if the file exists and whether it has been modified since last seen.
@@ -288,7 +289,9 @@ class BaseVis:
             with self.progress_trackers:
                 with ui.expansion().classes("w-full") as expansion:
                     with expansion.add_slot("header"):
-                        with ui.row().classes("w-full items-center justify-between gap-1"):
+                        with ui.row().classes(
+                            "w-full items-center justify-between gap-1"
+                        ):
                             with ui.column().classes("flex-grow gap-0"):
                                 ui.label("File Processing Status").classes(
                                     "text-sm font-medium mb-0 pb-0"
@@ -305,9 +308,9 @@ class BaseVis:
                                         .props("instant-feedback")
                                     )
                                     ui.label().bind_text_from(
-                                        app.storage.general[self.mainuuid][self.sampleID][
-                                            self.name
-                                        ]["counters"],
+                                        app.storage.general[self.mainuuid][
+                                            self.sampleID
+                                        ][self.name]["counters"],
                                         "bam_processed",
                                         backward=lambda n: f"{n}/{self._get_counter_value('bam_count', 0)}",
                                     ).classes("text-xs min-w-fit")
@@ -333,7 +336,7 @@ class BaseVis:
                                 "bam_count",
                                 backward=lambda n: str(
                                     n
-                                    #- self._get_counter_value("bam_processed", 0)
+                                    # - self._get_counter_value("bam_processed", 0)
                                     - self._get_counter_value("bams_in_processing", 0)
                                 ),
                             ).classes("text-xs min-w-[30px] text-right")
@@ -394,15 +397,24 @@ class BaseVis:
                         bam_count=0, bam_processed=0, bams_in_processing=0
                     )
                 }
-                logging.debug(f"Initialized counters for {self.name} in sample {sample_id}")
-            elif "counters" not in app.storage.general[self.mainuuid][sample_id][self.name]:
+                logging.debug(
+                    f"Initialized counters for {self.name} in sample {sample_id}"
+                )
+            elif (
+                "counters"
+                not in app.storage.general[self.mainuuid][sample_id][self.name]
+            ):
                 app.storage.general[self.mainuuid][sample_id][self.name]["counters"] = (
                     Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
                 )
-                logging.debug(f"Initialized missing counters for {self.name} in sample {sample_id}")
+                logging.debug(
+                    f"Initialized missing counters for {self.name} in sample {sample_id}"
+                )
 
         except Exception as e:
-            logging.error(f"Error initializing counters for {self.name} in sample {sample_id}: {str(e)}")
+            logging.error(
+                f"Error initializing counters for {self.name} in sample {sample_id}: {str(e)}"
+            )
             try:
                 app.storage.general[self.mainuuid] = {
                     sample_id: {
@@ -424,7 +436,6 @@ class BaseVis:
             ].get(counter_name, default)
         except (KeyError, AttributeError):
             return default
-
 
     @property
     def _progress(self) -> float:
@@ -458,6 +469,7 @@ class BaseVis:
         except (KeyError, TypeError):
             return 0.0
 
+
 def sort_bams(data_list):
     sorted_data = sorted(
         data_list,
@@ -468,12 +480,12 @@ def sort_bams(data_list):
     return bamfiles, latest_timestamp
 
 
-
 class BaseAnalysis:
     """
     Base class for analysis of BAM files output during a sequencing run.
     Handles core analysis functionality and file processing.
     """
+
     def __init__(
         self,
         threads: int = 1,
@@ -511,14 +523,14 @@ class BaseAnalysis:
         self.sampleID = sampleID
 
         # Initialize visualization component
-        #self.vis = BaseVis(
+        # self.vis = BaseVis(
         #    analysis_name=analysis_name,
         #    uuid=uuid,
         #    high_confidence_threshold=high_confidence_threshold,
         #    medium_confidence_threshold=medium_confidence_threshold
-        #)
-        #self.vis.progress = progress
-        #self.vis.browse = browse
+        # )
+        # self.vis.progress = progress
+        # self.vis.browse = browse
 
     async def process_data(self) -> None:
         """Start processing BAM files either in batch mode or in a continuous timer mode."""
@@ -538,7 +550,7 @@ class BaseAnalysis:
     async def _worker(self) -> None:
         """Process BAM files from the queue in the background."""
         while not self.terminate:
-            #self.timer.active = False
+            # self.timer.active = False
             if state.shutdown_event:
                 print(f"shutdown_event is True, stopping _worker in {self.name}")
                 await self.stop_analysis()
@@ -552,7 +564,7 @@ class BaseAnalysis:
                     f"Processing BAM file: {bamfile} with timestamp: {timestamp} and sampleID: {sampleID}"
                 )
                 self.sampleID = sampleID
-                
+
                 if not timestamp:
                     timestamp = time.time()
                 try:
@@ -572,7 +584,9 @@ class BaseAnalysis:
                         logger.error(f"Error processing BAM files: {e}")
                 except Exception as e:
                     logger.error(f"Error processing BAM files: {e}")
-                    logger.debug(f"Unexpected error occurred while processing BAM file: {bamfile}")
+                    logger.debug(
+                        f"Unexpected error occurred while processing BAM file: {bamfile}"
+                    )
                     logger.debug(f"Error details: {str(e)}")
                     logger.debug(f"Error type: {type(e)}")
                 finally:
@@ -582,10 +596,10 @@ class BaseAnalysis:
                     ]["bam_processed"] += 1
                 self.running = False
             state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
-            #if not self.terminate:
-                #self.timer.active = True
+            # if not self.terminate:
+            # self.timer.active = True
             await asyncio.sleep(1)
-                
+
     def add_bam(self, bamfile: BinaryIO, timestamp: Optional[float] = None) -> None:
         """Adds a BAM file to the queue for processing."""
         self.bamqueue.put((bamfile, timestamp))
@@ -601,7 +615,7 @@ class BaseAnalysis:
             await self.stop_analysis()
             return
         self.timer.active = False
-        if self.bamqueue.qsize()>0:
+        if self.bamqueue.qsize() > 0:
             count = 0
             while self.bamqueue.qsize() > 0:
                 state.set_process_state(self.name, ProcessState.RUNNING)
@@ -611,7 +625,7 @@ class BaseAnalysis:
                 if sampleID not in self.bams:
                     self.bams[sampleID] = []
                     self._initialize_counters(sampleID)
-                
+
                 self.bams[sampleID].append((bamfile, timestamp))
                 count += 1
 
@@ -627,21 +641,19 @@ class BaseAnalysis:
                     state.set_process_state(self.name, ProcessState.RUNNING)
                     self.running = True
                     self.sampleID = sample_id
-                    
-                    
+
                     try:
                         bamfiles, latest_timestamp = await run.cpu_bound(
                             sort_bams,
                             data_list,
                         )
-                        
+
                         await self.process_bam(bamfiles, latest_timestamp)
-                        
+
                     except Exception as e:
                         logger.error(f"Error processing BAM files: {e}")
             state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
         self.timer.active = True
-            
 
     def check_file_time(self, file_path: str) -> bool:
         """Check if the file exists and whether it has been modified since last seen."""
@@ -676,7 +688,7 @@ class BaseAnalysis:
             return full_path
         else:
             return path
-        
+
     def _initialize_counters(self, sample_id: str) -> None:
         """
         Initialize counters for a specific sample if they don't exist.

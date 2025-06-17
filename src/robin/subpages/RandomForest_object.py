@@ -452,8 +452,8 @@ class RandomForest_object(BaseAnalysis):
         state.set_process_state("Random Forest Analysis", ProcessState.STOPPING)
         state.stop_process("Random Forest Analysis")
         await super().stop_analysis()
-        
-        
+
+
 class RandomForestVis(BaseVis):
     """
     A class for processing and visualizing Random Forest methylation classification results.

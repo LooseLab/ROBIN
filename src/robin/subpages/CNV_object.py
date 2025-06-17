@@ -312,22 +312,19 @@ def get_data(output: str) -> Tuple[Result, Result, Result, dict]:
     """
     Get data from the output directory.
     """
-    result = Result(np.load(
-        os.path.join(output, "CNV.npy"), allow_pickle="TRUE"
-    ).item())
-    result2 = Result(np.load(
-        os.path.join(output, "CNV2.npy"), allow_pickle="TRUE"
-    ).item())
-    result3 = Result(np.load(
-        os.path.join(output, "CNV3.npy"), allow_pickle="TRUE"
-    ).item())
-    cnv_dict = np.load(
-        os.path.join(output, "CNV_dict.npy"), allow_pickle="TRUE"
-    ).item()
+    result = Result(
+        np.load(os.path.join(output, "CNV.npy"), allow_pickle="TRUE").item()
+    )
+    result2 = Result(
+        np.load(os.path.join(output, "CNV2.npy"), allow_pickle="TRUE").item()
+    )
+    result3 = Result(
+        np.load(os.path.join(output, "CNV3.npy"), allow_pickle="TRUE").item()
+    )
+    cnv_dict = np.load(os.path.join(output, "CNV_dict.npy"), allow_pickle="TRUE").item()
     return result, result2, result3, cnv_dict
 
 
-    
 class CNVVis(BaseVis):
     """
     A class for visualizing CNV data.
@@ -373,7 +370,7 @@ class CNVVis(BaseVis):
         self.color_mode = "chromosome"
 
         # Initialize data array related attributes
-        #self.DATA_ARRAY = None
+        # self.DATA_ARRAY = None
         self.data_array_size = 0
         self.data_array_path = None
         self.local_data_array = None
@@ -430,7 +427,7 @@ class CNVVis(BaseVis):
         )
 
         self.master_bed_tree = master_bed_tree
-        
+
         self.CNVchangedetector = CNVChangeDetectorTracker(base_proportion=0.02)
         # Add target_table as instance variable
         self.target_table = None
@@ -439,7 +436,6 @@ class CNVVis(BaseVis):
 
         # Add y_axis_log attribute
         self.y_axis_log = False  # Default to log scale
-
 
     def setup_ui(self) -> None:
         """
@@ -488,7 +484,7 @@ class CNVVis(BaseVis):
                 caption="A description of the methods used to identify genome-wide CNV events",
             ).classes("w-full"):
                 ui.restructured_text(
-                    '''
+                    """
                     Copy Number Variation (CNV) analysis is performed through the following steps:
 
                     1. **Bin-based Coverage Analysis**
@@ -524,7 +520,7 @@ class CNVVis(BaseVis):
                     * Gene-level zoom capability
                     * Time series tracking of changes
                     * Comprehensive tabular summaries
-                '''
+                """
                 ).style("font-size: 100%; font-weight: 300")
         with ui.row():
             self.chrom_select = ui.select(
@@ -677,7 +673,7 @@ class CNVVis(BaseVis):
             # Add slot for conditional formatting of the CNV state and row styling
             self.cnv_table.add_slot(
                 "body",
-                '''
+                """
                 <q-tr :props="props" @click="$parent.$emit('row-click', props)">
                     <q-td key="chromosome" :props="props">
                         {{ props.row.chrom }}
@@ -705,7 +701,7 @@ class CNVVis(BaseVis):
                         {{ props.row.genes ? props.row.genes.join(', ') : '' }}
                     </q-td>
                 </q-tr>
-            ''',
+            """,
             )
 
             # Add event handler for row clicks
@@ -800,7 +796,7 @@ class CNVVis(BaseVis):
                         # Add slot for conditional formatting
                         self.target_table.add_slot(
                             "body",
-                            '''
+                            """
                             <q-tr :props="props">
                                 <q-td key="chrom" :props="props">{{ props.row.chrom }}</q-td>
                                 <q-td key="gene" :props="props">{{ props.row.gene }}</q-td>
@@ -824,7 +820,7 @@ class CNVVis(BaseVis):
                                                 :label="props.row.source"/>
                                 </q-td>
                             </q-tr>
-                            ''',
+                            """,
                         )
 
                         # Add search input after table is created
@@ -844,7 +840,7 @@ class CNVVis(BaseVis):
             ui.timer(0.1, lambda: self.show_previous_data(), once=True)
         else:
             ui.timer(15, lambda: self.show_previous_data())
-            
+
     def update_plots(self, gene_target: Optional[str] = None) -> None:
         """Update CNV plots with new data and annotations."""
         if not gene_target:
@@ -948,7 +944,7 @@ class CNVVis(BaseVis):
         )[-1]
         # print(f"Latest bed file: {latest_file}")
         return os.path.join(bed_dir, latest_file)
-  
+
     def create_proportion_time_chart(self, title: str) -> None:
         """
         Creates the NanoDX time series chart.
@@ -2316,8 +2312,9 @@ class CNVVis(BaseVis):
                 get_data,
                 output,
             )
-            
+
             self.CNVResults = {}
+
             async def load_ruptures():
                 if self.check_file_time(os.path.join(output, "ruptures.npy")):
                     self.CNVResults = await run.io_bound(
@@ -2326,10 +2323,9 @@ class CNVVis(BaseVis):
                         allow_pickle="TRUE",
                     ).item()
                 self.update_plots()
-                
+
             background_tasks.create(load_ruptures())
-            
-            
+
             async def load_bedranges():
                 if self.check_file_time(os.path.join(output, "bedranges.csv")):
                     self.proportions_df_store = await run.io_bound(
@@ -2356,7 +2352,6 @@ class CNVVis(BaseVis):
                     self.update_proportion_time_chart2(pivot_df2)
 
                 self.update_target_table()
-
 
             background_tasks.create(load_bedranges())
 
@@ -2616,7 +2611,8 @@ class CNVVis(BaseVis):
                     "name": f"{chromosome} WHOLE CHROMOSOME {whole_chr_state}",
                     "mean_cnv": chr_mean,
                     "cnv_state": whole_chr_state,
-                    "length": chromosome_cytobands["end_pos"].max() - chromosome_cytobands["start_pos"].min(),
+                    "length": chromosome_cytobands["end_pos"].max()
+                    - chromosome_cytobands["start_pos"].min(),
                     "genes": genes_in_chr,
                 }
                 merged_idx += 1
@@ -2753,7 +2749,7 @@ class CNVVis(BaseVis):
 
         # Trim the pre-allocated list to actual size
         merged_cytobands = merged_cytobands[:merged_idx]
-        
+
         # Convert to DataFrame and sort
         merged_df = pd.DataFrame(merged_cytobands)
         if not merged_df.empty:
@@ -2949,10 +2945,15 @@ class CNVVis(BaseVis):
                 )
 
                 ui.update(self.scatter_echart)
-                
-                
+
+
 def iterate_bam(
-    bamfile, _threads: int, mapq_filter: int, copy_numbers: dict, log_level: int, ref_cnv_dict
+    bamfile,
+    _threads: int,
+    mapq_filter: int,
+    copy_numbers: dict,
+    log_level: int,
+    ref_cnv_dict,
 ) -> Tuple[dict, int, float, dict]:
     """
     Iterate over a BAM file and return CNV data and associated metrics.
@@ -2974,7 +2975,7 @@ def iterate_bam(
         copy_numbers=copy_numbers,
         log_level=log_level,
     )
-    
+
     result2 = iterate_bam_file(
         bamfile,
         _threads=_threads,
@@ -2990,8 +2991,9 @@ def iterate_bam(
         result.variance,
         copy_numbers,
         result.genome_length,
-        result2.cnv
+        result2.cnv,
     )
+
 
 class CNVAnalysis(BaseAnalysis):
     """
@@ -3100,13 +3102,13 @@ class CNVAnalysis(BaseAnalysis):
 
         # Add state directory path
         self.state_dir = None  # Will be set in do_cnv_work
-        
+
         # Initialize CNV detector with proper temp directory
         self.CNVchangedetector = CNVChangeDetectorTracker(
             base_proportion=0.02,
-            temp_dir=self.output  # Will use system temp dir by default
+            temp_dir=self.output,  # Will use system temp dir by default
         )
-        
+
         # Add target_table as instance variable
         self.target_table = None
         self.target_table_placeholder = None
@@ -3118,7 +3120,10 @@ class CNVAnalysis(BaseAnalysis):
     def _get_state_dir(self) -> Path:
         """Get the directory for storing CNV detector state."""
         if not self.state_dir:
-            self.state_dir = Path(self.check_and_create_folder(self.output, self.sampleID)) / "cnv_detector_state"
+            self.state_dir = (
+                Path(self.check_and_create_folder(self.output, self.sampleID))
+                / "cnv_detector_state"
+            )
             self.state_dir.mkdir(exist_ok=True)
         return self.state_dir
 
@@ -3360,7 +3365,7 @@ class CNVAnalysis(BaseAnalysis):
                     )
 
         return events
-    
+
     def estimate_XY(self) -> None:
         """
         Estimate genetic sex (XX or XY) based on CNV data.
@@ -3398,23 +3403,22 @@ class CNVAnalysis(BaseAnalysis):
             bamfile (BinaryIO): The BAM file to process.
             timestamp (float): The timestamp indicating when the file was generated.
         """
-        
+
         state.set_process_state("CNV Analysis", ProcessState.RUNNING)
-        
+
         try:
 
             # Set up state directory
             state_dir = self._get_state_dir()
-            
+
             # Initialize CNV detector only if it doesn't exist
             if self.CNVchangedetector is None:
                 self.CNVchangedetector = CNVChangeDetectorTracker(
-                    base_proportion=0.02,
-                    temp_dir=self.output
+                    base_proportion=0.02, temp_dir=self.output
                 )
-            
+
             # Load previous state if it exists
-            if self.load_data and (state_dir / 'tracker_metadata.pkl').exists():
+            if self.load_data and (state_dir / "tracker_metadata.pkl").exists():
                 try:
                     self.CNVchangedetector.load_state(str(state_dir))
                     logger.info("Successfully loaded CNV detector state")
@@ -3423,14 +3427,13 @@ class CNVAnalysis(BaseAnalysis):
                     # Initialize fresh state if loading fails
                     if self.CNVchangedetector is None:
                         self.CNVchangedetector = CNVChangeDetectorTracker(
-                            base_proportion=0.02,
-                            temp_dir=self.output
+                            base_proportion=0.02, temp_dir=self.output
                         )
 
             # Initialize data structures
             if self.sampleID not in self.update_cnv_dict.keys():
                 self.update_cnv_dict[self.sampleID] = {}
-            
+
             # Set up bed tree if needed
             if self.master_bed_tree[self.sampleID] is None:
                 self.master_bed_tree.add_bed_tree(
@@ -3460,8 +3463,12 @@ class CNVAnalysis(BaseAnalysis):
                 self.data_array_size = 0
             else:
                 # If file exists, resize if needed
-                current_size = os.path.getsize(self.data_array_path) // self.dtype.itemsize
-                expected_max_breakpoints = max(current_size, 1000)  # At least 1000 or current size
+                current_size = (
+                    os.path.getsize(self.data_array_path) // self.dtype.itemsize
+                )
+                expected_max_breakpoints = max(
+                    current_size, 1000
+                )  # At least 1000 or current size
                 if current_size < expected_max_breakpoints:
                     # Create a new larger array and copy existing data
                     temp_array = np.memmap(
@@ -3492,31 +3499,37 @@ class CNVAnalysis(BaseAnalysis):
                         shape=(current_size,),
                     )
                 self.data_array_size = current_size
-            
+
             # Update map tracker
             self.map_tracker.update(
                 Counter(
-                    {stat.contig: stat.mapped for stat in bamdata.get_index_statistics()}
+                    {
+                        stat.contig: stat.mapped
+                        for stat in bamdata.get_index_statistics()
+                    }
                 )
             )
-            
-            r_cnv, r_bin, r_var, self.update_cnv_dict[self.sampleID], genome_length, r2_cnv = (
-                await run.cpu_bound(
-                    iterate_bam,
-                    bamfile,
-                    self.threads,
-                    60,
-                    self.update_cnv_dict[self.sampleID],
-                    int(logging.ERROR),
-                    self.ref_cnv_dict
-                )
+
+            (
+                r_cnv,
+                r_bin,
+                r_var,
+                self.update_cnv_dict[self.sampleID],
+                genome_length,
+                r2_cnv,
+            ) = await run.cpu_bound(
+                iterate_bam,
+                bamfile,
+                self.threads,
+                60,
+                self.update_cnv_dict[self.sampleID],
+                int(logging.ERROR),
+                self.ref_cnv_dict,
             )
-            
+
             self.cnv_dict["bin_width"] = r_bin
             self.cnv_dict["variance"] = r_var
 
-            
-            
             # Process breakpoints and update CNV detector
             cnvupdate = False
             for key in r_cnv.keys():
@@ -3524,9 +3537,11 @@ class CNVAnalysis(BaseAnalysis):
                 if key != "chrM" and re.match(r"^chr(\d+|X|Y)$", key):
                     moving_avg_data1 = await run.cpu_bound(moving_average, r_cnv[key])
                     moving_avg_data2 = await run.cpu_bound(moving_average, r2_cnv[key])
-                    moving_avg_data1, moving_avg_data2 = await run.cpu_bound(pad_arrays, moving_avg_data1, moving_avg_data2)
+                    moving_avg_data1, moving_avg_data2 = await run.cpu_bound(
+                        pad_arrays, moving_avg_data1, moving_avg_data2
+                    )
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-                    
+
                     if len(r_cnv[key]) > 3 and self.map_tracker[key] > 2000:
                         paired_changepoints = await run.cpu_bound(
                             run_ruptures,
@@ -3534,27 +3549,45 @@ class CNVAnalysis(BaseAnalysis):
                             5,  # penalty_value
                             self.cnv_dict["bin_width"],
                         )
-                        
+
                         if len(paired_changepoints) > 0:
                             approx_chrom_length = len(r_cnv[key]) * r_bin
                             padding = 2_500_000
                             for start, end in paired_changepoints:
-                                if (start < approx_chrom_length < end or 
-                                    start < 0 or
-                                    (start < self.centromere_bed[self.centromere_bed["chrom"].eq(key)]["end_pos"].max() + padding and
-                                     end > self.centromere_bed[self.centromere_bed["chrom"].eq(key)]["start_pos"].min() - padding)):
+                                if (
+                                    start < approx_chrom_length < end
+                                    or start < 0
+                                    or (
+                                        start
+                                        < self.centromere_bed[
+                                            self.centromere_bed["chrom"].eq(key)
+                                        ]["end_pos"].max()
+                                        + padding
+                                        and end
+                                        > self.centromere_bed[
+                                            self.centromere_bed["chrom"].eq(key)
+                                        ]["start_pos"].min()
+                                        - padding
+                                    )
+                                ):
                                     continue
-                                    
+
                                 item = np.array([(key, start, end)], dtype=self.dtype)
-                                self.local_data_array = np.append(self.local_data_array, item)
+                                self.local_data_array = np.append(
+                                    self.local_data_array, item
+                                )
                                 self.DATA_ARRAY = np.append(self.DATA_ARRAY, item)
-                                
+
                             self.map_tracker[key] = 0
                             cnvupdate = True
-                            
-                            breakpoints = self.DATA_ARRAY[self.DATA_ARRAY["name"] == key]
-                            local_breakpoints = self.local_data_array[self.local_data_array["name"] == key]
-                            
+
+                            breakpoints = self.DATA_ARRAY[
+                                self.DATA_ARRAY["name"] == key
+                            ]
+                            local_breakpoints = self.local_data_array[
+                                self.local_data_array["name"] == key
+                            ]
+
                             if len(breakpoints) > 0:
                                 try:
                                     self.CNVchangedetector.add_breakpoints(
@@ -3565,21 +3598,22 @@ class CNVAnalysis(BaseAnalysis):
                                         r_bin,
                                     )
                                 except Exception as e:
-                                    logger.error(f"Error adding breakpoints for {key}: {e}")
+                                    logger.error(
+                                        f"Error adding breakpoints for {key}: {e}"
+                                    )
                                     raise
-            
-            
+
             self.estimate_XY()
-            
+
             # Save state if we have updates
             if cnvupdate:
                 try:
-                    
+
                     # Save CNV detector state
-                    
+
                     self.CNVchangedetector.save_state(str(state_dir))
                     logger.info("Successfully saved CNV detector state")
-                    
+
                     # Generate and save BED content
                     bedcontent = ""
                     bedcontent2 = ""
@@ -3588,7 +3622,9 @@ class CNVAnalysis(BaseAnalysis):
                         if len(tempbedcontent) > 0:
                             bedcontent += tempbedcontent + "\n"
 
-                        tempbedcontent2 = self.CNVchangedetector.get_bed_targets_breakpoints(chrom)
+                        tempbedcontent2 = (
+                            self.CNVchangedetector.get_bed_targets_breakpoints(chrom)
+                        )
                         if len(tempbedcontent2) > 0:
                             bedcontent2 += tempbedcontent2 + "\n"
 
@@ -3597,38 +3633,51 @@ class CNVAnalysis(BaseAnalysis):
                             bedcontent2,
                             merge=False,
                             write_files=True,
-                            output_location=str(self.check_and_create_folder(self.output, self.sampleID)),
+                            output_location=str(
+                                self.check_and_create_folder(self.output, self.sampleID)
+                            ),
                             source_type="CNV",
                         )
-                    
+
                     # Save other analysis results
                     np.save(
-                        os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV.npy"),
+                        os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID),
+                            "CNV.npy",
+                        ),
                         r_cnv,
                     )
                     np.save(
-                        os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV2.npy"),
+                        os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID),
+                            "CNV2.npy",
+                        ),
                         r2_cnv,
                     )
                     np.save(
-                        os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV3.npy"),
-                        self.result3.cnv
+                        os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID),
+                            "CNV3.npy",
+                        ),
+                        self.result3.cnv,
                     )
                     np.save(
-                        os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV_dict.npy"),
+                        os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID),
+                            "CNV_dict.npy",
+                        ),
                         self.cnv_dict,
                     )
-                    
+
                 except Exception as e:
                     logger.error(f"Error saving CNV detector state: {e}")
                     raise
-                  
+
         finally:
             # Clean up temporary files but preserve CNV detector
             self._cleanup_state()
             self.running = False
             state.set_process_state("CNV Analysis", ProcessState.WAITING_FOR_DATA)
-        
 
     def get_latest_bed_file(self) -> Optional[str]:
         """Get the path to the latest bed file in the output directory."""
@@ -3897,7 +3946,8 @@ class CNVAnalysis(BaseAnalysis):
                     "name": f"{chromosome} WHOLE CHROMOSOME {whole_chr_state}",
                     "mean_cnv": chr_mean,
                     "cnv_state": whole_chr_state,
-                    "length": chromosome_cytobands["end_pos"].max() - chromosome_cytobands["start_pos"].min(),
+                    "length": chromosome_cytobands["end_pos"].max()
+                    - chromosome_cytobands["start_pos"].min(),
                     "genes": genes_in_chr,
                 }
                 merged_idx += 1
@@ -4034,7 +4084,7 @@ class CNVAnalysis(BaseAnalysis):
 
         # Trim the pre-allocated list to actual size
         merged_cytobands = merged_cytobands[:merged_idx]
-        
+
         # Convert to DataFrame and sort
         merged_df = pd.DataFrame(merged_cytobands)
         if not merged_df.empty:

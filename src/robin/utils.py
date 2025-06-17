@@ -359,11 +359,14 @@ def merge_modkit_files(
                 sample = mnpFlex.get_sample(sample_id)
                 logging.info(f"Sample details: {sample}")
                 result_status = sample["bed_file_sample"]["analysis_status"]
-                
+
                 # Add timeout for analysis completion
                 max_wait_time = 300  # 5 minutes
                 start_time = time.time()
-                while result_status == "initialized" and (time.time() - start_time) < max_wait_time:
+                while (
+                    result_status == "initialized"
+                    and (time.time() - start_time) < max_wait_time
+                ):
                     time.sleep(1)
                     try:
                         sample = mnpFlex.get_sample(sample_id)
@@ -422,7 +425,7 @@ def merge_modkit_files(
                         except Exception as e:
                             logging.error(f"Error deleting sample: {str(e)}")
 
-            except Exception as e:
+            except Exception:
                 # Log the error but don't let it crash the process
                 logging.error("MNP-FLEX upload/analysis failed", exc_info=True)
                 logging.info("Continuing with processing despite MNP-FLEX error")
@@ -471,10 +474,11 @@ def run_modkit(sortfile: str, temp: str, threads: int) -> None:
         temp,
         # "--suppress-progress"
     ]
-    
+
     # Run the command
     subprocess.run(cmd, capture_output=True, text=True)
-    
+
+
 def run_samtools_sort(
     file: str, tomerge: List[str], sortfile: str, threads: int
 ) -> None:

@@ -21,7 +21,7 @@ import pandas as pd
 import logging
 from nicegui import ui
 from pathlib import Path
-from typing import Dict, List, Optional, Union, Tuple
+from typing import Dict, List, Optional, Union
 import psutil
 import subprocess
 
@@ -66,8 +66,8 @@ class PerformanceMetrics:
             "bam_file_sizes": [],
             "bam_file_names": [],
             "python_ram_usage": [],  # New metric for Python RAM usage
-            "r_ram_usage": [],      # New metric for R RAM usage
-            "ram_timestamps": [],    # New timestamps for RAM measurements
+            "r_ram_usage": [],  # New metric for R RAM usage
+            "ram_timestamps": [],  # New timestamps for RAM measurements
         }
 
         # Update with any provided metrics
@@ -188,9 +188,9 @@ class PerformanceMetrics:
                 ["ps", "-eo", "pid,comm,rss"],
                 capture_output=True,
                 text=True,
-                check=True
+                check=True,
             )
-            
+
             # Parse output to find R processes
             total_r_memory = 0
             for line in result.stdout.splitlines()[1:]:  # Skip header
@@ -198,7 +198,7 @@ class PerformanceMetrics:
                 if len(parts) >= 3 and "R" in parts[1]:
                     # RSS is in KB, convert to MB
                     total_r_memory += float(parts[2]) / 1024
-            
+
             return total_r_memory if total_r_memory > 0 else None
         except Exception as e:
             logger.error(f"Error getting R memory usage: {e}")
@@ -208,25 +208,27 @@ class PerformanceMetrics:
         """Track RAM usage of Python and R processes."""
         try:
             current_time = time.time() * 1000  # Convert to milliseconds
-            
+
             # Get Python process memory usage
-            python_memory = psutil.Process().memory_info().rss / (1024 * 1024)  # Convert to MB
-            
+            python_memory = psutil.Process().memory_info().rss / (
+                1024 * 1024
+            )  # Convert to MB
+
             # Get R process memory usage
             r_memory = self._get_r_memory_usage()
-            
+
             # Record metrics
             self.metrics["python_ram_usage"].append(python_memory)
             self.metrics["r_ram_usage"].append(r_memory)
             self.metrics["ram_timestamps"].append(current_time)
-            
+
             # Save metrics
             self.save_metrics()
-            
+
             # Update UI if initialized
             if self.ui_initialized and self.ram_chart is not None:
                 self._update_ram_chart()
-                
+
         except Exception as e:
             logger.error(f"Error tracking RAM usage: {e}")
 
@@ -287,7 +289,7 @@ class PerformanceMetrics:
                 # Processing times chart
                 with ui.card().classes("w-full p-4 border rounded-lg shadow-sm"):
                     self._create_time_series_chart()
-                
+
                 # RAM usage chart
                 with ui.card().classes("w-full p-4 border rounded-lg shadow-sm"):
                     self._create_ram_chart()
@@ -582,22 +584,28 @@ class PerformanceMetrics:
             if "ram_timestamps" in self.metrics and self.metrics["ram_timestamps"]:
                 # Filter out None values and create valid data points
                 valid_indices = [
-                    i for i, t in enumerate(self.metrics["ram_timestamps"]) if t is not None
+                    i
+                    for i, t in enumerate(self.metrics["ram_timestamps"])
+                    if t is not None
                 ]
 
                 if valid_indices:
-                    timestamps = [self.metrics["ram_timestamps"][i] for i in valid_indices]
+                    timestamps = [
+                        self.metrics["ram_timestamps"][i] for i in valid_indices
+                    ]
 
                     # Get valid data points for each series
                     python_data = []
                     r_data = []
-                    
+
                     for i, ts in enumerate(timestamps):
                         if i < len(self.metrics["python_ram_usage"]):
-                            python_data.append([ts, self.metrics["python_ram_usage"][i]])
+                            python_data.append(
+                                [ts, self.metrics["python_ram_usage"][i]]
+                            )
                         else:
                             python_data.append([ts, None])
-                            
+
                         if i < len(self.metrics["r_ram_usage"]):
                             r_data.append([ts, self.metrics["r_ram_usage"][i]])
                         else:

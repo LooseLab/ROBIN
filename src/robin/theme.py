@@ -68,6 +68,7 @@ def get_version_from_github():
             break
     return remote_version_str
 
+
 async def check_version():
     """
     Check the current version against the remote version on GitHub.
@@ -157,18 +158,19 @@ STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 
 # Global RAM history for background tracking (now only for ROBIN)
 ram_history = {
-    'robin': [],
-    'peak': [],
-    'available': [],  # Available system memory
-    'free': [],      # Free system memory
-    'swap_used': [], # Used swap memory
-    'swap_total': [], # Total swap memory
-    'timestamps': [],
-    'max_points': 2880,  # 24 hours at 30s intervals (24 * 60 * 2)
+    "robin": [],
+    "peak": [],
+    "available": [],  # Available system memory
+    "free": [],  # Free system memory
+    "swap_used": [],  # Used swap memory
+    "swap_total": [],  # Total swap memory
+    "timestamps": [],
+    "max_points": 2880,  # 24 hours at 30s intervals (24 * 60 * 2)
 }
 
 # Track the current peak in a mutable container
 current_peak = [0]
+
 
 def get_robin_ram_usage():
     process = psutil.Process(os.getpid())
@@ -180,35 +182,44 @@ def get_robin_ram_usage():
             continue
     return round(ram_gb, 2)
 
+
 def collect_ram_usage():
     robin_ram = get_robin_ram_usage()
     current_time = datetime.now().strftime("%H:%M:%S")
-    
+
     # Get system memory info
     mem = psutil.virtual_memory()
     available_gb = round(mem.available / (1024 * 1024 * 1024), 2)  # Convert to GB
     free_gb = round(mem.free / (1024 * 1024 * 1024), 2)  # Convert to GB
-    
+
     # Get swap memory info
     swap = psutil.swap_memory()
     swap_used_gb = round(swap.used / (1024 * 1024 * 1024), 2)  # Convert to GB
     swap_total_gb = round(swap.total / (1024 * 1024 * 1024), 2)  # Convert to GB
-    
-    ram_history['robin'].append(robin_ram)
-    ram_history['available'].append(available_gb)
-    ram_history['free'].append(free_gb)
-    ram_history['swap_used'].append(swap_used_gb)
-    ram_history['swap_total'].append(swap_total_gb)
-    ram_history['timestamps'].append(current_time)
-    
+
+    ram_history["robin"].append(robin_ram)
+    ram_history["available"].append(available_gb)
+    ram_history["free"].append(free_gb)
+    ram_history["swap_used"].append(swap_used_gb)
+    ram_history["swap_total"].append(swap_total_gb)
+    ram_history["timestamps"].append(current_time)
+
     # Update peak
     current_peak[0] = max(current_peak[0], robin_ram)
-    ram_history['peak'].append(current_peak[0])
+    ram_history["peak"].append(current_peak[0])
     current_peak[0] = 0  # Reset for next interval
-    
+
     # Keep only the last N points
-    max_points = ram_history['max_points']
-    for key in ['robin', 'peak', 'available', 'free', 'swap_used', 'swap_total', 'timestamps']:
+    max_points = ram_history["max_points"]
+    for key in [
+        "robin",
+        "peak",
+        "available",
+        "free",
+        "swap_used",
+        "swap_total",
+        "timestamps",
+    ]:
         ram_history[key] = ram_history[key][-max_points:]
 
 
@@ -229,7 +240,10 @@ def create_activity_monitor():
                 self.indicators = {}  # Dictionary to store process indicators
                 self.is_shutting_down = False
                 self.performance_metrics_container = None
-                self.ram_history = {'robin': [], 'timestamps': []}  # Store RAM usage history
+                self.ram_history = {
+                    "robin": [],
+                    "timestamps": [],
+                }  # Store RAM usage history
                 self.max_history_points = 60  # Store 30 minutes of data (30s * 60)
 
                 # Initialize process states
@@ -267,8 +281,10 @@ def create_activity_monitor():
             with ui.card().classes("w-full p-4 mb-4"):
                 ui.label("System Performance").classes("text-lg font-medium mb-4")
                 # Create a container for performance metrics that will be populated by the Brain class
-                status.performance_metrics_container = ui.column().classes("w-full gap-4")
-                
+                status.performance_metrics_container = ui.column().classes(
+                    "w-full gap-4"
+                )
+
                 # Add RAM usage graph using ECharts
                 with ui.card().classes("w-full p-4"):
                     ui.label("Memory Usage").classes("text-lg font-medium mb-4")
@@ -279,8 +295,15 @@ def create_activity_monitor():
                         "title": {"text": "Memory Usage (24h)", "left": "center"},
                         "tooltip": {"trigger": "axis"},
                         "legend": {
-                            "data": ["ROBIN", "Peak", "Available", "Free", "Swap Used", "Swap Total"],
-                            "top": 30
+                            "data": [
+                                "ROBIN",
+                                "Peak",
+                                "Available",
+                                "Free",
+                                "Swap Used",
+                                "Swap Total",
+                            ],
+                            "top": 30,
                         },
                         "xAxis": {
                             "type": "category",
@@ -304,7 +327,7 @@ def create_activity_monitor():
                                 "min": 0,
                                 "max": "dataMax",
                                 "position": "right",
-                            }
+                            },
                         ],
                         "dataZoom": [
                             {
@@ -383,7 +406,9 @@ def create_activity_monitor():
                                 "sampling": "lttb",
                                 "lineStyle": {"type": "dashed"},
                                 "yAxisIndex": 1,
-                                "itemStyle": {"color": "#ff8787"},  # Lighter red for total swap
+                                "itemStyle": {
+                                    "color": "#ff8787"
+                                },  # Lighter red for total swap
                             },
                         ],
                     }
@@ -391,13 +416,19 @@ def create_activity_monitor():
                     ram_chart = ui.echart(ram_echart_options).classes("w-full h-64")
 
                     def update_ram_echart():
-                        ram_chart.options["xAxis"]["data"] = ram_history['timestamps']
-                        ram_chart.options["series"][0]["data"] = ram_history['robin']
-                        ram_chart.options["series"][1]["data"] = ram_history['peak']
-                        ram_chart.options["series"][2]["data"] = ram_history['available']
-                        ram_chart.options["series"][3]["data"] = ram_history['free']
-                        ram_chart.options["series"][4]["data"] = ram_history['swap_used']
-                        ram_chart.options["series"][5]["data"] = ram_history['swap_total']
+                        ram_chart.options["xAxis"]["data"] = ram_history["timestamps"]
+                        ram_chart.options["series"][0]["data"] = ram_history["robin"]
+                        ram_chart.options["series"][1]["data"] = ram_history["peak"]
+                        ram_chart.options["series"][2]["data"] = ram_history[
+                            "available"
+                        ]
+                        ram_chart.options["series"][3]["data"] = ram_history["free"]
+                        ram_chart.options["series"][4]["data"] = ram_history[
+                            "swap_used"
+                        ]
+                        ram_chart.options["series"][5]["data"] = ram_history[
+                            "swap_total"
+                        ]
                         ram_chart.update()
 
                     # UI timer just for refreshing the plot
@@ -606,9 +637,9 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
             disclaimer_dialog.open()
 
     ui.timer(0.5, show_disclaimer, once=True)
-    
+
     # Add version check timer
-    
+
     ui.timer(1.0, check_version, once=True)
 
     # Create a persistent dialog for quitting the app
@@ -877,7 +908,8 @@ def workflow_page():
         crossnn_version = get_crossnn_version()
         cnv_from_bam_version = get_cnv_from_bam_version()
 
-        ui.mermaid(f'''
+        ui.mermaid(
+            f"""
 flowchart TD
     %% Style definitions
     classDef minKNOW fill:#f5fafd80,stroke:#339af0,stroke-width:1px,color:#1c7ed6,font-size:14px,font-weight:500
@@ -957,7 +989,13 @@ flowchart TD
     %% Subgraph background coloring
     style MinKNOW fill:#f5fafd80,stroke:#339af0,stroke-width:2px
     style ROBIN fill:#f6fcf7,stroke:#388e3c,stroke-width:2px
-''', config={'theme': 'redux', 'look': 'neo', 'flowchart': {'curve': 'basis', 'defaultRenderer': 'elk'}}).classes('w-full')
+""",
+            config={
+                "theme": "redux",
+                "look": "neo",
+                "flowchart": {"curve": "basis", "defaultRenderer": "elk"},
+            },
+        ).classes("w-full")
 
 
 def get_modkit_version():
@@ -967,27 +1005,31 @@ def get_modkit_version():
         if result.returncode == 0:
             return result.stdout.strip()
         return "unknown"
-    except:
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
         return "unknown"
+
 
 def get_sturgeon_version():
     """Get the version of sturgeon installed."""
     try:
-        result = subprocess.run(["sturgeon", "--version"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["sturgeon", "--version"], capture_output=True, text=True
+        )
         if result.returncode == 0:
             return result.stdout.strip()
         return "unknown"
-    except:
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
         try:
             return importlib.metadata.version("sturgeon")
-        except:
+        except importlib.metadata.PackageNotFoundError:
             return "unknown"
+
 
 def get_crossnn_version():
     """Get the version of CrossNN installed."""
     try:
         return importlib.metadata.version("nanoDX")
-    except:
+    except importlib.metadata.PackageNotFoundError:
         try:
             result = subprocess.run(
                 ["git", "describe", "--tags"],
@@ -1001,14 +1043,15 @@ def get_crossnn_version():
             if result.returncode == 0:
                 return result.stdout.strip()
             return "unknown"
-        except:
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
             return "unknown"
+
 
 def get_cnv_from_bam_version():
     """Get the version of CNV from BAM installed."""
     try:
         return importlib.metadata.version("cnv_from_bam")
-    except:
+    except importlib.metadata.PackageNotFoundError:
         try:
             result = subprocess.run(
                 ["git", "describe", "--tags"],
@@ -1022,7 +1065,7 @@ def get_cnv_from_bam_version():
             if result.returncode == 0:
                 return result.stdout.strip()
             return "unknown"
-        except:
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
             return "unknown"
 
 
@@ -1054,38 +1097,44 @@ if __name__ in {"__main__", "__mp_main__"}:
     # doctest.testmod()
     main()
 
+
 def get_process_ram_usage():
     """Get RAM usage for Python and R processes."""
     python_ram = 0
     r_ram = 0
-    
-    for proc in psutil.process_iter(['pid', 'name', 'memory_info']):
+
+    for proc in psutil.process_iter(["pid", "name", "memory_info"]):
         try:
             # Get process name and memory info
-            name = proc.info['name'].lower()
-            mem_info = proc.info['memory_info']
-            
+            name = proc.info["name"].lower()
+            mem_info = proc.info["memory_info"]
+
             # Skip if memory_info is None
             if mem_info is None:
                 continue
-                
+
             # Calculate RAM usage in GB
             ram_gb = mem_info.rss / (1024 * 1024 * 1024)  # Convert bytes to GB
-            
+
             # Only count processes that are actually using memory
             if ram_gb > 0:
-                if 'python' in name:
+                if "python" in name:
                     python_ram += ram_gb
-                elif 'r' in name or 'Rscript' in name:
+                elif "r" in name or "Rscript" in name:
                     r_ram += ram_gb
-                    
+
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             continue
         except Exception as e:
-            logging.debug(f"Error getting memory info for process {proc.info.get('name', 'unknown')}: {str(e)}")
+            logging.debug(
+                f"Error getting memory info for process {proc.info.get('name', 'unknown')}: {str(e)}"
+            )
             continue
-    
-    return round(python_ram, 2), round(r_ram, 2)  # Round to 2 decimal places for cleaner display
+
+    return round(python_ram, 2), round(
+        r_ram, 2
+    )  # Round to 2 decimal places for cleaner display
+
 
 # Start the background timer ONCE at app startup
 ui.timer(10.0, collect_ram_usage)

@@ -3,7 +3,6 @@ import click
 import os
 import sys
 import logging
-import memray
 from datetime import datetime
 import asyncio
 from time import sleep
@@ -89,31 +88,35 @@ def setup_logging(level: str, log_file: Path) -> None:
 
     # Create a queue for log messages
     log_queue = queue.Queue()
-    
+
     # Create handlers
     file_handler = logging.FileHandler(log_file)
     console_handler = logging.StreamHandler(sys.stdout)
-    
+
     # Create formatters and add them to the handlers
-    formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
-    
+
     # Create a QueueListener to handle the actual writing
-    queue_listener = QueueListener(log_queue, file_handler, console_handler, respect_handler_level=True)
+    queue_listener = QueueListener(
+        log_queue, file_handler, console_handler, respect_handler_level=True
+    )
     queue_listener.start()
-    
+
     # Create a QueueHandler and add it to the root logger
     queue_handler = QueueHandler(log_queue)
     queue_handler.setLevel(numeric_level)
-    
+
     # Configure the root logger
     logging.getLogger().setLevel(numeric_level)
     logging.getLogger().addHandler(queue_handler)
-    
+
     # Store the queue listener so it doesn't get garbage collected
     logging._queue_listener = queue_listener
-    
+
     logging.info(f"Logging configured to level: {level}")
     logging.info(f"Logging to file: {log_file}")
     logging.debug("Debug logging enabled.")
@@ -121,7 +124,7 @@ def setup_logging(level: str, log_file: Path) -> None:
 
 def cleanup_logging():
     """Clean up logging resources."""
-    if hasattr(logging, '_queue_listener'):
+    if hasattr(logging, "_queue_listener"):
         logging._queue_listener.stop()
         del logging._queue_listener
 
@@ -485,10 +488,8 @@ class Methnice:
     async def start_analysis(self) -> None:
         """Start the analysis process."""
         try:
-            #await self.robin.start_background()
-            ui.timer(
-                1, lambda:self.robin.start_background(), once=True
-            )
+            # await self.robin.start_background()
+            ui.timer(1, lambda: self.robin.start_background(), once=True)
         except Exception as e:
             logging.error(f"Error starting analysis: {str(e)}")
             # Consider how to handle this error (e.g., show an error message to the user)
@@ -870,7 +871,9 @@ def run_class(
     # Add cleanup to the shutdown handler
     def handler(*args):
         print("Shutting down ROBIN... from ctrl-c")
-        print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
+        print(
+            "Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open."
+        )
         print("Please shut down ROBIN from the command line.")
         state.shutdown_event = True
         cleanup_logging()  # Add cleanup call here
@@ -883,7 +886,9 @@ def run_class(
                 async def shutdown_task():
                     while state.get_running_process_count() > 0:
                         await asyncio.sleep(1)
-                        print(f"Waiting for {state.get_running_process_count()} processes to finish")
+                        print(
+                            f"Waiting for {state.get_running_process_count()} processes to finish"
+                        )
                         print(f"Active processes: {list(state.process_states.keys())}")
                     # Don't exit, just keep running
                     while True:
@@ -1302,7 +1307,7 @@ def package_run(
         if output is None:
             logging.error("Output is required when --browse is not set.")
             sys.exit(1)
-        
+
         run_class(
             port=port,
             force_sampleid=force_sampleid,

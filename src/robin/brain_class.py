@@ -68,21 +68,17 @@ Dependencies:
 """
 
 import logging
-from pathlib import Path
 from queue import Queue
 import pandas as pd
 import asyncio
-import pysam
 from collections import Counter
 from datetime import datetime
 from dateutil import parser
 import os
 import psutil
 import tempfile
-from alive_progress import alive_bar
-from nicegui import ui, app, run,background_tasks
+from nicegui import ui, app, run, background_tasks
 import concurrent.futures
-import subprocess
 import time
 
 from robin import resources
@@ -95,28 +91,25 @@ from robin.subpages.Sturgeon_object import (
     SturgeonVis,
 )
 from robin.subpages.NanoDX_object import NanoDX_object, NanoDXVis
-from robin.subpages.RandomForest_object import RandomForest_object, RandomForestVis, load_modkit_data
+from robin.subpages.RandomForest_object import (
+    RandomForest_object,
+    RandomForestVis,
+)
 from robin.subpages.CNV_object import CNVAnalysis, CNVVis
 from robin.subpages.TargetCoverage_object import TargetCoverage, TargetCoverageVis
 from robin.subpages.Fusion_object import FusionObject, FusionVis
 from robin.subpages.MNPFlex_object import MNPFlex_Object
 from robin.utilities.local_file_picker import LocalFilePicker
-from robin.utilities.ReadBam import ReadBam
 from robin.utilities.bed_file import MasterBedTree
-from robin.utilities.mnp_flex import APIClient as MnpFlexClient
 from robin.reporting.report import create_pdf
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
 
 from watchdog.observers import Observer
-from typing import List, Optional
 
-import pyranges as pr  # For fast interval-based filtering
 
 from .core.state import state, ProcessType, ProcessState
 
-import pickle
-import polars as pl
 import json
 
 from robin.utils import (
@@ -129,7 +122,6 @@ from robin.utils import (
 
 # Configure logging
 logger = logging.getLogger(__name__)
-
 
 
 class BrainMeth:
@@ -455,7 +447,7 @@ class BrainMeth:
                     bamqueue=self.bamforsturgeon,
                     **common_args,
                 )
-                
+
                 await self.Sturgeon.process_data()
 
             if "nanodx" not in self.exclude:
@@ -489,7 +481,7 @@ class BrainMeth:
                     **common_args,
                 )
                 await self.RandomForest.process_data()
-            
+
             if "cnv" not in self.exclude:
                 logging.info("Initializing CNV analysis")
                 self.CNV = CNVAnalysis(
@@ -542,10 +534,8 @@ class BrainMeth:
                     **common_args,
                 )
                 await self.Fusion_panel.process_data()
-                
+
         background_tasks.create(start_background_tasks())
-            
-        
 
     async def render_ui(self, sample_id=None):
         """
@@ -1264,26 +1254,28 @@ class BrainMeth:
                                                     "text-blue-600"
                                                 )
                                                 ui.label().bind_text_from(
-                                                    app.storage.general[self.mainuuid]["bam_count"],
+                                                    app.storage.general[self.mainuuid][
+                                                        "bam_count"
+                                                    ],
                                                     "total_files",
-                                                    backward=lambda n: f"{n} total" if n else 0,
-                                                ).classes(
-                                                    "text-sm text-gray-600"
-                                                )
-                                                
+                                                    backward=lambda n: (
+                                                        f"{n} total" if n else 0
+                                                    ),
+                                                ).classes("text-sm text-gray-600")
+
                                             with ui.row().classes("items-center gap-1"):
                                                 ui.icon("check_circle").classes(
                                                     "text-green-600"
                                                 )
                                                 ui.label().bind_text_from(
-                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID][
-                                                        "file_counters"
-                                                    ],
+                                                    app.storage.general[self.mainuuid][
+                                                        "samples"
+                                                    ][self.sampleID]["file_counters"],
                                                     "bam_passed",
-                                                    backward=lambda n: f"{n} passed" if n else 0,
-                                                ).classes(
-                                                    "text-sm text-gray-600"
-                                                )
+                                                    backward=lambda n: (
+                                                        f"{n} passed" if n else 0
+                                                    ),
+                                                ).classes("text-sm text-gray-600")
 
                                             with ui.row().classes("items-center gap-1"):
                                                 ui.icon("error").classes("text-red-600")
@@ -2547,7 +2539,9 @@ class BrainMeth:
                                         item
                                     ]:
                                         self.sampleID = sample
-                        if self.browse: #This is correct use of io_bound as we are in the main thread.
+                        if (
+                            self.browse
+                        ):  # This is correct use of io_bound as we are in the main thread.
                             myfile = await run.io_bound(
                                 create_pdf,
                                 f"{self.sampleID}_run_report.pdf",
@@ -2585,7 +2579,7 @@ class BrainMeth:
         :return: None
         """
         logging.info("Starting background BAM processing")
-        
+
         # Set up a timer to check application state every 10 seconds
         # This timer monitors for shutdown events and manages process states
         self.app_state_timer = app.timer(10, self.check_app_state)
@@ -2623,7 +2617,6 @@ class BrainMeth:
         self.check_and_log_memory = app.timer(
             15, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs)
         )
-        
 
     async def check_app_state(self):
         if state.shutdown_event:
@@ -2882,7 +2875,9 @@ class BrainMeth:
             # Process if we have enough files for any sample
             for sample_id in list(files_by_sample.keys()):
                 # The length of bams we allow to be processed at once will influence memory usage.
-                if len(files_by_sample[sample_id]) >= 5:  #This can be changed at any time
+                if (
+                    len(files_by_sample[sample_id]) >= 5
+                ):  # This can be changed at any time
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
                         f"Processing batch of {files_to_process} files for sample {sample_id}"
@@ -3018,7 +3013,7 @@ class BrainMeth:
             logging.info(
                 f"Processing {num_bam_files_seen} BAM files for sample ID: {sampleID}"
             )
-            
+
             # Ensure counters exist for this sample
             analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
             for analysis in analyses:
@@ -3064,7 +3059,7 @@ class BrainMeth:
             # Write the updated length of the tomerge list to the output file
             with open(tomerge_length_file, "w") as f:
                 f.write(f"Length of tomerge list: {new_count}\n")
-                
+
             tempbam = tempfile.NamedTemporaryFile(
                 dir=self.check_and_create_folder(self.output, sampleID),
                 suffix=".bam",
@@ -3083,7 +3078,7 @@ class BrainMeth:
             state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
 
             # Sort and merge BAM files
-            try: # Here we shouldn't need to use cpu_bound as we should be in the background.
+            try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
                 await run.cpu_bound(
                     run_samtools_sort, file, tomerge, sortfile, self.threads
                 )
@@ -3097,9 +3092,9 @@ class BrainMeth:
             with tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             ):
-                try:# Here we shouldn't need to use cpu_bound as we should be in the background.
+                try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
                     await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
-                    #run_modkit(sortfile, temp.name, self.threads)
+                    # run_modkit(sortfile, temp.name, self.threads)
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(
                         "Process pool was terminated. This is normal during shutdown."
@@ -3114,7 +3109,7 @@ class BrainMeth:
                 )
 
                 # Merge modkit files for this sample
-                try: # Here we shouldn't need to use cpu_bound as we should be in the background.
+                try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
                     await run.cpu_bound(
                         merge_modkit_files,
                         [temp.name],
@@ -3690,7 +3685,7 @@ class BrainMeth:
                 state.stop_process("Serial Bam Analysis")
 
     async def check_existing_bams(self, sequencing_summary=None):
-        #ToDo: THis needs to be a background process.
+        # ToDo: THis needs to be a background process.
         """
         Check and process existing BAM files based on a sequencing summary.
 
@@ -3701,7 +3696,7 @@ class BrainMeth:
 
         files_and_timestamps = []
 
-        files_and_timestamps = await run.cpu_bound (
+        files_and_timestamps = await run.cpu_bound(
             sort_bams,
             files_and_timestamps,
             self.watchfolder,

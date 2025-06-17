@@ -166,7 +166,8 @@ def run_modkit(
             os.system(cmd)
     except Exception:
         raise
-    
+
+
 class MGMTVis(BaseVis):
     """
     MGMT_Object handles the MGMT analysis process, including setting up the GUI
@@ -186,7 +187,7 @@ class MGMTVis(BaseVis):
         super().__init__(*args, **kwargs)
         # Remove state tracking for MGMT Analysis
         # state.start_process("MGMT Analysis", ProcessType.BATCH)
-        #state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
+        # state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
 
     def setup_ui(self) -> None:
         """
@@ -364,7 +365,7 @@ class MGMTVis(BaseVis):
         except Exception as e:
             logger.error(f"Error displaying bed file data: {e}")
             ui.label(f"Error reading bed file: {str(e)}").classes("text-red-500")
-            
+
     def display_specific_sites(self, bed_file: str) -> None:
         """
         Displays the specific methylation sites of interest in a table format.
@@ -496,7 +497,7 @@ class MGMTVis(BaseVis):
             ui.label(f"Error analyzing specific sites: {str(e)}").classes(
                 "text-red-500"
             )
-            
+
     def extract_specific_sites(self, bed_file: str) -> pd.DataFrame:
         """
         Extracts specific methylation sites of interest from the bed file.
@@ -642,7 +643,7 @@ class MGMTVis(BaseVis):
         except Exception as e:
             logger.error(f"Error extracting specific sites: {e}")
             return pd.DataFrame()
-        
+
     def save_specific_sites_data(
         self, specific_sites: pd.DataFrame, bed_file: str
     ) -> str:
@@ -837,7 +838,6 @@ class MGMTVis(BaseVis):
                     self.last_seen = count
 
 
-
 class MGMT_Object(BaseAnalysis):
     """
     MGMT_Object handles the MGMT analysis process, including setting up the GUI
@@ -872,9 +872,9 @@ class MGMT_Object(BaseAnalysis):
         """
         state.set_process_state("MGMT Analysis", ProcessState.RUNNING)
         try:
-            #result = await run.cpu_bound(
+            # result = await run.cpu_bound(
             result = has_reads(bamfile, "chr10", 129467242, 129467244)
-            #)
+            # )
 
             if result:
                 MGMT_BED: str = f"{HVPATH}/bin/mgmt_hg38.bed"
@@ -882,19 +882,19 @@ class MGMT_Object(BaseAnalysis):
                     dir=self.check_and_create_folder(self.output, self.sampleID),
                     suffix=".bam",
                 )
+
                 async def bedtools_background_work(bamfile, MGMT_BED, tempbamfile):
                     try:
                         await run.cpu_bound(
-                            run_bedtools,
-                            bamfile, 
-                            MGMT_BED, 
-                            tempbamfile.name
+                            run_bedtools, bamfile, MGMT_BED, tempbamfile.name
                         )
-                    except Exception:
+                    except Exception as e:
                         logger.error(f"Error in bedtools_background_work: {e}")
-                        #return
+                        # return
 
-                await background_tasks.create(bedtools_background_work(bamfile, MGMT_BED, tempbamfile))
+                await background_tasks.create(
+                    bedtools_background_work(bamfile, MGMT_BED, tempbamfile)
+                )
 
                 try:
                     if (
@@ -903,18 +903,17 @@ class MGMT_Object(BaseAnalysis):
                         )
                         > 0
                     ):
-                        async def mgmt_bam_background_work(sampleID, MGMTbamfile, tempbamfile):
+
+                        async def mgmt_bam_background_work(
+                            sampleID, MGMTbamfile, tempbamfile
+                        ):
                             if sampleID not in MGMTbamfile.keys():
                                 # if not self.MGMTbamfile:
                                 MGMTbamfile[sampleID] = os.path.join(
-                                    self.check_and_create_folder(
-                                        self.output, sampleID
-                                    ),
+                                    self.check_and_create_folder(self.output, sampleID),
                                     "mgmt.bam",
                                 )
-                                shutil.copy2(
-                                    tempbamfile.name, MGMTbamfile[sampleID]
-                                )
+                                shutil.copy2(tempbamfile.name, MGMTbamfile[sampleID])
                                 os.remove(f"{tempbamfile.name}.bai")
                             else:
                                 tempbamholder = tempfile.NamedTemporaryFile(
@@ -929,18 +928,20 @@ class MGMT_Object(BaseAnalysis):
                                     MGMTbamfile[sampleID],
                                     tempbamfile.name,
                                 )
-                                shutil.copy2(
-                                    tempbamholder.name, MGMTbamfile[sampleID]
-                                )
+                                shutil.copy2(tempbamholder.name, MGMTbamfile[sampleID])
                                 try:
                                     os.remove(f"{tempbamholder.name}.bai")
                                     os.remove(f"{tempbamfile.name}.bai")
                                 except FileNotFoundError:
                                     pass
-                            
-                        await background_tasks.create(mgmt_bam_background_work(self.sampleID, self.MGMTbamfile, tempbamfile))
+
+                        await background_tasks.create(
+                            mgmt_bam_background_work(
+                                self.sampleID, self.MGMTbamfile, tempbamfile
+                            )
+                        )
                         tempmgmtdir = tempfile.TemporaryDirectory(
-                            dir=self.check_and_create_folder(self.output, self.sampleID)                        
+                            dir=self.check_and_create_folder(self.output, self.sampleID)
                         )
                         self.counter += 1
 
@@ -949,7 +950,9 @@ class MGMT_Object(BaseAnalysis):
                             f"{self.counter}_mgmt.bed",
                         )
 
-                        async def modkit_background_work(tempmgmtdir, MGMTbamfile, threads, output_mgmt_bed):
+                        async def modkit_background_work(
+                            tempmgmtdir, MGMTbamfile, threads, output_mgmt_bed
+                        ):
                             await run.cpu_bound(
                                 run_modkit,
                                 tempmgmtdir.name,
@@ -957,8 +960,15 @@ class MGMT_Object(BaseAnalysis):
                                 threads,
                                 output_mgmt_bed,
                             )
-                        
-                        await background_tasks.create(modkit_background_work(tempmgmtdir, self.MGMTbamfile[self.sampleID], self.threads, output_mgmt_bed))
+
+                        await background_tasks.create(
+                            modkit_background_work(
+                                tempmgmtdir,
+                                self.MGMTbamfile[self.sampleID],
+                                self.threads,
+                                output_mgmt_bed,
+                            )
+                        )
 
                         try:
                             if os.path.exists(
@@ -980,15 +990,17 @@ class MGMT_Object(BaseAnalysis):
                                     f"{self.counter}_mgmt.png",
                                 )
 
-                                async def methylartist_background_work(tempmgmtdir, plot_out):
+                                async def methylartist_background_work(
+                                    tempmgmtdir, plot_out
+                                ):
                                     await run.cpu_bound(
-                                        run_methylartist,
-                                        tempmgmtdir.name,
-                                        plot_out
+                                        run_methylartist, tempmgmtdir.name, plot_out
                                     )
-                                    
-                                await background_tasks.create(methylartist_background_work(tempmgmtdir, plot_out))
-                                
+
+                                await background_tasks.create(
+                                    methylartist_background_work(tempmgmtdir, plot_out)
+                                )
+
                                 results.to_csv(
                                     os.path.join(
                                         self.check_and_create_folder(
@@ -1033,7 +1045,6 @@ class MGMT_Object(BaseAnalysis):
                     plot_out = os.path.join(watchfolder, file.replace(".csv", ".png"))
                     summary = f"Current MGMT status: {results['status'].values[0]}"
         return results, plot_out, summary
-
 
 
 def test_me(
