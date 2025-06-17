@@ -32,7 +32,7 @@ import sys
 import tempfile
 import time
 import pandas as pd
-from nicegui import ui, app, run
+from nicegui import ui, app, run, background_tasks
 from robin import theme
 from robin import models
 import click
@@ -494,70 +494,72 @@ class Sturgeon_object(BaseAnalysis):
                     self.check_and_create_folder(self.output, sampleID),
                     f"{sampleID}.parquet",
                 )
-
-                try:
-                    if self.check_file_time(parquet_path):
-                        tomerge_length_file = os.path.join(
-                            self.check_and_create_folder(self.output, sampleID),
-                            "tomerge_length.txt",
-                        )
-                        with open(tomerge_length_file, "r") as f:
-                            tomerge_length = int(f.readline().strip().split(": ")[1])
-
-                        merged_modkit_df = await run.cpu_bound(
-                            load_modkit_data, parquet_path
-                        )
-
-                        temp_pileup = tempfile.NamedTemporaryFile(
-                            dir=self.check_and_create_folder(self.output, sampleID)
-                        )
-
-                        # Pass the cleaned data
-                        result_df = await run.cpu_bound(
-                            modkit_pileup_file_to_bed,
-                            merged_modkit_df,
-                            temp_pileup.name,
-                            self.probes_file,
-                        )
-
-                        diagnosis = predict_sample_from_dataframe(result_df)
-                        self.st_num_probes[sampleID] = diagnosis.iloc[-1][
-                            "number_probes"
-                        ]
-                        # lastrow = mydf.iloc[-1].drop("number_probes")
-                        mydf_to_save = diagnosis
-                        mydf_to_save["timestamp"] = currenttime
-
-                        if sampleID not in self.sturgeon_df_store:
-                            self.sturgeon_df_store[sampleID] = pd.DataFrame()
-
-                        # Exclude empty or all-NA entries before concatenation
-                        if not mydf_to_save.dropna(how="all").empty:
-                            self.sturgeon_df_store[sampleID] = pd.concat(
-                                [
-                                    self.sturgeon_df_store[sampleID],
-                                    mydf_to_save.set_index("timestamp"),
-                                ]
+                async def sturgeon_bam_background_work(sampleID, parquet_path):
+                    try:
+                        if self.check_file_time(parquet_path):
+                            tomerge_length_file = os.path.join(
+                                self.check_and_create_folder(self.output, sampleID),
+                                "tomerge_length.txt",
                             )
-                            self.sturgeon_df_store[sampleID].to_csv(
-                                os.path.join(
-                                    self.check_and_create_folder(self.output, sampleID),
-                                    "sturgeon_scores.csv",
+                            with open(tomerge_length_file, "r") as f:
+                                tomerge_length = int(f.readline().strip().split(": ")[1])
+
+                            merged_modkit_df = await run.cpu_bound(
+                                load_modkit_data, parquet_path
+                            )
+
+                            temp_pileup = tempfile.NamedTemporaryFile(
+                                dir=self.check_and_create_folder(self.output, sampleID)
+                            )
+
+                            # Pass the cleaned data
+                            result_df = await run.cpu_bound(
+                                modkit_pileup_file_to_bed,
+                                merged_modkit_df,
+                                temp_pileup.name,
+                                self.probes_file,
+                            )
+
+                            diagnosis = await run.cpu_bound(predict_sample_from_dataframe,result_df)
+                            self.st_num_probes[sampleID] = diagnosis.iloc[-1][
+                                "number_probes"
+                            ]
+                            # lastrow = mydf.iloc[-1].drop("number_probes")
+                            mydf_to_save = diagnosis
+                            mydf_to_save["timestamp"] = currenttime
+
+                            if sampleID not in self.sturgeon_df_store:
+                                self.sturgeon_df_store[sampleID] = pd.DataFrame()
+
+                            # Exclude empty or all-NA entries before concatenation
+                            if not mydf_to_save.dropna(how="all").empty:
+                                self.sturgeon_df_store[sampleID] = pd.concat(
+                                    [
+                                        self.sturgeon_df_store[sampleID],
+                                        mydf_to_save.set_index("timestamp"),
+                                    ]
                                 )
-                            )
-                        app.storage.general[self.mainuuid][sampleID][self.name][
-                            "counters"
-                        ]["bam_processed"] = tomerge_length
+                                self.sturgeon_df_store[sampleID].to_csv(
+                                    os.path.join(
+                                        self.check_and_create_folder(self.output, sampleID),
+                                        "sturgeon_scores.csv",
+                                    )
+                                )
+                            app.storage.general[self.mainuuid][sampleID][self.name][
+                                "counters"
+                            ]["bam_processed"] = tomerge_length
 
+                            # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                            #    "bams_in_processing"
+                        # ] = 0
                         # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                        #    "bams_in_processing"
-                    # ] = 0
-                    # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    #    "bam_count"
-                    # ] -= tomerge_length
-                    # print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
-                except Exception as e:
-                    logger.error(f"Error in process_bam (sturgeon): {e}")
+                        #    "bam_count"
+                        # ] -= tomerge_length
+                        # print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
+                    except Exception as e:
+                        logger.error(f"Error in process_bam (sturgeon): {e}")
+                
+                await background_tasks.create(sturgeon_bam_background_work(sampleID, parquet_path))
 
             self.running = False
         finally:

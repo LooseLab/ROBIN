@@ -533,7 +533,7 @@ class BaseAnalysis:
 
     def timer_run(self) -> None:
         """Set up a timer to periodically run the _worker method for processing BAM files."""
-        self.timer = ui.timer(0.1, self._worker, once=True)
+        self.timer = app.timer(0.1, self._worker, once=True)
 
     async def _worker(self) -> None:
         """Process BAM files from the queue in the background."""

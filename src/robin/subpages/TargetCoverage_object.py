@@ -2069,7 +2069,7 @@ class TargetCoverage(BaseAnalysis):
         self.simtime = simtime
         self.enable_snp_calling = enable_snp_calling
         self.snp_calling = False  # Will be set to True only if both reference is provided and enable_snp_calling is True
-        self.clair3_status_label = ui.label("Clair3 Idle")  # UI label for status
+        #self.clair3_status_label = ui.label("Clair3 Idle")  # UI label for status
         if self.reference and self.enable_snp_calling:
             self.snp_calling = True
         self.target_panel = target_panel
@@ -2090,7 +2090,7 @@ class TargetCoverage(BaseAnalysis):
         self.check_docker_image()
         super().__init__(*args, **kwargs)
         # Add a timer to refresh the Clair3 status label
-        ui.timer(1, self.update_clair3_status_label)
+        #ui.timer(1, self.update_clair3_status_label)
 
     def update_clair3_status_label(self):
         process_state = state.get_process_state("clair3")
