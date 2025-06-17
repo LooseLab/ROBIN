@@ -52,7 +52,7 @@ from robin import submodules
 import pandas as pd
 import os
 import sys
-from nicegui import ui, run, app
+from nicegui import ui, run, app, background_tasks
 import pysam
 import shutil
 import click
@@ -882,14 +882,19 @@ class MGMT_Object(BaseAnalysis):
                     dir=self.check_and_create_folder(self.output, self.sampleID),
                     suffix=".bam",
                 )
+                async def bedtools_background_work(bamfile, MGMT_BED, tempbamfile):
+                    try:
+                        await run.cpu_bound(
+                            run_bedtools,
+                            bamfile, 
+                            MGMT_BED, 
+                            tempbamfile.name
+                        )
+                    except Exception:
+                        logger.error(f"Error in bedtools_background_work: {e}")
+                        #return
 
-                try:
-                    #await run.cpu_bound(
-                    run_bedtools(bamfile, MGMT_BED, tempbamfile.name)
-                    #)
-                except Exception:
-                    # logger.error(f"Error in process_bam: {e}")
-                    return
+                await background_tasks.create(bedtools_background_work(bamfile, MGMT_BED, tempbamfile))
 
                 try:
                     if (
@@ -898,43 +903,45 @@ class MGMT_Object(BaseAnalysis):
                         )
                         > 0
                     ):
-                        if self.sampleID not in self.MGMTbamfile.keys():
-                            # if not self.MGMTbamfile:
-                            self.MGMTbamfile[self.sampleID] = os.path.join(
-                                self.check_and_create_folder(
-                                    self.output, self.sampleID
-                                ),
-                                "mgmt.bam",
-                            )
-                            shutil.copy2(
-                                tempbamfile.name, self.MGMTbamfile[self.sampleID]
-                            )
-                            os.remove(f"{tempbamfile.name}.bai")
-                        else:
-                            tempbamholder = tempfile.NamedTemporaryFile(
-                                dir=self.check_and_create_folder(
-                                    self.output, self.sampleID
-                                ),
-                                suffix=".bam",
-                            )
-                            pysam.cat(
-                                "-o",
-                                tempbamholder.name,
-                                self.MGMTbamfile[self.sampleID],
-                                tempbamfile.name,
-                            )
-                            shutil.copy2(
-                                tempbamholder.name, self.MGMTbamfile[self.sampleID]
-                            )
-                            try:
-                                os.remove(f"{tempbamholder.name}.bai")
+                        async def mgmt_bam_background_work(sampleID, MGMTbamfile, tempbamfile):
+                            if sampleID not in MGMTbamfile.keys():
+                                # if not self.MGMTbamfile:
+                                MGMTbamfile[sampleID] = os.path.join(
+                                    self.check_and_create_folder(
+                                        self.output, sampleID
+                                    ),
+                                    "mgmt.bam",
+                                )
+                                shutil.copy2(
+                                    tempbamfile.name, MGMTbamfile[sampleID]
+                                )
                                 os.remove(f"{tempbamfile.name}.bai")
-                            except FileNotFoundError:
-                                pass
+                            else:
+                                tempbamholder = tempfile.NamedTemporaryFile(
+                                    dir=self.check_and_create_folder(
+                                        self.output, sampleID
+                                    ),
+                                    suffix=".bam",
+                                )
+                                pysam.cat(
+                                    "-o",
+                                    tempbamholder.name,
+                                    MGMTbamfile[sampleID],
+                                    tempbamfile.name,
+                                )
+                                shutil.copy2(
+                                    tempbamholder.name, MGMTbamfile[sampleID]
+                                )
+                                try:
+                                    os.remove(f"{tempbamholder.name}.bai")
+                                    os.remove(f"{tempbamfile.name}.bai")
+                                except FileNotFoundError:
+                                    pass
+                            
+                        await background_tasks.create(mgmt_bam_background_work(self.sampleID, self.MGMTbamfile, tempbamfile))
                         tempmgmtdir = tempfile.TemporaryDirectory(
-                            dir=self.check_and_create_folder(self.output, self.sampleID)
+                            dir=self.check_and_create_folder(self.output, self.sampleID)                        
                         )
-
                         self.counter += 1
 
                         output_mgmt_bed = os.path.join(
@@ -942,13 +949,16 @@ class MGMT_Object(BaseAnalysis):
                             f"{self.counter}_mgmt.bed",
                         )
 
-                        #await run.cpu_bound(
-                        run_modkit(
-                            tempmgmtdir.name,
-                            self.MGMTbamfile[self.sampleID],
-                            self.threads,
-                            output_mgmt_bed,
-                        )
+                        async def modkit_background_work(tempmgmtdir, MGMTbamfile, threads, output_mgmt_bed):
+                            await run.cpu_bound(
+                                run_modkit,
+                                tempmgmtdir.name,
+                                MGMTbamfile,
+                                threads,
+                                output_mgmt_bed,
+                            )
+                        
+                        await background_tasks.create(modkit_background_work(tempmgmtdir, self.MGMTbamfile[self.sampleID], self.threads, output_mgmt_bed))
 
                         try:
                             if os.path.exists(
@@ -970,9 +980,15 @@ class MGMT_Object(BaseAnalysis):
                                     f"{self.counter}_mgmt.png",
                                 )
 
-                                #await run.cpu_bound(
-                                run_methylartist(tempmgmtdir.name, plot_out)
-                                #)
+                                async def methylartist_background_work(tempmgmtdir, plot_out):
+                                    await run.cpu_bound(
+                                        run_methylartist,
+                                        tempmgmtdir.name,
+                                        plot_out
+                                    )
+                                    
+                                await background_tasks.create(methylartist_background_work(tempmgmtdir, plot_out))
+                                
                                 results.to_csv(
                                     os.path.join(
                                         self.check_and_create_folder(

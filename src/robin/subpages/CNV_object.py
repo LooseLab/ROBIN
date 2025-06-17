@@ -91,7 +91,7 @@ Matt Loose
 
 import pysam
 from cnv_from_bam import iterate_bam_file
-from robin.subpages.base_analysis import BaseAnalysisOrig, BaseVis, BaseAnalysis
+from robin.subpages.base_analysis import BaseVis, BaseAnalysis
 from robin.utilities.break_point_detector import CNVChangeDetectorTracker
 from robin.utilities.bed_file import MasterBedTree
 import natsort
@@ -101,7 +101,7 @@ import logging
 import numpy as np
 import os
 import sys
-from nicegui import ui, app
+from nicegui import ui, app, run, background_tasks
 import click
 from pathlib import Path
 import pickle
@@ -308,6 +308,26 @@ def pad_arrays_orig(
     return arr1, arr2
 
 
+def get_data(output: str) -> Tuple[Result, Result, Result, dict]:
+    """
+    Get data from the output directory.
+    """
+    result = Result(np.load(
+        os.path.join(output, "CNV.npy"), allow_pickle="TRUE"
+    ).item())
+    result2 = Result(np.load(
+        os.path.join(output, "CNV2.npy"), allow_pickle="TRUE"
+    ).item())
+    result3 = Result(np.load(
+        os.path.join(output, "CNV3.npy"), allow_pickle="TRUE"
+    ).item())
+    cnv_dict = np.load(
+        os.path.join(output, "CNV_dict.npy"), allow_pickle="TRUE"
+    ).item()
+    return result, result2, result3, cnv_dict
+
+
+    
 class CNVVis(BaseVis):
     """
     A class for visualizing CNV data.
@@ -353,7 +373,7 @@ class CNVVis(BaseVis):
         self.color_mode = "chromosome"
 
         # Initialize data array related attributes
-        self.DATA_ARRAY = None
+        #self.DATA_ARRAY = None
         self.data_array_size = 0
         self.data_array_path = None
         self.local_data_array = None
@@ -2292,110 +2312,53 @@ class CNVVis(BaseVis):
             output = self.check_and_create_folder(self.output, self.sampleID)
 
         if self.check_file_time(os.path.join(output, "CNV.npy")):
-            self.result = Result(np.load(
-                os.path.join(output, "CNV.npy"), allow_pickle="TRUE"
-            ).item())
-            self.result2 = Result(np.load(
-                os.path.join(output, "CNV2.npy"), allow_pickle="TRUE"
-            ).item())
+            self.result, self.result2, self.result3, self.cnv_dict = await run.io_bound(
+                get_data,
+                output,
+            )
             
-            self.cnv_dict = np.load(
-                os.path.join(output, "CNV_dict.npy"), allow_pickle=True
-            ).item()
-            #self.cnv_dict["bin_width"] = cnv_dict["bin_width"]
-            #self.cnv_dict["variance"] = cnv_dict["variance"]
-
-
-            for key in self.result.cnv.keys():
-                if key != "chrM" and re.match(r"^chr(\d+|X|Y)$", key):
-                    moving_avg_data1 = moving_average(self.result.cnv[key])
-                    moving_avg_data2 = moving_average(self.result2.cnv[key])
-                    moving_avg_data1, moving_avg_data2 = pad_arrays(
-                        moving_avg_data1, moving_avg_data2
-                    )
-                    self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
-
             self.CNVResults = {}
-            if self.check_file_time(os.path.join(output, "ruptures.npy")):
-                self.CNVResults = np.load(
-                    os.path.join(output, "ruptures.npy"), allow_pickle="TRUE"
-                ).item()
-
-                # Initialize data array for existing data
-                self.data_array_path = os.path.join(output, "cnv_data_array.npy")
-                if os.path.exists(self.data_array_path):
-                    # Get file size first
-                    file_size = os.path.getsize(self.data_array_path)
-                    # Calculate maximum possible shape based on file size
-                    max_shape = file_size // self.dtype.itemsize
-
-                    # Load existing data array with safe initial shape
-                    self.DATA_ARRAY = np.memmap(
-                        self.data_array_path,
-                        dtype=self.dtype,
-                        mode="r",
-                        shape=(min(1, max_shape),),  # Start with safe shape
+            async def load_ruptures():
+                if self.check_file_time(os.path.join(output, "ruptures.npy")):
+                    self.CNVResults = await run.io_bound(
+                        np.load,
+                        os.path.join(output, "ruptures.npy"),
+                        allow_pickle="TRUE",
+                    ).item()
+                self.update_plots()
+                
+            background_tasks.create(load_ruptures())
+            
+            
+            async def load_bedranges():
+                if self.check_file_time(os.path.join(output, "bedranges.csv")):
+                    self.proportions_df_store = await run.io_bound(
+                        pd.read_csv,
+                        os.path.join(os.path.join(output, "bedranges.csv")),
+                        index_col=0,
                     )
 
-                    # Count total number of entries across all chromosomes
-                    total_entries = sum(
-                        len(chrom_data.get("bed_data", []))
-                        for chrom_data in self.CNVResults.values()
+                    df_filtered = self.proportions_df_store[
+                        self.proportions_df_store["chromosome"] != "Genome-wide"
+                    ]
+                    pivot_df = df_filtered.pivot(
+                        index="timestamp", columns="chromosome", values="proportion"
                     )
-                    if total_entries > 0 and total_entries <= max_shape:
-                        # Only resize if the new size is valid
-                        self.DATA_ARRAY = np.memmap(
-                            self.data_array_path,
-                            dtype=self.dtype,
-                            mode="r",
-                            shape=(total_entries,),
-                        )
-                        self.data_array_size = total_entries
-                    else:
-                        # If invalid size, keep original shape
-                        self.data_array_size = max_shape
-                else:
-                    # Initialize empty array if no existing data
-                    self.DATA_ARRAY = np.memmap(
-                        self.data_array_path, dtype=self.dtype, mode="w+", shape=(1,)
+
+                    df_filtered2 = self.proportions_df_store[
+                        self.proportions_df_store["chromosome"] == "Genome-wide"
+                    ]
+                    pivot_df2 = df_filtered2.pivot(
+                        index="timestamp", columns="chromosome", values="proportion"
                     )
-                    self.data_array_size = 0
 
-            self.update_plots()
+                    self.update_proportion_time_chart(pivot_df)
+                    self.update_proportion_time_chart2(pivot_df2)
 
-            bedcontent = ""
-            # local_update = False
-            for chrom in natsort.natsorted(self.CNVResults):
-                if len(self.CNVResults[chrom]["bed_data"]) > 0:
-                    bedcontent += f'{self.CNVResults[chrom]["bed_data_breakpoints"]}\n'
-                    # local_update = True
+                self.update_target_table()
 
-            # self.NewBed.load_from_string(bedcontent, merge=False, source_type="CNV")
 
-            if self.check_file_time(os.path.join(output, "bedranges.csv")):
-                self.proportions_df_store = pd.read_csv(
-                    os.path.join(os.path.join(output, "bedranges.csv")),
-                    index_col=0,
-                )
-
-                df_filtered = self.proportions_df_store[
-                    self.proportions_df_store["chromosome"] != "Genome-wide"
-                ]
-                pivot_df = df_filtered.pivot(
-                    index="timestamp", columns="chromosome", values="proportion"
-                )
-
-                df_filtered2 = self.proportions_df_store[
-                    self.proportions_df_store["chromosome"] == "Genome-wide"
-                ]
-                pivot_df2 = df_filtered2.pivot(
-                    index="timestamp", columns="chromosome", values="proportion"
-                )
-
-                self.update_proportion_time_chart(pivot_df)
-                self.update_proportion_time_chart2(pivot_df2)
-
-            self.update_target_table()
+            background_tasks.create(load_bedranges())
 
             if self.summary:
                 with self.summary:
@@ -2986,6 +2949,49 @@ class CNVVis(BaseVis):
                 )
 
                 ui.update(self.scatter_echart)
+                
+                
+def iterate_bam(
+    bamfile, _threads: int, mapq_filter: int, copy_numbers: dict, log_level: int, ref_cnv_dict
+) -> Tuple[dict, int, float, dict]:
+    """
+    Iterate over a BAM file and return CNV data and associated metrics.
+
+    Args:
+        bamfile (BinaryIO): The BAM file to process.
+        _threads (int): Number of threads to use.
+        mapq_filter (int): MAPQ filter value.
+        copy_numbers (dict): Dictionary to store copy number data.
+        log_level (int): Logging level.
+
+    Returns:
+        Tuple[dict, int, float, dict]: CNV data, bin width, variance, and updated copy numbers.
+    """
+    result = iterate_bam_file(
+        bamfile,
+        _threads=_threads,
+        mapq_filter=mapq_filter,
+        copy_numbers=copy_numbers,
+        log_level=log_level,
+    )
+    
+    result2 = iterate_bam_file(
+        bamfile,
+        _threads=_threads,
+        mapq_filter=mapq_filter,
+        copy_numbers=ref_cnv_dict,
+        log_level=log_level,
+        bin_width=result.bin_width,
+    )
+
+    return (
+        result.cnv,
+        result.bin_width,
+        result.variance,
+        copy_numbers,
+        result.genome_length,
+        result2.cnv
+    )
 
 class CNVAnalysis(BaseAnalysis):
     """
@@ -3392,7 +3398,9 @@ class CNVAnalysis(BaseAnalysis):
             bamfile (BinaryIO): The BAM file to process.
             timestamp (float): The timestamp indicating when the file was generated.
         """
+        
         state.set_process_state("CNV Analysis", ProcessState.RUNNING)
+        
         try:
 
             # Set up state directory
@@ -3484,46 +3492,29 @@ class CNVAnalysis(BaseAnalysis):
                         shape=(current_size,),
                     )
                 self.data_array_size = current_size
-
+            
             # Update map tracker
             self.map_tracker.update(
                 Counter(
                     {stat.contig: stat.mapped for stat in bamdata.get_index_statistics()}
                 )
             )
-
-
-            #ToDo: We have a probelm here. The two runs of iterate_bam_file here should be independent, but they are not.
-            result = iterate_bam_file(
-                bamfile,
-                _threads=self.threads,
-                mapq_filter=60,
-                copy_numbers=self.update_cnv_dict[self.sampleID],
-                log_level=int(logging.ERROR),
+            
+            r_cnv, r_bin, r_var, self.update_cnv_dict[self.sampleID], genome_length, r2_cnv = (
+                await run.cpu_bound(
+                    iterate_bam,
+                    bamfile,
+                    self.threads,
+                    60,
+                    self.update_cnv_dict[self.sampleID],
+                    int(logging.ERROR),
+                    self.ref_cnv_dict
                 )
-
-            r_cnv = result.cnv
-            r_bin = result.bin_width
-            r_var = result.variance
-            result = None
+            )
             
             self.cnv_dict["bin_width"] = r_bin
             self.cnv_dict["variance"] = r_var
 
-
-            result2 = iterate_bam_file(
-                bamfile,
-                _threads=self.threads,
-                mapq_filter=60,
-                copy_numbers=self.ref_cnv_dict,
-                log_level=int(logging.ERROR),
-                bin_width=self.cnv_dict["bin_width"],
-            )
-            
-            r2_cnv = result2.cnv
-            r2_bin = result2.bin_width
-            r2_var = result2.variance
-            result2 = None
             
             
             # Process breakpoints and update CNV detector
@@ -3531,13 +3522,14 @@ class CNVAnalysis(BaseAnalysis):
             for key in r_cnv.keys():
                 self.local_data_array = np.empty(0, dtype=self.dtype)
                 if key != "chrM" and re.match(r"^chr(\d+|X|Y)$", key):
-                    moving_avg_data1 = moving_average(r_cnv[key])
-                    moving_avg_data2 = moving_average(r2_cnv[key])
-                    moving_avg_data1, moving_avg_data2 = pad_arrays(moving_avg_data1, moving_avg_data2)
+                    moving_avg_data1 = await run.cpu_bound(moving_average, r_cnv[key])
+                    moving_avg_data2 = await run.cpu_bound(moving_average, r2_cnv[key])
+                    moving_avg_data1, moving_avg_data2 = await run.cpu_bound(pad_arrays, moving_avg_data1, moving_avg_data2)
                     self.result3.cnv[key] = moving_avg_data1 - moving_avg_data2
                     
                     if len(r_cnv[key]) > 3 and self.map_tracker[key] > 2000:
-                        paired_changepoints = run_ruptures(
+                        paired_changepoints = await run.cpu_bound(
+                            run_ruptures,
                             r_cnv[key],
                             5,  # penalty_value
                             self.cnv_dict["bin_width"],
@@ -3575,6 +3567,7 @@ class CNVAnalysis(BaseAnalysis):
                                 except Exception as e:
                                     logger.error(f"Error adding breakpoints for {key}: {e}")
                                     raise
+            
             
             self.estimate_XY()
             
@@ -3618,6 +3611,10 @@ class CNVAnalysis(BaseAnalysis):
                         r2_cnv,
                     )
                     np.save(
+                        os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV3.npy"),
+                        self.result3.cnv
+                    )
+                    np.save(
                         os.path.join(self.check_and_create_folder(self.output, self.sampleID), "CNV_dict.npy"),
                         self.cnv_dict,
                     )
@@ -3625,13 +3622,13 @@ class CNVAnalysis(BaseAnalysis):
                 except Exception as e:
                     logger.error(f"Error saving CNV detector state: {e}")
                     raise
-
+                  
         finally:
             # Clean up temporary files but preserve CNV detector
             self._cleanup_state()
             self.running = False
             state.set_process_state("CNV Analysis", ProcessState.WAITING_FOR_DATA)
-
+        
 
     def get_latest_bed_file(self) -> Optional[str]:
         """Get the path to the latest bed file in the output directory."""

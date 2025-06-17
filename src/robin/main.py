@@ -8,7 +8,6 @@ from datetime import datetime
 import asyncio
 from time import sleep
 import queue
-import threading
 from logging.handlers import QueueHandler, QueueListener
 
 from typing import Optional, List
@@ -29,7 +28,7 @@ from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 from .core.state import state, ProcessType, ProcessState
 
 
-DEV_TESTING: bool = False
+DEV_TESTING: bool = True
 
 DEFAULT_CFG: str = "config.ini"
 UNIQUE_ID: str = str(uuid.uuid4())
@@ -185,7 +184,7 @@ async def index() -> None:
             else:
                 nicegui.air.disconnect()
 
-    ui.timer(1, use_on_air)
+    app.timer(1, use_on_air)
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
     await GUI.splash_screen()
 
@@ -474,7 +473,7 @@ class Methnice:
                     logging.info("Sending periodic telemetry update")
                     self.telemetry.send_run_telemetry(self)
 
-                ui.timer(
+                app.timer(
                     120.0, send_telemetry_update, active=True
                 )  # Send update every minute
                 logging.info("Telemetry update timer initialized (1-minute interval)")
@@ -486,7 +485,10 @@ class Methnice:
     async def start_analysis(self) -> None:
         """Start the analysis process."""
         try:
-            await self.robin.start_background()
+            #await self.robin.start_background()
+            ui.timer(
+                1, lambda:self.robin.start_background(), once=True
+            )
         except Exception as e:
             logging.error(f"Error starting analysis: {str(e)}")
             # Consider how to handle this error (e.g., show an error message to the user)
@@ -861,7 +863,7 @@ def run_class(
         if DEV_TESTING:
             loop = asyncio.get_running_loop()
             loop.set_debug(True)
-            loop.slow_callback_duration = 0.05
+            loop.slow_callback_duration = 2
 
         await global_methnice.start_analysis()
 

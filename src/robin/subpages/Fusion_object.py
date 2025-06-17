@@ -56,7 +56,7 @@ import pandas as pd
 import numpy as np
 import click
 from typing import Optional, Tuple
-from nicegui import ui, run, app
+from nicegui import ui, run, app, background_tasks
 from robin import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
@@ -2410,16 +2410,21 @@ class FusionObject(BaseAnalysis):
                         logger.info(f"Processing BAM file for fusions: {bamfile}")
                         # This function seems efficient but should it not be run without cpu_bound?
                         #fusion_candidates, fusion_candidates_all = await run.cpu_bound(
-                        fusion_candidates, fusion_candidates_all =     fusion_work(
-                            self.threads,
-                            bamfile,
-                            self.gene_bed,
-                            self.all_gene_bed,
-                            tempreadfile.name,
-                            tempbamfile.name,
-                            tempmappings.name,
-                            tempallmappings.name,
-                        )
+                        async def fusion_background_work(bamfile):
+                            fusion_candidates, fusion_candidates_all = await run.cpu_bound(
+                                fusion_work,
+                                self.threads,
+                                bamfile,
+                                self.gene_bed,
+                                self.all_gene_bed,
+                                tempreadfile.name,
+                                tempbamfile.name,
+                                tempmappings.name,
+                                tempallmappings.name,
+                            )
+                            return fusion_candidates, fusion_candidates_all
+                        
+                        fusion_candidates, fusion_candidates_all = await background_tasks.create(fusion_background_work(bamfile))
 
                         # Process genome-wide structural variants
                         logger.info(
@@ -2429,18 +2434,25 @@ class FusionObject(BaseAnalysis):
                             self.check_and_create_folder(self.output, self.sampleID),
                             "sv_master.csv",
                         )
-                        #sv_reads = await run.cpu_bound(
-                        sv_reads = process_bam_file_svs(
-                            bamfile,
-                            sv_csv_file,
-                        )
+                        async def sv_background_work(bamfile, sv_csv_file):
+                            sv_reads = await run.cpu_bound(
+                                process_bam_file_svs,
+                                bamfile,
+                                sv_csv_file,
+                            )
+                            return sv_reads
+                        sv_reads = await background_tasks.create(sv_background_work(bamfile, sv_csv_file))
 
-                        #bed_lines = await run.cpu_bound(
-                        bed_lines = build_breakpoint_graph(
-                            sv_reads,
-                            max_proximity=50000,
-                            group_by_sv=True,
-                        )
+                        async def bed_background_work(sv_reads):
+                            bed_lines = await run.cpu_bound(
+                                build_breakpoint_graph,
+                                sv_reads,
+                                max_proximity=50000,
+                                group_by_sv=True,
+                            )
+                            return bed_lines
+                        
+                        bed_lines = await background_tasks.create(bed_background_work(sv_reads))
 
                         if len(bed_lines) > 0:
                             # Convert bed lines to DataFrame for visualization

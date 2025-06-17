@@ -49,7 +49,7 @@ import click
 import time
 import subprocess
 from pathlib import Path
-from nicegui import ui, run, app
+from nicegui import ui, run, app, background_tasks
 from io import StringIO
 import pysam
 import tempfile
@@ -2214,7 +2214,40 @@ class TargetCoverage(BaseAnalysis):
         # run_bedtools(bamfile, self.bedfile, tempbamfile.name)
         #await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
         # )
-        run_bedtools(bamfile, self.bedfile, tempbamfile.name)
+        async def run_bedtools(bamfile, bedfile, tempbamfile):
+            """
+            This function extracts the target sites from the bamfile.
+
+            Parameters
+            ----------
+            bamfile : str
+                Path to the input BAM file
+            bedfile : str
+                Path to the BED file defining regions
+            tempbamfile : str
+                Path where the output BAM file should be written
+            """
+            try:
+                # Use subprocess.run with shell=True for commands with redirection
+                # Or open the output file and redirect stdout there
+                with open(tempbamfile, "w") as outfile:
+                    result = subprocess.run(
+                        ["bedtools", "intersect", "-a", bamfile, "-b", bedfile],
+                        stdout=outfile,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        check=False,
+                    )
+
+                if result.returncode != 0:
+                    logger.error(f"Error running bedtools: {result.stderr}")
+                    return
+
+                pysam.index(tempbamfile)
+            except Exception as e:
+                logger.error(f"Error in run_bedtools: {e}")
+                
+        await background_tasks.create(run_bedtools(bamfile, self.bedfile, tempbamfile.name))
 
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if self.sampleID not in self.targetbamfile.keys():
@@ -2280,7 +2313,7 @@ class TargetCoverage(BaseAnalysis):
             [self.coverage_over_time[self.sampleID], [(currenttime, coverage)]]
         )
 
-        np.save(
+        await run.io_bound(np.save,
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
                 "coverage_time_chart.npy",
@@ -2295,9 +2328,7 @@ class TargetCoverage(BaseAnalysis):
             ),
             index=False,
         )
-        # await asyncio.sleep(0.01)
-
-        # self.update_coverage_plot_targets(self.cov_df_main, self.bedcov_df_main)
+        
         self.bedcov_df_main[self.sampleID].to_csv(
             os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
@@ -2305,9 +2336,7 @@ class TargetCoverage(BaseAnalysis):
             ),
             index=False,
         )
-        # await asyncio.sleep(0.01)
-        # self.update_coverage_time_plot(self.cov_df_main, timestamp)
-        # await asyncio.sleep(0.01)
+        
         self.target_coverage_df = self.bedcov_df_main[self.sampleID]
         self.target_coverage_df["length"] = (
             self.target_coverage_df["endpos"] - self.target_coverage_df["startpos"] + 1
@@ -2323,17 +2352,7 @@ class TargetCoverage(BaseAnalysis):
             ),
             index=False,
         )
-        # if self.summary:
-        #    with self.summary:
-        #        self.summary.clear()
-        #        with ui.row():
-        #            ui.label("Coverage Depths - ")
-        #            ui.label(
-        #                f"Global Estimated Coverage: {(self.cov_df_main['covbases'].sum()/self.cov_df_main['endpos'].sum()):.2f}x"
-        #            )
-        #            ui.label(
-        #                f"Targets Estimated Coverage: {(self.bedcov_df_main['bases'].sum()/self.bedcov_df_main['length'].sum()):.2f}x"
-        #            )
+        
         run_list = self.target_coverage_df[
             self.target_coverage_df["coverage"].ge(self.callthreshold)
         ]
@@ -2373,10 +2392,6 @@ class TargetCoverage(BaseAnalysis):
                     )
                     self.pending_snp_jobs += 1  # Increment counter when adding a job
 
-        # ToDo: Reinstate this line later.
-        # self.update_target_coverage_table()
-
-        # await asyncio.sleep(0.5)
         self.running = False
 
     async def rerun_snp_analysis(self):

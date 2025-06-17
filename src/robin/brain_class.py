@@ -80,7 +80,7 @@ import os
 import psutil
 import tempfile
 from alive_progress import alive_bar
-from nicegui import ui, app, run
+from nicegui import ui, app, run,background_tasks
 import concurrent.futures
 import subprocess
 import time
@@ -401,145 +401,151 @@ class BrainMeth:
         """
         logging.info(f"Starting background tasks for UUID: {self.mainuuid}")
 
-        # Ensure storage directory exists
-        storage_dir = os.path.join(os.path.expanduser("~"), ".nicegui")
-        os.makedirs(storage_dir, exist_ok=True)
+        async def start_background_tasks():
+            # Ensure storage directory exists
+            storage_dir = os.path.join(os.path.expanduser("~"), ".nicegui")
+            os.makedirs(storage_dir, exist_ok=True)
 
-        # Initialize storage if it doesn't exist
-        if not hasattr(app.storage, "general"):
-            app.storage.general = {}
+            # Initialize storage if it doesn't exist
+            if not hasattr(app.storage, "general"):
+                app.storage.general = {}
 
-        if self.mainuuid not in app.storage.general:
-            app.storage.general[self.mainuuid] = {}
+            if self.mainuuid not in app.storage.general:
+                app.storage.general[self.mainuuid] = {}
 
-        app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
-        app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
-        app.storage.general[self.mainuuid]["bam_count"]["total_files"] = 0
-        app.storage.general[self.mainuuid]["samples"] = {}
-        app.storage.general[self.mainuuid]["sample_list"] = []
+            app.storage.general[self.mainuuid]["bam_count"] = Counter(counter=0)
+            app.storage.general[self.mainuuid]["bam_count"]["file"] = {}
+            app.storage.general[self.mainuuid]["bam_count"]["total_files"] = 0
+            app.storage.general[self.mainuuid]["samples"] = {}
+            app.storage.general[self.mainuuid]["sample_list"] = []
 
-        # Initialize queues
-        logging.info("Initializing processing queues")
-        self.bam_tracking = Queue()
-        self.bamforcns = Queue()
-        self.bamforsturgeon = Queue()
-        self.bamfornanodx = Queue()
-        self.bamforpannanodx = Queue()
-        self.bamforcnv = Queue()
-        self.bamfortargetcoverage = Queue()
-        self.bamformgmt = Queue()
-        self.bamforfusions = Queue()
-        self.bamforbigbadmerge = Queue()
-        self.mergecounter = 0
+            # Initialize queues
+            logging.info("Initializing processing queues")
+            self.bam_tracking = Queue()
+            self.bamforcns = Queue()
+            self.bamforsturgeon = Queue()
+            self.bamfornanodx = Queue()
+            self.bamforpannanodx = Queue()
+            self.bamforcnv = Queue()
+            self.bamfortargetcoverage = Queue()
+            self.bamformgmt = Queue()
+            self.bamforfusions = Queue()
+            self.bamforbigbadmerge = Queue()
+            self.mergecounter = 0
 
-        if self.watchfolder:
-            logging.info(f"Adding watchfolder: {self.watchfolder}")
-            await self.add_watchfolder(self.watchfolder)
+            if self.watchfolder:
+                logging.info(f"Adding watchfolder: {self.watchfolder}")
+                await self.add_watchfolder(self.watchfolder)
 
-        common_args = {
-            "threads": self.threads,
-            "output": self.output,
-            "progress": True,
-            "browse": self.browse,
-            "uuid": self.mainuuid,
-            "force_sampleid": self.force_sampleid,
-        }
+            common_args = {
+                "threads": self.threads,
+                "output": self.output,
+                "progress": True,
+                "browse": self.browse,
+                "uuid": self.mainuuid,
+                "force_sampleid": self.force_sampleid,
+            }
 
-        # Initialize analysis objects with batch processing
-        if "sturgeon" not in self.exclude:
-            logging.info("Initializing Sturgeon analysis with batch processing")
-            self.Sturgeon = Sturgeon_object(
-                analysis_name="STURGEON",
-                batch=True,
-                bamqueue=self.bamforsturgeon,
-                **common_args,
-            )
-            self.Sturgeon.process_data()
+            # Initialize analysis objects with batch processing
+            if "sturgeon" not in self.exclude:
+                logging.info("Initializing Sturgeon analysis with batch processing")
+                self.Sturgeon = Sturgeon_object(
+                    analysis_name="STURGEON",
+                    batch=True,
+                    bamqueue=self.bamforsturgeon,
+                    **common_args,
+                )
+                
+                await self.Sturgeon.process_data()
 
-        if "nanodx" not in self.exclude:
-            logging.info("Initializing NanoDX analysis with batch processing")
-            self.NanoDX = NanoDX_object(
-                analysis_name="NANODX",
-                batch=True,
-                bamqueue=self.bamfornanodx,
-                **common_args,
-            )
-            self.NanoDX.process_data()
+            if "nanodx" not in self.exclude:
+                logging.info("Initializing NanoDX analysis with batch processing")
+                self.NanoDX = NanoDX_object(
+                    analysis_name="NANODX",
+                    batch=True,
+                    bamqueue=self.bamfornanodx,
+                    **common_args,
+                )
+                await self.NanoDX.process_data()
 
-        if "pannanodx" not in self.exclude:
-            logging.info("Initializing PanNanoDX analysis with batch processing")
-            self.panNanoDX = NanoDX_object(
-                analysis_name="PANNANODX",
-                batch=True,
-                bamqueue=self.bamforpannanodx,
-                model="pancan_devel_v5i_NN.pkl",
-                **common_args,
-            )
-            self.panNanoDX.process_data()
+            if "pannanodx" not in self.exclude:
+                logging.info("Initializing PanNanoDX analysis with batch processing")
+                self.panNanoDX = NanoDX_object(
+                    analysis_name="PANNANODX",
+                    batch=True,
+                    bamqueue=self.bamforpannanodx,
+                    model="pancan_devel_v5i_NN.pkl",
+                    **common_args,
+                )
+                await self.panNanoDX.process_data()
 
-        if "forest" not in self.exclude:
-            logging.info("Initializing RandomForest analysis with batch processing")
-            self.RandomForest = RandomForest_object(
-                analysis_name="FOREST",
-                batch=True,
-                showerrors=self.showerrors,
-                bamqueue=self.bamforcns,
-                **common_args,
-            )
-            self.RandomForest.process_data()
+            if "forest" not in self.exclude:
+                logging.info("Initializing RandomForest analysis with batch processing")
+                self.RandomForest = RandomForest_object(
+                    analysis_name="FOREST",
+                    batch=True,
+                    showerrors=self.showerrors,
+                    bamqueue=self.bamforcns,
+                    **common_args,
+                )
+                await self.RandomForest.process_data()
+            
+            if "cnv" not in self.exclude:
+                logging.info("Initializing CNV analysis")
+                self.CNV = CNVAnalysis(
+                    analysis_name="CNV",
+                    bamqueue=self.bamforcnv,
+                    target_panel=self.target_panel,
+                    reference_file=self.reference,
+                    bed_file=self.bed_file,
+                    readfish_toml=self.readfish_toml,  # ToDo: This assumes a single sample per CNV analysis.
+                    # NewBed=self.NewBed, #ToDo: This assumes a single sample per CNV analysis.
+                    master_bed_tree=self.master_bed_tree,
+                    **common_args,
+                )
+                await self.CNV.process_data()
 
-        if "cnv" not in self.exclude:
-            logging.info("Initializing CNV analysis")
-            self.CNV = CNVAnalysis(
-                analysis_name="CNV",
-                bamqueue=self.bamforcnv,
-                target_panel=self.target_panel,
-                reference_file=self.reference,
-                bed_file=self.bed_file,
-                readfish_toml=self.readfish_toml,  # ToDo: This assumes a single sample per CNV analysis.
-                # NewBed=self.NewBed, #ToDo: This assumes a single sample per CNV analysis.
-                master_bed_tree=self.master_bed_tree,
-                **common_args,
-            )
-            self.CNV.process_data()
+            if "coverage" not in self.exclude:
+                logging.info("Initializing Coverage analysis")
+                self.Target_Coverage = TargetCoverage(
+                    analysis_name="COVERAGE",
+                    showerrors=self.showerrors,
+                    bamqueue=self.bamfortargetcoverage,
+                    target_panel=self.target_panel,
+                    reference=self.reference,
+                    enable_snp_calling=self.enable_snp_calling
+                    and self.reference is not None,
+                    **common_args,
+                )
+                await self.Target_Coverage.process_data()
 
-        if "coverage" not in self.exclude:
-            logging.info("Initializing Coverage analysis")
-            self.Target_Coverage = TargetCoverage(
-                analysis_name="COVERAGE",
-                showerrors=self.showerrors,
-                bamqueue=self.bamfortargetcoverage,
-                target_panel=self.target_panel,
-                reference=self.reference,
-                enable_snp_calling=self.enable_snp_calling
-                and self.reference is not None,
-                **common_args,
-            )
-            self.Target_Coverage.process_data()
+            if "mgmt" not in self.exclude:
+                logging.info("Initializing MGMT analysis")
+                self.MGMT_panel = MGMT_Object(
+                    analysis_name="MGMT",
+                    bamqueue=self.bamformgmt,
+                    **common_args,
+                )
+                await self.MGMT_panel.process_data()
 
-        if "mgmt" not in self.exclude:
-            logging.info("Initializing MGMT analysis")
-            self.MGMT_panel = MGMT_Object(
-                analysis_name="MGMT",
-                bamqueue=self.bamformgmt,
-                **common_args,
-            )
-            self.MGMT_panel.process_data()
-
-        if "fusion" not in self.exclude:
-            logging.info("Initializing Fusion analysis")
-            self.Fusion_panel = FusionObject(
-                analysis_name="FUSION",
-                bamqueue=self.bamforfusions,
-                target_panel=self.target_panel,
-                reference_file=self.reference,
-                bed_file=self.bed_file,
-                readfish_toml=self.readfish_toml,  # ToDo: This assumes a single sample per CNV analysis.
-                # NewBed=self.NewBed,
-                master_bed_tree=self.master_bed_tree,
-                **common_args,
-            )
-            self.Fusion_panel.process_data()
+            if "fusion" not in self.exclude:
+                logging.info("Initializing Fusion analysis")
+                self.Fusion_panel = FusionObject(
+                    analysis_name="FUSION",
+                    bamqueue=self.bamforfusions,
+                    target_panel=self.target_panel,
+                    reference_file=self.reference,
+                    bed_file=self.bed_file,
+                    readfish_toml=self.readfish_toml,  # ToDo: This assumes a single sample per CNV analysis.
+                    # NewBed=self.NewBed,
+                    master_bed_tree=self.master_bed_tree,
+                    **common_args,
+                )
+                await self.Fusion_panel.process_data()
+                
+        background_tasks.create(start_background_tasks())
+            
+        
 
     async def render_ui(self, sample_id=None):
         """
@@ -1257,59 +1263,27 @@ class BrainMeth:
                                                 ui.icon("description").classes(
                                                     "text-blue-600"
                                                 )
-                                                total_files = ui.label().classes(
+                                                ui.label().bind_text_from(
+                                                    app.storage.general[self.mainuuid]["bam_count"],
+                                                    "total_files",
+                                                    backward=lambda n: f"{n} total" if n else 0,
+                                                ).classes(
                                                     "text-sm text-gray-600"
                                                 )
-
-                                                total_files = ui.label().classes(
-                                                    "font-medium text-gray-900"
-                                                )
-
-                                                def update_total_files():
-                                                    total = app.storage.general[
-                                                        self.mainuuid
-                                                    ]["bam_count"]["total_files"]
-                                                    total_files.text = (
-                                                        f"{total:,}"
-                                                        if total > 0
-                                                        else "--"
-                                                    )
-
-                                                app.storage.general[self.mainuuid][
-                                                    "bam_count"
-                                                ].on_change(update_total_files)
-                                                update_total_files()
-
+                                                
                                             with ui.row().classes("items-center gap-1"):
                                                 ui.icon("check_circle").classes(
                                                     "text-green-600"
                                                 )
-                                                pass_count = ui.label().classes(
+                                                ui.label().bind_text_from(
+                                                    app.storage.general[self.mainuuid]["samples"][self.sampleID][
+                                                        "file_counters"
+                                                    ],
+                                                    "bam_passed",
+                                                    backward=lambda n: f"{n} passed" if n else 0,
+                                                ).classes(
                                                     "text-sm text-gray-600"
                                                 )
-
-                                                def update_pass_count():
-                                                    count = app.storage.general[
-                                                        self.mainuuid
-                                                    ]["samples"][self.sampleID][
-                                                        "file_counters"
-                                                    ][
-                                                        "bam_passed"
-                                                    ]
-                                                    pass_count.text = (
-                                                        f"{count:,} passed"
-                                                        if count is not None
-                                                        else "--"
-                                                    )
-
-                                                app.storage.general[self.mainuuid][
-                                                    "samples"
-                                                ][self.sampleID][
-                                                    "file_counters"
-                                                ].on_change(
-                                                    update_pass_count
-                                                )
-                                                update_pass_count()
 
                                             with ui.row().classes("items-center gap-1"):
                                                 ui.icon("error").classes("text-red-600")
@@ -2611,17 +2585,45 @@ class BrainMeth:
         :return: None
         """
         logging.info("Starting background BAM processing")
+        
+        # Set up a timer to check application state every 10 seconds
+        # This timer monitors for shutdown events and manages process states
         self.app_state_timer = app.timer(10, self.check_app_state)
+
+        # Set up a timer to process BAM files every 10 seconds
+        # This handles individual BAM file processing in a serial manner
         self.process_bams_tracker = app.timer(10, self.process_bams)
+
+        # Register the serial BAM analysis process in the state management system
+        # This allows the UI to track and display its status
         state.start_process("Serial Bam Analysis", ProcessType.BACKGROUND)
+
+        # Set the initial state of serial BAM analysis to waiting for data
+        # This indicates the process is ready but not actively processing yet
         state.set_process_state("Serial Bam Analysis", ProcessState.WAITING_FOR_DATA)
+
+        # Set up a timer to handle merging of BAM files every 10 seconds
+        # This manages the merging of multiple BAM files into consolidated files
         self.process_bigbadmerge_tracker = app.timer(10, self.process_bigbadmerge)
+
+        # Register the merge BAM analysis process in the state management system
+        # This allows the UI to track and display its status
         state.start_process("Merge Bam Analysis", ProcessType.BACKGROUND)
+
+        # Set the initial state of merge BAM analysis to waiting for data
+        # This indicates the process is ready but not actively merging yet
         state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
+
+        # Define a list of external processes to monitor for memory usage
+        # These are important system processes that run alongside the BAM processing
         otherprocs = ["dorado", "minknow", "docker"]
+
+        # Set up a timer to check and log memory usage every 15 seconds
+        # This monitors the memory consumption of both the application and external processes
         self.check_and_log_memory = app.timer(
-            5, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs)
+            15, lambda: self.get_memory_usage(process_names_to_monitor=otherprocs)
         )
+        
 
     async def check_app_state(self):
         if state.shutdown_event:
@@ -3688,6 +3690,7 @@ class BrainMeth:
                 state.stop_process("Serial Bam Analysis")
 
     async def check_existing_bams(self, sequencing_summary=None):
+        #ToDo: THis needs to be a background process.
         """
         Check and process existing BAM files based on a sequencing summary.
 
@@ -3698,7 +3701,8 @@ class BrainMeth:
 
         files_and_timestamps = []
 
-        files_and_timestamps = sort_bams(
+        files_and_timestamps = await run.cpu_bound (
+            sort_bams,
             files_and_timestamps,
             self.watchfolder,
             file_endings,

@@ -40,11 +40,9 @@ import asyncio
 import logging
 import subprocess
 import importlib.metadata
-import time
-import plotly.graph_objects as go
 from datetime import datetime
 
-from nicegui import ui, app, events, core
+from nicegui import ui, app, events, core, run
 import nicegui.air
 
 from pathlib import Path
@@ -58,6 +56,18 @@ import psutil
 import platform
 
 
+def get_version_from_github():
+    response = requests.get(
+        "https://raw.githubusercontent.com/LooseLab/ROBIN/main/src/robin/__about__.py"
+    )
+    response.raise_for_status()
+    remote_version_str = None
+    for line in response.text.split("\n"):
+        if line.startswith("__version__"):
+            remote_version_str = line.split("=")[1].strip().strip('"').strip("'")
+            break
+    return remote_version_str
+
 async def check_version():
     """
     Check the current version against the remote version on GitHub.
@@ -68,18 +78,7 @@ async def check_version():
         return
 
     try:
-        # Get the remote version from GitHub
-        response = requests.get(
-            "https://raw.githubusercontent.com/LooseLab/ROBIN/main/src/robin/__about__.py"
-        )
-        response.raise_for_status()
-
-        # Extract version from the response text
-        remote_version_str = None
-        for line in response.text.split("\n"):
-            if line.startswith("__version__"):
-                remote_version_str = line.split("=")[1].strip().strip('"').strip("'")
-                break
+        remote_version_str = await run.io_bound(get_version_from_github)
 
         if not remote_version_str:
             with ui.dialog() as dialog, ui.card():
@@ -606,9 +605,10 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                 ui.button("I agree", on_click=acknowledge).props("color=primary")
             disclaimer_dialog.open()
 
-    ui.timer(0.1, show_disclaimer, once=True)
-
+    ui.timer(0.5, show_disclaimer, once=True)
+    
     # Add version check timer
+    
     ui.timer(1.0, check_version, once=True)
 
     # Create a persistent dialog for quitting the app
