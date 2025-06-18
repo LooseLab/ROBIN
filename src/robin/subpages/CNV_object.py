@@ -578,11 +578,11 @@ class CNVVis(BaseVis):
                 # Create toggle for y-axis scale
                 ui.toggle(
                     options={"linear": "Linear", "log": "Log"},
-                    value="log",  # Default to log scale
+                    value="linear",  # Default to log scale
                     on_change=toggle_y_axis_scale,
                 ).classes("mt-1")
 
-        self.scatter_echart = self.generate_chart(title="CNV Scatter Plot")
+        self.scatter_echart = self.generate_chart(title="CNV Scatter Plot", initmin=0, initmax=8)
         self.difference_scatter_echart = self.generate_chart(
             title="Difference Plot", initmin=-2, initmax=2
         )
@@ -1278,6 +1278,8 @@ class CNVVis(BaseVis):
                             "filterMode": "none",
                             "width": 20,
                             "right": 50,
+                            #"start":0,
+                            #"end":8,
                             "startValue": y_min,
                             "endValue": y_max,  # Will be set dynamically
                             "minValueSpan": (
