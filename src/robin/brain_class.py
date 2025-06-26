@@ -1062,8 +1062,8 @@ class BrainMeth:
         """Display the main information panel with analysis results."""
         with ui.grid(columns=2) as grid:
             for _ in range(3):
-                ui.skeleton('text', width='3rem')
-                ui.skeleton('text', width='1rem')
+                ui.skeleton("text", width="3rem")
+                ui.skeleton("text", width="1rem")
         await ui.context.client.connected()
         grid.clear()
         try:

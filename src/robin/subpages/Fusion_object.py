@@ -47,7 +47,6 @@ import os
 import sys
 import subprocess
 import gff3_parser
-import tempfile
 import random
 import pysam
 import logging
@@ -68,10 +67,7 @@ from robin.utilities.decompress import decompress_gzip_file
 from robin.utilities.bed_file import MasterBedTree
 from collections import Counter, defaultdict
 from robin.core.state import state, ProcessState
-from intervaltree import IntervalTree
-from datetime import datetime, timedelta
-import time  # Add this import at the top of the file
-from collections import deque
+from datetime import datetime
 from itertools import combinations
 
 matplotlib.use("agg")
@@ -130,6 +126,7 @@ def get_aligned_read_coords(aln):
     re = aln.query_length - te
     return rs, re
 
+
 def extract_split_read_alignments(bam_path):
     # 1) find all split‐reads
     reads_with_supp = set()
@@ -154,9 +151,9 @@ def extract_split_read_alignments(bam_path):
             # compute left‐end clipping
             left_soft, left_hard = 0, 0
             for op, l in ct:
-                if op == 4:      # soft clip
+                if op == 4:  # soft clip
                     left_soft += l
-                elif op == 5:    # hard clip
+                elif op == 5:  # hard clip
                     left_hard += l
                 else:
                     break
@@ -172,37 +169,40 @@ def extract_split_read_alignments(bam_path):
                     break
 
             # compute read‐coords from CIGAR
-            #rs, re = get_aligned_read_coords(aln)
-            #read_start, read_end = sorted((rs, re))
-            #read_span = read_end - read_start
+            # rs, re = get_aligned_read_coords(aln)
+            # read_start, read_end = sorted((rs, re))
+            # read_span = read_end - read_start
             read_start = aln.query_alignment_start
             read_end = aln.query_alignment_end
             read_span = read_end - read_start
 
             # ref‐coords
             ref_start = aln.reference_start
-            ref_end   = aln.reference_end
-            ref_span  = ref_end - ref_start
+            ref_end = aln.reference_end
+            ref_span = ref_end - ref_start
 
-            rows.append({
-                "QNAME":        aln.query_name,
-                "TYPE":         "SUPPLEMENTARY" if aln.is_supplementary else "PRIMARY",
-                "RNAME":        bam.get_reference_name(aln.reference_id),
-                "STRAND":       "-" if aln.is_reverse else "+",
-                "REF_START":    ref_start,
-                "REF_END":      ref_end,
-                "REF_SPAN":     ref_span,
-                "READ_START":   read_start+left_hard,
-                "READ_END":     read_end+left_hard,
-                "READ_SPAN":    read_span,
-                "LEFT_SOFT":    left_soft,
-                "LEFT_HARD":    left_hard,
-                "RIGHT_SOFT":   right_soft,
-                "RIGHT_HARD":   right_hard,
-                "MQ":           aln.mapping_quality,
-            })
+            rows.append(
+                {
+                    "QNAME": aln.query_name,
+                    "TYPE": "SUPPLEMENTARY" if aln.is_supplementary else "PRIMARY",
+                    "RNAME": bam.get_reference_name(aln.reference_id),
+                    "STRAND": "-" if aln.is_reverse else "+",
+                    "REF_START": ref_start,
+                    "REF_END": ref_end,
+                    "REF_SPAN": ref_span,
+                    "READ_START": read_start + left_hard,
+                    "READ_END": read_end + left_hard,
+                    "READ_SPAN": read_span,
+                    "LEFT_SOFT": left_soft,
+                    "LEFT_HARD": left_hard,
+                    "RIGHT_SOFT": right_soft,
+                    "RIGHT_HARD": right_hard,
+                    "MQ": aln.mapping_quality,
+                }
+            )
 
     return pd.DataFrame(rows)
+
 
 def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -218,46 +218,63 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
     genomic_gap is set to –1 if the two pieces land on different chromosomes,
     else head2–tail1.
     """
+
     def natural_key(s: str):
         # split digits vs letters, so e.g. "chr2" < "chr10"
-        return [int(tok) if tok.isdigit() else tok.lower()
-                for tok in re.split(r'(\d+)', s)]
+        return [
+            int(tok) if tok.isdigit() else tok.lower() for tok in re.split(r"(\d+)", s)
+        ]
 
     records = []
     # Fix the FutureWarning by changing observed=False to observed=True
-    for qname, grp in df.groupby('QNAME', sort=False, observed=True):
-        seq = grp.sort_values('piece_order')
+    for qname, grp in df.groupby("QNAME", sort=False, observed=True):
+        seq = grp.sort_values("piece_order")
         for (_, p1), (_, p2) in zip(seq.iterrows(), seq.iloc[1:].iterrows()):
             # compute tail/head
             tail1 = p1.REF_END
             head2 = p2.REF_START
 
             # your original classification logic:
-            if (p1.RNAME == p2.RNAME):
-                if (p1.STRAND == p2.STRAND) and (p1.STRAND == "+") and (p1.REF_START < p2.REF_START):
+            if p1.RNAME == p2.RNAME:
+                if (
+                    (p1.STRAND == p2.STRAND)
+                    and (p1.STRAND == "+")
+                    and (p1.REF_START < p2.REF_START)
+                ):
                     ev = "deletion"
-                elif (p1.STRAND == p2.STRAND) and (p1.STRAND == "-") and (p1.REF_START < p2.REF_START):
+                elif (
+                    (p1.STRAND == p2.STRAND)
+                    and (p1.STRAND == "-")
+                    and (p1.REF_START < p2.REF_START)
+                ):
                     ev = "deletion"
-                elif (p1.STRAND == p2.STRAND) and (p1.STRAND == "+") and (p1.REF_START > p2.REF_START):
+                elif (
+                    (p1.STRAND == p2.STRAND)
+                    and (p1.STRAND == "+")
+                    and (p1.REF_START > p2.REF_START)
+                ):
                     ev = "intra_translocation"
-                elif (p1.STRAND == p2.STRAND) and (p1.STRAND == "-") and (p1.REF_START > p2.REF_START):
+                elif (
+                    (p1.STRAND == p2.STRAND)
+                    and (p1.STRAND == "-")
+                    and (p1.REF_START > p2.REF_START)
+                ):
                     ev = "intra_translocation"
-                elif (p1.STRAND != p2.STRAND):
+                elif p1.STRAND != p2.STRAND:
                     ev = "inversion"
                 else:
                     ev = "other"
-            elif (p1.RNAME != p2.RNAME):
+            elif p1.RNAME != p2.RNAME:
                 ev = "translocation"
             else:
                 ev = "unknown"
-            
+
             # decide ordering by (chr natural order, 5' mapping)
             five1 = p1.REF_START if p1.STRAND == "+" else p1.REF_END
             five2 = p2.REF_START if p2.STRAND == "+" else p2.REF_END
 
-            first_is_p1 = (
-                (natural_key(p1.RNAME) < natural_key(p2.RNAME)) or
-                (natural_key(p1.RNAME) == natural_key(p2.RNAME) and five1 <= five2)
+            first_is_p1 = (natural_key(p1.RNAME) < natural_key(p2.RNAME)) or (
+                natural_key(p1.RNAME) == natural_key(p2.RNAME) and five1 <= five2
             )
 
             if first_is_p1:
@@ -270,80 +287,79 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
             # genomic_gap per spec
             genomic_gap = -1 if r1 != r2 else (c2 - c1)
 
-            records.append({
-                "QNAME":       qname,
-                "RNAME.1":     r1,
-                "RNAME.2":     r2,
-                "coord_1":     c1,
-                "coord_2":     c2,
-                "genomic_gap": genomic_gap,
-                "event":       ev
-            })
+            records.append(
+                {
+                    "QNAME": qname,
+                    "RNAME.1": r1,
+                    "RNAME.2": r2,
+                    "coord_1": c1,
+                    "coord_2": c2,
+                    "genomic_gap": genomic_gap,
+                    "event": ev,
+                }
+            )
 
     return pd.DataFrame.from_records(records)
 
+
 def annotate_df(df):
     # Apply filters first to reduce memory usage
-    mq_mask = df['MQ'].values >= 55
-    chr_mask = df['RNAME'].values != 'chrM'
+    mq_mask = df["MQ"].values >= 55
+    chr_mask = df["RNAME"].values != "chrM"
     combined_mask = mq_mask & chr_mask
     df = df[combined_mask].reset_index(drop=True)
-    
+
     # Now optimize dtypes using astype() with dictionary
     dtype_optimizations = {
         #'BAM_FILE': 'category',
-        'QNAME': 'category', 
-        'TYPE': 'category',
-        'RNAME': 'category',
-        'REF_START': np.int32,
-        'REF_END': np.int32,
-        'REF_SPAN': np.int32,
-        'READ_START': np.int32,
-        'READ_END': np.int32,
-        'READ_SPAN': np.int32,
-        'MQ': np.int8,
-        'STRAND': 'category'
+        "QNAME": "category",
+        "TYPE": "category",
+        "RNAME": "category",
+        "REF_START": np.int32,
+        "REF_END": np.int32,
+        "REF_SPAN": np.int32,
+        "READ_START": np.int32,
+        "READ_END": np.int32,
+        "READ_SPAN": np.int32,
+        "MQ": np.int8,
+        "STRAND": "category",
     }
-    
+
     # Apply dtypes using astype() with dictionary
-    df = df.astype(dtype_optimizations, errors='ignore')
-    
+    df = df.astype(dtype_optimizations, errors="ignore")
+
     # Sort efficiently
-    df = df.sort_values(['QNAME', 'TYPE', 'REF_START'], ignore_index=True)
+    df = df.sort_values(["QNAME", "TYPE", "REF_START"], ignore_index=True)
 
-    primary_qnames = df.loc[df['TYPE'] == 'PRIMARY', 'QNAME'].unique()
-    df = df[df['QNAME'].isin(primary_qnames)]
-    df = df[df['QNAME'].duplicated(keep=False)].reset_index(drop=True)
+    primary_qnames = df.loc[df["TYPE"] == "PRIMARY", "QNAME"].unique()
+    df = df[df["QNAME"].isin(primary_qnames)]
+    df = df[df["QNAME"].duplicated(keep=False)].reset_index(drop=True)
     # Fix the FutureWarning by adding observed=True to this groupby operation
-    df['piece_order'] = (
-            df
-            .groupby('QNAME', observed=True)['READ_START']
-            .transform(lambda x: x.rank(method='first').astype(int))
-        )
+    df["piece_order"] = df.groupby("QNAME", observed=True)["READ_START"].transform(
+        lambda x: x.rank(method="first").astype(int)
+    )
     return df
-
 
 
 def get_summary(links_df, min_support=2):
     summary = (
-        links_df
-        .groupby(['RNAME.1','coord_1','RNAME.2','coord_2'], observed=True)
+        links_df.groupby(["RNAME.1", "coord_1", "RNAME.2", "coord_2"], observed=True)
         .agg(
-            support_count      = ('QNAME',    'nunique'),
-            supporting_reads   = ('QNAME',    lambda s: list(s.unique())),
-            from_med           = ('coord_1',  'median'),
-            to_med             = ('coord_2',  'median'),
-            median_genomic_gap = ('genomic_gap', 'median'),
-            event_counts       = ('event',    lambda s: s.value_counts().to_dict()),
-            predominant_event  = ('event',    lambda s: s.mode().iloc[0])
+            support_count=("QNAME", "nunique"),
+            supporting_reads=("QNAME", lambda s: list(s.unique())),
+            from_med=("coord_1", "median"),
+            to_med=("coord_2", "median"),
+            median_genomic_gap=("genomic_gap", "median"),
+            event_counts=("event", lambda s: s.value_counts().to_dict()),
+            predominant_event=("event", lambda s: s.mode().iloc[0]),
         )
         .reset_index()
     )
 
     # then e.g. pick deletions with enough support
     return summary[
-        #(summary['predominant_event'] == 'deletion') &
-        (summary['support_count']   >= min_support)
+        # (summary['predominant_event'] == 'deletion') &
+        (summary["support_count"] >= min_support)
     ].copy()
 
 
@@ -362,169 +378,6 @@ def has_supplementary(bam_file_path):
             if read.is_supplementary:
                 return True
     return False
-
-
-def process_bam_file_svs(bam_path: str, sv_store: str) -> pd.DataFrame:
-    """
-    Function that, for a single BAM file, returns a DataFrame
-    of all primary + supplementary alignments for reads that have at
-    least one supplementary alignment (or SA tag).
-
-    Args:
-        bam_path: Path to the BAM file
-        sv_store: Path to store the structural variant data (as string)
-    """
-    logger.debug(f"Starting process_bam_file_svs for {bam_path}")
-
-    reads_with_supp = set()
-    rows = []
-
-    # Single pass: identify reads with supplementary alignments and gather data
-    with pysam.AlignmentFile(bam_path, "rb") as bam:
-        for aln in bam:
-            if aln.is_unmapped:
-                continue
-                
-            # Check for supplementary alignments or SA tag
-            has_supp = aln.is_supplementary or aln.has_tag("SA")
-            if has_supp:
-                reads_with_supp.add(aln.query_name)
-            
-            # Skip secondary alignments - we only want primary + supplementary
-            if aln.is_secondary:
-                continue
-
-            # If this read has supplementary alignments, gather its data
-            if aln.query_name in reads_with_supp:
-                ref_name = (
-                    bam.get_reference_name(aln.reference_id)
-                    if aln.reference_id >= 0
-                    else None
-                )
-                ref_start = aln.reference_start
-                ref_end = aln.reference_end
-                ref_span = (
-                    ref_end - ref_start if (ref_start >= 0 and ref_end >= 0) else None
-                )
-
-                read_start = aln.query_alignment_start
-                read_end = aln.query_alignment_end
-                read_span = (
-                    (read_end - read_start) if (read_start >= 0 and read_end >= 0) else None
-                )
-
-                mapq = aln.mapping_quality
-                strand = "-" if aln.is_reverse else "+"
-
-                aln_type = classify_alignment(aln)
-
-                rows.append(
-                    {
-                        "BAM_FILE": os.path.basename(bam_path),
-                        "QNAME": aln.query_name,
-                        "TYPE": aln_type,  # PRIMARY or SUPPLEMENTARY
-                        "RNAME": ref_name,
-                        "REF_START": ref_start,
-                        "REF_END": ref_end,
-                        "REF_SPAN": ref_span,
-                        "READ_START": read_start,
-                        "READ_END": read_end,
-                        "READ_SPAN": read_span,
-                        "MQ": mapq,
-                        "STRAND": strand,
-                    }
-                )
-
-    logger.debug(f"Found {len(reads_with_supp)} reads with supplementary alignments")
-    logger.debug(f"Created DataFrame with {len(rows)} rows")
-
-    if len(rows) > 0:
-        # Create DataFrame first
-        df = pd.DataFrame(rows)
-        
-        logger.debug(f"Filtering DataFrame - initial size: {len(df)}")
-        
-        # Apply filters first to reduce memory usage
-        mq_mask = df['MQ'].values >= 55
-        chr_mask = df['RNAME'].values != 'chrM'
-        combined_mask = mq_mask & chr_mask
-        df = df[combined_mask].reset_index(drop=True)
-        
-        logger.debug(f"After combined filter: {len(df)}")
-        
-        # Now optimize dtypes using astype() with dictionary
-        dtype_optimizations = {
-            'BAM_FILE': 'category',
-            'QNAME': 'category', 
-            'TYPE': 'category',
-            'RNAME': 'category',
-            'REF_START': np.int32,
-            'REF_END': np.int32,
-            'REF_SPAN': np.int32,
-            'READ_START': np.int32,
-            'READ_END': np.int32,
-            'READ_SPAN': np.int32,
-            'MQ': np.int8,
-            'STRAND': 'category'
-        }
-        
-        # Apply dtypes using astype() with dictionary
-        df = df.astype(dtype_optimizations, errors='ignore')
-        
-        # Sort efficiently
-        df = df.sort_values(['QNAME', 'TYPE', 'REF_START'], ignore_index=True)
-
-        # Save or append to sv_store
-        try:
-            if os.path.exists(sv_store) and os.path.getsize(sv_store) > 0:
-                try:
-                    # Read existing data
-                    existing_df = pd.read_csv(sv_store, low_memory=False)
-                    logger.debug(f"Read existing data with {len(existing_df)} rows")
-                    # Append new data
-                    combined_df = pd.concat([existing_df, df], ignore_index=True)
-                    logger.debug(f"Combined DataFrame size: {len(combined_df)}")
-                except pd.errors.EmptyDataError:
-                    logger.debug("Existing file was empty")
-                    # If the file exists but is empty, just use the new data
-                    combined_df = df
-            else:
-                logger.debug("No existing file found")
-                # If file doesn't exist or is empty, use new data
-                combined_df = df
-
-            # Save combined data
-            combined_df.to_csv(sv_store, index=False)
-            logger.debug(f"Saved {len(combined_df)} rows to {sv_store}")
-            df = label_reads_with_svs(combined_df)
-            
-        except Exception as e:
-            logger.error(f"Error saving structural variants: {str(e)}")
-            logger.error("Exception details:", exc_info=True)
-            # Continue processing even if save fails
-            pass
-
-    return df
-
-
-def dataframe_to_bed_lines(df: pd.DataFrame) -> list:
-    """
-    Convert a DataFrame with columns [chrom, strand, sv_type, min_bin, max_bin]
-    into a list of BED-like strings:
-
-      chrom    min_bin    max_bin    sv_type    .    strand
-
-    Returns a list of strings, each representing one line in BED format.
-    """
-    bed_lines = []
-    for row in df.itertuples():
-        # row.chrom, row.strand, row.sv_type, row.min_bin, row.max_bin
-        line = (
-            f"{row.chrom}\t{row.min_bin}\t{row.max_bin}\t{row.sv_type}\t.\t{row.strand}"
-        )
-        bed_lines.append(line)
-    return bed_lines
-
 
 def merge_overlapping_intervals(group: pd.DataFrame) -> pd.DataFrame:
     """
@@ -581,12 +434,14 @@ def merge_overlapping_intervals(group: pd.DataFrame) -> pd.DataFrame:
 
     return pd.DataFrame(merged)
 
+
 def get_gene_network(gene_pairs):
     G = nx.Graph()
     for pair in gene_pairs:
         G.add_edge(pair[0], pair[1])
     connected_components = list(nx.connected_components(G))
     return [list(component) for component in connected_components]
+
 
 def collapse_overlaps(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -601,13 +456,13 @@ def collapse_overlaps(df: pd.DataFrame) -> pd.DataFrame:
 def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
     """
     Ultra-optimized version with minimal memory overhead and maximum performance.
-    
+
     This function identifies structural variant breakpoints by:
     1. Connecting reads that belong to the same read (QNAME)
     2. Connecting reads that are within proximity on the same chromosome/strand
     3. Finding connected components (clusters) of related breakpoints
     4. Converting clusters to BED format lines for visualization
-    
+
     Args:
         df: DataFrame containing structural variant reads with columns:
             - RNAME: chromosome name
@@ -617,14 +472,14 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
             - QNAME: read name
         max_proximity: Maximum distance (bp) to consider reads as proximal
         group_by_sv: Whether to group by SV type in addition to chrom/strand
-    
+
     Returns:
         List of BED format strings representing breakpoint regions
     """
     # Early exit if no data to process
     if df.empty:
         return []
-    
+
     # Step 1: Data Preparation - Convert DataFrame columns to numpy arrays for performance
     # Extract chromosome names and ensure they're strings
     chroms = df["RNAME"].values.astype(str)  # Ensure string dtype
@@ -639,12 +494,11 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
     sv_types = df["SV_TYPE"].values.astype(str)  # Ensure string dtype
     # Extract read names (QNAME)
     qnames = df["QNAME"].values.astype(str)  # Ensure string dtype
-    
+
     # Step 2: Edge Set Initialization
     # Pre-allocate edges set with conservative size estimate to avoid resizing
-    estimated_edges = min(len(df) * 10, 100000)  # Conservative estimate
     edges = set()  # Will store pairs of indices representing connected reads
-    
+
     # Step 3: Same Read Connections - Connect all alignments from the same read
     # Find unique read names and their inverse mapping for efficient grouping
     unique_qnames, qname_inverse = np.unique(qnames, return_inverse=True)
@@ -658,39 +512,46 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
             # This creates all possible pairs of indices for this read
             for i, j in combinations(read_indices, 2):
                 edges.add((i, j))  # Add edge between these two alignments
-    
+
     # Step 4: Proximity Connections - Connect reads that are close to each other
     # Create grouping keys based on chromosome, strand, and optionally SV type
     if group_by_sv:
         # Group by chromosome, strand, AND structural variant type
-        group_keys = [f"{chrom}_{strand}_{sv_type}" for chrom, strand, sv_type in zip(chroms, strands, sv_types)]
+        group_keys = [
+            f"{chrom}_{strand}_{sv_type}"
+            for chrom, strand, sv_type in zip(chroms, strands, sv_types)
+        ]
     else:
         # Group only by chromosome and strand
         group_keys = [f"{chrom}_{strand}" for chrom, strand in zip(chroms, strands)]
-    
+
     # Create temporary DataFrame for efficient grouping operations
-    df_temp = pd.DataFrame({
-        'group_key': group_keys,  # Grouping key for each row
-        'position': positions,    # Center position of each alignment
-        'index': np.arange(len(df))  # Original row index
-    })
-    
+    df_temp = pd.DataFrame(
+        {
+            "group_key": group_keys,  # Grouping key for each row
+            "position": positions,  # Center position of each alignment
+            "index": np.arange(len(df)),  # Original row index
+        }
+    )
+
     # Process each group (same chromosome, strand, SV type) separately
-    for group_key, group in df_temp.groupby('group_key'):
+    for group_key, group in df_temp.groupby("group_key"):
         # Skip groups with only one alignment (no proximity connections possible)
         if len(group) < 2:
             continue
-        
+
         # Sort by position for efficient proximity search (O(n log n) vs O(n²))
-        group_sorted = group.sort_values('position')
-        group_indices = group_sorted['index'].values  # Original row indices
-        group_positions = group_sorted['position'].values  # Sorted positions
-        
+        group_sorted = group.sort_values("position")
+        group_indices = group_sorted["index"].values  # Original row indices
+        group_positions = group_sorted["position"].values  # Sorted positions
+
         # For each position, find all subsequent positions within max_proximity
         for i in range(len(group_positions)):
             # Vectorized proximity search: find all positions within max_proximity
             # This is much faster than nested loops
-            proximity_mask = (group_positions[i+1:] - group_positions[i]) <= max_proximity
+            proximity_mask = (
+                group_positions[i + 1 :] - group_positions[i]
+            ) <= max_proximity
             if np.any(proximity_mask):
                 # Add edges to all positions within proximity
                 # Calculate how many positions are within proximity
@@ -698,7 +559,7 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
                 # Add edges to all proximal positions
                 for j in range(i + 1, i + 1 + num_proximal):
                     edges.add((group_indices[i], group_indices[j]))
-    
+
     # Step 5: Connected Components Detection using Union-Find Algorithm
     # Define Union-Find data structure for efficient connected component detection
     class UnionFind:
@@ -707,13 +568,13 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
             self.parent = list(range(n))
             # Initialize rank array for union-by-rank optimization
             self.rank = [0] * n
-        
+
         def find(self, x):
             # Path compression: make all nodes on path point directly to root
             if self.parent[x] != x:
                 self.parent[x] = self.find(self.parent[x])
             return self.parent[x]
-        
+
         def union(self, x, y):
             # Union by rank: attach smaller tree to root of larger tree
             px, py = self.find(x), self.find(y)
@@ -726,13 +587,13 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
             else:
                 self.parent[py] = px
                 self.rank[px] += 1  # Increase rank when trees have same height
-    
+
     # Build connected components using Union-Find
     uf = UnionFind(len(df))  # Initialize Union-Find with number of rows
     # Union all connected pairs
     for edge in edges:
         uf.union(edge[0], edge[1])
-    
+
     # Step 6: Group nodes by their connected component
     components = {}  # Dictionary: root -> list of indices in this component
     for i in range(len(df)):
@@ -740,86 +601,66 @@ def build_breakpoint_graph(df, max_proximity=500000000, group_by_sv=False):
         if root not in components:
             components[root] = []
         components[root].append(i)  # Add this node to its component
-    
+
     # Step 7: Process components and generate BED format lines
     bed_lines = []  # Will store BED format strings
-    bed_lines_extend = bed_lines.extend  # Local reference for faster extend
-    
+
     # Process each connected component
     for component_indices in components.values():
         # Filter components: must have 3-100 alignments (avoid noise and huge clusters)
         if len(component_indices) < 3 or len(component_indices) > 100:
             continue
-        
+
         # Extract data for this component efficiently using numpy indexing
-        comp_chroms = chroms[component_indices]      # Chromosomes in this component
+        comp_chroms = chroms[component_indices]  # Chromosomes in this component
         comp_positions = positions[component_indices]  # Positions in this component
-        comp_strands = strands[component_indices]    # Strands in this component
+        comp_strands = strands[component_indices]  # Strands in this component
         comp_sv_types = sv_types[component_indices]  # SV types in this component
-        comp_qnames = qnames[component_indices]      # Read names in this component
-        
+        comp_qnames = qnames[component_indices]  # Read names in this component
+
         # Check component quality criteria
         unique_chroms = set(comp_chroms)  # Number of different chromosomes
-        unique_reads = set(comp_qnames)   # Number of different reads
-        
+        unique_reads = set(comp_qnames)  # Number of different reads
+
         # Quality filter: must have >2 unique reads and <4 chromosomes
         # This ensures we have multiple supporting reads but not too many chromosomes
         if len(unique_reads) > 2 and len(unique_chroms) < 4:
             # Calculate BED coordinates using vectorized operations
             bin_size = 1000  # 1kb bins for coordinate calculation
             bins = comp_positions // bin_size  # Convert positions to bin numbers
-            
+
             # Create strand-specific masks for different bin calculations
             strand_mask = comp_strands == "+"  # Boolean mask for positive strand
-            
+
             # Calculate min/max bins differently for + and - strands
             # Positive strand: extend 1 bin upstream, 5 bins downstream
             # Negative strand: extend 5 bins upstream, 1 bin downstream
             min_bins = np.where(strand_mask, bins - 1, bins - 5) * bin_size
             max_bins = np.where(strand_mask, bins + 5, bins + 1) * bin_size
-            
+
             # Create BED lines directly without intermediate DataFrame
             for i in range(len(component_indices)):
-                chrom = comp_chroms[i]      # Chromosome name
-                strand = comp_strands[i]    # Strand (+ or -)
+                chrom = comp_chroms[i]  # Chromosome name
+                strand = comp_strands[i]  # Strand (+ or -)
                 # Use SV type if grouping by SV, otherwise "UNKNOWN"
                 sv_type = comp_sv_types[i] if group_by_sv else "UNKNOWN"
-                min_bin = min_bins[i]       # Start coordinate
-                max_bin = max_bins[i]       # End coordinate
-                
+                min_bin = min_bins[i]  # Start coordinate
+                max_bin = max_bins[i]  # End coordinate
+
                 # Format as BED line: chrom start end name score strand
                 bed_line = f"{chrom}\t{min_bin}\t{max_bin}\t{sv_type}\t.\t{strand}"
                 bed_lines.append(bed_line)
-    
+
     # Step 8: Post-processing
     # Remove duplicates efficiently while preserving order
     bed_lines = list(dict.fromkeys(bed_lines))  # Preserves order, removes duplicates
-    
+
     # Limit output size for performance (prevent memory issues with huge datasets)
     if len(bed_lines) > 1000:
         bed_lines = bed_lines[:1000]
-        logger.warning(f"Limited bed lines output to 1000 entries for performance")
-    
+        logger.warning("Limited bed lines output to 1000 entries for performance")
+
     return bed_lines
-
-
-def build_breakpoint_graph_memory_optimized(df, max_proximity=500000000, group_by_sv=False):
-    """
-    Memory-optimized version that minimizes string operations.
-    """
-    # Use byte arrays for group keys instead of strings
-    if group_by_sv:
-        # Create group keys as integers for faster comparison
-        chrom_ints = pd.Categorical(chroms).codes
-        strand_ints = (strands == '+').astype(int)
-        sv_type_ints = pd.Categorical(sv_types).codes
-        group_keys = chrom_ints * 1000000 + strand_ints * 100000 + sv_type_ints
-    else:
-        chrom_ints = pd.Categorical(chroms).codes
-        strand_ints = (strands == '+').astype(int)
-        group_keys = chrom_ints * 1000 + strand_ints
-    
-    # Rest of the function remains the same but uses integer keys
 
 
 def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
@@ -1030,30 +871,30 @@ def fusion_work_pysam(
 ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
     """
     Simplified fusion candidate detection using pure pysam instead of external tools.
-    
+
     Args:
         bamfile: Path to the BAM file
         gene_bed: Path to target gene BED file
         all_gene_bed: Path to all genes BED file
-        
+
     Returns:
         Tuple of (fusion_candidates, fusion_candidates_all) DataFrames
     """
     fusion_candidates: Optional[pd.DataFrame] = None
     fusion_candidates_all: Optional[pd.DataFrame] = None
-    
+
     try:
         # Load BED files into memory for efficient lookup
         gene_regions = load_bed_regions(gene_bed)
         all_gene_regions = load_bed_regions(all_gene_bed)
-        
+
         # Find reads with supplementary alignments
         reads_with_supp = find_reads_with_supplementary(bamfile)
-        
+
         if not reads_with_supp:
             logger.debug("No reads with supplementary alignments found")
             return None, None
-            
+
         # Process reads and find gene intersections
         fusion_candidates = process_reads_for_fusions(
             bamfile, reads_with_supp, gene_regions
@@ -1061,53 +902,53 @@ def fusion_work_pysam(
         fusion_candidates_all = process_reads_for_fusions(
             bamfile, reads_with_supp, all_gene_regions
         )
-        
+
     except Exception as e:
         logger.error(f"Error in fusion_work_pysam: {str(e)}")
         logger.error("Exception details:", exc_info=True)
         raise
-        
+
     return fusion_candidates, fusion_candidates_all
 
 
 def load_bed_regions(bed_file: str) -> Dict[str, List[Tuple[int, int, str]]]:
     """
     Load BED file regions into memory for efficient lookup.
-    
+
     Args:
         bed_file: Path to BED file
-        
+
     Returns:
         Dictionary mapping chromosome to list of (start, end, gene_name) tuples
     """
     regions = defaultdict(list)
-    
-    with open(bed_file, 'r') as f:
+
+    with open(bed_file, "r") as f:
         for line in f:
             if line.strip():
-                parts = line.strip().split('\t')
+                parts = line.strip().split("\t")
                 if len(parts) >= 4:
                     chrom = parts[0]
                     start = int(parts[1])
                     end = int(parts[2])
                     gene_name = parts[3]
                     regions[chrom].append((start, end, gene_name))
-    
+
     return dict(regions)
 
 
 def find_reads_with_supplementary(bamfile: str) -> Set[str]:
     """
     Find all read names that have supplementary alignments.
-    
+
     Args:
         bamfile: Path to BAM file
-        
+
     Returns:
         Set of read names with supplementary alignments
     """
     reads_with_supp = set()
-    
+
     with pysam.AlignmentFile(bamfile, "rb") as bam:
         for read in bam:
             if read.is_unmapped:
@@ -1115,55 +956,59 @@ def find_reads_with_supplementary(bamfile: str) -> Set[str]:
             # Check for supplementary alignments or SA tag
             if read.is_supplementary or read.has_tag("SA"):
                 reads_with_supp.add(read.query_name)
-    
+
     logger.debug(f"Found {len(reads_with_supp)} reads with supplementary alignments")
     return reads_with_supp
 
 
 def process_reads_for_fusions(
-    bamfile: str, 
-    reads_with_supp: Set[str], 
-    gene_regions: Dict[str, List[Tuple[int, int, str]]]
+    bamfile: str,
+    reads_with_supp: Set[str],
+    gene_regions: Dict[str, List[Tuple[int, int, str]]],
 ) -> Optional[pd.DataFrame]:
     """
     Process reads to find gene intersections and create fusion candidates.
-    
+
     Args:
         bamfile: Path to BAM file
         reads_with_supp: Set of read names with supplementary alignmentsxx
         gene_regions: Dictionary of gene regions by chromosome
-        
+
     Returns:
         DataFrame with fusion candidates or None if no candidates found
     """
     rows = []
-    
+
     with pysam.AlignmentFile(bamfile, "rb") as bam:
         for read in bam:
             # Skip if not in our target reads
             if read.query_name not in reads_with_supp:
                 continue
-                
+
             # Skip secondary alignments
             if read.is_secondary:
                 continue
-                
+
             # Skip unmapped reads
             if read.is_unmapped:
                 continue
-                
+
             # Get reference information
-            ref_name = bam.get_reference_name(read.reference_id) if read.reference_id >= 0 else None
+            ref_name = (
+                bam.get_reference_name(read.reference_id)
+                if read.reference_id >= 0
+                else None
+            )
             if not ref_name:
                 continue
-                
+
             # Exclude chrM early to avoid unnecessary processing
             if ref_name == "chrM":
                 continue
-                
+
             ref_start = read.reference_start
             ref_end = read.reference_end
-            
+
             # Check if this read intersects with any gene regions
             if ref_name in gene_regions:
                 # Use list comprehension for better performance
@@ -1186,31 +1031,32 @@ def process_reads_for_fusions(
                         "mapping_span": ref_end - ref_start,
                     }
                     for gene_start, gene_end, gene_name in gene_regions[ref_name]
-                    if (gene_start < ref_end and gene_end > ref_start and  # Overlap check
-                        min(ref_end, gene_end) - max(ref_start, gene_start) > 100)  # Length check
+                    if (
+                        gene_start < ref_end
+                        and gene_end > ref_start  # Overlap check
+                        and min(ref_end, gene_end) - max(ref_start, gene_start) > 100
+                    )  # Length check
                 ]
                 rows.extend(read_rows)
-    
+
     if not rows:
         return None
-        
+
     # Create DataFrame with optimized dtypes
     df = pd.DataFrame(rows)
-    
+
     # Use categorical dtypes for string columns
     string_columns = ["BAM_FILE", "QNAME", "TYPE", "RNAME", "STRAND"]
     for col in string_columns:
         if col in df.columns:
             df[col] = df[col].astype("category")
-    
-    # Apply filters more efficiently
-    df = df[
-        (df["mapping_quality"] > 40) & 
-        (df["mapping_span"] > 100)
-    ].reset_index(drop=True)
-    
-    return df
 
+    # Apply filters more efficiently
+    df = df[(df["mapping_quality"] > 40) & (df["mapping_span"] > 100)].reset_index(
+        drop=True
+    )
+
+    return df
 
 
 class FusionVis(BaseVis):
@@ -1608,7 +1454,7 @@ class FusionVis(BaseVis):
                             """
                             ).style("font-size: 100%; font-weight: 300")
 
-                        #self.sv_plot = ui.row().classes("w-full")
+                        # self.sv_plot = ui.row().classes("w-full")
                         self.sv_table_container = ui.row().classes("w-full")
 
         if self.browse:
@@ -2024,7 +1870,11 @@ class FusionVis(BaseVis):
                 return group
 
             # Apply the function to each group
-            lines = lines.groupby("id", observed=True).apply(assign_occurrence).reset_index(drop=True)
+            lines = (
+                lines.groupby("id", observed=True)
+                .apply(assign_occurrence)
+                .reset_index(drop=True)
+            )
 
             # Function to find join coordinates
             def find_joins(group):
@@ -2058,7 +1908,11 @@ class FusionVis(BaseVis):
             lines["rankB"] = None
 
             # Apply the function to each group
-            lines = lines.groupby("id", observed=True).apply(find_joins).reset_index(drop=True)
+            lines = (
+                lines.groupby("id", observed=True)
+                .apply(find_joins)
+                .reset_index(drop=True)
+            )
             # Remove rows containing NA values
             lines = lines.dropna()
 
@@ -2299,37 +2153,49 @@ class FusionVis(BaseVis):
                         "event": str,
                     },
                 )
-                
+
                 if not sv_links_df.empty:
                     # Process the links data to create a summary for display
                     # Use the get_summary function that's already defined
                     sv_summary = get_summary(sv_links_df, min_support=2)
-                    
+
                     if not sv_summary.empty:
                         # Convert the summary to the format expected by the UI
-                        sv_df = pd.DataFrame({
-                            "Event Type": sv_summary["predominant_event"],
-                            "Primary Location": sv_summary.apply(
-                                lambda row: f"{row['RNAME.1']}:{row['coord_1']:,}", axis=1
-                            ),
-                            "Partner Location": sv_summary.apply(
-                                lambda row: f"{row['RNAME.2']}:{row['coord_2']:,}",# if row['RNAME.1'] != row['RNAME.2'] else "N/A", 
-                                axis=1
-                            ),
-                            "Size (bp)": sv_summary["median_genomic_gap"].apply(
-                                lambda x: f"{x:,}" if x >= 0 else "N/A"
-                            ),
-                            "Strand": "Unknown",  # Not available in links data
-                            "Full Location": sv_summary.apply(
-                                lambda row: f"{row['RNAME.1']}:{row['coord_1']:,}-{row['coord_2']:,}" if row['RNAME.1'] == row['RNAME.2'] else f"{row['RNAME.1']}:{row['coord_1']:,} ⟷ {row['RNAME.2']}:{row['coord_2']:,}",
-                                axis=1
-                            ),
-                            "Support Count": sv_summary["support_count"],
-                            "Supporting Reads": sv_summary["supporting_reads"].apply(lambda x: ", ".join(x[:5]) + ("..." if len(x) > 5 else "")),
-                        })
-                        
+                        sv_df = pd.DataFrame(
+                            {
+                                "Event Type": sv_summary["predominant_event"],
+                                "Primary Location": sv_summary.apply(
+                                    lambda row: f"{row['RNAME.1']}:{row['coord_1']:,}",
+                                    axis=1,
+                                ),
+                                "Partner Location": sv_summary.apply(
+                                    lambda row: f"{row['RNAME.2']}:{row['coord_2']:,}",  # if row['RNAME.1'] != row['RNAME.2'] else "N/A",
+                                    axis=1,
+                                ),
+                                "Size (bp)": sv_summary["median_genomic_gap"].apply(
+                                    lambda x: f"{x:,}" if x >= 0 else "N/A"
+                                ),
+                                "Strand": "Unknown",  # Not available in links data
+                                "Full Location": sv_summary.apply(
+                                    lambda row: (
+                                        f"{row['RNAME.1']}:{row['coord_1']:,}-{row['coord_2']:,}"
+                                        if row["RNAME.1"] == row["RNAME.2"]
+                                        else f"{row['RNAME.1']}:{row['coord_1']:,} ⟷ {row['RNAME.2']}:{row['coord_2']:,}"
+                                    ),
+                                    axis=1,
+                                ),
+                                "Support Count": sv_summary["support_count"],
+                                "Supporting Reads": sv_summary[
+                                    "supporting_reads"
+                                ].apply(
+                                    lambda x: ", ".join(x[:5])
+                                    + ("..." if len(x) > 5 else "")
+                                ),
+                            }
+                        )
+
                         self.sv_count = len(sv_df)
-                        
+
                         # Only update UI elements if they exist
                         if hasattr(self, "sv_plot") and self.sv_plot is not None:
                             self.sv_plot.clear()
@@ -2340,15 +2206,19 @@ class FusionVis(BaseVis):
                             and self.sv_table_container is not None
                         ):
                             self.update_sv_table(sv_df)
-                            
-                        logger.info(f"Loaded {len(sv_df)} structural variant events from {len(sv_links_df)} links")
+
+                        logger.info(
+                            f"Loaded {len(sv_df)} structural variant events from {len(sv_links_df)} links"
+                        )
                     else:
-                        logger.debug("No structural variant events with sufficient support found")
+                        logger.debug(
+                            "No structural variant events with sufficient support found"
+                        )
                         self.sv_count = 0  # Set count to 0 when no events found
                 else:
                     logger.debug("Structural variant links file is empty")
                     self.sv_count = 0  # Set count to 0 when file is empty
-                    
+
             except pd.errors.EmptyDataError:
                 logger.debug("Structural variant links file is empty or corrupted")
                 self.sv_count = 0  # Set count to 0 when file is corrupted
@@ -2368,56 +2238,73 @@ class FusionVis(BaseVis):
         if sv_df.empty:
             with ui.column().classes("gap-2"):
                 ui.label("No Structural Variants Found").classes("text-lg font-medium")
-                ui.label("No structural variant events with sufficient support were identified").classes("text-gray-600")
+                ui.label(
+                    "No structural variant events with sufficient support were identified"
+                ).classes("text-gray-600")
             return
-            
+
         with ui.pyplot(figsize=(12, 8)).classes("w-full"):
             # Create figure with tight layout
             plt.rcParams["figure.constrained_layout.use"] = True
-            
+
             # Create subplots
             fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-            
+
             # Plot 1: Event type distribution
             event_counts = sv_df["Event Type"].value_counts()
-            ax1.bar(event_counts.index, event_counts.values, color='skyblue', alpha=0.7)
-            ax1.set_title(f"Structural Variant Events by Type - {sample_id}", fontsize=14, fontweight='bold')
+            ax1.bar(event_counts.index, event_counts.values, color="skyblue", alpha=0.7)
+            ax1.set_title(
+                f"Structural Variant Events by Type - {sample_id}",
+                fontsize=14,
+                fontweight="bold",
+            )
             ax1.set_ylabel("Number of Events", fontsize=12)
-            ax1.tick_params(axis='x', rotation=45)
-            
+            ax1.tick_params(axis="x", rotation=45)
+
             # Add value labels on bars
             for i, v in enumerate(event_counts.values):
-                ax1.text(i, v + 0.1, str(v), ha='center', va='bottom', fontweight='bold')
-            
+                ax1.text(
+                    i, v + 0.1, str(v), ha="center", va="bottom", fontweight="bold"
+                )
+
             # Plot 2: Support count distribution
             support_counts = sv_df["Support Count"].value_counts().sort_index()
-            ax2.bar(support_counts.index.astype(str), support_counts.values, color='lightcoral', alpha=0.7)
-            ax2.set_title("Events by Support Count", fontsize=14, fontweight='bold')
+            ax2.bar(
+                support_counts.index.astype(str),
+                support_counts.values,
+                color="lightcoral",
+                alpha=0.7,
+            )
+            ax2.set_title("Events by Support Count", fontsize=14, fontweight="bold")
             ax2.set_xlabel("Support Count", fontsize=12)
             ax2.set_ylabel("Number of Events", fontsize=12)
-            
+
             # Add value labels on bars
             for i, v in enumerate(support_counts.values):
-                ax2.text(i, v + 0.1, str(v), ha='center', va='bottom', fontweight='bold')
-            
-            #plt.tight_layout()
+                ax2.text(
+                    i, v + 0.1, str(v), ha="center", va="bottom", fontweight="bold"
+                )
+
+            # plt.tight_layout()
 
     def update_sv_table(self, sv_df: pd.DataFrame) -> None:
         """
         Updates the structural variant table in the UI.
-        
+
         Args:
             sv_df: DataFrame containing structural variant data
         """
         if sv_df.empty:
             with ui.column().classes("gap-2"):
                 ui.label("No Structural Variants Found").classes("text-lg font-medium")
-                ui.label("No structural variant events with sufficient support were identified").classes("text-gray-600")
+                ui.label(
+                    "No structural variant events with sufficient support were identified"
+                ).classes("text-gray-600")
             return
-            
+
         # Clear existing table
         self.sv_table_container.clear()
-        
+
         with self.sv_table_container:
             # Create table with structural variant data
             self.sv_table = (
@@ -2430,7 +2317,7 @@ class FusionVis(BaseVis):
                 .style("height: 600px")
                 .style("font-size: 100%; font-weight: 300")
             )
-            
+
             # Make columns sortable
             for col in self.sv_table.columns:
                 col["sortable"] = True
@@ -2599,7 +2486,7 @@ class FusionObject(BaseAnalysis):
         self.bam_files_since_last_run = 0
         self.pending_sv_reads = []  # Store SV reads that haven't been processed yet
         self.breakpoint_throttle_time = 30  # seconds
-        self.breakpoint_throttle_count = 30   # number of BAM files
+        self.breakpoint_throttle_count = 30  # number of BAM files
 
     def fusion_table_all(self) -> None:
         """
@@ -2669,15 +2556,13 @@ class FusionObject(BaseAnalysis):
         state.set_process_state("Fusion Analysis", ProcessState.RUNNING)
         try:
             try:
-                start_time = time.perf_counter()
-                last_step_time = start_time
                 logger.info(f"Starting BAM processing for file: {bamfile}")
 
                 if has_supplementary(bamfile):
                     try:
                         # Process fusion candidates
                         logger.info(f"Processing BAM file for fusions: {bamfile}")
-                        
+
                         async def fusion_background_work(bamfile):
                             fusion_candidates, fusion_candidates_all = (
                                 await run.cpu_bound(
@@ -2688,134 +2573,191 @@ class FusionObject(BaseAnalysis):
                                 )
                             )
                             return fusion_candidates, fusion_candidates_all
-                        
-                        fusion_candidates, fusion_candidates_all = await background_tasks.create(
-                            fusion_background_work(bamfile)
+
+                        fusion_candidates, fusion_candidates_all = (
+                            await background_tasks.create(
+                                fusion_background_work(bamfile)
+                            )
                         )
-                        
+
                         # Store fusion candidates in the class dictionaries
-                        if fusion_candidates is not None and not fusion_candidates.empty:
+                        if (
+                            fusion_candidates is not None
+                            and not fusion_candidates.empty
+                        ):
                             if self.sampleID not in self.fusion_candidates:
-                                self.fusion_candidates[self.sampleID] = fusion_candidates
+                                self.fusion_candidates[self.sampleID] = (
+                                    fusion_candidates
+                                )
                             else:
                                 # Append to existing data
                                 self.fusion_candidates[self.sampleID] = pd.concat(
-                                    [self.fusion_candidates[self.sampleID], fusion_candidates], 
-                                    ignore_index=True
+                                    [
+                                        self.fusion_candidates[self.sampleID],
+                                        fusion_candidates,
+                                    ],
+                                    ignore_index=True,
                                 )
-                            logger.info(f"Added {len(fusion_candidates)} fusion candidates for sample {self.sampleID}")
-                        
-                        if fusion_candidates_all is not None and not fusion_candidates_all.empty:
+                            logger.info(
+                                f"Added {len(fusion_candidates)} fusion candidates for sample {self.sampleID}"
+                            )
+
+                        if (
+                            fusion_candidates_all is not None
+                            and not fusion_candidates_all.empty
+                        ):
                             if self.sampleID not in self.fusion_candidates_all:
-                                self.fusion_candidates_all[self.sampleID] = fusion_candidates_all
+                                self.fusion_candidates_all[self.sampleID] = (
+                                    fusion_candidates_all
+                                )
                             else:
                                 # Append to existing data
                                 self.fusion_candidates_all[self.sampleID] = pd.concat(
-                                    [self.fusion_candidates_all[self.sampleID], fusion_candidates_all], 
-                                    ignore_index=True
+                                    [
+                                        self.fusion_candidates_all[self.sampleID],
+                                        fusion_candidates_all,
+                                    ],
+                                    ignore_index=True,
                                 )
-                            logger.info(f"Added {len(fusion_candidates_all)} genome-wide fusion candidates for sample {self.sampleID}")
-                        
+                            logger.info(
+                                f"Added {len(fusion_candidates_all)} genome-wide fusion candidates for sample {self.sampleID}"
+                            )
+
                         # Save fusion results periodically
                         await self._save_fusion_results()
-                        
-                        
-                        
+
                         # Process genome-wide structural variants
-                        logger.info(f"Processing BAM file for structural variants: {bamfile}")
-                        
-                        new_df = build_links_df(annotate_df(extract_split_read_alignments(bamfile)))
+                        logger.info(
+                            f"Processing BAM file for structural variants: {bamfile}"
+                        )
+
+                        new_df = build_links_df(
+                            annotate_df(extract_split_read_alignments(bamfile))
+                        )
                         # Save the new_df to a file, appending to existing data
                         if not new_df.empty:
                             # Construct the output file path
-                            output_dir = self.check_and_create_folder(self.output, self.sampleID)
-                            sv_links_file = os.path.join(output_dir, "structural_variant_links.csv")
-                            
+                            output_dir = self.check_and_create_folder(
+                                self.output, self.sampleID
+                            )
+                            sv_links_file = os.path.join(
+                                output_dir, "structural_variant_links.csv"
+                            )
+
                             try:
                                 # Check if file exists and has data
-                                if os.path.exists(sv_links_file) and os.path.getsize(sv_links_file) > 0:
+                                if (
+                                    os.path.exists(sv_links_file)
+                                    and os.path.getsize(sv_links_file) > 0
+                                ):
                                     # Read existing data
                                     existing_df = pd.read_csv(sv_links_file)
-                                    logger.debug(f"Read existing SV links data with {len(existing_df)} rows")
-                                    
+                                    logger.debug(
+                                        f"Read existing SV links data with {len(existing_df)} rows"
+                                    )
+
                                     # Append new data
-                                    combined_df = pd.concat([existing_df, new_df], ignore_index=True)
-                                    logger.debug(f"Combined DataFrame size: {len(combined_df)} rows")
+                                    combined_df = pd.concat(
+                                        [existing_df, new_df], ignore_index=True
+                                    )
+                                    logger.debug(
+                                        f"Combined DataFrame size: {len(combined_df)} rows"
+                                    )
                                 else:
                                     # If file doesn't exist or is empty, use new data
                                     combined_df = new_df
-                                    logger.debug("No existing SV links file found, using new data")
-                                
+                                    logger.debug(
+                                        "No existing SV links file found, using new data"
+                                    )
+
                                 # Save combined data
                                 combined_df.to_csv(sv_links_file, index=False)
-                                
+
                                 # Generate bed_lines from combined_df for BedTree - focus on breakpoint boundaries only
                                 bed_lines = []
                                 if not combined_df.empty:
                                     # Get summary of structural variants
                                     sv_summary = get_summary(combined_df, min_support=2)
-                                    
+
                                     if not sv_summary.empty:
                                         # Convert summary to BED format lines - only breakpoint boundaries
                                         for _, row in sv_summary.iterrows():
                                             # Create BED line for primary breakpoint boundary
-                                            chrom1 = row['RNAME.1']
-                                            coord1 = row['coord_1']
-                                            
+                                            chrom1 = row["RNAME.1"]
+                                            coord1 = row["coord_1"]
+
                                             # Define breakpoint boundary window (e.g., 500bp on each side)
-                                            boundary_window = 500  # 500bp window around breakpoint
+                                            boundary_window = (
+                                                500  # 500bp window around breakpoint
+                                            )
                                             start1 = max(0, coord1 - boundary_window)
                                             end1 = coord1 + boundary_window
-                                            
+
                                             # Create BED lines for primary breakpoint on both strands
                                             bed_line1_plus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t+"
                                             bed_line1_minus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t-"
                                             bed_lines.append(bed_line1_plus)
                                             bed_lines.append(bed_line1_minus)
-                                            
+
                                             # Handle different event types
-                                            if row['RNAME.1'] != row['RNAME.2']:
+                                            if row["RNAME.1"] != row["RNAME.2"]:
                                                 # Translocation: add partner breakpoint boundary on both strands
-                                                chrom2 = row['RNAME.2']
-                                                coord2 = row['coord_2']
-                                                
-                                                start2 = max(0, coord2 - boundary_window)
+                                                chrom2 = row["RNAME.2"]
+                                                coord2 = row["coord_2"]
+
+                                                start2 = max(
+                                                    0, coord2 - boundary_window
+                                                )
                                                 end2 = coord2 + boundary_window
-                                                
+
                                                 bed_line2_plus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
                                                 bed_line2_minus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
                                                 bed_lines.append(bed_line2_plus)
                                                 bed_lines.append(bed_line2_minus)
-                                                
-                                            elif row['RNAME.1'] == row['RNAME.2']:
+
+                                            elif row["RNAME.1"] == row["RNAME.2"]:
                                                 # Same chromosome event (deletion, inversion, etc.)
-                                                coord2 = row['coord_2']
-                                                
+                                                coord2 = row["coord_2"]
+
                                                 # Only add second breakpoint if it's different from the first
                                                 # and the gap is significant (> 1kb to avoid very small events)
                                                 if abs(coord2 - coord1) > 1000:
-                                                    start2 = max(0, coord2 - boundary_window)
+                                                    start2 = max(
+                                                        0, coord2 - boundary_window
+                                                    )
                                                     end2 = coord2 + boundary_window
-                                                    
+
                                                     bed_line2_plus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
                                                     bed_line2_minus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
                                                     bed_lines.append(bed_line2_plus)
                                                     bed_lines.append(bed_line2_minus)
-                                
-                                results = get_summary(combined_df)
-                                logger.info(f"Saved {len(combined_df)} SV links to {sv_links_file}")
-                                logger.info(f"Generated {len(bed_lines)} breakpoint boundary BED lines for BedTree")
+
+                                logger.info(
+                                    f"Saved {len(combined_df)} SV links to {sv_links_file}"
+                                )
+                                logger.info(
+                                    f"Generated {len(bed_lines)} breakpoint boundary BED lines for BedTree"
+                                )
 
                                 # Add to BedTree if needed
-                                if bed_lines and self.master_bed_tree[self.sampleID] is None:
+                                if (
+                                    bed_lines
+                                    and self.master_bed_tree[self.sampleID] is None
+                                ):
                                     self.master_bed_tree.add_bed_tree(
                                         sample_id=self.sampleID,
                                         preserve_original_tree=True,
                                         reference_file=f"{self.reference_file}.fai",
                                     )
-                                
+                                    bedfile = self.master_bed_tree.bed_trees[
+                                        self.sampleID
+                                    ]
+                                    bedfile.load_from_file(self.bed_file)
+
                                 if bed_lines:
-                                    bedfile = self.master_bed_tree.bed_trees[self.sampleID]
+                                    bedfile = self.master_bed_tree.bed_trees[
+                                        self.sampleID
+                                    ]
                                     bedfile.load_from_string(
                                         "\n".join(bed_lines),
                                         merge=False,
@@ -2827,15 +2769,21 @@ class FusionObject(BaseAnalysis):
                                         ),
                                         source_type="FUSION",
                                     )
-                                    logger.info(f"Added {len(bed_lines)} structural variant breakpoint boundaries to BedTree")
+                                    logger.info(
+                                        f"Added {len(bed_lines)} structural variant breakpoint boundaries to BedTree"
+                                    )
 
                             except Exception as e:
-                                logger.error(f"Error saving structural variant links: {str(e)}")
+                                logger.error(
+                                    f"Error saving structural variant links: {str(e)}"
+                                )
                                 logger.error("Exception details:", exc_info=True)
                                 # Continue processing even if save fails
                         else:
-                            logger.debug("No structural variant links found in this BAM file")
-                            
+                            logger.debug(
+                                "No structural variant links found in this BAM file"
+                            )
+
                         """
                         #ToDO: Add to the bed_tree
                         # Add to BedTree if needed
@@ -2882,35 +2830,43 @@ class FusionObject(BaseAnalysis):
     def _should_run_breakpoint_processing(self) -> bool:
         """
         Determine if breakpoint graph processing should run based on throttling criteria.
-        
+
         Returns:
             bool: True if processing should run, False otherwise
         """
         current_time = datetime.now()
-        
+
         # Check time-based throttling
         if self.last_breakpoint_run is None:
             # First run - always process
             return True
-        
+
         time_since_last = (current_time - self.last_breakpoint_run).total_seconds()
         if time_since_last >= self.breakpoint_throttle_time:
-            logger.info(f"Running breakpoint processing due to time threshold ({time_since_last:.1f}s >= {self.breakpoint_throttle_time}s)")
+            logger.info(
+                f"Running breakpoint processing due to time threshold ({time_since_last:.1f}s >= {self.breakpoint_throttle_time}s)"
+            )
             return True
-        
+
         # Check count-based throttling
         if self.bam_files_since_last_run >= self.breakpoint_throttle_count:
-            logger.info(f"Running breakpoint processing due to count threshold ({self.bam_files_since_last_run} >= {self.breakpoint_throttle_count})")
+            logger.info(
+                f"Running breakpoint processing due to count threshold ({self.bam_files_since_last_run} >= {self.breakpoint_throttle_count})"
+            )
             return True
-        
+
         # No throttling criteria met
-        logger.debug(f"Throttling breakpoint processing: {time_since_last:.1f}s since last run, {self.bam_files_since_last_run} files processed")
+        logger.debug(
+            f"Throttling breakpoint processing: {time_since_last:.1f}s since last run, {self.bam_files_since_last_run} files processed"
+        )
         return False
 
-    async def _process_breakpoint_results(self, bed_lines: list, sv_reads: pd.DataFrame) -> None:
+    async def _process_breakpoint_results(
+        self, bed_lines: list, sv_reads: pd.DataFrame
+    ) -> None:
         """
         Optimized version of breakpoint results processing using vectorized operations.
-        
+
         Args:
             bed_lines: List of BED format lines from breakpoint analysis
             sv_reads: Combined structural variant reads DataFrame
@@ -2925,43 +2881,41 @@ class FusionObject(BaseAnalysis):
                 starts = sv_reads["REF_START"].values.astype(float).astype(int)
                 ends = sv_reads["REF_END"].values.astype(float).astype(int)
                 qnames = sv_reads["QNAME"].values
-                
+
                 # Create efficient lookup structures
                 # Group by QNAME for faster partner finding - use list of dicts for easier access
                 qname_groups = {}
                 for i, qname in enumerate(qnames):
                     if qname not in qname_groups:
                         qname_groups[qname] = []
-                    qname_groups[qname].append({
-                        'chrom': chroms[i],
-                        'start': starts[i],
-                        'end': ends[i]
-                    })
-                
+                    qname_groups[qname].append(
+                        {"chrom": chroms[i], "start": starts[i], "end": ends[i]}
+                    )
+
                 # Pre-allocate sv_data list
                 sv_data = []
                 sv_data_append = sv_data.append  # Local reference for faster append
-                
+
                 # Process bed lines efficiently
                 for line in bed_lines:
                     chrom, start, end, sv_type, _, strand = line.split("\t")
                     start_int = int(float(start))
                     end_int = int(float(end))
-                    
+
                     # Vectorized filtering using numpy
                     chrom_mask = chroms == chrom
                     start_mask = starts >= start_int - 1000
                     end_mask = ends <= end_int + 1000
                     combined_mask = chrom_mask & start_mask & end_mask
-                    
+
                     matching_indices = np.where(combined_mask)[0]
-                    
+
                     # Find partner information efficiently
                     partner_info = ""
                     if len(matching_indices) > 0:
                         # Get unique QNAMEs from matching reads
                         matching_qnames = set(qnames[matching_indices])
-                        
+
                         # Find partner chromosomes efficiently
                         for qname in matching_qnames:
                             if qname in qname_groups:
@@ -2969,51 +2923,59 @@ class FusionObject(BaseAnalysis):
                                 if len(pairs) > 1:
                                     # Find partner alignment (different chromosome)
                                     for pair in pairs:
-                                        if pair['chrom'] != chrom:
-                                            partner_chrom = pair['chrom']
+                                        if pair["chrom"] != chrom:
+                                            partner_chrom = pair["chrom"]
                                             partner_pos = f"{pair['start']:,}"
-                                            partner_info = f"{partner_chrom}:{partner_pos}"
+                                            partner_info = (
+                                                f"{partner_chrom}:{partner_pos}"
+                                            )
                                             break
-                                    if partner_info:  # Found partner, no need to continue
+                                    if (
+                                        partner_info
+                                    ):  # Found partner, no need to continue
                                         break
-                    
+
                     # Format coordinates efficiently
                     formatted_start = f"{start_int:,}"
                     formatted_end = f"{end_int:,}"
                     size = end_int - start_int
                     formatted_size = f"{size:,}"
-                    
+
                     event_location = f"{chrom}:{formatted_start}-{formatted_end}"
                     if partner_info:
                         event_location += f" ⟷ {partner_info}"
-                    
+
                     # Use local append reference for better performance
-                    sv_data_append({
-                        "Event Type": sv_type,
-                        "Primary Location": f"{chrom}:{formatted_start}-{formatted_end}",
-                        "Partner Location": partner_info if partner_info else "N/A",
-                        "Size (bp)": formatted_size,
-                        "Strand": strand,
-                        "Full Location": event_location,
-                    })
-            
+                    sv_data_append(
+                        {
+                            "Event Type": sv_type,
+                            "Primary Location": f"{chrom}:{formatted_start}-{formatted_end}",
+                            "Partner Location": partner_info if partner_info else "N/A",
+                            "Size (bp)": formatted_size,
+                            "Strand": strand,
+                            "Full Location": event_location,
+                        }
+                    )
+
             # Create DataFrame efficiently
             sv_df = pd.DataFrame(sv_data)
-            
+
             # Sort efficiently using numpy argsort if DataFrame is large
             if len(sv_df) > 1000:
                 # Use numpy for large datasets
                 event_type_values = sv_df["Event Type"].values
                 primary_loc_values = sv_df["Primary Location"].values
-                
+
                 # Create composite sort key
                 sort_key = np.char.add(event_type_values, "_" + primary_loc_values)
                 sort_indices = np.argsort(sort_key)
                 sv_df = sv_df.iloc[sort_indices].reset_index(drop=True)
             else:
                 # Use pandas sort for smaller datasets
-                sv_df = sv_df.sort_values(["Event Type", "Primary Location"]).reset_index(drop=True)
-            
+                sv_df = sv_df.sort_values(
+                    ["Event Type", "Primary Location"]
+                ).reset_index(drop=True)
+
             # Save structural variants to CSV
             sv_df.to_csv(
                 os.path.join(
@@ -3022,7 +2984,7 @@ class FusionObject(BaseAnalysis):
                 ),
                 index=False,
             )
-            
+
             # Add to BedTree if needed
             if self.master_bed_tree[self.sampleID] is None:
                 self.master_bed_tree.add_bed_tree(
@@ -3031,8 +2993,7 @@ class FusionObject(BaseAnalysis):
                     reference_file=f"{self.reference_file}.fai",
                 )
             bedfile = self.master_bed_tree.bed_trees[self.sampleID]
-            
-            
+
             bedfile.load_from_string(
                 "\n".join(bed_lines),
                 merge=False,
@@ -3042,9 +3003,11 @@ class FusionObject(BaseAnalysis):
                 ),
                 source_type="FUSION",
             )
-            
-            logger.info(f"Processed {len(bed_lines)} structural variant events from {len(sv_reads)} reads")
-            
+
+            logger.info(
+                f"Processed {len(bed_lines)} structural variant events from {len(sv_reads)} reads"
+            )
+
         except Exception as e:
             logger.error(f"Error processing breakpoint results: {str(e)}")
             logger.error("Exception details:", exc_info=True)
@@ -3054,16 +3017,18 @@ class FusionObject(BaseAnalysis):
         Stops ongoing analysis and processes any remaining pending SV reads.
         """
         state.set_process_state("Fusion Analysis", ProcessState.STOPPING)
-        
+
         # Save final fusion results
         await self._save_fusion_results()
-        
+
         # Process any remaining pending SV reads before stopping
         if self.pending_sv_reads:
-            logger.info(f"Processing {len(self.pending_sv_reads)} pending SV read sets before stopping")
+            logger.info(
+                f"Processing {len(self.pending_sv_reads)} pending SV read sets before stopping"
+            )
             try:
                 combined_sv_reads = pd.concat(self.pending_sv_reads, ignore_index=True)
-                
+
                 async def final_bed_background_work(combined_sv_reads):
                     bed_lines = await run.cpu_bound(
                         build_breakpoint_graph,
@@ -3072,19 +3037,19 @@ class FusionObject(BaseAnalysis):
                         group_by_sv=True,
                     )
                     return bed_lines
-                
+
                 bed_lines = await background_tasks.create(
                     final_bed_background_work(combined_sv_reads)
                 )
-                
+
                 if len(bed_lines) > 0:
                     await self._process_breakpoint_results(bed_lines, combined_sv_reads)
-                
+
                 logger.info("Final breakpoint processing completed")
-                
+
             except Exception as e:
                 logger.error(f"Error in final breakpoint processing: {str(e)}")
-        
+
         state.stop_process("Fusion Analysis")
         await super().stop_analysis()
 
@@ -3095,7 +3060,10 @@ class FusionObject(BaseAnalysis):
         """
         try:
             # Save fusion candidates within target regions
-            if self.sampleID in self.fusion_candidates and not self.fusion_candidates[self.sampleID].empty:
+            if (
+                self.sampleID in self.fusion_candidates
+                and not self.fusion_candidates[self.sampleID].empty
+            ):
                 # Filter for duplicated reads
                 df = self.fusion_candidates[self.sampleID]
                 uniques = df["read_id"].duplicated(keep=False)
@@ -3106,32 +3074,45 @@ class FusionObject(BaseAnalysis):
                     if not result.empty:
                         result.to_csv(
                             os.path.join(
-                                self.check_and_create_folder(self.output, self.sampleID),
+                                self.check_and_create_folder(
+                                    self.output, self.sampleID
+                                ),
                                 "fusion_candidates_master.csv",
                             ),
                             index=False,
                         )
-                        logger.info(f"Saved {len(result)} fusion candidates within target regions")
-            
+                        logger.info(
+                            f"Saved {len(result)} fusion candidates within target regions"
+                        )
+
             # Save genome-wide fusion candidates
-            if self.sampleID in self.fusion_candidates_all and not self.fusion_candidates_all[self.sampleID].empty:
+            if (
+                self.sampleID in self.fusion_candidates_all
+                and not self.fusion_candidates_all[self.sampleID].empty
+            ):
                 # Filter for duplicated reads
                 df = self.fusion_candidates_all[self.sampleID]
                 uniques_all = df["read_id"].duplicated(keep=False)
                 doubles_all = df[uniques_all]
                 if not doubles_all.empty:
-                    counts_all = doubles_all.groupby("read_id")["col4"].transform("nunique")
+                    counts_all = doubles_all.groupby("read_id")["col4"].transform(
+                        "nunique"
+                    )
                     result_all = doubles_all[counts_all > 1]
                     if not result_all.empty:
                         result_all.to_csv(
                             os.path.join(
-                                self.check_and_create_folder(self.output, self.sampleID),
+                                self.check_and_create_folder(
+                                    self.output, self.sampleID
+                                ),
                                 "fusion_candidates_all.csv",
                             ),
                             index=False,
                         )
-                        logger.info(f"Saved {len(result_all)} genome-wide fusion candidates")
-                    
+                        logger.info(
+                            f"Saved {len(result_all)} genome-wide fusion candidates"
+                        )
+
         except Exception as e:
             logger.error(f"Error saving fusion results: {str(e)}")
             logger.error("Exception details:", exc_info=True)
