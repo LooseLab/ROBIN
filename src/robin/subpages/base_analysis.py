@@ -126,7 +126,7 @@ class BaseVis:
         """Set up the visualization components of the UI"""
         if sample_id:
             self.sampleID = sample_id
-        self.setup_ui()
+        await self.setup_ui()
         if self.progress and not self.browse:
             self.progress_bars()
 

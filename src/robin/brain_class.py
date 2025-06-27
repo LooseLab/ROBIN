@@ -1060,12 +1060,6 @@ class BrainMeth:
 
     async def information_panel(self, sample_id=None):
         """Display the main information panel with analysis results."""
-        with ui.grid(columns=2) as grid:
-            for _ in range(3):
-                ui.skeleton("text", width="3rem")
-                ui.skeleton("text", width="1rem")
-        await ui.context.client.connected()
-        grid.clear()
         try:
             logging.info(f"Starting information_panel with sample_id: {sample_id}")
             if sample_id:

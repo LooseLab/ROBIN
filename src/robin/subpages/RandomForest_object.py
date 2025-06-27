@@ -528,7 +528,7 @@ class RandomForestVis(BaseVis):
             0.65  # RandomForest-specific medium confidence threshold
         )
 
-    def setup_ui(self):
+    async def setup_ui(self):
         self.card = ui.card().classes("w-full p-2")
         with self.card:
             with ui.grid(columns=8).classes("w-full h-auto gap-2"):
@@ -543,6 +543,7 @@ class RandomForestVis(BaseVis):
         if self.summary:
             with self.summary:
                 ui.label("Forest classification: Unknown")
+        await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

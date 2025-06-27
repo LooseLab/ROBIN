@@ -443,11 +443,11 @@ class CNVVis(BaseVis):
         self.DATA_ARRAY = None
         self.data_array_path = None
 
-    def setup_ui(self) -> None:
+    async def setup_ui(self) -> None:
         """
         Set up the user interface for CNV analysis.
         """
-
+        
         self.display_row = ui.row().style("width: 100")
         if self.summary:
             with self.summary:
@@ -538,9 +538,9 @@ class CNVVis(BaseVis):
             self.gene_select = ui.select(
                 options={"All": "All"},
                 on_change=lambda e: (
-                    self.update_plots()
+                    self.update_plots(preserve_zoom=True)
                     if e.value == "All"
-                    else self.update_plots(gene_target=e.value)
+                    else self.update_plots(gene_target=e.value, preserve_zoom=True)
                 ),
                 label="Select Gene",
                 value="All",
@@ -558,7 +558,7 @@ class CNVVis(BaseVis):
                 # Define callback function before creating the toggle
                 def toggle_color_mode(e):
                     self.color_mode = e.value
-                    self.update_plots()
+                    self.update_plots(preserve_zoom=True)
 
                 # Create toggle with options as a dict and pass on_change in constructor
                 ui.toggle(
@@ -593,7 +593,7 @@ class CNVVis(BaseVis):
 
                 def toggle_breakpoint_visualization(e):
                     self.show_breakpoints = e.value == "show"
-                    self.update_plots()
+                    self.update_plots(preserve_zoom=True)
 
                 ui.toggle(
                     options={"hide": "Hide", "show": "Show"},
@@ -604,6 +604,7 @@ class CNVVis(BaseVis):
         self.scatter_echart = self.generate_chart(
             title="CNV Scatter Plot", initmin=0, initmax=8
         )
+
         self.difference_scatter_echart = self.generate_chart(
             title="Difference Plot", initmin=-2, initmax=2
         )
@@ -857,13 +858,30 @@ class CNVVis(BaseVis):
             self.create_proportion_time_chart2("Proportions over time - Genome Wide.")
             self.create_proportion_time_chart("Proportions over time.")
 
+
+
+        await ui.context.client.connected()
+        
+
         if self.browse:
             ui.timer(0.1, lambda: self.show_previous_data(), once=True)
         else:
             ui.timer(15, lambda: self.show_previous_data())
 
-    def update_plots(self, gene_target: Optional[str] = None) -> None:
-        """Update CNV plots with new data and annotations."""
+    def update_plots(self, gene_target: Optional[str] = None, preserve_zoom: bool = False) -> None:
+        """
+        Update CNV plots with new data and annotations.
+        
+        Parameters
+        ----------
+        gene_target : Optional[str], optional
+            Target gene to focus the plot on. If None, uses current chromosome selection.
+        preserve_zoom : bool, default False
+            Whether to preserve the current zoom settings. If True, user zoom settings
+            are maintained. If False, zoom is reset to show the full data range.
+            Set to True for UI control changes (color mode, breakpoints, etc.) and
+            False for chromosome/gene selection changes.
+        """
         if not gene_target:
             # Reset zoom when switching to "All" chromosomes view
             if self.chrom_select.value == "All":
@@ -887,24 +905,28 @@ class CNVVis(BaseVis):
                                 ui.update(toggle)
                 except Exception:
                     pass
+                # When switching to "All" view, don't preserve zoom
+                preserve_zoom = False
             else:
                 # In single chromosome view, allow breakpoints to be shown (default to previous state or 'show')
                 if not hasattr(self, '_breakpoint_toggle_initialized'):
                     self.show_breakpoints = True
                     self._breakpoint_toggle_initialized = True
             self._update_cnv_plot(
-                plot_to_update=self.scatter_echart, result=self.result, title="CNV"
+                plot_to_update=self.scatter_echart, result=self.result, title="CNV", preserve_zoom=preserve_zoom
             )
             self._update_cnv_plot(
                 plot_to_update=self.reference_scatter_echart,
                 result=self.result2,
                 title="Reference CNV",
+                preserve_zoom=preserve_zoom,
             )
             self._update_cnv_plot(
                 plot_to_update=self.difference_scatter_echart,
                 result=self.result3,
                 title="Difference CNV",
                 min_value="dataMin",
+                preserve_zoom=preserve_zoom,
             )
         else:
             self._update_cnv_plot(
@@ -912,12 +934,14 @@ class CNVVis(BaseVis):
                 result=self.result,
                 gene_target=gene_target,
                 title="CNV",
+                preserve_zoom=preserve_zoom,
             )
             self._update_cnv_plot(
                 plot_to_update=self.reference_scatter_echart,
                 result=self.result2,
                 gene_target=gene_target,
                 title="Reference CNV",
+                preserve_zoom=preserve_zoom,
             )
             self._update_cnv_plot(
                 plot_to_update=self.difference_scatter_echart,
@@ -925,6 +949,7 @@ class CNVVis(BaseVis):
                 gene_target=gene_target,
                 title="Difference CNV",
                 min_value="dataMin",
+                preserve_zoom=preserve_zoom,
             )
 
     def _handle_table_row_click(self, e, plot_to_update):
@@ -992,6 +1017,7 @@ class CNVVis(BaseVis):
             title (str): Title of the chart.
         """
         self.proportion_time_chart = self.create_time_chart(title)
+        
 
     def update_proportion_time_chart(self, datadf: pd.DataFrame) -> None:
         """
@@ -1391,9 +1417,28 @@ class CNVVis(BaseVis):
         title: Optional[str] = None,
         min_value: Optional[float] = 0,
         ui_mode: bool = True,
+        preserve_zoom: bool = False,
     ) -> None:
         """
         Update CNV plots with new data and annotations.
+        
+        Parameters
+        ----------
+        plot_to_update : ui.echart
+            The chart component to update.
+        result : Optional[Result], optional
+            CNV result data. If None, uses self.result.
+        gene_target : Optional[str], optional
+            Target gene to focus the plot on.
+        title : Optional[str], optional
+            Title for the plot.
+        min_value : Optional[float], default 0
+            Minimum value for the x-axis.
+        ui_mode : bool, default True
+            Whether to update the UI immediately.
+        preserve_zoom : bool, default False
+            Whether to preserve the current zoom settings. If True, user zoom settings
+            are maintained. If False, zoom is reset to show the full data range.
         """
         # Check if there is CNV result data available, either passed to the function or stored in the instance
         if result or self.result:
@@ -2255,18 +2300,20 @@ class CNVVis(BaseVis):
                     data_min = math.floor(data_min)
 
                 # Update y-axis limits
-                plot_to_update.options["yAxis"][0].update(
-                    {"min": data_min, "max": y_max}
-                )
+                if not preserve_zoom:
+                    plot_to_update.options["yAxis"][0].update(
+                        {"min": data_min, "max": y_max}
+                    )
 
-                # Update zoom settings
-                plot_to_update.options["dataZoom"][1].update(
-                    {
-                        "startValue": data_min,
-                        "endValue": y_max,
-                        "maxValueSpan": y_max - data_min,
-                    }
-                )
+                # Update zoom settings only if not preserving zoom
+                if not preserve_zoom:
+                    plot_to_update.options["dataZoom"][1].update(
+                        {
+                            "startValue": data_min,
+                            "endValue": y_max,
+                            "maxValueSpan": y_max - data_min,
+                        }
+                    )
 
     def create_summary_card(
         self, xy_estimate: str, bin_width: int, variance: float
@@ -2464,7 +2511,7 @@ class CNVVis(BaseVis):
                 else:
                     logger.info("Breakpoint data file does not exist")
                     self.DATA_ARRAY = None
-                self.update_plots()
+                self.update_plots(preserve_zoom=True)
 
             background_tasks.create(load_ruptures())
 
@@ -3089,7 +3136,7 @@ class CNVVis(BaseVis):
                 ui.update(self.scatter_echart)
 
         # Trigger a full update of all plots to ensure difference plot stays in linear scale
-        self.update_plots()
+        self.update_plots(preserve_zoom=True)
 
     def calculate_breakpoint_metrics(self, chromosome: str = None) -> dict:
         """

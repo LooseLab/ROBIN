@@ -189,7 +189,7 @@ class MGMTVis(BaseVis):
         # state.start_process("MGMT Analysis", ProcessType.BATCH)
         # state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
 
-    def setup_ui(self) -> None:
+    async def setup_ui(self) -> None:
         """
         Sets up the user interface for the MGMT analysis.
 
@@ -235,6 +235,8 @@ class MGMTVis(BaseVis):
                         "w-full mt-4 text-sm text-gray-500 justify-center"
                     ):
                         ui.label("Methylation status based on MGMT promoter analysis")
+                        
+        await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

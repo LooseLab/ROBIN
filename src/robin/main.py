@@ -647,7 +647,7 @@ class Methnice:
                 smalltitle=self.smalltitle,
                 batphone=self.batphone,
             ):
-                await ui.context.client.connected()
+                #await ui.context.client.connected()
                 with ui.column().classes("w-full"):
                     # Set up MinKNOW connection if necessary
                     if self.watchfolder is None and not self.browse:

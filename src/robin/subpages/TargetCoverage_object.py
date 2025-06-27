@@ -681,7 +681,7 @@ class TargetCoverageVis(BaseVis):
             )
         self.clair3_status_label.text = status
 
-    def setup_ui(self):
+    async def setup_ui(self):
         if self.summary:
             with self.summary:
                 with ui.card().classes("w-full p-4 mb-4"):
@@ -797,6 +797,7 @@ class TargetCoverageVis(BaseVis):
                 # self.INDELview = SNPview(self.INDELplaceholder)
                 # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
 
+        await ui.context.client.connected()
         self.mybutton = None
         if self.browse:
             self.page_timer = ui.timer(0.1, callback=self.show_previous_data, once=True)

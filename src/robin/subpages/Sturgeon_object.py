@@ -644,7 +644,7 @@ class SturgeonVis(BaseVis):
         # Remove state tracking for Sturgeon Analysis
         # state.start_process("Sturgeon Analysis", ProcessType.BATCH)
 
-    def setup_ui(self):
+    async def setup_ui(self):
         """
         Set up the user interface components for Sturgeon visualization.
 
@@ -674,6 +674,7 @@ class SturgeonVis(BaseVis):
         if self.summary:
             with self.summary:
                 ui.label("Sturgeon classification: Unknown")
+        await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

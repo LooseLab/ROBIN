@@ -1209,7 +1209,7 @@ class FusionVis(BaseVis):
         # self.NewBed = NewBed
         self.master_bed_tree = master_bed_tree
 
-    def setup_ui(self) -> None:
+    async def setup_ui(self) -> None:
         """
         Sets up the user interface for the Fusion Panel and Structural Variant Analysis.
         """
@@ -1231,7 +1231,7 @@ class FusionVis(BaseVis):
                                 ui.label("0").bind_text_from(
                                     self,
                                     "candidates",
-                                    backward=lambda n: f"{n} high confidence",
+                                    backward=lambda n: f"{n} between target fusions",
                                 ).classes("px-2 py-1 rounded bg-blue-100 text-blue-600")
 
                         # Right side - Additional metrics
@@ -1240,7 +1240,7 @@ class FusionVis(BaseVis):
                             ui.label("0").bind_text_from(
                                 self,
                                 "all_candidates",
-                                backward=lambda n: f"{n} low confidence fusions",
+                                backward=lambda n: f"{n} genome wide fusions",
                             ).classes("text-gray-600")
 
                     # Bottom row - Information
@@ -1456,7 +1456,7 @@ class FusionVis(BaseVis):
 
                         # self.sv_plot = ui.row().classes("w-full")
                         self.sv_table_container = ui.row().classes("w-full")
-
+        await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

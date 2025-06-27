@@ -469,7 +469,7 @@ class NanoDXVis(BaseVis):
             self.storefile = "NanoDX_scores.csv"
         #    self.output = f"{self.output}_PanCan"
 
-    def setup_ui(self) -> None:
+    async def setup_ui(self) -> None:
         """
         Sets up the user interface for the NanoDX analysis.
         """
@@ -486,6 +486,8 @@ class NanoDXVis(BaseVis):
         if self.summary:
             with self.summary:
                 ui.label(f"NanoDX classification {self.model}: Unknown")
+                
+        await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

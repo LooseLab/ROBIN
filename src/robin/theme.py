@@ -604,7 +604,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
 
     # Create disclaimer dialog that appears on first visit
     async def show_disclaimer():
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
         if not app.storage.tab.get("disclaimer_acknowledged", False):
             with ui.dialog().props(
                 "persistent"
