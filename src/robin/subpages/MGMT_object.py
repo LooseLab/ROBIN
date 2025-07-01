@@ -236,7 +236,7 @@ class MGMTVis(BaseVis):
                     ):
                         ui.label("Methylation status based on MGMT promoter analysis")
                         
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:
@@ -1012,6 +1012,9 @@ class MGMT_Object(BaseAnalysis):
                                     ),
                                     index=False,
                                 )
+                                
+                                # Update the bam_processed counter for progress tracking
+                                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]["bam_processed"] += 1
                         except Exception:
                             # logger.error(f"Error processing results: {e}")
                             raise

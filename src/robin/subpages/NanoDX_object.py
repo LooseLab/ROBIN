@@ -487,7 +487,7 @@ class NanoDXVis(BaseVis):
             with self.summary:
                 ui.label(f"NanoDX classification {self.model}: Unknown")
                 
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

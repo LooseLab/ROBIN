@@ -114,7 +114,7 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
             )
             logger.info("R script executed successfully")
             logger.debug(f"R script stdout: {result.stdout}")
-            print(f"R script stdout: {result.stdout}")
+            #print(f"R script stdout: {result.stdout}")
             if result.stderr:
                 pass
                 # logger.warning(f"R script stderr: {result.stderr}")
@@ -543,7 +543,7 @@ class RandomForestVis(BaseVis):
         if self.summary:
             with self.summary:
                 ui.label("Forest classification: Unknown")
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

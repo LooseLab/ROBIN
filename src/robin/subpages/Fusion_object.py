@@ -1456,7 +1456,7 @@ class FusionVis(BaseVis):
 
                         # self.sv_plot = ui.row().classes("w-full")
                         self.sv_table_container = ui.row().classes("w-full")
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

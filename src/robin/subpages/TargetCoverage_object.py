@@ -797,7 +797,7 @@ class TargetCoverageVis(BaseVis):
                 # self.INDELview = SNPview(self.INDELplaceholder)
                 # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
 
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
         self.mybutton = None
         if self.browse:
             self.page_timer = ui.timer(0.1, callback=self.show_previous_data, once=True)
@@ -2396,6 +2396,13 @@ class TargetCoverage(BaseAnalysis):
                     self.pending_snp_jobs += 1  # Increment counter when adding a job
 
         self.running = False
+
+        # At the end of the method, after all processing and before the method returns:
+        if hasattr(self, 'mainuuid') and hasattr(self, 'sampleID') and hasattr(self, 'name'):
+            try:
+                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]["bam_processed"] += 1
+            except Exception as e:
+                logger.warning(f"Could not update bam_processed counter: {e}")
 
     async def rerun_snp_analysis(self):
         """

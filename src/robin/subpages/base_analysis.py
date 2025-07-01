@@ -363,9 +363,9 @@ class BaseVis:
                             ).classes("text-xs min-w-[30px] text-right")
 
             if not state.shutdown_event:
-                ui.timer(1, callback=lambda: progress_summary.set_value(self._progress))
-                ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
-                ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
+                ui.timer(1, callback=lambda: progress_summary.set_value(self._progress_processed)) # total
+                ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed)) # not processed
+                ui.timer(1, callback=lambda: progressbar.set_value(self._progress_processed)) # processed
 
         except Exception as e:
             logging.error(f"Error creating progress bars for {self.name}: {str(e)}")
@@ -431,6 +431,8 @@ class BaseVis:
     def _get_counter_value(self, counter_name: str, default: int = 0) -> int:
         """Safely get a counter value from storage."""
         try:
+            sample_id = self.sampleID
+            app.storage.general[self.mainuuid][sample_id][self.name]["counters"]["bam_total"] = app.storage.general[self.mainuuid][sample_id][self.name]["counters"]["bams_in_processing"] + app.storage.general[self.mainuuid][sample_id][self.name]["counters"]["bam_processed"]
             return app.storage.general[self.mainuuid][self.sampleID][self.name][
                 "counters"
             ].get(counter_name, default)
@@ -445,9 +447,25 @@ class BaseVis:
             counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
                 "counters"
             ]
-            if counters.get("bam_count", 0) == 0:
+            if counters.get("bam_processed", 0) == 0:
                 return 0.0
-            return counters.get("bam_processed", 0) / counters.get("bam_count", 1)
+            return counters.get("bam_processed", 0) / counters.get("bam_total", 1)
+        except (KeyError, TypeError):
+            return 0.0
+        
+    @property
+    def _progress_processed(self) -> float:
+        """Calculate the progress of BAM file processing."""
+        try:
+            self._initialize_counters(self.sampleID)
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+                "counters"
+            ]
+            if counters.get("bam_processed", 0) == 0:
+                return 0.0
+            if counters.get("bam_total") == 0:
+                return 0.0
+            return counters.get("bam_processed", 0) / counters.get("bam_total", 1)
         except (KeyError, TypeError):
             return 0.0
 
@@ -461,11 +479,11 @@ class BaseVis:
             ]
             if counters.get("bam_count", 0) == 0:
                 return 0.0
-            return (
-                counters.get("bam_count", 0)
-                - counters.get("bams_in_processing", 0)
-                - counters.get("bam_processed", 0)
-            ) / counters.get("bam_count", 1)
+            not_analysed = counters.get("bam_count", 0) - counters.get("bams_in_processing", 0) - counters.get("bam_processed", 0)
+            if not_analysed == 0 or counters.get("bam_total") == 0:
+                return 0.0
+            else:
+                return not_analysed / counters.get("bam_total", 1)
         except (KeyError, TypeError):
             return 0.0
 
@@ -732,6 +750,7 @@ class BaseAnalysis:
                 logging.debug(
                     f"Initialized missing counters for {self.name} in sample {sample_id}"
                 )
+            
 
         except Exception as e:
             logging.error(
@@ -750,6 +769,8 @@ class BaseAnalysis:
                 }
             except Exception as nested_e:
                 logging.error(f"Failed to create fallback counters: {str(nested_e)}")
+        
+            
 
     async def stop_analysis(self):
         """Stop the analysis and clean up resources."""

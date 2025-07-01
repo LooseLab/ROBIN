@@ -77,7 +77,7 @@ from dateutil import parser
 import os
 import psutil
 import tempfile
-from nicegui import ui, app, run, background_tasks
+from nicegui import ui, app, run, background_tasks, binding
 import concurrent.futures
 import time
 
@@ -2667,6 +2667,9 @@ class BrainMeth:
         """
         try:
             # Get the current process
+            #print('a. links:', len(binding.active_links))
+            #print(binding.active_links)
+            
             current_process = psutil.Process(os.getpid())
             memory = psutil.virtual_memory()
             available_memory_gb = memory.available / (1024**3)

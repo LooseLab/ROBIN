@@ -4011,6 +4011,12 @@ class CNVAnalysis(BaseAnalysis):
                     raise
 
         finally:
+            # Update the bam_processed counter for progress tracking
+            if hasattr(self, 'mainuuid') and hasattr(self, 'sampleID') and hasattr(self, 'name'):
+                try:
+                    app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]["bam_processed"] += 1
+                except Exception as e:
+                    logger.warning(f"Could not update bam_processed counter: {e}")
             # Clean up temporary files but preserve CNV detector
             self._cleanup_state()
             self.running = False
