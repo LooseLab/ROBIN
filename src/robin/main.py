@@ -27,7 +27,7 @@ from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 from .core.state import state, ProcessType, ProcessState
 
 
-DEV_TESTING: bool = False
+DEV_TESTING: bool = True
 
 DEFAULT_CFG: str = "config.ini"
 UNIQUE_ID: str = str(uuid.uuid4())
@@ -622,6 +622,7 @@ class Methnice:
                         logging.warning(
                             "No telemetry instance available for map display"
                         )
+        await ui.context.client.connected()
 
     async def index_page(self) -> None:
         """
