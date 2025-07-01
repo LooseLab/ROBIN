@@ -2211,9 +2211,11 @@ class TargetCoverage(BaseAnalysis):
         # await loop.run_in_executor(
         #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
         # )
-        # run_bedtools(bamfile, self.bedfile, tempbamfile.name)
-        # await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
-        # )
+        #run_bedtools(bamfile, self.bedfile, tempbamfile.name)
+        await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
+        
+        
+        '''
         async def run_bedtools(bamfile, bedfile, tempbamfile):
             """
             This function extracts the target sites from the bamfile.
@@ -2250,7 +2252,8 @@ class TargetCoverage(BaseAnalysis):
         await background_tasks.create(
             run_bedtools(bamfile, self.bedfile, tempbamfile.name)
         )
-
+        '''
+        
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if self.sampleID not in self.targetbamfile.keys():
                 self.targetbamfile[self.sampleID] = os.path.join(

@@ -218,6 +218,8 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
     genomic_gap is set to –1 if the two pieces land on different chromosomes,
     else head2–tail1.
     """
+    
+    df = annotate_df(df)
 
     def natural_key(s: str):
         # split digits vs letters, so e.g. "chr2" < "chr10"
@@ -303,6 +305,7 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def annotate_df(df):
+    df = extract_split_read_alignments(df)
     # Apply filters first to reduce memory usage
     mq_mask = df["MQ"].values >= 55
     chr_mask = df["RNAME"].values != "chrM"
@@ -2579,7 +2582,7 @@ class FusionObject(BaseAnalysis):
                                 fusion_background_work(bamfile)
                             )
                         )
-
+                        
                         # Store fusion candidates in the class dictionaries
                         if (
                             fusion_candidates is not None
@@ -2598,10 +2601,11 @@ class FusionObject(BaseAnalysis):
                                     ],
                                     ignore_index=True,
                                 )
+                                
                             logger.info(
                                 f"Added {len(fusion_candidates)} fusion candidates for sample {self.sampleID}"
                             )
-
+                        
                         if (
                             fusion_candidates_all is not None
                             and not fusion_candidates_all.empty
@@ -2625,15 +2629,28 @@ class FusionObject(BaseAnalysis):
 
                         # Save fusion results periodically
                         await self._save_fusion_results()
-
+                        
                         # Process genome-wide structural variants
                         logger.info(
                             f"Processing BAM file for structural variants: {bamfile}"
                         )
 
-                        new_df = build_links_df(
-                            annotate_df(extract_split_read_alignments(bamfile))
-                        )
+                        #new_df = build_links_df(
+                        #    annotate_df(extract_split_read_alignments(bamfile))
+                        #)
+                        async def build_links_background_work(bamfile):
+                            new_df = await run.cpu_bound(
+                                    build_links_df,
+                                    bamfile,
+                                )
+                            
+                            return new_df
+
+                        new_df = await background_tasks.create(
+                                build_links_background_work(bamfile)
+                            )
+                        
+                        
                         # Save the new_df to a file, appending to existing data
                         if not new_df.empty:
                             # Construct the output file path
@@ -2784,33 +2801,7 @@ class FusionObject(BaseAnalysis):
                                 "No structural variant links found in this BAM file"
                             )
 
-                        """
-                        #ToDO: Add to the bed_tree
-                        # Add to BedTree if needed
-                        if self.master_bed_tree[self.sampleID] is None:
-                            self.master_bed_tree.add_bed_tree(
-                                sample_id=self.sampleID,
-                                preserve_original_tree=True,
-                                reference_file=f"{self.reference_file}.fai",
-                            )
-                        bedfile = self.master_bed_tree.bed_trees[self.sampleID]
-
-                        bedfile.load_from_string(
-                            "\n".join(bed_lines),
-                            merge=False,
-                            write_files=True,
-                            output_location=os.path.join(
-                                self.check_and_create_folder(
-                                    self.output, self.sampleID
-                                )
-                            ),
-                            source_type="FUSION",
-                        )
-
-                        logger.info(f"We found {len(bed_lines)} possible events.")
-                        """
-
-                        # ... existing code ...
+                        
                     except Exception as e:
                         logger.error(f"Error processing BAM file: {str(e)}")
                         logger.error("Exception details:", exc_info=True)

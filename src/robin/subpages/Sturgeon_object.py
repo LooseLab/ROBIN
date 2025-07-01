@@ -674,7 +674,7 @@ class SturgeonVis(BaseVis):
         if self.summary:
             with self.summary:
                 ui.label("Sturgeon classification: Unknown")
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:
