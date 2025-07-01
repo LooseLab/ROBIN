@@ -2312,7 +2312,7 @@ class BrainMeth:
                             if not selectedtab:
                                 selectedtab = mnpflextab
 
-                    with ui.tab_panels(tabs, value=selectedtab):# , on_change=lambda e: print(e)).classes("w-full"):
+                    with ui.tab_panels(tabs, value=selectedtab).classes("w-full"):# , on_change=lambda e: print(e))
                         display_args = {
                             "threads": self.threads,
                             "output": self.output,
