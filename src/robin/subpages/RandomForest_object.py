@@ -26,7 +26,7 @@ The module requires proper configuration of input/output directories and
 assumes the presence of necessary R scripts and model files.
 """
 
-from robin.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis, BaseVis
 import os
 import tempfile
 import time
@@ -76,7 +76,7 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
         logger.info(f"Batch number: {batch}")
 
         # Check if R script exists
-        r_script_path = f"{HVPATH}/bin/methylation_classification_nanodx_v0.1.R"
+        r_script_path = f"{HVPATH}/bin/methylation_classification_nanodx_v0.2.R"
         if not os.path.exists(r_script_path):
             logger.error(f"R script not found at: {r_script_path}")
             raise FileNotFoundError(f"R script not found: {r_script_path}")
@@ -114,6 +114,7 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
             )
             logger.info("R script executed successfully")
             logger.debug(f"R script stdout: {result.stdout}")
+            #print(f"R script stdout: {result.stdout}")
             if result.stderr:
                 pass
                 # logger.warning(f"R script stderr: {result.stderr}")
@@ -251,126 +252,6 @@ class RandomForest_object(BaseAnalysis):
         kwargs["medium_confidence_threshold"] = (
             0.65  # RandomForest-specific medium confidence threshold
         )
-
-    def setup_ui(self):
-        self.card = ui.card().classes("w-full p-2")
-        with self.card:
-            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
-                with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 p-2"
-                ):
-                    self.create_rcns2_chart("Random Forest")
-                with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 p-2"
-                ):
-                    self.create_rcns2_time_chart("Random Forest Time Series")
-        if self.summary:
-            with self.summary:
-                ui.label("Forest classification: Unknown")
-        if self.browse:
-            self.show_previous_data()
-        else:
-            ui.timer(5, lambda: self.show_previous_data())
-
-    def show_previous_data(self):
-        """
-        Load and display previously generated Random Forest analysis results.
-        """
-        try:
-            logger.info("Starting show_previous_data")
-
-            # Get output path
-            if not self.browse:
-                for item in app.storage.general[self.mainuuid]:
-                    if item == "sample_ids":
-                        for sample in app.storage.general[self.mainuuid][item]:
-                            self.sampleID = sample
-                output = self.output
-                logger.debug(f"Using output path: {output}")
-            if self.browse:
-                output = self.check_and_create_folder(self.output, self.sampleID)
-                logger.debug(f"Using browse output path: {output}")
-
-            scores_file = os.path.join(output, "random_forest_scores.csv")
-            logger.info(f"Looking for scores file: {scores_file}")
-
-            if os.path.exists(scores_file):
-                logger.info(f"Loading scores from: {scores_file}")
-                try:
-                    self.rcns2_df_store = pd.read_csv(scores_file, index_col=0)
-                    logger.info(
-                        f"DataFrame loaded with shape: {self.rcns2_df_store.shape}"
-                    )
-
-                    if not self.rcns2_df_store.empty:
-                        columns_greater_than_threshold = (
-                            self.rcns2_df_store > self.threshold
-                        ).any()
-                        columns_not_greater_than_threshold = (
-                            ~columns_greater_than_threshold
-                        )
-                        result = self.rcns2_df_store.columns[
-                            columns_not_greater_than_threshold
-                        ].tolist()
-                        logger.debug(f"Filtered columns: {result}")
-
-                        # Update time series chart
-                        filtered_df = self.rcns2_df_store.drop(columns=result)
-                        logger.info(
-                            f"Updating time chart with filtered data shape: {filtered_df.shape}"
-                        )
-                        self.update_rcns2_time_chart(filtered_df)
-
-                        # Get last row data
-                        lastrow = self.rcns2_df_store.iloc[-1]
-                        logger.debug(f"Last row before processing: {lastrow.to_dict()}")
-
-                        n_features = lastrow.get("number_probes", 0)
-                        if "number_probes" in lastrow.index:
-                            lastrow = lastrow.drop("number_probes")
-                            logger.info(
-                                f"Dropped number_probes column, features found: {n_features}"
-                            )
-
-                        lastrow_plot = lastrow.sort_values(ascending=False).head(10)
-                        lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-                        logger.info(
-                            f"Top classification: {lastrow_plot_top.index[0]} ({lastrow_plot_top.values[0]:.1f}%)"
-                        )
-
-                        # Update summary card
-                        if self.summary:
-                            with self.summary:
-                                self.summary.clear()
-                                classification_text = f"Forest classification: {lastrow_plot_top.index[0]}"
-                                logger.debug(
-                                    f"Creating summary card with text: {classification_text}"
-                                )
-                                self.create_summary_card(
-                                    classification_text=classification_text,
-                                    confidence_value=lastrow_plot_top.values[0] / 100,
-                                    features_found=(
-                                        int(n_features) if n_features else None
-                                    ),
-                                )
-
-                        # Update bar plot
-                        logger.info("Updating bar plot with top 10 classifications")
-                        self.update_rcns2_plot(
-                            lastrow_plot.index.to_list(),
-                            list(lastrow_plot.values),
-                            "All",
-                            n_features if n_features else None,
-                        )
-                        logger.info("Completed show_previous_data successfully")
-                except Exception as e:
-                    logger.error(f"Error reading scores file: {str(e)}", exc_info=True)
-            else:
-                logger.debug(f"No scores file found at: {scores_file}")
-
-        except Exception as e:
-            logger.error(f"Error in show_previous_data: {str(e)}", exc_info=True)
-            raise
 
     async def process_bam(
         self, bamfile: List[Tuple[str, float]], timestamp: float = None
@@ -565,6 +446,208 @@ class RandomForest_object(BaseAnalysis):
             state.set_process_state(
                 "Random Forest Analysis", ProcessState.WAITING_FOR_DATA
             )
+
+    async def stop_analysis(self):
+        """Stop the Random Forest analysis."""
+        state.set_process_state("Random Forest Analysis", ProcessState.STOPPING)
+        state.stop_process("Random Forest Analysis")
+        await super().stop_analysis()
+
+
+class RandomForestVis(BaseVis):
+    """
+    A class for processing and visualizing Random Forest methylation classification results.
+
+    This class extends BaseAnalysis to provide specialized functionality for
+    Random Forest methylation analysis. It handles real-time processing of BAM files,
+    methylation data extraction, and visualization of classification results.
+
+    Parameters
+    ----------
+    *args
+        Variable length argument list passed to BaseAnalysis
+    showerrors : bool, optional
+        Whether to show error messages (default: False)
+    **kwargs
+        Arbitrary keyword arguments passed to BaseAnalysis
+
+    Attributes
+    ----------
+    rcns2_df_store : dict
+        Store for Random Forest dataframes
+    threshold : float
+        Confidence threshold for predictions (default: 0.5)
+    bambatch : dict
+        Dictionary tracking BAM file batches
+    cpgs_file : str
+        Path to the CpG sites BED file
+    offset : bool
+        Flag for offset calculations
+    first_run : dict
+        Tracks first run status for each sample
+    showerrors : bool
+        Whether to show error messages
+    modelfile : str
+        Path to the model file
+    dataDir : dict
+        Dictionary of temporary directories for data
+    bedDir : dict
+        Dictionary of temporary directories for BED files
+    merged_bed_file : dict
+        Dictionary of merged BED files
+    """
+
+    def __init__(self, *args, showerrors=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        # Remove state tracking for Random Forest Analysis
+        # state.start_process("Random Forest Analysis", ProcessType.BATCH)
+        state.set_process_state("Random Forest Analysis", ProcessState.WAITING_FOR_DATA)
+        self.rcns2_df_store = {}
+        self.threshold = 0.5
+        self.bambatch = {}
+        self.cpgs_file = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "hglft_genome_260e9_91a970_clean.bed",
+        )
+        self.offset = False
+        self.first_run = {}
+        self.showerrors = showerrors
+        self.modelfile = os.path.join(
+            os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
+        )
+        self.dataDir = {}
+        self.bedDir = {}
+        self.merged_bed_file = {}
+
+        # Set RandomForest-specific confidence thresholds
+        # RandomForest confidence is reported as percentage (0-100) but converted to 0-1 in create_summary_card
+        kwargs["high_confidence_threshold"] = (
+            0.85  # RandomForest-specific high confidence threshold
+        )
+        kwargs["medium_confidence_threshold"] = (
+            0.65  # RandomForest-specific medium confidence threshold
+        )
+
+    async def setup_ui(self):
+        self.card = ui.card().classes("w-full p-2")
+        with self.card:
+            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 p-2"
+                ):
+                    self.create_rcns2_chart("Random Forest")
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 p-2"
+                ):
+                    self.create_rcns2_time_chart("Random Forest Time Series")
+        if self.summary:
+            with self.summary:
+                ui.label("Forest classification: Unknown")
+        #await ui.context.client.connected()
+        if self.browse:
+            self.show_previous_data()
+        else:
+            ui.timer(5, lambda: self.show_previous_data())
+
+    def show_previous_data(self):
+        """
+        Load and display previously generated Random Forest analysis results.
+        """
+        try:
+            logger.info("Starting show_previous_data")
+
+            # Get output path
+            if not self.browse:
+                for item in app.storage.general[self.mainuuid]:
+                    if item == "sample_ids":
+                        for sample in app.storage.general[self.mainuuid][item]:
+                            self.sampleID = sample
+                output = self.output
+                logger.debug(f"Using output path: {output}")
+            if self.browse:
+                output = self.check_and_create_folder(self.output, self.sampleID)
+                logger.debug(f"Using browse output path: {output}")
+
+            scores_file = os.path.join(output, "random_forest_scores.csv")
+            logger.info(f"Looking for scores file: {scores_file}")
+
+            if os.path.exists(scores_file):
+                logger.info(f"Loading scores from: {scores_file}")
+                try:
+                    self.rcns2_df_store = pd.read_csv(scores_file, index_col=0)
+                    logger.info(
+                        f"DataFrame loaded with shape: {self.rcns2_df_store.shape}"
+                    )
+
+                    if not self.rcns2_df_store.empty:
+                        columns_greater_than_threshold = (
+                            self.rcns2_df_store > self.threshold
+                        ).any()
+                        columns_not_greater_than_threshold = (
+                            ~columns_greater_than_threshold
+                        )
+                        result = self.rcns2_df_store.columns[
+                            columns_not_greater_than_threshold
+                        ].tolist()
+                        logger.debug(f"Filtered columns: {result}")
+
+                        # Update time series chart
+                        filtered_df = self.rcns2_df_store.drop(columns=result)
+                        logger.info(
+                            f"Updating time chart with filtered data shape: {filtered_df.shape}"
+                        )
+                        self.update_rcns2_time_chart(filtered_df)
+
+                        # Get last row data
+                        lastrow = self.rcns2_df_store.iloc[-1]
+                        logger.debug(f"Last row before processing: {lastrow.to_dict()}")
+
+                        n_features = lastrow.get("number_probes", 0)
+                        if "number_probes" in lastrow.index:
+                            lastrow = lastrow.drop("number_probes")
+                            logger.info(
+                                f"Dropped number_probes column, features found: {n_features}"
+                            )
+
+                        lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+                        lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+                        logger.info(
+                            f"Top classification: {lastrow_plot_top.index[0]} ({lastrow_plot_top.values[0]:.1f}%)"
+                        )
+
+                        # Update summary card
+                        if self.summary:
+                            with self.summary:
+                                self.summary.clear()
+                                classification_text = f"Forest classification: {lastrow_plot_top.index[0]}"
+                                logger.debug(
+                                    f"Creating summary card with text: {classification_text}"
+                                )
+                                self.create_summary_card(
+                                    classification_text=classification_text,
+                                    confidence_value=lastrow_plot_top.values[0] / 100,
+                                    features_found=(
+                                        int(n_features) if n_features else None
+                                    ),
+                                )
+
+                        # Update bar plot
+                        logger.info("Updating bar plot with top 10 classifications")
+                        self.update_rcns2_plot(
+                            lastrow_plot.index.to_list(),
+                            list(lastrow_plot.values),
+                            "All",
+                            n_features if n_features else None,
+                        )
+                        logger.info("Completed show_previous_data successfully")
+                except Exception as e:
+                    logger.error(f"Error reading scores file: {str(e)}", exc_info=True)
+            else:
+                logger.debug(f"No scores file found at: {scores_file}")
+
+        except Exception as e:
+            logger.error(f"Error in show_previous_data: {str(e)}", exc_info=True)
+            raise
 
     def create_rcns2_chart(self, title):
         """
@@ -871,9 +954,3 @@ class RandomForest_object(BaseAnalysis):
         except Exception as e:
             logger.error(f"Error in update_rcns2_time_chart: {str(e)}", exc_info=True)
             raise
-
-    async def stop_analysis(self):
-        """Stop the Random Forest analysis."""
-        state.set_process_state("Random Forest Analysis", ProcessState.STOPPING)
-        state.stop_process("Random Forest Analysis")
-        await super().stop_analysis()

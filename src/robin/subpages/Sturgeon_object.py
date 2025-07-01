@@ -26,13 +26,13 @@ The module requires proper configuration of input/output directories and
 assumes the presence of necessary model files for Sturgeon predictions.
 """
 
-from robin.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis, BaseVis
 import os
 import sys
 import tempfile
 import time
 import pandas as pd
-from nicegui import ui, app, run
+from nicegui import ui, app, run, background_tasks
 from robin import theme
 from robin import models
 import click
@@ -462,7 +462,189 @@ class Sturgeon_object(BaseAnalysis):
         # Remove state tracking for Sturgeon Analysis
         # state.start_process("Sturgeon Analysis", ProcessType.BATCH)
 
-    def setup_ui(self):
+    async def process_bam(self, bamfile, timestamp):
+        """Process BAM files for Sturgeon analysis."""
+        state.set_process_state("Sturgeon Analysis", ProcessState.RUNNING)
+        try:
+            sampleID = self.sampleID
+
+            # Initialize directories if needed
+            if sampleID not in self.dataDir.keys():
+                self.dataDir[sampleID] = tempfile.TemporaryDirectory(
+                    dir=self.check_and_create_folder(self.output, sampleID)
+                )
+                self.bedDir[sampleID] = tempfile.TemporaryDirectory(
+                    dir=self.check_and_create_folder(self.output, sampleID)
+                )
+
+            latest_file = 0
+
+            if (
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bam_count"
+                ]
+                > 0
+            ):
+                if latest_file:
+                    currenttime = latest_file * 1000
+                else:
+                    currenttime = timestamp * 1000 if timestamp else time.time() * 1000
+
+                parquet_path = os.path.join(
+                    self.check_and_create_folder(self.output, sampleID),
+                    f"{sampleID}.parquet",
+                )
+
+                async def sturgeon_bam_background_work(sampleID, parquet_path):
+                    try:
+                        if self.check_file_time(parquet_path):
+                            tomerge_length_file = os.path.join(
+                                self.check_and_create_folder(self.output, sampleID),
+                                "tomerge_length.txt",
+                            )
+                            with open(tomerge_length_file, "r") as f:
+                                tomerge_length = int(
+                                    f.readline().strip().split(": ")[1]
+                                )
+
+                            merged_modkit_df = await run.cpu_bound(
+                                load_modkit_data, parquet_path
+                            )
+
+                            temp_pileup = tempfile.NamedTemporaryFile(
+                                dir=self.check_and_create_folder(self.output, sampleID)
+                            )
+
+                            # Pass the cleaned data
+                            result_df = await run.cpu_bound(
+                                modkit_pileup_file_to_bed,
+                                merged_modkit_df,
+                                temp_pileup.name,
+                                self.probes_file,
+                            )
+
+                            diagnosis = await run.cpu_bound(
+                                predict_sample_from_dataframe, result_df
+                            )
+                            self.st_num_probes[sampleID] = diagnosis.iloc[-1][
+                                "number_probes"
+                            ]
+                            # lastrow = mydf.iloc[-1].drop("number_probes")
+                            mydf_to_save = diagnosis
+                            mydf_to_save["timestamp"] = currenttime
+
+                            if sampleID not in self.sturgeon_df_store:
+                                self.sturgeon_df_store[sampleID] = pd.DataFrame()
+
+                            # Exclude empty or all-NA entries before concatenation
+                            if not mydf_to_save.dropna(how="all").empty:
+                                self.sturgeon_df_store[sampleID] = pd.concat(
+                                    [
+                                        self.sturgeon_df_store[sampleID],
+                                        mydf_to_save.set_index("timestamp"),
+                                    ]
+                                )
+                                self.sturgeon_df_store[sampleID].to_csv(
+                                    os.path.join(
+                                        self.check_and_create_folder(
+                                            self.output, sampleID
+                                        ),
+                                        "sturgeon_scores.csv",
+                                    )
+                                )
+                            app.storage.general[self.mainuuid][sampleID][self.name][
+                                "counters"
+                            ]["bam_processed"] = tomerge_length
+
+                            # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                            #    "bams_in_processing"
+                        # ] = 0
+                        # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                        #    "bam_count"
+                        # ] -= tomerge_length
+                        # print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
+                    except Exception as e:
+                        logger.error(f"Error in process_bam (sturgeon): {e}")
+
+                await background_tasks.create(
+                    sturgeon_bam_background_work(sampleID, parquet_path)
+                )
+
+            self.running = False
+        finally:
+            state.set_process_state("Sturgeon Analysis", ProcessState.WAITING_FOR_DATA)
+
+    async def stop_analysis(self):
+        """Stop the Sturgeon analysis."""
+        state.set_process_state("Sturgeon Analysis", ProcessState.STOPPING)
+        state.stop_process("Sturgeon Analysis")
+        await super().stop_analysis()
+
+
+class SturgeonVis(BaseVis):
+    """
+    A class for processing and visualizing Sturgeon methylation analysis results.
+
+    This class extends BaseAnalysis to provide specialized functionality for
+    Sturgeon methylation analysis. It handles real-time processing of BAM files,
+    methylation data extraction, and visualization of results.
+
+    Parameters
+    ----------
+    *args
+        Variable length argument list passed to BaseAnalysis
+    **kwargs
+        Arbitrary keyword arguments passed to BaseAnalysis
+
+    Attributes
+    ----------
+    sturgeon_df_store : dict
+        Store for Sturgeon dataframes
+    threshold : float
+        Confidence threshold for predictions (default: 0.05)
+    first_run : dict
+        Tracks first run status for each sample
+    modelfile : str
+        Path to the Sturgeon model file
+    dataDir : dict
+        Dictionary of temporary directories for data
+    bedDir : dict
+        Dictionary of temporary directories for BED files
+    st_num_probes : dict
+        Dictionary tracking number of probes per sample
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.sturgeon_df_store = {}
+        self.threshold = 0.05
+        self.first_run = {}
+        self.modelfile = os.path.join(
+            os.path.dirname(os.path.abspath(models.__file__)), "general.zip"
+        )
+        self.dataDir = {}
+        self.bedDir = {}
+        self.st_num_probes = {}
+        reference_genome = "hg38"
+        self.probes_file = os.path.join(
+            os.path.dirname(sturgeon.__file__),
+            "include/static",
+            "probes_{}.bed".format(reference_genome),
+        )
+
+        # Set Sturgeon-specific confidence thresholds
+        # Sturgeon typically gives higher confidence scores, so adjust thresholds accordingly
+        kwargs["high_confidence_threshold"] = (
+            0.8  # Sturgeon-specific high confidence threshold
+        )
+        kwargs["medium_confidence_threshold"] = (
+            0.6  # Sturgeon-specific medium confidence threshold
+        )
+
+        super().__init__(*args, **kwargs)
+        # Remove state tracking for Sturgeon Analysis
+        # state.start_process("Sturgeon Analysis", ProcessType.BATCH)
+
+    async def setup_ui(self):
         """
         Set up the user interface components for Sturgeon visualization.
 
@@ -492,6 +674,7 @@ class Sturgeon_object(BaseAnalysis):
         if self.summary:
             with self.summary:
                 ui.label("Sturgeon classification: Unknown")
+        await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:
@@ -548,107 +731,6 @@ class Sturgeon_object(BaseAnalysis):
                 "All",
                 self.sturgeon_df_store.iloc[-1]["number_probes"],
             )
-
-    async def process_bam(self, bamfile, timestamp):
-        """Process BAM files for Sturgeon analysis."""
-        state.set_process_state("Sturgeon Analysis", ProcessState.RUNNING)
-        try:
-            sampleID = self.sampleID
-
-            # Initialize directories if needed
-            if sampleID not in self.dataDir.keys():
-                self.dataDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
-                self.bedDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
-
-            latest_file = 0
-
-            if (
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bam_count"
-                ]
-                > 0
-            ):
-                if latest_file:
-                    currenttime = latest_file * 1000
-                else:
-                    currenttime = timestamp * 1000 if timestamp else time.time() * 1000
-
-                parquet_path = os.path.join(
-                    self.check_and_create_folder(self.output, sampleID),
-                    f"{sampleID}.parquet",
-                )
-
-                try:
-                    if self.check_file_time(parquet_path):
-                        tomerge_length_file = os.path.join(
-                            self.check_and_create_folder(self.output, sampleID),
-                            "tomerge_length.txt",
-                        )
-                        with open(tomerge_length_file, "r") as f:
-                            tomerge_length = int(f.readline().strip().split(": ")[1])
-
-                        merged_modkit_df = await run.cpu_bound(
-                            load_modkit_data, parquet_path
-                        )
-
-                        temp_pileup = tempfile.NamedTemporaryFile(
-                            dir=self.check_and_create_folder(self.output, sampleID)
-                        )
-
-                        # Pass the cleaned data
-                        result_df = await run.cpu_bound(
-                            modkit_pileup_file_to_bed,
-                            merged_modkit_df,
-                            temp_pileup.name,
-                            self.probes_file,
-                        )
-
-                        diagnosis = predict_sample_from_dataframe(result_df)
-                        self.st_num_probes[sampleID] = diagnosis.iloc[-1][
-                            "number_probes"
-                        ]
-                        # lastrow = mydf.iloc[-1].drop("number_probes")
-                        mydf_to_save = diagnosis
-                        mydf_to_save["timestamp"] = currenttime
-
-                        if sampleID not in self.sturgeon_df_store:
-                            self.sturgeon_df_store[sampleID] = pd.DataFrame()
-
-                        # Exclude empty or all-NA entries before concatenation
-                        if not mydf_to_save.dropna(how="all").empty:
-                            self.sturgeon_df_store[sampleID] = pd.concat(
-                                [
-                                    self.sturgeon_df_store[sampleID],
-                                    mydf_to_save.set_index("timestamp"),
-                                ]
-                            )
-                            self.sturgeon_df_store[sampleID].to_csv(
-                                os.path.join(
-                                    self.check_and_create_folder(self.output, sampleID),
-                                    "sturgeon_scores.csv",
-                                )
-                            )
-                        app.storage.general[self.mainuuid][sampleID][self.name][
-                            "counters"
-                        ]["bam_processed"] = tomerge_length
-
-                        # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                        #    "bams_in_processing"
-                    # ] = 0
-                    # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    #    "bam_count"
-                    # ] -= tomerge_length
-                    # print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
-                except Exception as e:
-                    logger.error(f"Error in process_bam (sturgeon): {e}")
-
-            self.running = False
-        finally:
-            state.set_process_state("Sturgeon Analysis", ProcessState.WAITING_FOR_DATA)
 
     def create_sturgeon_chart(self, title):
         """
@@ -919,12 +1001,6 @@ class Sturgeon_object(BaseAnalysis):
         )
 
         self.sturgeon_time_chart.update()
-
-    async def stop_analysis(self):
-        """Stop the Sturgeon analysis."""
-        state.set_process_state("Sturgeon Analysis", ProcessState.STOPPING)
-        state.stop_process("Sturgeon Analysis")
-        await super().stop_analysis()
 
 
 def test_me(

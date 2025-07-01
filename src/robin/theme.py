@@ -40,8 +40,9 @@ import asyncio
 import logging
 import subprocess
 import importlib.metadata
+from datetime import datetime
 
-from nicegui import ui, app, events, core
+from nicegui import ui, app, events, core, run
 import nicegui.air
 
 from pathlib import Path
@@ -55,6 +56,19 @@ import psutil
 import platform
 
 
+def get_version_from_github():
+    response = requests.get(
+        "https://raw.githubusercontent.com/LooseLab/ROBIN/main/src/robin/__about__.py"
+    )
+    response.raise_for_status()
+    remote_version_str = None
+    for line in response.text.split("\n"):
+        if line.startswith("__version__"):
+            remote_version_str = line.split("=")[1].strip().strip('"').strip("'")
+            break
+    return remote_version_str
+
+
 async def check_version():
     """
     Check the current version against the remote version on GitHub.
@@ -65,18 +79,7 @@ async def check_version():
         return
 
     try:
-        # Get the remote version from GitHub
-        response = requests.get(
-            "https://raw.githubusercontent.com/LooseLab/ROBIN/main/src/robin/__about__.py"
-        )
-        response.raise_for_status()
-
-        # Extract version from the response text
-        remote_version_str = None
-        for line in response.text.split("\n"):
-            if line.startswith("__version__"):
-                remote_version_str = line.split("=")[1].strip().strip('"').strip("'")
-                break
+        remote_version_str = await run.io_bound(get_version_from_github)
 
         if not remote_version_str:
             with ui.dialog() as dialog, ui.card():
@@ -153,6 +156,72 @@ HEADER_HTML = (Path(__file__).parent / "static" / "header.html").read_text()
 # Read the CSS styles for the application
 STYLE_CSS = (Path(__file__).parent / "static" / "styles.css").read_text()
 
+# Global RAM history for background tracking (now only for ROBIN)
+ram_history = {
+    "robin": [],
+    "peak": [],
+    "available": [],  # Available system memory
+    "free": [],  # Free system memory
+    "swap_used": [],  # Used swap memory
+    "swap_total": [],  # Total swap memory
+    "timestamps": [],
+    "max_points": 2880,  # 24 hours at 30s intervals (24 * 60 * 2)
+}
+
+# Track the current peak in a mutable container
+current_peak = [0]
+
+
+def get_robin_ram_usage():
+    process = psutil.Process(os.getpid())
+    ram_gb = process.memory_info().rss / (1024 * 1024 * 1024)
+    for child in process.children(recursive=True):
+        try:
+            ram_gb += child.memory_info().rss / (1024 * 1024 * 1024)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return round(ram_gb, 2)
+
+
+def collect_ram_usage():
+    robin_ram = get_robin_ram_usage()
+    current_time = datetime.now().strftime("%H:%M:%S")
+
+    # Get system memory info
+    mem = psutil.virtual_memory()
+    available_gb = round(mem.available / (1024 * 1024 * 1024), 2)  # Convert to GB
+    free_gb = round(mem.free / (1024 * 1024 * 1024), 2)  # Convert to GB
+
+    # Get swap memory info
+    swap = psutil.swap_memory()
+    swap_used_gb = round(swap.used / (1024 * 1024 * 1024), 2)  # Convert to GB
+    swap_total_gb = round(swap.total / (1024 * 1024 * 1024), 2)  # Convert to GB
+
+    ram_history["robin"].append(robin_ram)
+    ram_history["available"].append(available_gb)
+    ram_history["free"].append(free_gb)
+    ram_history["swap_used"].append(swap_used_gb)
+    ram_history["swap_total"].append(swap_total_gb)
+    ram_history["timestamps"].append(current_time)
+
+    # Update peak
+    current_peak[0] = max(current_peak[0], robin_ram)
+    ram_history["peak"].append(current_peak[0])
+    current_peak[0] = 0  # Reset for next interval
+
+    # Keep only the last N points
+    max_points = ram_history["max_points"]
+    for key in [
+        "robin",
+        "peak",
+        "available",
+        "free",
+        "swap_used",
+        "swap_total",
+        "timestamps",
+    ]:
+        ram_history[key] = ram_history[key][-max_points:]
+
 
 def create_activity_monitor():
     """
@@ -170,6 +239,12 @@ def create_activity_monitor():
                 self.columns = {}  # Dictionary to store column containers
                 self.indicators = {}  # Dictionary to store process indicators
                 self.is_shutting_down = False
+                self.performance_metrics_container = None
+                self.ram_history = {
+                    "robin": [],
+                    "timestamps": [],
+                }  # Store RAM usage history
+                self.max_history_points = 60  # Store 30 minutes of data (30s * 60)
 
                 # Initialize process states
                 for process_type in ProcessType:
@@ -189,7 +264,7 @@ def create_activity_monitor():
                 for status_type, color_class, is_spinning in [
                     ("Running", "primary", True),  # Blue
                     ("Waiting", "warning", False),  # Orange
-                    ("Starting", "info", True),  # Light Blue
+                    ("Starting", "info", True),  # Light Blue, spinning
                     ("Error", "negative", False),  # Red
                     ("Finished", "positive", False),  # Green
                 ]:
@@ -201,6 +276,163 @@ def create_activity_monitor():
                         else:
                             progress.value = 100
                         ui.label(status_type).style("font-size: 0.75rem")
+
+            # Add performance metrics UI
+            with ui.card().classes("w-full p-4 mb-4"):
+                ui.label("System Performance").classes("text-lg font-medium mb-4")
+                # Create a container for performance metrics that will be populated by the Brain class
+                status.performance_metrics_container = ui.column().classes(
+                    "w-full gap-4"
+                )
+
+                # Add RAM usage graph using ECharts
+                with ui.card().classes("w-full p-4"):
+                    ui.label("Memory Usage").classes("text-lg font-medium mb-4")
+
+                    # Initial ECharts options for two lines (current and peak)
+                    ram_echart_options = {
+                        "backgroundColor": "transparent",
+                        "title": {"text": "Memory Usage (24h)", "left": "center"},
+                        "tooltip": {"trigger": "axis"},
+                        "legend": {
+                            "data": [
+                                "ROBIN",
+                                "Peak",
+                                "Available",
+                                "Free",
+                                "Swap Used",
+                                "Swap Total",
+                            ],
+                            "top": 30,
+                        },
+                        "xAxis": {
+                            "type": "category",
+                            "name": "Time",
+                            "axisLabel": {"rotate": 45, "formatter": "{value}"},
+                            "data": [],
+                        },
+                        "yAxis": [
+                            {
+                                "type": "value",
+                                "name": "Memory (GB)",
+                                "axisLabel": {"formatter": "{value} GB"},
+                                "min": 0,
+                                "max": "dataMax",
+                                "position": "left",
+                            },
+                            {
+                                "type": "value",
+                                "name": "Swap (GB)",
+                                "axisLabel": {"formatter": "{value} GB"},
+                                "min": 0,
+                                "max": "dataMax",
+                                "position": "right",
+                            },
+                        ],
+                        "dataZoom": [
+                            {
+                                "type": "slider",
+                                "show": True,
+                                "xAxisIndex": [0],
+                                "start": 0,
+                                "end": 100,
+                                "height": 20,
+                                "bottom": 0,
+                            },
+                            {
+                                "type": "inside",
+                                "xAxisIndex": [0],
+                                "start": 0,
+                                "end": 100,
+                            },
+                        ],
+                        "series": [
+                            {
+                                "name": "ROBIN",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "sampling": "lttb",  # Use LTTB sampling for better performance
+                                "yAxisIndex": 0,
+                            },
+                            {
+                                "name": "Peak",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "lineStyle": {"type": "dashed"},
+                                "sampling": "lttb",  # Use LTTB sampling for better performance
+                                "yAxisIndex": 0,
+                            },
+                            {
+                                "name": "Available",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "sampling": "lttb",
+                                "lineStyle": {"type": "dotted"},
+                                "yAxisIndex": 0,
+                            },
+                            {
+                                "name": "Free",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "sampling": "lttb",
+                                "lineStyle": {"type": "dotted"},
+                                "yAxisIndex": 0,
+                            },
+                            {
+                                "name": "Swap Used",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "sampling": "lttb",
+                                "lineStyle": {"type": "dashed"},
+                                "yAxisIndex": 1,
+                                "itemStyle": {"color": "#ff6b6b"},  # Red color for swap
+                            },
+                            {
+                                "name": "Swap Total",
+                                "type": "line",
+                                "smooth": True,
+                                "data": [],
+                                "showSymbol": False,
+                                "sampling": "lttb",
+                                "lineStyle": {"type": "dashed"},
+                                "yAxisIndex": 1,
+                                "itemStyle": {
+                                    "color": "#ff8787"
+                                },  # Lighter red for total swap
+                            },
+                        ],
+                    }
+
+                    ram_chart = ui.echart(ram_echart_options).classes("w-full h-64")
+
+                    def update_ram_echart():
+                        ram_chart.options["xAxis"]["data"] = ram_history["timestamps"]
+                        ram_chart.options["series"][0]["data"] = ram_history["robin"]
+                        ram_chart.options["series"][1]["data"] = ram_history["peak"]
+                        ram_chart.options["series"][2]["data"] = ram_history[
+                            "available"
+                        ]
+                        ram_chart.options["series"][3]["data"] = ram_history["free"]
+                        ram_chart.options["series"][4]["data"] = ram_history[
+                            "swap_used"
+                        ]
+                        ram_chart.options["series"][5]["data"] = ram_history[
+                            "swap_total"
+                        ]
+                        ram_chart.update()
+
+                    # UI timer just for refreshing the plot
+                    ui.timer(10.0, update_ram_echart)
 
             # Create the grid for process types
             grid = ui.grid(columns=4).classes("w-full gap-4")
@@ -372,7 +604,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
 
     # Create disclaimer dialog that appears on first visit
     async def show_disclaimer():
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
         if not app.storage.tab.get("disclaimer_acknowledged", False):
             with ui.dialog().props(
                 "persistent"
@@ -404,9 +636,10 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
                 ui.button("I agree", on_click=acknowledge).props("color=primary")
             disclaimer_dialog.open()
 
-    ui.timer(0.1, show_disclaimer, once=True)
+    ui.timer(0.5, show_disclaimer, once=True)
 
     # Add version check timer
+
     ui.timer(1.0, check_version, once=True)
 
     # Create a persistent dialog for quitting the app
@@ -675,7 +908,8 @@ def workflow_page():
         crossnn_version = get_crossnn_version()
         cnv_from_bam_version = get_cnv_from_bam_version()
 
-        ui.mermaid(f'''
+        ui.mermaid(
+            f"""
 flowchart TD
     %% Style definitions
     classDef minKNOW fill:#f5fafd80,stroke:#339af0,stroke-width:1px,color:#1c7ed6,font-size:14px,font-weight:500
@@ -755,7 +989,13 @@ flowchart TD
     %% Subgraph background coloring
     style MinKNOW fill:#f5fafd80,stroke:#339af0,stroke-width:2px
     style ROBIN fill:#f6fcf7,stroke:#388e3c,stroke-width:2px
-''', config={'theme': 'redux', 'look': 'neo', 'flowchart': {'curve': 'basis', 'defaultRenderer': 'elk'}}).classes('w-full')
+""",
+            config={
+                "theme": "redux",
+                "look": "neo",
+                "flowchart": {"curve": "basis", "defaultRenderer": "elk"},
+            },
+        ).classes("w-full")
 
 
 def get_modkit_version():
@@ -765,27 +1005,31 @@ def get_modkit_version():
         if result.returncode == 0:
             return result.stdout.strip()
         return "unknown"
-    except:
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
         return "unknown"
+
 
 def get_sturgeon_version():
     """Get the version of sturgeon installed."""
     try:
-        result = subprocess.run(["sturgeon", "--version"], capture_output=True, text=True)
+        result = subprocess.run(
+            ["sturgeon", "--version"], capture_output=True, text=True
+        )
         if result.returncode == 0:
             return result.stdout.strip()
         return "unknown"
-    except:
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
         try:
             return importlib.metadata.version("sturgeon")
-        except:
+        except importlib.metadata.PackageNotFoundError:
             return "unknown"
+
 
 def get_crossnn_version():
     """Get the version of CrossNN installed."""
     try:
         return importlib.metadata.version("nanoDX")
-    except:
+    except importlib.metadata.PackageNotFoundError:
         try:
             result = subprocess.run(
                 ["git", "describe", "--tags"],
@@ -799,14 +1043,15 @@ def get_crossnn_version():
             if result.returncode == 0:
                 return result.stdout.strip()
             return "unknown"
-        except:
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
             return "unknown"
+
 
 def get_cnv_from_bam_version():
     """Get the version of CNV from BAM installed."""
     try:
         return importlib.metadata.version("cnv_from_bam")
-    except:
+    except importlib.metadata.PackageNotFoundError:
         try:
             result = subprocess.run(
                 ["git", "describe", "--tags"],
@@ -820,7 +1065,7 @@ def get_cnv_from_bam_version():
             if result.returncode == 0:
                 return result.stdout.strip()
             return "unknown"
-        except:
+        except (subprocess.SubprocessError, FileNotFoundError, OSError):
             return "unknown"
 
 
@@ -851,3 +1096,45 @@ if __name__ in {"__main__", "__mp_main__"}:
     # import doctest
     # doctest.testmod()
     main()
+
+
+def get_process_ram_usage():
+    """Get RAM usage for Python and R processes."""
+    python_ram = 0
+    r_ram = 0
+
+    for proc in psutil.process_iter(["pid", "name", "memory_info"]):
+        try:
+            # Get process name and memory info
+            name = proc.info["name"].lower()
+            mem_info = proc.info["memory_info"]
+
+            # Skip if memory_info is None
+            if mem_info is None:
+                continue
+
+            # Calculate RAM usage in GB
+            ram_gb = mem_info.rss / (1024 * 1024 * 1024)  # Convert bytes to GB
+
+            # Only count processes that are actually using memory
+            if ram_gb > 0:
+                if "python" in name:
+                    python_ram += ram_gb
+                elif "r" in name or "Rscript" in name:
+                    r_ram += ram_gb
+
+        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+            continue
+        except Exception as e:
+            logging.debug(
+                f"Error getting memory info for process {proc.info.get('name', 'unknown')}: {str(e)}"
+            )
+            continue
+
+    return round(python_ram, 2), round(
+        r_ram, 2
+    )  # Round to 2 decimal places for cleaner display
+
+
+# Start the background timer ONCE at app startup
+ui.timer(10.0, collect_ram_usage)

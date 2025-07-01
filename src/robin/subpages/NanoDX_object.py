@@ -45,7 +45,7 @@ Usage:
 """
 
 from __future__ import annotations
-from robin.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis, BaseVis
 from nicegui import ui, app, run
 import time
 import os
@@ -56,6 +56,7 @@ import numpy as np
 import pysam
 import pandas as pd
 import tempfile
+from typing import List, Tuple, Optional, Dict, Any
 from robin import models, theme, resources
 import logging
 from robin.utilities.merge_bedmethyl import collapse_bedmethyl
@@ -265,81 +266,6 @@ class NanoDX_object(BaseAnalysis):
             self.storefile = "NanoDX_scores.csv"
         #    self.output = f"{self.output}_PanCan"
 
-    def setup_ui(self) -> None:
-        """
-        Sets up the user interface for the NanoDX analysis.
-        """
-        with ui.card().classes("w-full p-2"):
-            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
-                with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg p-2"
-                ):
-                    self.create_nanodx_chart("NanoDX")
-                with ui.card().classes(
-                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg p-2"
-                ):
-                    self.create_nanodx_time_chart("NanoDX Time Series")
-        if self.summary:
-            with self.summary:
-                ui.label(f"NanoDX classification {self.model}: Unknown")
-        if self.browse:
-            self.show_previous_data()
-        else:
-            ui.timer(5, lambda: self.show_previous_data())
-
-    def show_previous_data(self):
-        """
-        Load and display previously generated NanoDX analysis results.
-        """
-        if not self.browse:
-            for item in app.storage.general[self.mainuuid]:
-                if item == "sample_ids":
-                    for sample in app.storage.general[self.mainuuid][item]:
-                        self.sampleID = sample
-            output = self.output
-        if self.browse:
-            output = self.check_and_create_folder(self.output, self.sampleID)
-
-        if self.check_file_time(os.path.join(output, self.storefile)):
-            self.nanodx_df_store = pd.read_csv(
-                os.path.join(output, self.storefile),
-                index_col=0,
-            )
-            columns_greater_than_threshold = (
-                self.nanodx_df_store > self.threshold
-            ).any()
-            columns_not_greater_than_threshold = ~columns_greater_than_threshold
-            result = self.nanodx_df_store.columns[
-                columns_not_greater_than_threshold
-            ].tolist()
-            self.update_nanodx_time_chart(self.nanodx_df_store.drop(columns=result))
-            lastrow = self.nanodx_df_store.iloc[-1].drop("number_probes")
-            lastrow_plot = lastrow.sort_values(ascending=False).head(10)
-            lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
-
-            # Update summary with new card
-            if self.summary:
-                with self.summary:
-                    self.summary.clear()
-                    classification_text = (
-                        f"NanoDX classification: {lastrow_plot_top.index[0]}"
-                    )
-                    self.create_summary_card(
-                        classification_text=classification_text,
-                        confidence_value=lastrow_plot_top.values[0],
-                        model_name=self.model,
-                        features_found=int(
-                            self.nanodx_df_store.iloc[-1]["number_probes"]
-                        ),
-                    )
-
-            self.update_nanodx_plot(
-                lastrow_plot.index.to_list(),
-                list(lastrow_plot.values),
-                "All",
-                self.nanodx_df_store.iloc[-1]["number_probes"],
-            )
-
     async def process_bam(
         self, bamfile: List[Tuple[str, float]], timestamp: float = None
     ) -> None:
@@ -485,6 +411,140 @@ class NanoDX_object(BaseAnalysis):
             self.running = False
         finally:
             pass
+
+
+class NanoDXVis(BaseVis):
+    """
+    NanoDX_object handles the NanoDX analysis process, including setting up the GUI
+    and processing BAM files asynchronously.
+
+    Attributes:
+        cpgs_file (str): Path to the CpG BED file.
+        cpgs (pd.DataFrame): DataFrame containing CpG data.
+        model (str): Name of the neural network model file.
+        threshold (float): Threshold for classification confidence.
+        nanodx_bam_count (int): Counter for the number of BAM files processed.
+        not_first_run (bool): Flag indicating whether it's the first run.
+        modelfile (str): Path to the neural network model file.
+        nanodx_df_store (pd.DataFrame): DataFrame for storing NanoDX results.
+    """
+
+    def __init__(self, *args, model: str = "Capper_et_al_NN.pkl", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        # Remove state tracking for NanoDX Analysis
+        # state.start_process("NanoDX Analysis", ProcessType.BATCH)
+        self.cpgs_file = os.path.join(
+            os.path.dirname(os.path.abspath(resources.__file__)),
+            "hglft_genome_260e9_91a970_clean.bed",
+        )
+        self.cpgs = pd.read_csv(
+            self.cpgs_file,
+            sep="\t",
+            header=None,
+        )
+        self.model = model
+        self.dataDir = {}
+        self.bedDir = {}
+        self.threshold = 0.01
+        self.nanodx_bam_count = {}
+        self.modelfile = os.path.join(
+            os.path.dirname(os.path.abspath(models.__file__)), self.model
+        )
+        logger.info(f"model file: {self.modelfile}")
+        self.nanodx_df_store = {}  # pd.DataFrame()
+
+        # Set NanoDX-specific confidence thresholds
+        # NanoDX typically produces lower confidence scores, so adjust thresholds accordingly
+        kwargs["high_confidence_threshold"] = (
+            0.5  # NanoDX-specific high confidence threshold
+        )
+        kwargs["medium_confidence_threshold"] = (
+            0.25  # NanoDX-specific medium confidence threshold
+        )
+
+        super().__init__(*args, **kwargs)
+        if self.model != "Capper_et_al_NN.pkl":
+            self.storefile = "PanNanoDX_scores.csv"
+        else:
+            self.storefile = "NanoDX_scores.csv"
+        #    self.output = f"{self.output}_PanCan"
+
+    async def setup_ui(self) -> None:
+        """
+        Sets up the user interface for the NanoDX analysis.
+        """
+        with ui.card().classes("w-full p-2"):
+            with ui.grid(columns=8).classes("w-full h-auto gap-2"):
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-3 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg p-2"
+                ):
+                    self.create_nanodx_chart("NanoDX")
+                with ui.card().classes(
+                    f"min-[{self.MENU_BREAKPOINT+1}px]:col-span-5 max-[{self.MENU_BREAKPOINT}px]:col-span-8 shadow-lg rounded-lg p-2"
+                ):
+                    self.create_nanodx_time_chart("NanoDX Time Series")
+        if self.summary:
+            with self.summary:
+                ui.label(f"NanoDX classification {self.model}: Unknown")
+                
+        #await ui.context.client.connected()
+        if self.browse:
+            self.show_previous_data()
+        else:
+            ui.timer(5, lambda: self.show_previous_data())
+
+    def show_previous_data(self):
+        """
+        Load and display previously generated NanoDX analysis results.
+        """
+        if not self.browse:
+            for item in app.storage.general[self.mainuuid]:
+                if item == "sample_ids":
+                    for sample in app.storage.general[self.mainuuid][item]:
+                        self.sampleID = sample
+            output = self.output
+        if self.browse:
+            output = self.check_and_create_folder(self.output, self.sampleID)
+
+        if self.check_file_time(os.path.join(output, self.storefile)):
+            self.nanodx_df_store = pd.read_csv(
+                os.path.join(output, self.storefile),
+                index_col=0,
+            )
+            columns_greater_than_threshold = (
+                self.nanodx_df_store > self.threshold
+            ).any()
+            columns_not_greater_than_threshold = ~columns_greater_than_threshold
+            result = self.nanodx_df_store.columns[
+                columns_not_greater_than_threshold
+            ].tolist()
+            self.update_nanodx_time_chart(self.nanodx_df_store.drop(columns=result))
+            lastrow = self.nanodx_df_store.iloc[-1].drop("number_probes")
+            lastrow_plot = lastrow.sort_values(ascending=False).head(10)
+            lastrow_plot_top = lastrow.sort_values(ascending=False).head(1)
+
+            # Update summary with new card
+            if self.summary:
+                with self.summary:
+                    self.summary.clear()
+                    classification_text = (
+                        f"NanoDX classification: {lastrow_plot_top.index[0]}"
+                    )
+                    self.create_summary_card(
+                        classification_text=classification_text,
+                        confidence_value=lastrow_plot_top.values[0],
+                        model_name=self.model,
+                        features_found=int(
+                            self.nanodx_df_store.iloc[-1]["number_probes"]
+                        ),
+                    )
+
+            self.update_nanodx_plot(
+                lastrow_plot.index.to_list(),
+                list(lastrow_plot.values),
+                "All",
+                self.nanodx_df_store.iloc[-1]["number_probes"],
+            )
 
     def create_nanodx_chart(self, title):
         """

@@ -46,13 +46,13 @@ Usage:
     options like the port, number of threads, watch folder, and output directory.
 """
 
-from robin.subpages.base_analysis import BaseAnalysis
+from robin.subpages.base_analysis import BaseAnalysis, BaseVis
 from robin import theme
 from robin import submodules
 import pandas as pd
 import os
 import sys
-from nicegui import ui, run, app
+from nicegui import ui, run, app, background_tasks
 import pysam
 import shutil
 import click
@@ -168,7 +168,7 @@ def run_modkit(
         raise
 
 
-class MGMT_Object(BaseAnalysis):
+class MGMTVis(BaseVis):
     """
     MGMT_Object handles the MGMT analysis process, including setting up the GUI
     and processing BAM files asynchronously.
@@ -187,9 +187,9 @@ class MGMT_Object(BaseAnalysis):
         super().__init__(*args, **kwargs)
         # Remove state tracking for MGMT Analysis
         # state.start_process("MGMT Analysis", ProcessType.BATCH)
-        state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
+        # state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
 
-    def setup_ui(self) -> None:
+    async def setup_ui(self) -> None:
         """
         Sets up the user interface for the MGMT analysis.
 
@@ -235,146 +235,12 @@ class MGMT_Object(BaseAnalysis):
                         "w-full mt-4 text-sm text-gray-500 justify-center"
                     ):
                         ui.label("Methylation status based on MGMT promoter analysis")
+                        
+        #await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:
             ui.timer(30, lambda: self.show_previous_data())
-
-    async def process_bam(self, bamfile: str, timestamp: str) -> None:
-        """
-        Processes the BAM file to extract and analyze MGMT sites.
-
-        Args:
-            bamfile (str): Path to the input BAM file.
-            timestamp (str): Timestamp for the analysis.
-
-        Returns:
-            None
-        """
-        state.set_process_state("MGMT Analysis", ProcessState.RUNNING)
-        try:
-            result = await run.cpu_bound(
-                has_reads, bamfile, "chr10", 129467242, 129467244
-            )
-
-            if result:
-                MGMT_BED: str = f"{HVPATH}/bin/mgmt_hg38.bed"
-                tempbamfile = tempfile.NamedTemporaryFile(
-                    dir=self.check_and_create_folder(self.output, self.sampleID),
-                    suffix=".bam",
-                )
-
-                try:
-                    await run.cpu_bound(
-                        run_bedtools, bamfile, MGMT_BED, tempbamfile.name
-                    )
-                except Exception:
-                    # logger.error(f"Error in process_bam: {e}")
-                    return
-
-                try:
-                    if (
-                        pysam.AlignmentFile(tempbamfile.name, "rb").count(
-                            until_eof=True
-                        )
-                        > 0
-                    ):
-                        if self.sampleID not in self.MGMTbamfile.keys():
-                            # if not self.MGMTbamfile:
-                            self.MGMTbamfile[self.sampleID] = os.path.join(
-                                self.check_and_create_folder(
-                                    self.output, self.sampleID
-                                ),
-                                "mgmt.bam",
-                            )
-                            shutil.copy2(
-                                tempbamfile.name, self.MGMTbamfile[self.sampleID]
-                            )
-                            os.remove(f"{tempbamfile.name}.bai")
-                        else:
-                            tempbamholder = tempfile.NamedTemporaryFile(
-                                dir=self.check_and_create_folder(
-                                    self.output, self.sampleID
-                                ),
-                                suffix=".bam",
-                            )
-                            pysam.cat(
-                                "-o",
-                                tempbamholder.name,
-                                self.MGMTbamfile[self.sampleID],
-                                tempbamfile.name,
-                            )
-                            shutil.copy2(
-                                tempbamholder.name, self.MGMTbamfile[self.sampleID]
-                            )
-                            try:
-                                os.remove(f"{tempbamholder.name}.bai")
-                                os.remove(f"{tempbamfile.name}.bai")
-                            except FileNotFoundError:
-                                pass
-                        tempmgmtdir = tempfile.TemporaryDirectory(
-                            dir=self.check_and_create_folder(self.output, self.sampleID)
-                        )
-
-                        self.counter += 1
-
-                        output_mgmt_bed = os.path.join(
-                            self.check_and_create_folder(self.output, self.sampleID),
-                            f"{self.counter}_mgmt.bed",
-                        )
-
-                        await run.cpu_bound(
-                            run_modkit,
-                            tempmgmtdir.name,
-                            self.MGMTbamfile[self.sampleID],
-                            self.threads,
-                            output_mgmt_bed,
-                        )
-
-                        try:
-                            if os.path.exists(
-                                os.path.join(
-                                    tempmgmtdir.name, "live_analysis_mgmt_status.csv"
-                                )
-                            ):
-                                results = pd.read_csv(
-                                    os.path.join(
-                                        tempmgmtdir.name,
-                                        "live_analysis_mgmt_status.csv",
-                                    )
-                                )
-                                # self.counter += 1
-                                plot_out = os.path.join(
-                                    self.check_and_create_folder(
-                                        self.output, self.sampleID
-                                    ),
-                                    f"{self.counter}_mgmt.png",
-                                )
-
-                                await run.cpu_bound(
-                                    run_methylartist, tempmgmtdir.name, plot_out
-                                )
-                                results.to_csv(
-                                    os.path.join(
-                                        self.check_and_create_folder(
-                                            self.output, self.sampleID
-                                        ),
-                                        f"{self.counter}_mgmt.csv",
-                                    ),
-                                    index=False,
-                                )
-                        except Exception:
-                            # logger.error(f"Error processing results: {e}")
-                            raise
-                    else:
-                        os.remove(f"{tempbamfile.name}.bai")
-                except Exception:
-                    # logger.error(f"Error in BAM file processing: {e}")
-                    raise
-            else:
-                self.running = False
-        finally:
-            state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
 
     def tabulate(self, results: pd.DataFrame) -> None:
         """
@@ -501,6 +367,138 @@ class MGMT_Object(BaseAnalysis):
         except Exception as e:
             logger.error(f"Error displaying bed file data: {e}")
             ui.label(f"Error reading bed file: {str(e)}").classes("text-red-500")
+
+    def display_specific_sites(self, bed_file: str) -> None:
+        """
+        Displays the specific methylation sites of interest in a table format.
+
+        Args:
+            bed_file (str): Path to the bed file.
+
+        Returns:
+            None
+        """
+        try:
+            specific_sites = self.extract_specific_sites(bed_file)
+
+            if specific_sites.empty:
+                ui.label("No specific CpG pairs found in the data").classes(
+                    "text-amber-500 mt-2"
+                )
+                ui.label(
+                    "Looking for CpG pairs: 129467255/6, 129467258/9, 129467262/3, 129467272/3"
+                ).classes("text-gray-600 text-sm mt-1")
+                return
+
+            # Save the specific sites data to CSV
+            csv_file = self.save_specific_sites_data(specific_sites, bed_file)
+            if csv_file:
+                ui.label(
+                    f"Specific sites data saved to: {os.path.basename(csv_file)}"
+                ).classes("text-green-600 text-sm mt-1")
+
+            # Display the specific sites in an AG Grid table
+            ui.label("Key CpG Sites for MGMT Analysis").classes(
+                "text-lg font-medium mt-4 mb-2"
+            )
+
+            ui.aggrid.from_pandas(
+                specific_sites,
+                theme="material",
+                options={
+                    "defaultColDef": {
+                        "sortable": True,
+                        "resizable": True,
+                        "filter": True,
+                    },
+                    "columnDefs": [
+                        {"headerName": "Site", "field": "Site_Label", "width": 200},
+                        {"headerName": "Chr", "field": "Chromosome", "width": 80},
+                        {
+                            "headerName": "CpG Position",
+                            "field": "Position",
+                            "width": 120,
+                        },
+                        {
+                            "headerName": "Forward Coverage",
+                            "field": "Coverage_Forward",
+                            "width": 140,
+                        },
+                        {
+                            "headerName": "Reverse Coverage",
+                            "field": "Coverage_Reverse",
+                            "width": 140,
+                        },
+                        {
+                            "headerName": "Total Coverage",
+                            "field": "Total_Coverage",
+                            "width": 130,
+                        },
+                        {
+                            "headerName": "% Methylation",
+                            "field": "Methylation_Percentage",
+                            "width": 120,
+                        },
+                        {
+                            "headerName": "Forward % Meth",
+                            "field": "Forward_Methylation",
+                            "width": 130,
+                        },
+                        {
+                            "headerName": "Reverse % Meth",
+                            "field": "Reverse_Methylation",
+                            "width": 130,
+                        },
+                        {"headerName": "Notes", "field": "Notes", "width": 250},
+                    ],
+                    "pagination": False,
+                },
+            ).classes(
+                "w-full"
+            )  # .style("height: 200px")
+
+            # Calculate and display both simple and weighted averages
+            if (
+                "Methylation_Percentage" in specific_sites.columns
+                and not specific_sites["Methylation_Percentage"].isna().all()
+            ):
+                # Simple arithmetic mean
+                simple_avg = specific_sites["Methylation_Percentage"].mean()
+
+                # Coverage-weighted mean
+                total_coverage = specific_sites["Total_Coverage"].sum()
+                weighted_avg = (
+                    (
+                        specific_sites["Methylation_Percentage"]
+                        * specific_sites["Total_Coverage"]
+                    ).sum()
+                    / total_coverage
+                    if total_coverage > 0
+                    else 0
+                )
+
+                ui.label("Methylation Summary:").classes(
+                    "text-blue-600 font-medium mt-2"
+                )
+                ui.label(
+                    f"• Simple average across CpG pairs: {simple_avg:.2f}%"
+                ).classes("text-gray-600 ml-2")
+                ui.label(f"• Coverage-weighted average: {weighted_avg:.2f}%").classes(
+                    "text-gray-600 ml-2"
+                )
+                ui.label(f"• Total read coverage: {total_coverage}").classes(
+                    "text-gray-600 ml-2"
+                )
+            else:
+                ui.label("Unable to calculate average methylation (no data)").classes(
+                    "text-amber-500 mt-2"
+                )
+
+        except Exception as e:
+            logger.error(f"Error displaying specific sites: {e}")
+            ui.label(f"Error analyzing specific sites: {str(e)}").classes(
+                "text-red-500"
+            )
 
     def extract_specific_sites(self, bed_file: str) -> pd.DataFrame:
         """
@@ -714,161 +712,6 @@ class MGMT_Object(BaseAnalysis):
             logger.error(f"Error saving specific sites data: {e}")
             return ""
 
-    def display_specific_sites(self, bed_file: str) -> None:
-        """
-        Displays the specific methylation sites of interest in a table format.
-
-        Args:
-            bed_file (str): Path to the bed file.
-
-        Returns:
-            None
-        """
-        try:
-            specific_sites = self.extract_specific_sites(bed_file)
-
-            if specific_sites.empty:
-                ui.label("No specific CpG pairs found in the data").classes(
-                    "text-amber-500 mt-2"
-                )
-                ui.label(
-                    "Looking for CpG pairs: 129467255/6, 129467258/9, 129467262/3, 129467272/3"
-                ).classes("text-gray-600 text-sm mt-1")
-                return
-
-            # Save the specific sites data to CSV
-            csv_file = self.save_specific_sites_data(specific_sites, bed_file)
-            if csv_file:
-                ui.label(
-                    f"Specific sites data saved to: {os.path.basename(csv_file)}"
-                ).classes("text-green-600 text-sm mt-1")
-
-            # Display the specific sites in an AG Grid table
-            ui.label("Key CpG Sites for MGMT Analysis").classes(
-                "text-lg font-medium mt-4 mb-2"
-            )
-
-            ui.aggrid.from_pandas(
-                specific_sites,
-                theme="material",
-                options={
-                    "defaultColDef": {
-                        "sortable": True,
-                        "resizable": True,
-                        "filter": True,
-                    },
-                    "columnDefs": [
-                        {"headerName": "Site", "field": "Site_Label", "width": 200},
-                        {"headerName": "Chr", "field": "Chromosome", "width": 80},
-                        {
-                            "headerName": "CpG Position",
-                            "field": "Position",
-                            "width": 120,
-                        },
-                        {
-                            "headerName": "Forward Coverage",
-                            "field": "Coverage_Forward",
-                            "width": 140,
-                        },
-                        {
-                            "headerName": "Reverse Coverage",
-                            "field": "Coverage_Reverse",
-                            "width": 140,
-                        },
-                        {
-                            "headerName": "Total Coverage",
-                            "field": "Total_Coverage",
-                            "width": 130,
-                        },
-                        {
-                            "headerName": "% Methylation",
-                            "field": "Methylation_Percentage",
-                            "width": 120,
-                        },
-                        {
-                            "headerName": "Forward % Meth",
-                            "field": "Forward_Methylation",
-                            "width": 130,
-                        },
-                        {
-                            "headerName": "Reverse % Meth",
-                            "field": "Reverse_Methylation",
-                            "width": 130,
-                        },
-                        {"headerName": "Notes", "field": "Notes", "width": 250},
-                    ],
-                    "pagination": False,
-                },
-            ).classes(
-                "w-full"
-            )  # .style("height: 200px")
-
-            # Calculate and display both simple and weighted averages
-            if (
-                "Methylation_Percentage" in specific_sites.columns
-                and not specific_sites["Methylation_Percentage"].isna().all()
-            ):
-                # Simple arithmetic mean
-                simple_avg = specific_sites["Methylation_Percentage"].mean()
-
-                # Coverage-weighted mean
-                total_coverage = specific_sites["Total_Coverage"].sum()
-                weighted_avg = (
-                    (
-                        specific_sites["Methylation_Percentage"]
-                        * specific_sites["Total_Coverage"]
-                    ).sum()
-                    / total_coverage
-                    if total_coverage > 0
-                    else 0
-                )
-
-                ui.label("Methylation Summary:").classes(
-                    "text-blue-600 font-medium mt-2"
-                )
-                ui.label(
-                    f"• Simple average across CpG pairs: {simple_avg:.2f}%"
-                ).classes("text-gray-600 ml-2")
-                ui.label(f"• Coverage-weighted average: {weighted_avg:.2f}%").classes(
-                    "text-gray-600 ml-2"
-                )
-                ui.label(f"• Total read coverage: {total_coverage}").classes(
-                    "text-gray-600 ml-2"
-                )
-            else:
-                ui.label("Unable to calculate average methylation (no data)").classes(
-                    "text-amber-500 mt-2"
-                )
-
-        except Exception as e:
-            logger.error(f"Error displaying specific sites: {e}")
-            ui.label(f"Error analyzing specific sites: {str(e)}").classes(
-                "text-red-500"
-            )
-
-    def get_report(self, watchfolder: str) -> Tuple[pd.DataFrame, str, str]:
-        """
-        Generates a report from the analysis results.
-
-        Args:
-            watchfolder (str): Path to the folder containing previous analysis results.
-
-        Returns:
-            Tuple[pd.DataFrame, str, str]: DataFrame with results, path to plot, and summary string.
-        """
-        # logger.debug(f"Generating report from {watchfolder}")
-        results = pd.DataFrame()
-        plot_out = ""
-        summary = ""
-        for file in natsort.natsorted(os.listdir(watchfolder)):
-            if file.endswith("_mgmt.csv"):
-                count = int(file.split("_")[0])
-                if count > self.last_seen:
-                    results = pd.read_csv(os.path.join(watchfolder, file))
-                    plot_out = os.path.join(watchfolder, file.replace(".csv", ".png"))
-                    summary = f"Current MGMT status: {results['status'].values[0]}"
-        return results, plot_out, summary
-
     def show_previous_data(self) -> None:
         """
         Displays previously analyzed data from the specified watch folder.
@@ -995,6 +838,218 @@ class MGMT_Object(BaseAnalysis):
                                         "MGMT status determined from methylation analysis of 137 CpG sites"
                                     )
                     self.last_seen = count
+
+
+class MGMT_Object(BaseAnalysis):
+    """
+    MGMT_Object handles the MGMT analysis process, including setting up the GUI
+    and processing BAM files asynchronously.
+
+    Attributes:
+        MGMTbamfile (Optional[str]): Path to the MGMT BAM file.
+        counter (int): Counter for the number of analyses.
+        last_seen (int): Last seen timestamp for analysis.
+    """
+
+    def __init__(self, *args, **kwargs):
+        self.MGMTbamfile = {}
+        self.counter: int = 0
+        self.last_seen: int = 0
+        # logger.debug("Initializing MGMT_Object")
+        super().__init__(*args, **kwargs)
+        # Remove state tracking for MGMT Analysis
+        # state.start_process("MGMT Analysis", ProcessType.BATCH)
+        state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
+
+    async def process_bam(self, bamfile: str, timestamp: str) -> None:
+        """
+        Processes the BAM file to extract and analyze MGMT sites.
+
+        Args:
+            bamfile (str): Path to the input BAM file.
+            timestamp (str): Timestamp for the analysis.
+
+        Returns:
+            None
+        """
+        state.set_process_state("MGMT Analysis", ProcessState.RUNNING)
+        try:
+            # result = await run.cpu_bound(
+            result = has_reads(bamfile, "chr10", 129467242, 129467244)
+            # )
+
+            if result:
+                MGMT_BED: str = f"{HVPATH}/bin/mgmt_hg38.bed"
+                tempbamfile = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, self.sampleID),
+                    suffix=".bam",
+                )
+
+                async def bedtools_background_work(bamfile, MGMT_BED, tempbamfile):
+                    try:
+                        await run.cpu_bound(
+                            run_bedtools, bamfile, MGMT_BED, tempbamfile.name
+                        )
+                    except Exception as e:
+                        logger.error(f"Error in bedtools_background_work: {e}")
+                        # return
+
+                await background_tasks.create(
+                    bedtools_background_work(bamfile, MGMT_BED, tempbamfile)
+                )
+
+                try:
+                    if (
+                        pysam.AlignmentFile(tempbamfile.name, "rb").count(
+                            until_eof=True
+                        )
+                        > 0
+                    ):
+
+                        async def mgmt_bam_background_work(
+                            sampleID, MGMTbamfile, tempbamfile
+                        ):
+                            if sampleID not in MGMTbamfile.keys():
+                                # if not self.MGMTbamfile:
+                                MGMTbamfile[sampleID] = os.path.join(
+                                    self.check_and_create_folder(self.output, sampleID),
+                                    "mgmt.bam",
+                                )
+                                shutil.copy2(tempbamfile.name, MGMTbamfile[sampleID])
+                                os.remove(f"{tempbamfile.name}.bai")
+                            else:
+                                tempbamholder = tempfile.NamedTemporaryFile(
+                                    dir=self.check_and_create_folder(
+                                        self.output, sampleID
+                                    ),
+                                    suffix=".bam",
+                                )
+                                pysam.cat(
+                                    "-o",
+                                    tempbamholder.name,
+                                    MGMTbamfile[sampleID],
+                                    tempbamfile.name,
+                                )
+                                shutil.copy2(tempbamholder.name, MGMTbamfile[sampleID])
+                                try:
+                                    os.remove(f"{tempbamholder.name}.bai")
+                                    os.remove(f"{tempbamfile.name}.bai")
+                                except FileNotFoundError:
+                                    pass
+
+                        await background_tasks.create(
+                            mgmt_bam_background_work(
+                                self.sampleID, self.MGMTbamfile, tempbamfile
+                            )
+                        )
+                        tempmgmtdir = tempfile.TemporaryDirectory(
+                            dir=self.check_and_create_folder(self.output, self.sampleID)
+                        )
+                        self.counter += 1
+
+                        output_mgmt_bed = os.path.join(
+                            self.check_and_create_folder(self.output, self.sampleID),
+                            f"{self.counter}_mgmt.bed",
+                        )
+
+                        async def modkit_background_work(
+                            tempmgmtdir, MGMTbamfile, threads, output_mgmt_bed
+                        ):
+                            await run.cpu_bound(
+                                run_modkit,
+                                tempmgmtdir.name,
+                                MGMTbamfile,
+                                threads,
+                                output_mgmt_bed,
+                            )
+
+                        await background_tasks.create(
+                            modkit_background_work(
+                                tempmgmtdir,
+                                self.MGMTbamfile[self.sampleID],
+                                self.threads,
+                                output_mgmt_bed,
+                            )
+                        )
+
+                        try:
+                            if os.path.exists(
+                                os.path.join(
+                                    tempmgmtdir.name, "live_analysis_mgmt_status.csv"
+                                )
+                            ):
+                                results = pd.read_csv(
+                                    os.path.join(
+                                        tempmgmtdir.name,
+                                        "live_analysis_mgmt_status.csv",
+                                    )
+                                )
+                                # self.counter += 1
+                                plot_out = os.path.join(
+                                    self.check_and_create_folder(
+                                        self.output, self.sampleID
+                                    ),
+                                    f"{self.counter}_mgmt.png",
+                                )
+
+                                async def methylartist_background_work(
+                                    tempmgmtdir, plot_out
+                                ):
+                                    await run.cpu_bound(
+                                        run_methylartist, tempmgmtdir.name, plot_out
+                                    )
+
+                                await background_tasks.create(
+                                    methylartist_background_work(tempmgmtdir, plot_out)
+                                )
+
+                                results.to_csv(
+                                    os.path.join(
+                                        self.check_and_create_folder(
+                                            self.output, self.sampleID
+                                        ),
+                                        f"{self.counter}_mgmt.csv",
+                                    ),
+                                    index=False,
+                                )
+                                
+                                # Update the bam_processed counter for progress tracking
+                                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]["bam_processed"] += 1
+                        except Exception:
+                            # logger.error(f"Error processing results: {e}")
+                            raise
+                    else:
+                        os.remove(f"{tempbamfile.name}.bai")
+                except Exception:
+                    # logger.error(f"Error in BAM file processing: {e}")
+                    raise
+            else:
+                self.running = False
+        finally:
+            state.set_process_state("MGMT Analysis", ProcessState.WAITING_FOR_DATA)
+
+    def get_report(self, watchfolder: str) -> Tuple[pd.DataFrame, str, str]:
+        """
+        Generates a report from the analysis results.
+
+        Args:
+            watchfolder (str): Path to the folder containing previous analysis results.
+
+        Returns:
+            Tuple[pd.DataFrame, str, str]: DataFrame with results, path to plot, and summary string.
+        """
+        # logger.debug(f"Generating report from {watchfolder}")
+        results = pd.DataFrame()
+        plot_out = ""
+        summary = ""
+        for file in natsort.natsorted(os.listdir(watchfolder)):
+            if file.endswith("_mgmt.csv"):
+                count = int(file.split("_")[0])
+                if count > self.last_seen:
+                    results = pd.read_csv(os.path.join(watchfolder, file))
+                    plot_out = os.path.join(watchfolder, file.replace(".csv", ".png"))
+                    summary = f"Current MGMT status: {results['status'].values[0]}"
+        return results, plot_out, summary
 
 
 def test_me(

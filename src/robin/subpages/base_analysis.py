@@ -1,11 +1,11 @@
 """
 Base Class for Analysis of BAM Files Output During a Sequencing Run
 
-This module provides a base class (`BaseAnalysis`) for the analysis of BAM files generated during a sequencing run. The class includes a queue to receive BAM files and a background thread for data processing. It also features a render pipeline for displaying progress and results.
+This module provides a base class (`BaseAnalysisOrig`) for the analysis of BAM files generated during a sequencing run. The class includes a queue to receive BAM files and a background thread for data processing. It also features a render pipeline for displaying progress and results.
 
 Key Components:
 
-1. **BaseAnalysis Class**:
+1. **BaseAnalysisOrig Class**:
    - Initializes analysis parameters and sets up queues for BAM file processing.
    - Provides methods to process BAM files either in batch mode or continuous mode.
    - Includes user interface elements for displaying progress and results.
@@ -47,9 +47,9 @@ Dependencies:
 
 Example usage::
 
-    from base_analysis import BaseAnalysis
+    from base_analysis import BaseAnalysisOrig
 
-    class CustomAnalysis(BaseAnalysis):
+    class CustomAnalysis(BaseAnalysisOrig):
         def process_bam(self, bamfile, timestamp):
             # Implement custom BAM file processing logic
             pass
@@ -64,7 +64,7 @@ Example usage::
 """
 
 import queue
-from nicegui import ui, app
+from nicegui import ui, app, run
 from typing import BinaryIO, Optional, List, Tuple, Dict
 import pandas as pd
 import time
@@ -80,24 +80,10 @@ from robin.core.state import state, ProcessType, ProcessState
 logger = logging.getLogger(__name__)
 
 
-class BaseAnalysis:
+class BaseVis:
     """
-    A base class for analysis of BAM files output during a sequencing run.
-
-    This class provides a queue to receive BAM files and a background thread to process the data.
-    It also provides a render pipeline for displaying progress and results.
-
-    Args:
-        threads (int): Number of threads to use for processing.
-        outputfolder (str): Directory to store output files.
-        analysis_name (str): Name of the analysis.
-        summary (Optional[str]): Summary of the analysis.
-        bamqueue (Optional[queue.Queue]): Queue to hold BAM files.
-        progress (bool): Flag to display progress bars.
-        batch (bool): Flag to enable batch processing.
-        start_time (Optional[float]): Start time of the analysis.
-        browse (bool): Flag to enable browsing of results.
-        uuid (Optional[str]): Unique identifier for the analysis instance.
+    Base class for visualization components of BAM file analysis.
+    Handles all UI and visualization-related functionality.
     """
 
     def __init__(
@@ -119,29 +105,30 @@ class BaseAnalysis:
         *args,
         **kwargs,
     ) -> None:
-        self.mainuuid = uuid
-        self.bamqueue = bamqueue if bamqueue else queue.Queue()
         self.name = analysis_name
-        self.start_time = start_time
-        self.batch = batch
-        self.output = output
-        self.summary = summary
-        self.browse = browse
-        self.progress = progress
+        self.mainuuid = uuid
         self.file_mod_times = {}
-        self.MENU_BREAKPOINT = 1200
-        self.running = False
-        self.terminate = False
-        self.force_sampleid = force_sampleid
-        self.threads = max(1, threads // 2)
         self.high_confidence_threshold = high_confidence_threshold
         self.medium_confidence_threshold = medium_confidence_threshold
-        if sampleID:
-            self.sampleID = sampleID
-            logger.debug(f"SampleID: {self.sampleID}")
-        else:
-            self.sampleID = None
-            logger.debug("No SampleID provided")
+        self.summary = summary
+        self.MENU_BREAKPOINT = 1200
+        self.progress = progress
+        self.browse = browse
+        self.force_sampleid = force_sampleid
+        self.output = output
+        self.bamqueue = bamqueue
+        self.batch = batch
+        self.start_time = start_time
+        self.threads = threads
+        self.sampleID = sampleID
+
+    async def render_ui(self, sample_id=None) -> None:
+        """Set up the visualization components of the UI"""
+        if sample_id:
+            self.sampleID = sample_id
+        await self.setup_ui()
+        if self.progress and not self.browse:
+            self.progress_bars()
 
     def check_file_time(self, file_path: str) -> bool:
         """
@@ -188,32 +175,383 @@ class BaseAnalysis:
         else:
             return path
 
-    async def render_ui(self, sample_id=None) -> None:
-        """
-        Set up the user interface for the analysis and display progress bars if enabled.
-        """
-        if sample_id:
-            self.sampleID = sample_id
-        logger.debug(f"Rendering UI for {self.name} and {self.sampleID}")
-        self.setup_ui()
-        if self.progress and not self.browse:
-            self.progress_bars()
+    def setup_ui(self) -> None:
+        """Set up visualization-specific UI components"""
+        raise NotImplementedError("Subclasses must implement this method.")
 
-    async def stop_analysis(self):
-        """Stop the analysis and clean up resources."""
-        state.set_process_state(self.name, ProcessState.STOPPING)
-        self.running = False
-        self.batch_running = False
-        print(
-            f"Analysis stopped for {self.name} and {self.sampleID}. Active processes: {list(state.process_states.keys())}"
+    def create_time_chart(self, title: str) -> ui.echart:
+        """Create a time-based chart for visualizing data."""
+        return (
+            ui.echart(
+                {
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
+                    "animation": False,
+                    "grid": {"containLabel": True},
+                    "title": {"text": title},
+                    "tooltip": {"order": "valueDesc", "trigger": "axis"},
+                    "toolbox": {
+                        "show": True,
+                        "feature": {
+                            "dataZoom": {"yAxisIndex": "none"},
+                            "restore": {},
+                            "saveAsImage": {},
+                        },
+                    },
+                    "xAxis": {"type": "time"},
+                    "yAxis": {"type": "value", "data": [], "inverse": False},
+                    "series": [],
+                }
+            )
+            .classes("border-double text-sky-600 dark:text-white dark:bg-black")
+            .style("height: 350px")
         )
-        if self.name in state.process_states:
-            state.stop_process(self.name)
 
-    def process_data(self) -> None:
-        """
-        Start processing BAM files either in batch mode or in a continuous timer mode.
-        """
+    def create_chart(self, title: str) -> ui.echart:
+        """Create a categorical chart for visualizing data."""
+        return (
+            ui.echart(
+                {
+                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
+                    "animation": False,
+                    "grid": {"containLabel": True},
+                    "title": {"text": title},
+                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
+                    "xAxis": {"type": "value", "max": 1},
+                    "yAxis": {"type": "category", "data": [], "inverse": True},
+                    "series": [],
+                }
+            )
+            .classes("border-double text-sky-600 dark:text-white dark:bg-black")
+            .style("font-size: 150%; font-weight: 300; height: 350px")
+        )
+
+    def create_summary_card(
+        self,
+        classification_text,
+        confidence_value,
+        model_name=None,
+        features_found=None,
+    ):
+        """Create a standardized summary card for displaying classification results."""
+        with ui.card().classes("w-full shadow-sm rounded-lg").style(
+            "background-color: #F5F5F7; padding: 16px; margin-bottom: 16px;"
+        ):
+            with ui.row().classes("w-full items-center justify-between gap-4"):
+                with ui.column().classes("gap-2 flex-grow"):
+                    ui.label(classification_text.split(" - ")[0]).classes(
+                        "text-lg font-medium text-gray-900"
+                    )
+                    with ui.row().classes("gap-4 items-center"):
+                        if model_name:
+                            ui.label(f"Model: {model_name}").classes(
+                                "text-sm text-gray-500"
+                            )
+                        if features_found:
+                            ui.label(f"Features: {features_found:,}").classes(
+                                "text-sm text-gray-500"
+                            )
+
+                confidence_percent = confidence_value * 100
+                with ui.column().classes("items-end gap-1 min-w-fit"):
+                    ui.label(f"{confidence_percent:.1f}%").classes(
+                        "text-xl font-semibold"
+                    ).style(f"color: {self._get_confidence_color(confidence_value)}")
+                    ui.label(self._get_confidence_text(confidence_value)).classes(
+                        "text-sm text-gray-500"
+                    )
+
+    def _get_confidence_color(self, confidence):
+        """Get color based on confidence level."""
+        if confidence >= self.high_confidence_threshold:
+            return "#34C759"  # Green for high confidence
+        elif confidence >= self.medium_confidence_threshold:
+            return "#007AFF"  # Blue for medium confidence
+        else:
+            return "#FF9500"  # Orange for low confidence
+
+    def _get_confidence_text(self, confidence):
+        """Get descriptive text based on confidence level."""
+        if confidence >= self.high_confidence_threshold:
+            return "High confidence"
+        elif confidence >= self.medium_confidence_threshold:
+            return "Medium confidence"
+        else:
+            return "Low confidence"
+
+    def progress_bars(self) -> None:
+        """Show progress bars for file processing."""
+        try:
+            self.progress_trackers = ui.card().classes("w-full p-2")
+            logger.debug(f"Progress bars for {self.name} and {self.sampleID}")
+
+            self._initialize_counters(self.sampleID)
+
+            with self.progress_trackers:
+                with ui.expansion().classes("w-full") as expansion:
+                    with expansion.add_slot("header"):
+                        with ui.row().classes(
+                            "w-full items-center justify-between gap-1"
+                        ):
+                            with ui.column().classes("flex-grow gap-0"):
+                                ui.label("File Processing Status").classes(
+                                    "text-sm font-medium mb-0 pb-0"
+                                )
+                                with ui.row().classes("w-full items-center gap-1"):
+                                    progress_summary = (
+                                        ui.linear_progress(
+                                            size="4px",
+                                            show_value=False,
+                                            value=0,
+                                            color="primary",
+                                        )
+                                        .classes("flex-grow my-1")
+                                        .props("instant-feedback")
+                                    )
+                                    ui.label().bind_text_from(
+                                        app.storage.general[self.mainuuid][
+                                            self.sampleID
+                                        ][self.name]["counters"],
+                                        "bam_processed",
+                                        backward=lambda n: f"{n}/{self._get_counter_value('bam_count', 0)}",
+                                    ).classes("text-xs min-w-fit")
+
+                    with ui.column().classes("w-full gap-0 mt-1"):
+                        with ui.row().classes("w-full items-center gap-1 py-0"):
+                            ui.label("Not processed").classes("text-xs min-w-[80px]")
+                            progressbar3 = (
+                                ui.linear_progress(
+                                    size="4px",
+                                    show_value=False,
+                                    value=0,
+                                    color="red",
+                                )
+                                .tooltip("Indicates read files not yet processed.")
+                                .props("instant-feedback")
+                                .classes("flex-grow my-0")
+                            )
+                            ui.label().bind_text_from(
+                                app.storage.general[self.mainuuid][self.sampleID][
+                                    self.name
+                                ]["counters"],
+                                "bam_count",
+                                backward=lambda n: str(
+                                    n
+                                    # - self._get_counter_value("bam_processed", 0)
+                                    - self._get_counter_value("bams_in_processing", 0)
+                                ),
+                            ).classes("text-xs min-w-[30px] text-right")
+
+                        with ui.row().classes("w-full items-center gap-1 py-0"):
+                            ui.label("Completed").classes("text-xs min-w-[80px]")
+                            progressbar = (
+                                ui.linear_progress(
+                                    size="4px",
+                                    show_value=False,
+                                    value=0,
+                                    color="green",
+                                )
+                                .tooltip("Indicates read files processed.")
+                                .props("instant-feedback")
+                                .classes("flex-grow my-0")
+                            )
+                            ui.label().bind_text_from(
+                                app.storage.general[self.mainuuid][self.sampleID][
+                                    self.name
+                                ]["counters"],
+                                "bam_processed",
+                                backward=lambda n: str(n or 0),
+                            ).classes("text-xs min-w-[30px] text-right")
+
+            if not state.shutdown_event:
+                ui.timer(1, callback=lambda: progress_summary.set_value(self._progress_processed)) # total
+                ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed)) # not processed
+                ui.timer(1, callback=lambda: progressbar.set_value(self._progress_processed)) # processed
+
+        except Exception as e:
+            logging.error(f"Error creating progress bars for {self.name}: {str(e)}")
+            with ui.card().classes("w-full p-2 text-red-500"):
+                ui.label(f"Error displaying progress: {str(e)}")
+
+    def _initialize_counters(self, sample_id: str) -> None:
+        """Initialize counters for a specific sample if they don't exist."""
+        try:
+            if not sample_id:
+                logging.warning(f"No sample ID provided for {self.name}")
+                return
+
+            if not self.mainuuid:
+                logging.warning(f"No UUID provided for {self.name}")
+                return
+
+            if self.mainuuid not in app.storage.general:
+                app.storage.general[self.mainuuid] = {}
+                logging.debug(f"Initialized storage for UUID {self.mainuuid}")
+
+            if sample_id not in app.storage.general[self.mainuuid]:
+                app.storage.general[self.mainuuid][sample_id] = {}
+                logging.debug(f"Initialized storage for sample {sample_id}")
+
+            if self.name not in app.storage.general[self.mainuuid][sample_id]:
+                app.storage.general[self.mainuuid][sample_id][self.name] = {
+                    "counters": Counter(
+                        bam_count=0, bam_processed=0, bams_in_processing=0
+                    )
+                }
+                logging.debug(
+                    f"Initialized counters for {self.name} in sample {sample_id}"
+                )
+            elif (
+                "counters"
+                not in app.storage.general[self.mainuuid][sample_id][self.name]
+            ):
+                app.storage.general[self.mainuuid][sample_id][self.name]["counters"] = (
+                    Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
+                )
+                logging.debug(
+                    f"Initialized missing counters for {self.name} in sample {sample_id}"
+                )
+
+        except Exception as e:
+            logging.error(
+                f"Error initializing counters for {self.name} in sample {sample_id}: {str(e)}"
+            )
+            try:
+                app.storage.general[self.mainuuid] = {
+                    sample_id: {
+                        self.name: {
+                            "counters": Counter(
+                                bam_count=0, bam_processed=0, bams_in_processing=0
+                            )
+                        }
+                    }
+                }
+            except Exception as nested_e:
+                logging.error(f"Failed to create fallback counters: {str(nested_e)}")
+
+    def _get_counter_value(self, counter_name: str, default: int = 0) -> int:
+        """Safely get a counter value from storage."""
+        try:
+            sample_id = self.sampleID
+            app.storage.general[self.mainuuid][sample_id][self.name]["counters"]["bam_total"] = app.storage.general[self.mainuuid][sample_id][self.name]["counters"]["bams_in_processing"] + app.storage.general[self.mainuuid][sample_id][self.name]["counters"]["bam_processed"]
+            return app.storage.general[self.mainuuid][self.sampleID][self.name][
+                "counters"
+            ].get(counter_name, default)
+        except (KeyError, AttributeError):
+            return default
+
+    @property
+    def _progress(self) -> float:
+        """Calculate the progress of BAM file processing."""
+        try:
+            self._initialize_counters(self.sampleID)
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+                "counters"
+            ]
+            if counters.get("bam_processed", 0) == 0:
+                return 0.0
+            return counters.get("bam_processed", 0) / counters.get("bam_total", 1)
+        except (KeyError, TypeError):
+            return 0.0
+        
+    @property
+    def _progress_processed(self) -> float:
+        """Calculate the progress of BAM file processing."""
+        try:
+            self._initialize_counters(self.sampleID)
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+                "counters"
+            ]
+            if counters.get("bam_processed", 0) == 0:
+                return 0.0
+            if counters.get("bam_total") == 0:
+                return 0.0
+            return counters.get("bam_processed", 0) / counters.get("bam_total", 1)
+        except (KeyError, TypeError):
+            return 0.0
+
+    @property
+    def _not_analysed(self) -> float:
+        """Calculate the fraction of BAM files not yet analysed."""
+        try:
+            self._initialize_counters(self.sampleID)
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
+                "counters"
+            ]
+            if counters.get("bam_count", 0) == 0:
+                return 0.0
+            not_analysed = counters.get("bam_count", 0) - counters.get("bams_in_processing", 0) - counters.get("bam_processed", 0)
+            if not_analysed == 0 or counters.get("bam_total") == 0:
+                return 0.0
+            else:
+                return not_analysed / counters.get("bam_total", 1)
+        except (KeyError, TypeError):
+            return 0.0
+
+
+def sort_bams(data_list):
+    sorted_data = sorted(
+        data_list,
+        key=lambda x: x[1] if x[1] is not None else float("inf"),
+    )
+    bamfiles = [item[0] for item in sorted_data]
+    latest_timestamp = sorted_data[-1][1] if sorted_data else None
+    return bamfiles, latest_timestamp
+
+
+class BaseAnalysis:
+    """
+    Base class for analysis of BAM files output during a sequencing run.
+    Handles core analysis functionality and file processing.
+    """
+
+    def __init__(
+        self,
+        threads: int = 1,
+        output: str = None,
+        analysis_name: str = None,
+        summary: Optional[str] = None,
+        bamqueue: Optional[queue.Queue] = None,
+        progress: bool = False,
+        batch: bool = False,
+        start_time: Optional[float] = None,
+        browse: bool = False,
+        uuid: Optional[str] = None,
+        force_sampleid: Optional[str] = None,
+        sampleID: Optional[str] = None,
+        high_confidence_threshold: float = 0.9,
+        medium_confidence_threshold: float = 0.7,
+        *args,
+        **kwargs,
+    ) -> None:
+        # Initialize core analysis properties
+        self.bamqueue = bamqueue if bamqueue else queue.Queue()
+        self.name = analysis_name
+        self.mainuuid = uuid
+        self.start_time = start_time
+        self.batch = batch
+        self.output = output
+        self.summary = summary
+        self.browse = browse
+        self.progress = progress
+        self.file_mod_times = {}
+        self.running = False
+        self.terminate = False
+        self.force_sampleid = force_sampleid
+        self.threads = max(1, threads // 2)
+        self.sampleID = sampleID
+
+        # Initialize visualization component
+        # self.vis = BaseVis(
+        #    analysis_name=analysis_name,
+        #    uuid=uuid,
+        #    high_confidence_threshold=high_confidence_threshold,
+        #    medium_confidence_threshold=medium_confidence_threshold
+        # )
+        # self.vis.progress = progress
+        # self.vis.browse = browse
+
+    async def process_data(self) -> None:
+        """Start processing BAM files either in batch mode or in a continuous timer mode."""
         state.start_process(
             self.name, ProcessType.BATCH if self.batch else ProcessType.PER_FILE
         )
@@ -224,155 +562,150 @@ class BaseAnalysis:
             self.timer_run()
 
     def timer_run(self) -> None:
-        """
-        Set up a timer to periodically run the _worker method for processing BAM files.
-        """
-        self.timer = ui.timer(0.1, self._worker)
+        """Set up a timer to periodically run the _worker method for processing BAM files."""
+        self.timer = app.timer(0.1, self._worker, once=True)
 
     async def _worker(self) -> None:
-        """
-        Process BAM files from the queue in the background.
+        """Process BAM files from the queue in the background."""
+        while not self.terminate:
+            # self.timer.active = False
+            if state.shutdown_event:
+                print(f"shutdown_event is True, stopping _worker in {self.name}")
+                await self.stop_analysis()
+                return
 
-        This function takes reads from the queue and adds them to the background thread for processing.
-        """
-        self.timer.active = False
-        if state.shutdown_event:
-            print(f"shutdown_event is True, stopping _worker in {self.name}")
-            await self.stop_analysis()
-            return
-
-        if not self.bamqueue.empty() and not self.running:
-            self.running = True
-            state.set_process_state(self.name, ProcessState.RUNNING)
-            bamfile, timestamp, sampleID = self.bamqueue.get()
-            logger.debug(
-                f"Processing BAM file: {bamfile} with timestamp: {timestamp} and sampleID: {sampleID}"
-            )
-            self.sampleID = sampleID
-
-            # Initialize storage structure
-            if self.mainuuid not in app.storage.general:
-                app.storage.general[self.mainuuid] = {}
-            if self.sampleID not in app.storage.general[self.mainuuid]:
-                app.storage.general[self.mainuuid][self.sampleID] = {}
-            if self.name not in app.storage.general[self.mainuuid][self.sampleID]:
-                app.storage.general[self.mainuuid][self.sampleID][self.name] = {
-                    "counters": Counter(
-                        bam_count=0, bam_processed=0, bams_in_processing=0
-                    )
-                }
-
-            app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"][
-                "bam_count"
-            ] += 1
-
-            if not timestamp:
-                timestamp = time.time()
-            try:
+            if not self.bamqueue.empty() and not self.running:
+                self.running = True
+                state.set_process_state(self.name, ProcessState.RUNNING)
+                bamfile, timestamp, sampleID = self.bamqueue.get()
                 logger.debug(
-                    f"Calling process_bam with bamfile: {bamfile}, timestamp: {timestamp}"
+                    f"Processing BAM file: {bamfile} with timestamp: {timestamp} and sampleID: {sampleID}"
                 )
-                await self.process_bam(bamfile, timestamp)
-            except ValueError as e:
-                if "invalid literal for int() with base 10" in str(e):
-                    logger.error(
-                        f"Error processing BAM file: {e}. Skipping this file and continuing."
+                self.sampleID = sampleID
+
+                if not timestamp:
+                    timestamp = time.time()
+                try:
+                    logger.debug(
+                        f"Calling process_bam with bamfile: {bamfile}, timestamp: {timestamp}"
                     )
-                    logger.debug(f"BAM file that caused error: {bamfile}")
-                    logger.debug(f"Timestamp that caused error: {timestamp}")
-                    logger.debug(f"SampleID that caused error: {sampleID}")
-                else:
+                    await self.process_bam(bamfile, timestamp)
+                except ValueError as e:
+                    if "invalid literal for int() with base 10" in str(e):
+                        logger.error(
+                            f"Error processing BAM file: {e}. Skipping this file and continuing."
+                        )
+                        logger.debug(f"BAM file that caused error: {bamfile}")
+                        logger.debug(f"Timestamp that caused error: {timestamp}")
+                        logger.debug(f"SampleID that caused error: {sampleID}")
+                    else:
+                        logger.error(f"Error processing BAM files: {e}")
+                except Exception as e:
                     logger.error(f"Error processing BAM files: {e}")
-            except Exception as e:
-                logger.error(f"Error processing BAM files: {e}")
-                logger.debug(
-                    f"Unexpected error occurred while processing BAM file: {bamfile}"
-                )
-                logger.debug(f"Error details: {str(e)}")
-                logger.debug(f"Error type: {type(e)}")
-            finally:
-                app.storage.general[self.mainuuid][self.sampleID][self.name][
-                    "counters"
-                ]["bam_processed"] += 1
-            self.running = False
-        state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
-        if not self.terminate:
-            self.timer.active = True
+                    logger.debug(
+                        f"Unexpected error occurred while processing BAM file: {bamfile}"
+                    )
+                    logger.debug(f"Error details: {str(e)}")
+                    logger.debug(f"Error type: {type(e)}")
+                finally:
+                    self._initialize_counters(self.sampleID)
+                    app.storage.general[self.mainuuid][self.sampleID][self.name][
+                        "counters"
+                    ]["bam_processed"] += 1
+                self.running = False
+            state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
+            # if not self.terminate:
+            # self.timer.active = True
+            await asyncio.sleep(1)
 
     def add_bam(self, bamfile: BinaryIO, timestamp: Optional[float] = None) -> None:
-        """
-        Adds a BAM file to the queue for processing.
-
-        Args:
-            bamfile (BinaryIO): The BAM file to process.
-            timestamp (Optional[float]): The timestamp indicating when the file was generated.
-        """
+        """Adds a BAM file to the queue for processing."""
         self.bamqueue.put((bamfile, timestamp))
 
     def batch_timer_run(self) -> None:
-        """
-        Set up a timer to periodically run the _batch_worker method for batch processing of BAM files.
-        """
-        self.timer = ui.timer(5, self._batch_worker)
+        """Set up a timer to periodically run the _batch_worker method for batch processing."""
+        self.timer = app.timer(5, self._batch_worker)
 
     async def _batch_worker(self) -> None:
         """Process BAM files from the queue in batches in the background."""
-        self.timer.active = False
         if state.shutdown_event:
             print(f"shutdown_event is True, stopping _batch_worker in {self.name}")
             await self.stop_analysis()
             return
-        count = 0
-        while self.bamqueue.qsize() > 0:
-            state.set_process_state(self.name, ProcessState.RUNNING)
-
-            bamfile, timestamp, sampleID = self.bamqueue.get()
-
-            if sampleID not in self.bams:
-                self.bams[sampleID] = []
-
-            self.bams[sampleID].append((bamfile, timestamp))
-            count += 1
-
-            # Initialize counters for this sampleID if they don't exist
-            self._initialize_counters(sampleID)
-
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bam_count"
-            ] += 1
-
-            if count >= 100:
-                break
-
-        for sample_id, data_list in self.bams.items():
-            if not self.running and len(data_list) > 0:
+        self.timer.active = False
+        if self.bamqueue.qsize() > 0:
+            count = 0
+            while self.bamqueue.qsize() > 0:
                 state.set_process_state(self.name, ProcessState.RUNNING)
-                self.running = True
-                self.sampleID = sample_id
 
-                # Initialize counters for this sampleID if they don't exist
-                self._initialize_counters(self.sampleID)
+                bamfile, timestamp, sampleID = self.bamqueue.get()
 
-                try:
-                    # Sort the data_list by timestamp if timestamps exist
-                    sorted_data = sorted(
-                        data_list,
-                        key=lambda x: x[1] if x[1] is not None else float("inf"),
-                    )
+                if sampleID not in self.bams:
+                    self.bams[sampleID] = []
+                    self._initialize_counters(sampleID)
 
-                    # Extract just the bamfiles while preserving order
-                    bamfiles = [item[0] for item in sorted_data]
-                    # Get the latest timestamp
-                    latest_timestamp = sorted_data[-1][1] if sorted_data else None
+                self.bams[sampleID].append((bamfile, timestamp))
+                count += 1
 
-                    # Process the batch with the latest timestamp
-                    await self.process_bam(bamfiles, latest_timestamp)
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                    "bam_count"
+                ] += 1
 
-                except Exception as e:
-                    logger.error(f"Error processing BAM files: {e}")
-        state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
-        await asyncio.sleep(0.01)
+                if count >= 100:
+                    break
+
+            for sample_id, data_list in self.bams.items():
+                if not self.running and len(data_list) > 0:
+                    state.set_process_state(self.name, ProcessState.RUNNING)
+                    self.running = True
+                    self.sampleID = sample_id
+
+                    try:
+                        bamfiles, latest_timestamp = await run.cpu_bound(
+                            sort_bams,
+                            data_list,
+                        )
+
+                        await self.process_bam(bamfiles, latest_timestamp)
+
+                    except Exception as e:
+                        logger.error(f"Error processing BAM files: {e}")
+            state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
         self.timer.active = True
+
+    def check_file_time(self, file_path: str) -> bool:
+        """Check if the file exists and whether it has been modified since last seen."""
+        if not os.path.exists(file_path):
+            return False
+
+        current_mod_time = os.path.getmtime(file_path)
+
+        if file_path not in self.file_mod_times:
+            self.file_mod_times[file_path] = current_mod_time
+            return True
+
+        if self.file_mod_times[file_path] == current_mod_time:
+            return False
+
+        self.file_mod_times[file_path] = current_mod_time
+        return True
+
+    def check_and_create_folder(self, path, folder_name=None):
+        """Check if the path exists and create the folder if it doesn't."""
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"The specified path does not exist: {path}")
+
+        if self.force_sampleid:
+            folder_name = self.force_sampleid
+
+        if folder_name:
+            full_path = os.path.join(path, folder_name)
+            if not os.path.exists(full_path):
+                os.makedirs(full_path)
+                logger.info(f"Folder created: {full_path}")
+            return full_path
+        else:
+            return path
 
     def _initialize_counters(self, sample_id: str) -> None:
         """
@@ -417,6 +750,7 @@ class BaseAnalysis:
                 logging.debug(
                     f"Initialized missing counters for {self.name} in sample {sample_id}"
                 )
+            
 
         except Exception as e:
             logging.error(
@@ -435,228 +769,40 @@ class BaseAnalysis:
                 }
             except Exception as nested_e:
                 logging.error(f"Failed to create fallback counters: {str(nested_e)}")
+        
+            
 
-    @property
-    def _progress(self) -> float:
-        """
-        Calculate the progress of BAM file processing.
+    async def stop_analysis(self):
+        """Stop the analysis and clean up resources."""
+        state.set_process_state(self.name, ProcessState.STOPPING)
+        self.running = False
+        self.batch_running = False
+        print(
+            f"Analysis stopped for {self.name} and {self.sampleID}. Active processes: {list(state.process_states.keys())}"
+        )
+        if self.name in state.process_states:
+            state.stop_process(self.name)
 
-        Returns:
-            float: The progress as a fraction of processed files over total files.
-        """
-        try:
-            self._initialize_counters(self.sampleID)
-            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
-                "counters"
-            ]
-            if counters.get("bam_count", 0) == 0:
-                return 0.0
-            return counters.get("bam_processed", 0) / counters.get("bam_count", 1)
-        except (KeyError, TypeError):
-            return 0.0
+    def process_bam(self, bamfile: BinaryIO, timestamp: float) -> None:
+        """Process a BAM file."""
+        raise NotImplementedError("Subclasses must implement this method.")
 
-    @property
-    def _progress2(self) -> float:
-        """
-        Calculate the progress of BAM files currently being processed.
+    def setup_ui(self) -> None:
+        """Set up the user interface for the analysis."""
+        raise NotImplementedError("Subclasses must implement this method.")
 
-        Returns:
-            float: The progress as a fraction of files being processed over total files.
-        """
-        try:
-            self._initialize_counters(self.sampleID)
-            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
-                "counters"
-            ]
-            if counters.get("bam_count", 0) == 0:
-                return 0.0
-            return counters.get("bams_in_processing", 0) / counters.get("bam_count", 1)
-        except (KeyError, TypeError):
-            return 0.0
+    def cleanup(self) -> None:
+        """Clean up any resources used by the analysis."""
+        pass
 
-    @property
-    def _not_analysed(self) -> float:
-        """
-        Calculate the fraction of BAM files not yet analysed.
-
-        Returns:
-            float: The fraction of files not yet processed over total files.
-        """
-        try:
-            self._initialize_counters(self.sampleID)
-            counters = app.storage.general[self.mainuuid][self.sampleID][self.name][
-                "counters"
-            ]
-            if counters.get("bam_count", 0) == 0:
-                return 0.0
-            return (
-                counters.get("bam_count", 0)
-                - counters.get("bams_in_processing", 0)
-                - counters.get("bam_processed", 0)
-            ) / counters.get("bam_count", 1)
-        except (KeyError, TypeError):
-            return 0.0
-
-    def progress_bars(self) -> None:
-        """
-        Show a progress bar for the number of BAM files processed.
-        """
-        try:
-            self.progress_trackers = ui.card().classes("w-full p-2")
-            logger.debug(f"Progress bars for {self.name} and {self.sampleID}")
-
-            # Initialize storage structure
-            self._initialize_counters(self.sampleID)
-
-            with self.progress_trackers:
-                # Create expansion with custom header
-                with ui.expansion().classes("w-full") as expansion:
-                    # Header slot with summary
-                    with expansion.add_slot("header"):
-                        with ui.row().classes(
-                            "w-full items-center justify-between gap-1"
-                        ):
-                            with ui.column().classes("flex-grow gap-0"):
-                                ui.label("File Processing Status").classes(
-                                    "text-sm font-medium mb-0 pb-0"
-                                )
-                                with ui.row().classes("w-full items-center gap-1"):
-                                    progress_summary = (
-                                        ui.linear_progress(
-                                            size="4px",
-                                            show_value=False,
-                                            value=0,
-                                            color="primary",
-                                        )
-                                        .classes("flex-grow my-1")
-                                        .props("instant-feedback")
-                                    )
-                                    ui.label().bind_text_from(
-                                        app.storage.general[self.mainuuid][
-                                            self.sampleID
-                                        ][self.name]["counters"],
-                                        "bam_processed",
-                                        backward=lambda n: f"{n}/{self._get_counter_value('bam_count', 0)}",
-                                    ).classes("text-xs min-w-fit")
-
-                    # Detailed content
-                    with ui.column().classes("w-full gap-0 mt-1"):
-                        # Files not processed yet
-                        with ui.row().classes("w-full items-center gap-1 py-0"):
-                            ui.label("Not processed").classes("text-xs min-w-[80px]")
-                            progressbar3 = (
-                                ui.linear_progress(
-                                    size="4px",
-                                    show_value=False,
-                                    value=0,
-                                    color="red",
-                                )
-                                .tooltip("Indicates read files not yet processed.")
-                                .props("instant-feedback")
-                                .classes("flex-grow my-0")
-                            )
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid][self.sampleID][
-                                    self.name
-                                ]["counters"],
-                                "bam_count",
-                                backward=lambda n: str(
-                                    n
-                                    - self._get_counter_value("bam_processed", 0)
-                                    - self._get_counter_value("bams_in_processing", 0)
-                                ),
-                            ).classes("text-xs min-w-[30px] text-right")
-
-                        # Files being processed (only shown in batch mode)
-                        if self.batch:
-                            with ui.row().classes("w-full items-center gap-1 py-0"):
-                                ui.label("Processing").classes("text-xs min-w-[80px]")
-                                progressbar2 = (
-                                    ui.linear_progress(
-                                        size="4px",
-                                        show_value=False,
-                                        value=0,
-                                        color="amber",
-                                    )
-                                    .tooltip("Indicates read files being processed.")
-                                    .props("instant-feedback")
-                                    .classes("flex-grow my-0")
-                                )
-                                ui.label().bind_text_from(
-                                    app.storage.general[self.mainuuid][self.sampleID][
-                                        self.name
-                                    ]["counters"],
-                                    "bams_in_processing",
-                                    backward=lambda n: str(n or 0),
-                                ).classes("text-xs min-w-[30px] text-right")
-
-                        # Files processed
-                        with ui.row().classes("w-full items-center gap-1 py-0"):
-                            ui.label("Completed").classes("text-xs min-w-[80px]")
-                            progressbar = (
-                                ui.linear_progress(
-                                    size="4px",
-                                    show_value=False,
-                                    value=0,
-                                    color="green",
-                                )
-                                .tooltip("Indicates read files processed.")
-                                .props("instant-feedback")
-                                .classes("flex-grow my-0")
-                            )
-                            ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid][self.sampleID][
-                                    self.name
-                                ]["counters"],
-                                "bam_processed",
-                                backward=lambda n: str(n or 0),
-                            ).classes("text-xs min-w-[30px] text-right")
-
-            # Update progress bars
-            if not state.shutdown_event:
-                ui.timer(1, callback=lambda: progress_summary.set_value(self._progress))
-                ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed))
-                if self.batch:
-                    ui.timer(
-                        1, callback=lambda: progressbar2.set_value(self._progress2)
-                    )
-                ui.timer(1, callback=lambda: progressbar.set_value(self._progress))
-
-        except Exception as e:
-            logging.error(f"Error creating progress bars for {self.name}: {str(e)}")
-            # Create a simple error message instead of the progress bars
-            with ui.card().classes("w-full p-2 text-red-500"):
-                ui.label(f"Error displaying progress: {str(e)}")
-
-    def _get_counter_value(self, counter_name: str, default: int = 0) -> int:
-        """
-        Safely get a counter value from storage.
-
-        Args:
-            counter_name (str): Name of the counter to retrieve
-            default (int): Default value if counter doesn't exist
-
-        Returns:
-            int: Counter value or default
-        """
-        try:
-            return app.storage.general[self.mainuuid][self.sampleID][self.name][
-                "counters"
-            ].get(counter_name, default)
-        except (KeyError, AttributeError):
-            return default
+    def check_resources(self) -> None:
+        """Check the resources required for the analysis."""
+        pass
 
     def playback(
         self, data: pd.DataFrame, step_size: int = 2, start_time: Optional[float] = None
     ) -> None:
-        """
-        Simulate the processing of BAM files from a dataframe in playback mode.
-
-        Args:
-            data (pd.DataFrame): The dataframe containing BAM file information.
-            step_size (int): The step size for the playback.
-            start_time (Optional[float]): The start time of the playback.
-        """
+        """Simulate the processing of BAM files from a dataframe in playback mode."""
         self.data = data
         playback_thread = threading.Thread(
             target=self.playback_bams, args=(step_size, start_time)
@@ -667,18 +813,7 @@ class BaseAnalysis:
     def playback_bams(
         self, step_size: int = 2, start_time: Optional[float] = None
     ) -> None:
-        """
-        Simulate the processing of BAM files from a pandas dataframe.
-
-        This function plays back the processing of BAM files from a pandas dataframe.
-        To simulate the behavior of a run, it adds files to the queue in the order in which they were produced.
-        The run time for each individual processing loop is monitored, and the reads are added to the queue
-        accounting for this delay. The delay is calculated by the offset parameter which starts as 0.
-
-        Args:
-            step_size (int): The step size for the playback.
-            start_time (Optional[float]): The start time of the playback.
-        """
+        """Simulate the processing of BAM files from a pandas dataframe."""
         latest_timestamps = self.data
         self.offset = 0
         playback_start_time = time.time()
@@ -698,179 +833,3 @@ class BaseAnalysis:
                 self.add_bam(
                     row["full_path"], playback_start_time + row["file_produced"]
                 )
-
-    def create_time_chart(self, title: str) -> ui.echart:
-        """
-        Create a time chart for visualizing data.
-
-        Args:
-            title (str): The title of the chart.
-
-        Returns:
-            ui.echart: The Echarts object configured for time series data.
-        """
-        return (
-            ui.echart(
-                {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "tooltip": {"order": "valueDesc", "trigger": "axis"},
-                    "toolbox": {
-                        "show": True,
-                        "feature": {
-                            "dataZoom": {"yAxisIndex": "none"},
-                            "restore": {},
-                            "saveAsImage": {},
-                        },
-                    },
-                    "xAxis": {"type": "time"},
-                    "yAxis": {"type": "value", "data": [], "inverse": False},
-                    "series": [],
-                }
-            )
-            .classes("border-double text-sky-600 dark:text-white dark:bg-black")
-            .style("height: 350px")
-        )
-
-    def create_chart(self, title: str) -> ui.echart:
-        """
-        Create a categorical chart for visualizing data.
-
-        Args:
-            title (str): The title of the chart.
-
-        Returns:
-            ui.echart: The Echarts object configured for categorical data.
-        """
-        return (
-            ui.echart(
-                {
-                    "textStyle": {"fontFamily": "Fira Sans, Fira Mono"},
-                    "animation": False,
-                    "grid": {"containLabel": True},
-                    "title": {"text": title},
-                    "toolbox": {"show": True, "feature": {"saveAsImage": {}}},
-                    "xAxis": {"type": "value", "max": 1},
-                    "yAxis": {"type": "category", "data": [], "inverse": True},
-                    "series": [],
-                }
-            )
-            .classes("border-double text-sky-600 dark:text-white dark:bg-black")
-            .style("font-size: 150%; font-weight: 300; height: 350px")
-            # .classes("border-double")
-        )
-
-    def process_bam(self, bamfile: BinaryIO, timestamp: float) -> None:
-        """
-        Process a BAM file.
-
-        Args:
-            bamfile (BinaryIO): The BAM file to process.
-            timestamp (float): A timestamp indicating when the file was generated.
-        """
-        raise NotImplementedError("Subclasses must implement this method.")
-
-    def setup_ui(self) -> None:
-        """
-        Set up the user interface for the analysis.
-
-        This function should be overridden by subclasses to create the user interface for the analysis.
-        It should create the necessary widgets and add them to the display.
-        The function should do no work of its own. That should all be done in the process_bam method.
-        The function may call other methods to trigger updates to the display.
-        """
-        raise NotImplementedError("Subclasses must implement this method.")
-
-    def cleanup(self) -> None:
-        """
-        Clean up any resources used by the analysis.
-
-        This function is called when the app is closed.
-        It should be overridden by subclasses to clean up any resources used by the analysis.
-        """
-        pass
-
-    def check_resources(self) -> None:
-        """
-        Check the resources required for the analysis.
-
-        This function is called to check the resources required for the analysis are present.
-        It should be overridden by subclasses to check the resources required for the analysis are present.
-        """
-        pass
-
-    def create_summary_card(
-        self,
-        classification_text,
-        confidence_value,
-        model_name=None,
-        features_found=None,
-    ):
-        """
-        Create a standardized summary card for displaying classification results.
-        Following Apple HIG principles for presenting machine learning results.
-
-        Parameters
-        ----------
-        classification_text : str
-            The primary classification result
-        confidence_value : float
-            The confidence value (between 0 and 1)
-        model_name : str, optional
-            The name of the model used for classification
-        features_found : int, optional
-            Number of features/probes found
-        """
-        with ui.card().classes("w-full shadow-sm rounded-lg").style(
-            "background-color: #F5F5F7; padding: 16px; margin-bottom: 16px;"
-        ):
-            # Main classification result
-            with ui.row().classes("w-full items-center justify-between gap-4"):
-                # Left side - Classification info
-                with ui.column().classes("gap-2 flex-grow"):
-                    # Primary classification
-                    ui.label(classification_text.split(" - ")[0]).classes(
-                        "text-lg font-medium text-gray-900"
-                    )
-                    # Secondary info row
-                    with ui.row().classes("gap-4 items-center"):
-                        if model_name:
-                            ui.label(f"Model: {model_name}").classes(
-                                "text-sm text-gray-500"
-                            )
-                        if features_found:
-                            ui.label(f"Features: {features_found:,}").classes(
-                                "text-sm text-gray-500"
-                            )
-
-                # Right side - Confidence indicator
-                confidence_percent = confidence_value * 100
-                with ui.column().classes("items-end gap-1 min-w-fit"):
-                    # Confidence value
-                    ui.label(f"{confidence_percent:.1f}%").classes(
-                        "text-xl font-semibold"
-                    ).style(f"color: {self._get_confidence_color(confidence_value)}")
-                    # Confidence label
-                    ui.label(self._get_confidence_text(confidence_value)).classes(
-                        "text-sm text-gray-500"
-                    )
-
-    def _get_confidence_color(self, confidence):
-        """Get color based on confidence level."""
-        if confidence >= self.high_confidence_threshold:
-            return "#34C759"  # Green for high confidence
-        elif confidence >= self.medium_confidence_threshold:
-            return "#007AFF"  # Blue for medium confidence
-        else:
-            return "#FF9500"  # Orange for low confidence
-
-    def _get_confidence_text(self, confidence):
-        """Get descriptive text based on confidence level."""
-        if confidence >= self.high_confidence_threshold:
-            return "High confidence"
-        elif confidence >= self.medium_confidence_threshold:
-            return "Medium confidence"
-        else:
-            return "Low confidence"

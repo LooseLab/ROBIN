@@ -6,6 +6,8 @@ import logging
 from datetime import datetime
 import asyncio
 from time import sleep
+import queue
+from logging.handlers import QueueHandler, QueueListener
 
 from typing import Optional, List
 from pathlib import Path
@@ -23,6 +25,7 @@ from robin.utilities.news_feed import NewsFeed
 from robin.__about__ import __version__
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 from .core.state import state, ProcessType, ProcessState
+
 
 DEV_TESTING: bool = False
 
@@ -79,24 +82,51 @@ def setup_logging(level: str, log_file: Path) -> None:
     if numeric_level is None:
         raise ValueError(f"Invalid log level: {level}")
 
+    # Remove any existing handlers
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
 
-    try:
-        logging.basicConfig(
-            level=numeric_level,
-            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-            handlers=[logging.FileHandler(log_file), logging.StreamHandler(sys.stdout)],
-        )
-        logging.info(f"Logging configured to level: {level}")
-        logging.info(f"Logging to file: {log_file}")
-        logging.debug("Debug logging enabled.")
-    except PermissionError:
-        print(f"Error: Unable to write to log file {log_file}. Check permissions.")
-        sys.exit(1)
-    except Exception as e:
-        print(f"Error setting up logging: {str(e)}")
-        sys.exit(1)
+    # Create a queue for log messages
+    log_queue = queue.Queue()
+
+    # Create handlers
+    file_handler = logging.FileHandler(log_file)
+    console_handler = logging.StreamHandler(sys.stdout)
+
+    # Create formatters and add them to the handlers
+    formatter = logging.Formatter(
+        "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    )
+    file_handler.setFormatter(formatter)
+    console_handler.setFormatter(formatter)
+
+    # Create a QueueListener to handle the actual writing
+    queue_listener = QueueListener(
+        log_queue, file_handler, console_handler, respect_handler_level=True
+    )
+    queue_listener.start()
+
+    # Create a QueueHandler and add it to the root logger
+    queue_handler = QueueHandler(log_queue)
+    queue_handler.setLevel(numeric_level)
+
+    # Configure the root logger
+    logging.getLogger().setLevel(numeric_level)
+    logging.getLogger().addHandler(queue_handler)
+
+    # Store the queue listener so it doesn't get garbage collected
+    logging._queue_listener = queue_listener
+
+    logging.info(f"Logging configured to level: {level}")
+    logging.info(f"Logging to file: {log_file}")
+    logging.debug("Debug logging enabled.")
+
+
+def cleanup_logging():
+    """Clean up logging resources."""
+    if hasattr(logging, "_queue_listener"):
+        logging._queue_listener.stop()
+        del logging._queue_listener
 
 
 def clean_up_handler(thingtokill):
@@ -157,7 +187,7 @@ async def index() -> None:
             else:
                 nicegui.air.disconnect()
 
-    ui.timer(1, use_on_air)
+    app.timer(1, use_on_air)
     ui.context.client.on_disconnect(lambda: clean_up_handler(GUI))
     await GUI.splash_screen()
 
@@ -446,7 +476,7 @@ class Methnice:
                     logging.info("Sending periodic telemetry update")
                     self.telemetry.send_run_telemetry(self)
 
-                ui.timer(
+                app.timer(
                     120.0, send_telemetry_update, active=True
                 )  # Send update every minute
                 logging.info("Telemetry update timer initialized (1-minute interval)")
@@ -458,7 +488,8 @@ class Methnice:
     async def start_analysis(self) -> None:
         """Start the analysis process."""
         try:
-            await self.robin.start_background()
+            # await self.robin.start_background()
+            ui.timer(1, lambda: self.robin.start_background(), once=True)
         except Exception as e:
             logging.error(f"Error starting analysis: {str(e)}")
             # Consider how to handle this error (e.g., show an error message to the user)
@@ -616,7 +647,7 @@ class Methnice:
                 smalltitle=self.smalltitle,
                 batphone=self.batphone,
             ):
-                await ui.context.client.connected()
+                #await ui.context.client.connected()
                 with ui.column().classes("w-full"):
                     # Set up MinKNOW connection if necessary
                     if self.watchfolder is None and not self.browse:
@@ -833,24 +864,46 @@ def run_class(
         if DEV_TESTING:
             loop = asyncio.get_running_loop()
             loop.set_debug(True)
-            loop.slow_callback_duration = 0.05
+            loop.slow_callback_duration = 2
 
         await global_methnice.start_analysis()
 
-    """
-    async def shutdown_with_methnice():
-        ```
-        Shutdown the application and Methnice instance.
-        ```
+    # Add cleanup to the shutdown handler
+    def handler(*args):
         print("Shutting down ROBIN... from ctrl-c")
-        print("Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open.")
-        ui.notify("Shutting down ROBIN from command line...", type='warning')
+        print(
+            "Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open."
+        )
+        print("Please shut down ROBIN from the command line.")
         state.shutdown_event = True
-        print(f"Value of shutdown_event: {state.shutdown_event}")
-    """
+        cleanup_logging()  # Add cleanup call here
+
+        # Get the current event loop
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # Schedule the shutdown task in the existing loop
+                async def shutdown_task():
+                    while state.get_running_process_count() > 0:
+                        await asyncio.sleep(1)
+                        print(
+                            f"Waiting for {state.get_running_process_count()} processes to finish"
+                        )
+                        print(f"Active processes: {list(state.process_states.keys())}")
+                    # Don't exit, just keep running
+                    while True:
+                        await asyncio.sleep(1)
+                        print(f"Active processes: {list(state.process_states.keys())}")
+
+                loop.create_task(shutdown_task())
+        except Exception as e:
+            print(f"Error during shutdown: {e}")
+            # Don't exit, keep running
+            while True:
+                sleep(1)
+                print(f"Active processes: {list(state.process_states.keys())}")
 
     app.on_startup(startup_with_methnice)
-    # app.on_shutdown(shutdown_with_methnice)
 
     try:
         ui.run(
@@ -1138,6 +1191,7 @@ def package_run(
     """
     Main entry point for the ROBIN package.
     """
+
     # Set up logging first, before any other operations
     setup_logging(log_level, log_file)
 
@@ -1148,6 +1202,7 @@ def package_run(
         )
         print("Please shut down ROBIN from the command line.")
         state.shutdown_event = True
+        cleanup_logging()  # Add cleanup call here
 
         # Get the current event loop
         try:
@@ -1252,6 +1307,7 @@ def package_run(
         if output is None:
             logging.error("Output is required when --browse is not set.")
             sys.exit(1)
+
         run_class(
             port=port,
             force_sampleid=force_sampleid,

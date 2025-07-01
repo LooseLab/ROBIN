@@ -21,7 +21,7 @@ from robin.subpages.CNV_object import (
     CNVAnalysis,
     CNV_Difference,
     moving_average,
-    iterate_bam_bin,
+    # iterate_bam_bin,
 )
 from robin import resources
 
@@ -134,14 +134,12 @@ class CNVSection(ReportSection):
             logger.debug(
                 "Getting reference CNV data with bin width %s", cnv_dict["bin_width"]
             )
-            r2_cnv, _, _, _ = iterate_bam_bin(
-                None,
-                1,
-                60,
-                ref_cnv_dict,
-                int(logging.ERROR),
-                bin_width=cnv_dict["bin_width"],
-            )
+
+            r2_cnv = Result(
+                np.load(
+                    os.path.join(self.report.output, "CNV2.npy"), allow_pickle="TRUE"
+                ).item()
+            ).cnv
 
             # Initialize CNV_Difference object for normalized values
             result3 = CNV_Difference()
