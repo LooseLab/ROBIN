@@ -2282,7 +2282,7 @@ class BrainMeth:
                 # Detailed Analysis Tabs
                 if sample_id:
                     selectedtab = None
-                    with ui.tabs().on('click', lambda: ui.notify('You clicked a tab.')).classes("w-full") as tabs:
+                    with ui.tabs().classes("w-full") as tabs: #.on('click', lambda: ui.notify('You clicked a tab.'))
                         if not (
                             set(["sturgeon", "pannanodx", "nanodx", "forest"]).issubset(
                                 set(self.exclude)
@@ -2312,7 +2312,7 @@ class BrainMeth:
                             if not selectedtab:
                                 selectedtab = mnpflextab
 
-                    with ui.tab_panels(tabs, value=selectedtab, on_change=lambda e: print(e)).classes("w-full"):
+                    with ui.tab_panels(tabs, value=selectedtab):# , on_change=lambda e: print(e)).classes("w-full"):
                         display_args = {
                             "threads": self.threads,
                             "output": self.output,
