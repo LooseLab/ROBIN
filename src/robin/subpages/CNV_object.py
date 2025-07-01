@@ -860,7 +860,7 @@ class CNVVis(BaseVis):
 
 
 
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
         
 
         if self.browse:

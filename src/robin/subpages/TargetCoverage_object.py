@@ -1666,14 +1666,14 @@ class TargetCoverageVis(BaseVis):
 
                     # Define the async functions that will be used by the buttons
                     async def clear_and_reload():
-                        await ui.context.client.connected()
+                        #await ui.context.client.connected()
                         ui.run_javascript(js_code, timeout=30.0)
                         self.mybutton.disable()
                         dataload.enable()
 
                     async def data_load():
                         ui.notify("Data Loading")
-                        await ui.context.client.connected()
+                        #await ui.context.client.connected()
                         ui.run_javascript(js_clear_track, timeout=30)
                         ui.run_javascript(js_code_track, timeout=100)
                         ui.notify("Data Loaded")

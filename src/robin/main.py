@@ -622,7 +622,7 @@ class Methnice:
                         logging.warning(
                             "No telemetry instance available for map display"
                         )
-        await ui.context.client.connected()
+        #await ui.context.client.connected()
 
     async def index_page(self) -> None:
         """
