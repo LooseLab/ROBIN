@@ -1411,7 +1411,7 @@ def important_function(combined_df):
     bed_lines = []
     if not combined_df.empty:
     # Get summary of structural variants
-    sv_summary = get_summary(combined_df, min_support=2)
+        sv_summary = get_summary(combined_df, min_support=2)
 
     if not sv_summary.empty:
         # Convert summary to BED format lines - only breakpoint boundaries
