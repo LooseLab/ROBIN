@@ -3529,7 +3529,7 @@ class FusionObject(BaseAnalysis):
                                 os.path.join(output_dir, "fusion_candidates_master_processed.csv")
                             )
                         
-                        await background_tasks.create(preprocess_master_background_work())
+                        background_tasks.create(preprocess_master_background_work())
                         
                         logger.info(
                             f"Saved {len(result)} fusion candidates within target regions"
@@ -3566,7 +3566,7 @@ class FusionObject(BaseAnalysis):
                                 os.path.join(output_dir, "fusion_candidates_all_processed.csv")
                             )
                         
-                        await background_tasks.create(preprocess_all_background_work())
+                        background_tasks.create(preprocess_all_background_work())
                         
                         logger.info(
                             f"Saved {len(result_all)} genome-wide fusion candidates"
@@ -3577,7 +3577,7 @@ class FusionObject(BaseAnalysis):
                 loop = asyncio.get_event_loop()
                 return await loop.run_in_executor(None, preprocess_structural_variants_standalone, output_dir)
             
-            await background_tasks.create(preprocess_sv_background_work())
+            background_tasks.create(preprocess_sv_background_work())
 
         except Exception as e:
             logger.error(f"Error saving fusion results: {str(e)}")
