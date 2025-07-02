@@ -1216,7 +1216,7 @@ class FusionVis(BaseVis):
         """
         Sets up the user interface for the Fusion Panel and Structural Variant Analysis.
         """
-        app.config.request_timeout = 10  # Increase timeout to 10 seconds
+        #app.config.request_timeout = 10  # Increase timeout to 10 seconds
 
         if self.summary:
             with self.summary:
