@@ -3265,7 +3265,10 @@ class FusionObject(BaseAnalysis):
                                     )
 
                                 # Save combined data without compression for compatibility
-                                combined_df.to_csv(sv_links_file, index=False)
+                                async def save_csv_work():
+                                    return await run.io_bound(combined_df.to_csv, sv_links_file, index=False)
+                                
+                                await save_csv_work()
                                 sv_save_time = time.time() - start_sv_save
                                 print(f"    Save SV links to CSV: {sv_save_time:.3f}s")
 
