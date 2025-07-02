@@ -1463,6 +1463,7 @@ class FusionVis(BaseVis):
         if self.browse:
             self.show_previous_data()
         else:
+            # Timer now calls lightweight show_previous_data method
             ui.timer(30, lambda: self.show_previous_data())
 
     def update_fusion_table_all(self, result_all: pd.DataFrame) -> None:
@@ -2057,18 +2058,9 @@ class FusionVis(BaseVis):
     def show_previous_data(self) -> None:
         """
         Loads and displays previously analyzed data.
-
-        Performance Warning:
-        - Reads entire CSV files into memory
-        - Creates multiple DataFrame copies
-        - No streaming or chunked processing
-
-        Optimization Suggestions:
-        1. Implement streaming for large files
-        2. Use chunked processing
-        3. Cache frequently accessed data
-        4. Implement lazy loading
-        5. Use memory-efficient data structures
+        
+        This method now only loads pre-processed data from FusionObject,
+        eliminating all heavy computational work from the display layer.
         """
         if not self.browse:
             for item in app.storage.general[self.mainuuid]:
@@ -2079,156 +2071,295 @@ class FusionVis(BaseVis):
         if self.browse:
             output = self.check_and_create_folder(self.output, self.sampleID)
 
-        # Load fusion candidates
-        if self.check_file_time(os.path.join(output, "fusion_candidates_master.csv")):
-            try:
-                fusion_candidates = pd.read_csv(
-                    os.path.join(output, "fusion_candidates_master.csv"),
-                    dtype=str,
-                    header=None,
-                    skiprows=1,
-                )
-                # Add column names to match the expected format
-                fusion_candidates.columns = [
-                    "col1",
-                    "col2",
-                    "col3",
-                    "col4",  # BED file columns
-                    "reference_id",
-                    "reference_start",
-                    "reference_end",  # Reference columns
-                    "read_id",
-                    "mapping_quality",
-                    "strand",  # Read info columns
-                    "read_start",
-                    "read_end",  # Read mapping columns
-                    "is_secondary",
-                    "is_supplementary",
-                    "mapping_span",  # Additional info
-                ]
-                self.update_fusion_table(fusion_candidates)
-            except pd.errors.EmptyDataError:
-                pass
+        # Load pre-processed fusion data (lightweight operation)
+        self._load_preprocessed_fusion_data(output)
+        
+        # Load pre-processed structural variant data (lightweight operation)
+        self._load_preprocessed_structural_variants(output)
 
-        if self.check_file_time(os.path.join(output, "fusion_candidates_all.csv")):
-            try:
-                fusion_candidates_all = pd.read_csv(
-                    os.path.join(output, "fusion_candidates_all.csv"),
-                    dtype=str,
-                    header=None,
-                    skiprows=1,
-                )
-                # Add column names to match the expected format
-                fusion_candidates_all.columns = [
-                    "col1",
-                    "col2",
-                    "col3",
-                    "col4",  # BED file columns
-                    "reference_id",
-                    "reference_start",
-                    "reference_end",  # Reference columns
-                    "read_id",
-                    "mapping_quality",
-                    "strand",  # Read info columns
-                    "read_start",
-                    "read_end",  # Read mapping columns
-                    "is_secondary",
-                    "is_supplementary",
-                    "mapping_span",  # Additional info
-                ]
-                self.update_fusion_table_all(fusion_candidates_all)
-            except pd.errors.EmptyDataError:
-                pass
+    def _load_preprocessed_fusion_data(self, output: str) -> None:
+        """Load pre-processed fusion data for display."""
+        try:
+            # Load target panel fusion data
+            master_processed_file = os.path.join(output, "fusion_candidates_master_processed.csv")
+            if os.path.exists(master_processed_file):
+                import pickle
+                with open(master_processed_file, 'rb') as f:
+                    processed_data = pickle.load(f)
+                
+                # Update UI with pre-processed data
+                self._update_fusion_ui_from_processed_data(processed_data, is_target_panel=True)
+            
+            # Load genome-wide fusion data
+            all_processed_file = os.path.join(output, "fusion_candidates_all_processed.csv")
+            if os.path.exists(all_processed_file):
+                import pickle
+                with open(all_processed_file, 'rb') as f:
+                    processed_data = pickle.load(f)
+                
+                # Update UI with pre-processed data
+                self._update_fusion_ui_from_processed_data(processed_data, is_target_panel=False)
+                
+        except Exception as e:
+            logger.error(f"Error loading pre-processed fusion data: {str(e)}")
 
-        # Load structural variants
-        if self.check_file_time(os.path.join(output, "structural_variant_links.csv")):
-            try:
-                # Read the structural variant links CSV
-                sv_links_df = pd.read_csv(
-                    os.path.join(output, "structural_variant_links.csv"),
-                    dtype={
-                        "QNAME": str,
-                        "RNAME.1": str,
-                        "RNAME.2": str,
-                        "coord_1": np.int64,
-                        "coord_2": np.int64,
-                        "genomic_gap": np.int64,
-                        "event": str,
-                    },
-                )
+    def _load_preprocessed_structural_variants(self, output: str) -> None:
+        """Load pre-processed structural variant data for display."""
+        try:
+            # Load structural variant count
+            sv_count_file = os.path.join(output, "sv_count.txt")
+            if os.path.exists(sv_count_file):
+                with open(sv_count_file, 'r') as f:
+                    self.sv_count = int(f.read().strip())
+            
+            # Load processed structural variant data
+            sv_processed_file = os.path.join(output, "structural_variants_processed.csv")
+            if os.path.exists(sv_processed_file):
+                sv_df = pd.read_csv(sv_processed_file)
+                
+                # Update UI elements if they exist
+                if hasattr(self, "sv_plot") and self.sv_plot is not None:
+                    self.sv_plot.clear()
+                    with self.sv_plot:
+                        self.create_sv_plot(sv_df, self.sampleID)
+                if (
+                    hasattr(self, "sv_table_container")
+                    and self.sv_table_container is not None
+                ):
+                    self.update_sv_table(sv_df)
+                    
+                logger.info(f"Loaded {len(sv_df)} pre-processed structural variant events")
+            else:
+                self.sv_count = 0
+                
+        except Exception as e:
+            logger.error(f"Error loading pre-processed structural variants: {str(e)}")
+            self.sv_count = 0
 
-                if not sv_links_df.empty:
-                    # Process the links data to create a summary for display
-                    # Use the get_summary function that's already defined
-                    sv_summary = get_summary(sv_links_df, min_support=2)
+    def _update_fusion_ui_from_processed_data(self, processed_data: dict, is_target_panel: bool) -> None:
+        """Update UI with pre-processed fusion data."""
+        try:
+            annotated_data = processed_data["annotated_data"]
+            goodpairs = processed_data["goodpairs"]
+            gene_groups = processed_data["gene_groups"]
+            candidate_count = processed_data["candidate_count"]
+            
+            if is_target_panel:
+                # Update target panel fusion table and UI
+                self._update_fusion_table_from_processed(annotated_data, goodpairs, gene_groups, candidate_count)
+            else:
+                # Update genome-wide fusion table and UI
+                self._update_fusion_table_all_from_processed(annotated_data, goodpairs, gene_groups, candidate_count)
+                
+        except Exception as e:
+            logger.error(f"Error updating fusion UI from processed data: {str(e)}")
 
-                    if not sv_summary.empty:
-                        # Convert the summary to the format expected by the UI
-                        sv_df = pd.DataFrame(
-                            {
-                                "Event Type": sv_summary["predominant_event"],
-                                "Primary Location": sv_summary.apply(
-                                    lambda row: f"{row['RNAME.1']}:{row['coord_1']:,}",
-                                    axis=1,
-                                ),
-                                "Partner Location": sv_summary.apply(
-                                    lambda row: f"{row['RNAME.2']}:{row['coord_2']:,}",  # if row['RNAME.1'] != row['RNAME.2'] else "N/A",
-                                    axis=1,
-                                ),
-                                "Size (bp)": sv_summary["median_genomic_gap"].apply(
-                                    lambda x: f"{x:,}" if x >= 0 else "N/A"
-                                ),
-                                "Strand": "Unknown",  # Not available in links data
-                                "Full Location": sv_summary.apply(
-                                    lambda row: (
-                                        f"{row['RNAME.1']}:{row['coord_1']:,}-{row['coord_2']:,}"
-                                        if row["RNAME.1"] == row["RNAME.2"]
-                                        else f"{row['RNAME.1']}:{row['coord_1']:,} ⟷ {row['RNAME.2']}:{row['coord_2']:,}"
-                                    ),
-                                    axis=1,
-                                ),
-                                "Support Count": sv_summary["support_count"],
-                                "Supporting Reads": sv_summary[
-                                    "supporting_reads"
-                                ].apply(
-                                    lambda x: ", ".join(x[:5])
-                                    + ("..." if len(x) > 5 else "")
-                                ),
-                            }
+    def _update_fusion_table_from_processed(self, annotated_data: pd.DataFrame, goodpairs: pd.Series, gene_groups: list, candidate_count: int) -> None:
+        """Update target panel fusion table with pre-processed data."""
+        if annotated_data.shape[0] > self.fstable_row_count:
+            self.fstable_row_count = annotated_data.shape[0]
+            if not self.fstable:
+                self.fusiontable.clear()
+                with self.fusiontable:
+                    self.fstable = (
+                        ui.table.from_pandas(
+                            annotated_data.sort_values(by="reference_start").rename(
+                                columns={
+                                    "col1": "chromBED",
+                                    "col2": "BS",
+                                    "col3": "BE",
+                                    "col4": "Gene",
+                                    "reference_id": "chrom",
+                                    "reference_start": "mS",
+                                    "reference_end": "mE",
+                                    "read_id": "readID",
+                                    "mapping_quality": "mapQ",
+                                    "strand": "strand",
+                                    "read_start": "Read Map Start",
+                                    "read_end": "Read Map End",
+                                    "is_secondary": "Secondary",
+                                    "is_supplementary": "Supplementary",
+                                    "mapping_span": "mapping span",
+                                }
+                            ),
+                            pagination=25,
                         )
+                        .props("dense")
+                        .classes("w-full")
+                        .style("height: 900px")
+                        .style("font-size: 100%; font-weight: 300")
+                    )
+                    for col in self.fstable.columns:
+                        col["sortable"] = True
 
-                        self.sv_count = len(sv_df)
+                    with self.fstable.add_slot("top-right"):
+                        with ui.input(placeholder="Search").props(
+                            "type=search"
+                        ).bind_value(self.fstable, "filter").add_slot("append"):
+                            ui.icon("search")
 
-                        # Only update UI elements if they exist
-                        if hasattr(self, "sv_plot") and self.sv_plot is not None:
-                            self.sv_plot.clear()
-                            with self.sv_plot:
-                                self.create_sv_plot(sv_df, self.sampleID)
-                        if (
-                            hasattr(self, "sv_table_container")
-                            and self.sv_table_container is not None
-                        ):
-                            self.update_sv_table(sv_df)
+                self.fusionplot.clear()
+            else:
+                self.fstable.update_rows(
+                    annotated_data.sort_values(by="reference_start")
+                    .rename(
+                        columns={
+                            "col1": "chromBED",
+                            "col2": "BS",
+                            "col3": "BE",
+                            "col4": "Gene",
+                            "reference_id": "chrom",
+                            "reference_start": "mS",
+                            "reference_end": "mE",
+                            "read_id": "readID",
+                            "mapping_quality": "mapQ",
+                            "strand": "strand",
+                            "read_start": "Read Map Start",
+                            "read_end": "Read Map End",
+                            "is_secondary": "Secondary",
+                            "is_supplementary": "Supplementary",
+                            "mapping_span": "mapping span",
+                        }
+                    )
+                    .to_dict("records")
+                )
 
-                        logger.info(
-                            f"Loaded {len(sv_df)} structural variant events from {len(sv_links_df)} links"
+                self.fusionplot.clear()
+
+            self.candidates = candidate_count
+
+            if not annotated_data.empty and candidate_count > 0:
+                with self.fusionplot.classes("w-full"):
+                    with ui.row().classes("w-full"):
+                        ui.select(
+                            options=gene_groups,
+                            with_input=True,
+                            on_change=lambda e: self._show_gene_pair_from_processed(
+                                e.value, annotated_data, goodpairs, is_target_panel=True
+                            ),
+                        ).classes("w-40")
+                    with ui.row().classes("w-full"):
+                        self.card = ui.card()
+                        with self.card:
+                            ui.label("Select gene pair to see results.").tailwind(
+                                "drop-shadow", "font-bold"
+                            )
+
+    def _update_fusion_table_all_from_processed(self, annotated_data: pd.DataFrame, goodpairs: pd.Series, gene_groups: list, candidate_count: int) -> None:
+        """Update genome-wide fusion table with pre-processed data."""
+        if annotated_data.shape[0] > self.fstable_all_row_count:
+            self.fstable_all_row_count = annotated_data.shape[0]
+            if not self.fstable_all:
+                self.fusiontable_all.clear()
+                with self.fusiontable_all:
+                    self.fstable_all = (
+                        ui.table.from_pandas(
+                            annotated_data.sort_values(by="reference_start").rename(
+                                columns={
+                                    "col1": "chromBED",
+                                    "col2": "BS",
+                                    "col3": "BE",
+                                    "col4": "Gene",
+                                    "reference_id": "chrom",
+                                    "reference_start": "mS",
+                                    "reference_end": "mE",
+                                    "read_id": "readID",
+                                    "mapping_quality": "mapQ",
+                                    "strand": "strand",
+                                    "read_start": "Read Map Start",
+                                    "read_end": "Read Map End",
+                                    "is_secondary": "Secondary",
+                                    "is_supplementary": "Supplementary",
+                                    "mapping_span": "mapping span",
+                                }
+                            ),
+                            pagination=25,
                         )
-                    else:
-                        logger.debug(
-                            "No structural variant events with sufficient support found"
-                        )
-                        self.sv_count = 0  # Set count to 0 when no events found
-                else:
-                    logger.debug("Structural variant links file is empty")
-                    self.sv_count = 0  # Set count to 0 when file is empty
+                        .props("dense")
+                        .classes("w-full")
+                        .style("height: 900px")
+                        .style("font-size: 100%; font-weight: 300")
+                    )
+                    for col in self.fstable_all.columns:
+                        col["sortable"] = True
 
-            except pd.errors.EmptyDataError:
-                logger.debug("Structural variant links file is empty or corrupted")
-                self.sv_count = 0  # Set count to 0 when file is corrupted
-            except Exception as e:
-                logger.error(f"Error reading structural variant links: {str(e)}")
-                logger.error("Exception details:", exc_info=True)
-                self.sv_count = 0  # Set count to 0 when there's an error
+                    with self.fstable_all.add_slot("top-right"):
+                        with ui.input(placeholder="Search").props(
+                            "type=search"
+                        ).bind_value(self.fstable_all, "filter").add_slot("append"):
+                            ui.icon("search")
+
+                self.fusionplot_all.clear()
+            else:
+                self.fstable_all.update_rows(
+                    annotated_data.sort_values(by="reference_start")
+                    .rename(
+                        columns={
+                            "col1": "chromBED",
+                            "col2": "BS",
+                            "col3": "BE",
+                            "col4": "Gene",
+                            "reference_id": "chrom",
+                            "reference_start": "mS",
+                            "reference_end": "mE",
+                            "read_id": "readID",
+                            "mapping_quality": "mapQ",
+                            "strand": "strand",
+                            "read_start": "Read Map Start",
+                            "read_end": "Read Map End",
+                            "is_secondary": "Secondary",
+                            "is_supplementary": "Supplementary",
+                            "mapping_span": "mapping span",
+                        }
+                    )
+                    .to_dict("records")
+                )
+
+                self.fusionplot_all.clear()
+
+            self.all_candidates = candidate_count
+
+            if not annotated_data.empty and candidate_count > 0:
+                with self.fusionplot_all.classes("w-full"):
+                    with ui.row().classes("w-full"):
+                        ui.select(
+                            options=gene_groups,
+                            with_input=True,
+                            on_change=lambda e: self._show_gene_pair_from_processed(
+                                e.value, annotated_data, goodpairs, is_target_panel=False
+                            ),
+                        ).classes("w-40")
+                    with ui.row().classes("w-full"):
+                        self.all_card = ui.card()
+                        with self.all_card:
+                            ui.label("Select gene pair to see results.").tailwind(
+                                "drop-shadow", "font-bold"
+                            )
+
+    def _show_gene_pair_from_processed(self, gene_group: str, annotated_data: pd.DataFrame, goodpairs: pd.Series, is_target_panel: bool) -> None:
+        """Show gene pair plot from pre-processed data."""
+        ui.notify(gene_group)
+        
+        if is_target_panel:
+            self.card.clear()
+            with self.card:
+                with ui.row():
+                    ui.label(f"{gene_group}").tailwind("drop-shadow", "font-bold")
+                with ui.row():
+                    reads = annotated_data[goodpairs][
+                        annotated_data[goodpairs]["col4"].isin(gene_group)
+                    ]
+                    self.create_fusion_plot(gene_group, reads)
+        else:
+            self.all_card.clear()
+            with self.all_card:
+                with ui.row():
+                    ui.label(f"{gene_group}").tailwind("drop-shadow", "font-bold")
+                with ui.row():
+                    reads = annotated_data[goodpairs][
+                        annotated_data[goodpairs]["col4"].isin(gene_group)
+                    ]
+                    self.create_fusion_plot(gene_group, reads)
 
     def create_sv_plot(self, sv_df: pd.DataFrame, sample_id: str) -> None:
         """
@@ -2627,7 +2758,7 @@ class FusionObject(BaseAnalysis):
                                 f"Added {len(fusion_candidates_all)} genome-wide fusion candidates for sample {self.sampleID}"
                             )
 
-                        # Save fusion results periodically
+                        # Save fusion results with pre-processing for display
                         await self._save_fusion_results()
                         
                         # Process genome-wide structural variants
@@ -2789,6 +2920,9 @@ class FusionObject(BaseAnalysis):
                                     logger.info(
                                         f"Added {len(bed_lines)} structural variant breakpoint boundaries to BedTree"
                                     )
+
+                                    # Save fusion results again after structural variant processing
+                                    await self._save_fusion_results()
 
                             except Exception as e:
                                 logger.error(
@@ -3048,8 +3182,13 @@ class FusionObject(BaseAnalysis):
         """
         Save fusion candidates to CSV files and update UI.
         This should be called periodically or when processing is complete.
+        
+        Enhanced to pre-process all data needed by FusionVis to eliminate
+        heavy lifting from the display layer.
         """
         try:
+            output_dir = self.check_and_create_folder(self.output, self.sampleID)
+            
             # Save fusion candidates within target regions
             if (
                 self.sampleID in self.fusion_candidates
@@ -3063,15 +3202,18 @@ class FusionObject(BaseAnalysis):
                     counts = doubles.groupby("read_id")["col4"].transform("nunique")
                     result = doubles[counts > 1]
                     if not result.empty:
+                        # Save raw data
                         result.to_csv(
-                            os.path.join(
-                                self.check_and_create_folder(
-                                    self.output, self.sampleID
-                                ),
-                                "fusion_candidates_master.csv",
-                            ),
+                            os.path.join(output_dir, "fusion_candidates_master.csv"),
                             index=False,
                         )
+                        
+                        # Pre-process data for FusionVis (heavy lifting moved here)
+                        await self._preprocess_fusion_data_for_display(
+                            result, 
+                            os.path.join(output_dir, "fusion_candidates_master_processed.csv")
+                        )
+                        
                         logger.info(
                             f"Saved {len(result)} fusion candidates within target regions"
                         )
@@ -3091,21 +3233,190 @@ class FusionObject(BaseAnalysis):
                     )
                     result_all = doubles_all[counts_all > 1]
                     if not result_all.empty:
+                        # Save raw data
                         result_all.to_csv(
-                            os.path.join(
-                                self.check_and_create_folder(
-                                    self.output, self.sampleID
-                                ),
-                                "fusion_candidates_all.csv",
-                            ),
+                            os.path.join(output_dir, "fusion_candidates_all.csv"),
                             index=False,
                         )
+                        
+                        # Pre-process data for FusionVis (heavy lifting moved here)
+                        await self._preprocess_fusion_data_for_display(
+                            result_all, 
+                            os.path.join(output_dir, "fusion_candidates_all_processed.csv")
+                        )
+                        
                         logger.info(
                             f"Saved {len(result_all)} genome-wide fusion candidates"
                         )
 
+            # Pre-process structural variant summary data
+            await self._preprocess_structural_variants_for_display(output_dir)
+
         except Exception as e:
             logger.error(f"Error saving fusion results: {str(e)}")
+            logger.error("Exception details:", exc_info=True)
+
+    async def _preprocess_fusion_data_for_display(
+        self, 
+        fusion_data: pd.DataFrame, 
+        output_file: str
+    ) -> None:
+        """
+        Pre-process fusion data for display, moving heavy lifting from FusionVis.
+        
+        Args:
+            fusion_data: Raw fusion candidate data
+            output_file: Path to save processed data
+        """
+        try:
+            # Apply categorical data types for efficiency
+            fusion_data = fusion_data.astype(
+                {
+                    "read_id": "category",
+                    "col4": "category",  # Gene column
+                    "reference_id": "category",  # Chromosome column
+                    "strand": "category",
+                }
+            )
+
+            # Annotate results (this is the heavy lifting)
+            annotated_data, goodpairs = _annotate_results(fusion_data)
+            
+            # Create processed data structure for FusionVis
+            processed_data = {
+                "annotated_data": annotated_data,
+                "goodpairs": goodpairs,
+                "gene_pairs": [],
+                "gene_groups": [],
+                "candidate_count": 0
+            }
+            
+            # Process gene pairs and groups if we have good pairs
+            if not annotated_data.empty and goodpairs.any():
+                gene_pairs = (
+                    annotated_data[goodpairs]
+                    .sort_values(by="reference_start")["tag"]
+                    .unique()
+                    .tolist()
+                )
+                gene_pairs = [tuple(pair.split(",")) for pair in gene_pairs]
+                gene_groups_test = get_gene_network(gene_pairs)
+                gene_groups = []
+                
+                for gene_group in gene_groups_test:
+                    reads = _get_reads(
+                        annotated_data[goodpairs][
+                            annotated_data[goodpairs]["col4"].isin(gene_group)
+                        ]
+                    )
+                    if len(reads) > 1:
+                        gene_groups.append(gene_group)
+                
+                processed_data.update({
+                    "gene_pairs": gene_pairs,
+                    "gene_groups": gene_groups,
+                    "candidate_count": len(gene_groups)
+                })
+            
+            # Save processed data as pickle for efficient loading
+            import pickle
+            with open(output_file, 'wb') as f:
+                pickle.dump(processed_data, f)
+                
+            logger.info(f"Pre-processed fusion data saved to {output_file}")
+            
+        except Exception as e:
+            logger.error(f"Error pre-processing fusion data: {str(e)}")
+            logger.error("Exception details:", exc_info=True)
+
+    async def _preprocess_structural_variants_for_display(self, output_dir: str) -> None:
+        """
+        Pre-process structural variant data for display, moving heavy lifting from FusionVis.
+        
+        Args:
+            output_dir: Output directory path
+        """
+        try:
+            sv_links_file = os.path.join(output_dir, "structural_variant_links.csv")
+            
+            if os.path.exists(sv_links_file) and os.path.getsize(sv_links_file) > 0:
+                # Read the structural variant links CSV
+                sv_links_df = pd.read_csv(
+                    sv_links_file,
+                    dtype={
+                        "QNAME": str,
+                        "RNAME.1": str,
+                        "RNAME.2": str,
+                        "coord_1": np.int64,
+                        "coord_2": np.int64,
+                        "genomic_gap": np.int64,
+                        "event": str,
+                    },
+                )
+
+                if not sv_links_df.empty:
+                    # Process the links data to create a summary for display
+                    sv_summary = get_summary(sv_links_df, min_support=2)
+
+                    if not sv_summary.empty:
+                        # Convert the summary to the format expected by the UI
+                        sv_df = pd.DataFrame(
+                            {
+                                "Event Type": sv_summary["predominant_event"],
+                                "Primary Location": sv_summary.apply(
+                                    lambda row: f"{row['RNAME.1']}:{row['coord_1']:,}",
+                                    axis=1,
+                                ),
+                                "Partner Location": sv_summary.apply(
+                                    lambda row: f"{row['RNAME.2']}:{row['coord_2']:,}",
+                                    axis=1,
+                                ),
+                                "Size (bp)": sv_summary["median_genomic_gap"].apply(
+                                    lambda x: f"{x:,}" if x >= 0 else "N/A"
+                                ),
+                                "Strand": "Unknown",  # Not available in links data
+                                "Full Location": sv_summary.apply(
+                                    lambda row: (
+                                        f"{row['RNAME.1']}:{row['coord_1']:,}-{row['coord_2']:,}"
+                                        if row["RNAME.1"] == row["RNAME.2"]
+                                        else f"{row['RNAME.1']}:{row['coord_1']:,} ⟷ {row['RNAME.2']}:{row['coord_2']:,}"
+                                    ),
+                                    axis=1,
+                                ),
+                                "Support Count": sv_summary["support_count"],
+                                "Supporting Reads": sv_summary[
+                                    "supporting_reads"
+                                ].apply(
+                                    lambda x: ", ".join(x[:5])
+                                    + ("..." if len(x) > 5 else "")
+                                ),
+                            }
+                        )
+
+                        # Save processed structural variant data
+                        sv_df.to_csv(
+                            os.path.join(output_dir, "structural_variants_processed.csv"),
+                            index=False
+                        )
+                        
+                        # Save count for quick access
+                        with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                            f.write(str(len(sv_df)))
+                        
+                        logger.info(
+                            f"Pre-processed {len(sv_df)} structural variant events"
+                        )
+                    else:
+                        # Save empty count
+                        with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                            f.write("0")
+                else:
+                    # Save empty count
+                    with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                        f.write("0")
+                        
+        except Exception as e:
+            logger.error(f"Error pre-processing structural variants: {str(e)}")
             logger.error("Exception details:", exc_info=True)
 
 
