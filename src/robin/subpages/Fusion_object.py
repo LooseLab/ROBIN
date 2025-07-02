@@ -1407,6 +1407,68 @@ def process_reads_for_fusions(
 
     return df
 
+def important_function(combined_df):
+    bed_lines = []
+    if not combined_df.empty:
+    # Get summary of structural variants
+    sv_summary = get_summary(combined_df, min_support=2)
+
+    if not sv_summary.empty:
+        # Convert summary to BED format lines - only breakpoint boundaries
+        for _, row in sv_summary.iterrows():
+            # Create BED line for primary breakpoint boundary
+            chrom1 = row["RNAME.1"]
+            coord1 = row["coord_1"]
+
+            # Define breakpoint boundary window (e.g., 500bp on each side)
+            boundary_window = (
+                500  # 500bp window around breakpoint
+            )
+            start1 = max(0, coord1 - boundary_window)
+            end1 = coord1 + boundary_window
+
+            # Create BED lines for primary breakpoint on both strands
+            bed_line1_plus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t+"
+            bed_line1_minus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t-"
+            bed_lines.append(bed_line1_plus)
+            bed_lines.append(bed_line1_minus)
+
+            # Handle different event types
+            if row["RNAME.1"] != row["RNAME.2"]:
+                # Translocation: add partner breakpoint boundary on both strands
+                chrom2 = row["RNAME.2"]
+                coord2 = row["coord_2"]
+
+                start2 = max(
+                    0, coord2 - boundary_window
+                )
+                end2 = coord2 + boundary_window
+
+                bed_line2_plus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
+                bed_line2_minus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
+                bed_lines.append(bed_line2_plus)
+                bed_lines.append(bed_line2_minus)
+
+            elif row["RNAME.1"] == row["RNAME.2"]:
+                # Same chromosome event (deletion, inversion, etc.)
+                coord2 = row["coord_2"]
+
+                # Only add second breakpoint if it's different from the first
+                # and the gap is significant (> 1kb to avoid very small events)
+                if abs(coord2 - coord1) > 1000:
+                    start2 = max(
+                        0, coord2 - boundary_window
+                    )
+                    end2 = coord2 + boundary_window
+
+                    bed_line2_plus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
+                    bed_line2_minus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
+                    bed_lines.append(bed_line2_plus)
+                    bed_lines.append(bed_line2_minus)
+                    
+    return bed_lines
+
+
 
 class FusionVis(BaseVis):
     """
@@ -3206,7 +3268,8 @@ class FusionObject(BaseAnalysis):
 
                                 # Generate bed_lines from combined_df for BedTree - focus on breakpoint boundaries only
                                 start_bed_lines = time.time()
-                                bed_lines = []
+                                bed_lines = await important_function(combined_df)
+                                """
                                 if not combined_df.empty:
                                     # Get summary of structural variants
                                     sv_summary = get_summary(combined_df, min_support=2)
@@ -3263,6 +3326,7 @@ class FusionObject(BaseAnalysis):
                                                     bed_line2_minus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
                                                     bed_lines.append(bed_line2_plus)
                                                     bed_lines.append(bed_line2_minus)
+                                    """
 
                                 bed_lines_time = time.time() - start_bed_lines
                                 print(f"    Generate BED lines: {bed_lines_time:.3f}s")
