@@ -3202,10 +3202,13 @@ class FusionObject(BaseAnalysis):
                         try:
                             async def sv_background_work():
                                 loop = asyncio.get_event_loop()
-                                return await loop.run_in_executor(None, process_bam_pipeline, bamfile)
+                                #return await loop.run_in_executor(None, process_bam_pipeline, bamfile)
+                                return await run.cpu_bound(process_bam_pipeline, bamfile)
                             
                             new_df = await background_tasks.create(sv_background_work())
+                            
                             sv_time = time.time() - start_sv
+                            
                             print(f"  Structural variant processing: {sv_time:.3f}s")
                             logger.info(f"Structural variant processing completed in {sv_time:.2f} seconds")
                         except Exception as e:
