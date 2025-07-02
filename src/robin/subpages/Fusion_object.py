@@ -55,6 +55,7 @@ import pandas as pd
 import numpy as np
 import re
 import click
+import asyncio
 from typing import Optional, Tuple, Dict, List, Set
 from nicegui import ui, run, app, background_tasks
 from robin import theme, resources
@@ -878,6 +879,165 @@ def safe_read_csv(file_path, dtype=None):
         except Exception as e:
             logger.error(f"Failed to read CSV file {file_path} with both uncompressed and gzip methods: {str(e)}")
             raise
+
+
+def preprocess_fusion_data_standalone(fusion_data: pd.DataFrame, output_file: str) -> None:
+    """
+    Standalone version of fusion data preprocessing for CPU-bound execution.
+    
+    Args:
+        fusion_data: Raw fusion candidate data
+        output_file: Path to save processed data
+    """
+    try:
+        # Apply categorical data types for efficiency
+        fusion_data = fusion_data.astype(
+            {
+                "read_id": "category",
+                "col4": "category",  # Gene column
+                "reference_id": "category",  # Chromosome column
+                "strand": "category",
+            }
+        )
+
+        # Annotate results (this is the heavy lifting)
+        annotated_data, goodpairs = _annotate_results(fusion_data)
+        
+        # Create processed data structure for FusionVis
+        processed_data = {
+            "annotated_data": annotated_data,
+            "goodpairs": goodpairs,
+            "gene_pairs": [],
+            "gene_groups": [],
+            "candidate_count": 0
+        }
+        
+        # Process gene pairs and groups if we have good pairs
+        if not annotated_data.empty and goodpairs.any():
+            gene_pairs = (
+                annotated_data[goodpairs]
+                .sort_values(by="reference_start")["tag"]
+                .unique()
+                .tolist()
+            )
+            gene_pairs = [tuple(pair.split(",")) for pair in gene_pairs]
+            gene_groups_test = get_gene_network(gene_pairs)
+            gene_groups = []
+            
+            for gene_group in gene_groups_test:
+                reads = _get_reads(
+                    annotated_data[goodpairs][
+                        annotated_data[goodpairs]["col4"].isin(gene_group)
+                    ]
+                )
+                if len(reads) > 1:
+                    gene_groups.append(gene_group)
+            
+            processed_data.update({
+                "gene_pairs": gene_pairs,
+                "gene_groups": gene_groups,
+                "candidate_count": len(gene_groups)
+            })
+        
+        # Save processed data as pickle for efficient loading
+        import pickle
+        with open(output_file, 'wb') as f:
+            pickle.dump(processed_data, f)
+            
+        logger.info(f"Pre-processed fusion data saved to {output_file}")
+        
+    except Exception as e:
+        logger.error(f"Error pre-processing fusion data: {str(e)}")
+        logger.error("Exception details:", exc_info=True)
+
+
+def preprocess_structural_variants_standalone(output_dir: str) -> None:
+    """
+    Standalone version of structural variant preprocessing for CPU-bound execution.
+    
+    Args:
+        output_dir: Output directory path
+    """
+    try:
+        sv_links_file = os.path.join(output_dir, "structural_variant_links.csv")
+        
+        if os.path.exists(sv_links_file) and os.path.getsize(sv_links_file) > 0:
+            # Read the structural variant links CSV using safe reader
+            dtype_spec = {
+                "QNAME": str,
+                "RNAME.1": str,
+                "RNAME.2": str,
+                "coord_1": np.int64,
+                "coord_2": np.int64,
+                "genomic_gap": np.int64,
+                "event": str,
+            }
+            sv_links_df = safe_read_csv(sv_links_file, dtype=dtype_spec)
+
+            if not sv_links_df.empty:
+                # Process the links data to create a summary for display
+                sv_summary = get_summary(sv_links_df, min_support=2)
+
+                if not sv_summary.empty:
+                    # Convert the summary to the format expected by the UI
+                    sv_df = pd.DataFrame(
+                        {
+                            "Event Type": sv_summary["predominant_event"],
+                            "Primary Location": sv_summary.apply(
+                                lambda row: f"{row['RNAME.1']}:{row['coord_1']:,}",
+                                axis=1,
+                            ),
+                            "Partner Location": sv_summary.apply(
+                                lambda row: f"{row['RNAME.2']}:{row['coord_2']:,}",
+                                axis=1,
+                            ),
+                            "Size (bp)": sv_summary["median_genomic_gap"].apply(
+                                lambda x: f"{x:,}" if x >= 0 else "N/A"
+                            ),
+                            "Strand": "Unknown",  # Not available in links data
+                            "Full Location": sv_summary.apply(
+                                lambda row: (
+                                    f"{row['RNAME.1']}:{row['coord_1']:,}-{row['coord_2']:,}"
+                                    if row["RNAME.1"] == row["RNAME.2"]
+                                    else f"{row['RNAME.1']}:{row['coord_1']:,} ⟷ {row['RNAME.2']}:{row['coord_2']:,}"
+                                ),
+                                axis=1,
+                            ),
+                            "Support Count": sv_summary["support_count"],
+                            "Supporting Reads": sv_summary[
+                                "supporting_reads"
+                            ].apply(
+                                lambda x: ", ".join(x[:5])
+                                + ("..." if len(x) > 5 else "")
+                            ),
+                        }
+                    )
+
+                    # Save processed structural variant data
+                    sv_df.to_csv(
+                        os.path.join(output_dir, "structural_variants_processed.csv"),
+                        index=False
+                    )
+                    
+                    # Save count for quick access
+                    with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                        f.write(str(len(sv_df)))
+                    
+                    logger.info(
+                        f"Pre-processed {len(sv_df)} structural variant events"
+                    )
+                else:
+                    # Save empty count
+                    with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                        f.write("0")
+            else:
+                # Save empty count
+                with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                    f.write("0")
+                    
+    except Exception as e:
+        logger.error(f"Error pre-processing structural variants: {str(e)}")
+        logger.error("Exception details:", exc_info=True)
 
 
 def process_bam_pipeline(bamfile):
@@ -2837,22 +2997,24 @@ class FusionObject(BaseAnalysis):
                         # Process fusion candidates
                         logger.info(f"Processing BAM file for fusions: {bamfile}")
 
-                        async def fusion_background_work(bamfile):
-                            fusion_candidates, fusion_candidates_all = (
-                                await run.cpu_bound(
+                        # Execute fusion processing in background task
+                        try:
+                            async def fusion_background_work():
+                                loop = asyncio.get_event_loop()
+                                return await loop.run_in_executor(
+                                    None, 
                                     fusion_work_pysam,
                                     bamfile,
                                     self.gene_bed,
                                     self.all_gene_bed,
                                 )
+                            
+                            fusion_candidates, fusion_candidates_all = await background_tasks.create(
+                                fusion_background_work()
                             )
-                            return fusion_candidates, fusion_candidates_all
-
-                        fusion_candidates, fusion_candidates_all = (
-                            await background_tasks.create(
-                                fusion_background_work(bamfile)
-                            )
-                        )
+                        except Exception as e:
+                            logger.error(f"Error in fusion processing: {str(e)}")
+                            fusion_candidates, fusion_candidates_all = None, None
                         
                         # Store fusion candidates in the class dictionaries
                         if (
@@ -2907,16 +3069,13 @@ class FusionObject(BaseAnalysis):
                             f"Processing BAM file for structural variants: {bamfile}"
                         )
 
-                        # Fixed: Proper pipeline for structural variant processing with reduced async overhead
-                        async def build_links_background_work(bamfile):
-                            # Single CPU-bound task instead of multiple async calls
-                            new_df = await run.cpu_bound(process_bam_pipeline, bamfile)
-                            
-                            return new_df
-
-                        # Execute the background work with proper error handling
+                        # Execute structural variant processing in background task
                         try:
-                            new_df = await build_links_background_work(bamfile)
+                            async def sv_background_work():
+                                loop = asyncio.get_event_loop()
+                                return await loop.run_in_executor(None, process_bam_pipeline, bamfile)
+                            
+                            new_df = await background_tasks.create(sv_background_work())
                             processing_time = (datetime.now() - start_time).total_seconds()
                             logger.info(f"Structural variant processing completed in {processing_time:.2f} seconds")
                         except Exception as e:
@@ -3306,13 +3465,14 @@ class FusionObject(BaseAnalysis):
                 combined_sv_reads = pd.concat(self.pending_sv_reads, ignore_index=True)
 
                 async def final_bed_background_work(combined_sv_reads):
-                    bed_lines = await run.cpu_bound(
+                    loop = asyncio.get_event_loop()
+                    return await loop.run_in_executor(
+                        None,
                         build_breakpoint_graph,
                         combined_sv_reads,
-                        max_proximity=50000,
-                        group_by_sv=True,
+                        50000,  # max_proximity
+                        True,   # group_by_sv
                     )
-                    return bed_lines
 
                 bed_lines = await background_tasks.create(
                     final_bed_background_work(combined_sv_reads)
@@ -3359,11 +3519,17 @@ class FusionObject(BaseAnalysis):
                             index=False,
                         )
                         
-                        # Pre-process data for FusionVis (heavy lifting moved here)
-                        await self._preprocess_fusion_data_for_display(
-                            result, 
-                            os.path.join(output_dir, "fusion_candidates_master_processed.csv")
-                        )
+                        # Pre-process data for FusionVis in background task
+                        async def preprocess_master_background_work():
+                            loop = asyncio.get_event_loop()
+                            return await loop.run_in_executor(
+                                None,
+                                preprocess_fusion_data_standalone,
+                                result, 
+                                os.path.join(output_dir, "fusion_candidates_master_processed.csv")
+                            )
+                        
+                        await background_tasks.create(preprocess_master_background_work())
                         
                         logger.info(
                             f"Saved {len(result)} fusion candidates within target regions"
@@ -3390,21 +3556,104 @@ class FusionObject(BaseAnalysis):
                             index=False,
                         )
                         
-                        # Pre-process data for FusionVis (heavy lifting moved here)
-                        await self._preprocess_fusion_data_for_display(
-                            result_all, 
-                            os.path.join(output_dir, "fusion_candidates_all_processed.csv")
-                        )
+                        # Pre-process data for FusionVis in background task
+                        async def preprocess_all_background_work():
+                            loop = asyncio.get_event_loop()
+                            return await loop.run_in_executor(
+                                None,
+                                preprocess_fusion_data_standalone,
+                                result_all, 
+                                os.path.join(output_dir, "fusion_candidates_all_processed.csv")
+                            )
+                        
+                        await background_tasks.create(preprocess_all_background_work())
                         
                         logger.info(
                             f"Saved {len(result_all)} genome-wide fusion candidates"
                         )
 
-            # Pre-process structural variant summary data
-            await self._preprocess_structural_variants_for_display(output_dir)
+            # Pre-process structural variant summary data in background task
+            async def preprocess_sv_background_work():
+                loop = asyncio.get_event_loop()
+                return await loop.run_in_executor(None, preprocess_structural_variants_standalone, output_dir)
+            
+            await background_tasks.create(preprocess_sv_background_work())
 
         except Exception as e:
             logger.error(f"Error saving fusion results: {str(e)}")
+            logger.error("Exception details:", exc_info=True)
+
+    def _preprocess_fusion_data_sync(
+        self, 
+        fusion_data: pd.DataFrame, 
+        output_file: str
+    ) -> None:
+        """
+        Synchronous version of fusion data preprocessing for CPU-bound execution.
+        
+        Args:
+            fusion_data: Raw fusion candidate data
+            output_file: Path to save processed data
+        """
+        try:
+            # Apply categorical data types for efficiency
+            fusion_data = fusion_data.astype(
+                {
+                    "read_id": "category",
+                    "col4": "category",  # Gene column
+                    "reference_id": "category",  # Chromosome column
+                    "strand": "category",
+                }
+            )
+
+            # Annotate results (this is the heavy lifting)
+            annotated_data, goodpairs = _annotate_results(fusion_data)
+            
+            # Create processed data structure for FusionVis
+            processed_data = {
+                "annotated_data": annotated_data,
+                "goodpairs": goodpairs,
+                "gene_pairs": [],
+                "gene_groups": [],
+                "candidate_count": 0
+            }
+            
+            # Process gene pairs and groups if we have good pairs
+            if not annotated_data.empty and goodpairs.any():
+                gene_pairs = (
+                    annotated_data[goodpairs]
+                    .sort_values(by="reference_start")["tag"]
+                    .unique()
+                    .tolist()
+                )
+                gene_pairs = [tuple(pair.split(",")) for pair in gene_pairs]
+                gene_groups_test = get_gene_network(gene_pairs)
+                gene_groups = []
+                
+                for gene_group in gene_groups_test:
+                    reads = _get_reads(
+                        annotated_data[goodpairs][
+                            annotated_data[goodpairs]["col4"].isin(gene_group)
+                        ]
+                    )
+                    if len(reads) > 1:
+                        gene_groups.append(gene_group)
+                
+                processed_data.update({
+                    "gene_pairs": gene_pairs,
+                    "gene_groups": gene_groups,
+                    "candidate_count": len(gene_groups)
+                })
+            
+            # Save processed data as pickle for efficient loading
+            import pickle
+            with open(output_file, 'wb') as f:
+                pickle.dump(processed_data, f)
+                
+            logger.info(f"Pre-processed fusion data saved to {output_file}")
+            
+        except Exception as e:
+            logger.error(f"Error pre-processing fusion data: {str(e)}")
             logger.error("Exception details:", exc_info=True)
 
     async def _preprocess_fusion_data_for_display(
@@ -3478,6 +3727,94 @@ class FusionObject(BaseAnalysis):
             
         except Exception as e:
             logger.error(f"Error pre-processing fusion data: {str(e)}")
+            logger.error("Exception details:", exc_info=True)
+
+    def _preprocess_structural_variants_sync(self, output_dir: str) -> None:
+        """
+        Synchronous version of structural variant preprocessing for CPU-bound execution.
+        
+        Args:
+            output_dir: Output directory path
+        """
+        try:
+            sv_links_file = os.path.join(output_dir, "structural_variant_links.csv")
+            
+            if os.path.exists(sv_links_file) and os.path.getsize(sv_links_file) > 0:
+                # Read the structural variant links CSV using safe reader
+                dtype_spec = {
+                    "QNAME": str,
+                    "RNAME.1": str,
+                    "RNAME.2": str,
+                    "coord_1": np.int64,
+                    "coord_2": np.int64,
+                    "genomic_gap": np.int64,
+                    "event": str,
+                }
+                sv_links_df = safe_read_csv(sv_links_file, dtype=dtype_spec)
+
+                if not sv_links_df.empty:
+                    # Process the links data to create a summary for display
+                    sv_summary = get_summary(sv_links_df, min_support=2)
+
+                    if not sv_summary.empty:
+                        # Convert the summary to the format expected by the UI
+                        sv_df = pd.DataFrame(
+                            {
+                                "Event Type": sv_summary["predominant_event"],
+                                "Primary Location": sv_summary.apply(
+                                    lambda row: f"{row['RNAME.1']}:{row['coord_1']:,}",
+                                    axis=1,
+                                ),
+                                "Partner Location": sv_summary.apply(
+                                    lambda row: f"{row['RNAME.2']}:{row['coord_2']:,}",
+                                    axis=1,
+                                ),
+                                "Size (bp)": sv_summary["median_genomic_gap"].apply(
+                                    lambda x: f"{x:,}" if x >= 0 else "N/A"
+                                ),
+                                "Strand": "Unknown",  # Not available in links data
+                                "Full Location": sv_summary.apply(
+                                    lambda row: (
+                                        f"{row['RNAME.1']}:{row['coord_1']:,}-{row['coord_2']:,}"
+                                        if row["RNAME.1"] == row["RNAME.2"]
+                                        else f"{row['RNAME.1']}:{row['coord_1']:,} ⟷ {row['RNAME.2']}:{row['coord_2']:,}"
+                                    ),
+                                    axis=1,
+                                ),
+                                "Support Count": sv_summary["support_count"],
+                                "Supporting Reads": sv_summary[
+                                    "supporting_reads"
+                                ].apply(
+                                    lambda x: ", ".join(x[:5])
+                                    + ("..." if len(x) > 5 else "")
+                                ),
+                            }
+                        )
+
+                        # Save processed structural variant data
+                        sv_df.to_csv(
+                            os.path.join(output_dir, "structural_variants_processed.csv"),
+                            index=False
+                        )
+                        
+                        # Save count for quick access
+                        with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                            f.write(str(len(sv_df)))
+                        
+                        logger.info(
+                            f"Pre-processed {len(sv_df)} structural variant events"
+                        )
+                    else:
+                        # Save empty count
+                        with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                            f.write("0")
+                else:
+                    # Save empty count
+                    with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                        f.write("0")
+                        
+        except Exception as e:
+            logger.error(f"Error pre-processing structural variants: {str(e)}")
             logger.error("Exception details:", exc_info=True)
 
     async def _preprocess_structural_variants_for_display(self, output_dir: str) -> None:
