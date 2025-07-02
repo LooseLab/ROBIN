@@ -71,6 +71,7 @@ from robin.core.state import state, ProcessState
 from datetime import datetime
 from itertools import combinations
 
+
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
 
@@ -457,16 +458,10 @@ def has_supplementary(bam_file_path):
     Returns:
         bool: True if supplementary alignment is found, else False.
     """
-    import time
-    start = time.time()
     with pysam.AlignmentFile(bam_file_path, "rb", check_sq=False) as bam:
         for read in bam.fetch(until_eof=True):
             if read.is_supplementary:
-                check_time = time.time() - start
-                print(f"      has_supplementary (FOUND): {check_time:.3f}s")
                 return True
-    check_time = time.time() - start
-    print(f"      has_supplementary (NOT FOUND): {check_time:.3f}s")
     return False
 
 def merge_overlapping_intervals(group: pd.DataFrame) -> pd.DataFrame:
@@ -1061,44 +1056,25 @@ def process_bam_pipeline(bamfile):
     Returns:
         pd.DataFrame: DataFrame containing structural variant links
     """
-    import time
-    start_total = time.time()
-    print(f"    process_bam_pipeline START: {bamfile}")
     
     # Step 1: Extract split read alignments from BAM file
-    start_extract = time.time()
     split_reads_df = extract_split_read_alignments(bamfile)
-    extract_time = time.time() - start_extract
-    print(f"      Extract split reads: {extract_time:.3f}s")
     
     # Early exit if no split reads found
     if split_reads_df.empty:
         logger.debug("No split reads found in BAM file")
-        total_time = time.time() - start_total
-        print(f"    process_bam_pipeline END (no split reads): {total_time:.3f}s")
         return pd.DataFrame()
     
     # Step 2: Annotate the extracted data
-    start_annotate = time.time()
     annotated_df = annotate_df(split_reads_df)
-    annotate_time = time.time() - start_annotate
-    print(f"      Annotate data: {annotate_time:.3f}s")
     
     # Early exit if no annotated data
     if annotated_df.empty:
         logger.debug("No annotated data after filtering")
-        total_time = time.time() - start_total
-        print(f"    process_bam_pipeline END (no annotated data): {total_time:.3f}s")
         return pd.DataFrame()
     
     # Step 3: Build links from annotated data
-    start_build_links = time.time()
     new_df = build_links_df(annotated_df)
-    build_links_time = time.time() - start_build_links
-    print(f"      Build links: {build_links_time:.3f}s")
-    
-    total_time = time.time() - start_total
-    print(f"    process_bam_pipeline END: {total_time:.3f}s")
     return new_df
 
 
@@ -1208,55 +1184,36 @@ def fusion_work_pysam(
     Returns:
         Tuple of (fusion_candidates, fusion_candidates_all) DataFrames
     """
-    import time
-    start_total = time.time()
-    print(f"    fusion_work_pysam START: {bamfile}")
     
     fusion_candidates: Optional[pd.DataFrame] = None
     fusion_candidates_all: Optional[pd.DataFrame] = None
 
     try:
         # Load BED files into memory for efficient lookup
-        start_bed_load = time.time()
         gene_regions = load_bed_regions(gene_bed)
         all_gene_regions = load_bed_regions(all_gene_bed)
-        bed_load_time = time.time() - start_bed_load
-        print(f"      Load BED regions: {bed_load_time:.3f}s")
-
+        
         # Find reads with supplementary alignments
-        start_find_supp = time.time()
         reads_with_supp = find_reads_with_supplementary(bamfile)
-        find_supp_time = time.time() - start_find_supp
-        print(f"      Find supplementary reads: {find_supp_time:.3f}s")
-
+        
         if not reads_with_supp:
             logger.debug("No reads with supplementary alignments found")
-            total_time = time.time() - start_total
-            print(f"    fusion_work_pysam END (no supp): {total_time:.3f}s")
             return None, None
 
         # Process reads and find gene intersections
-        start_process_target = time.time()
         fusion_candidates = process_reads_for_fusions(
             bamfile, reads_with_supp, gene_regions
         )
-        process_target_time = time.time() - start_process_target
-        print(f"      Process target fusions: {process_target_time:.3f}s")
         
-        start_process_all = time.time()
         fusion_candidates_all = process_reads_for_fusions(
             bamfile, reads_with_supp, all_gene_regions
         )
-        process_all_time = time.time() - start_process_all
-        print(f"      Process all fusions: {process_all_time:.3f}s")
-
+        
     except Exception as e:
         logger.error(f"Error in fusion_work_pysam: {str(e)}")
         logger.error("Exception details:", exc_info=True)
         raise
 
-    total_time = time.time() - start_total
-    print(f"    fusion_work_pysam END: {total_time:.3f}s")
     return fusion_candidates, fusion_candidates_all
 
 
@@ -3095,52 +3052,30 @@ class FusionObject(BaseAnalysis):
         """
         Asynchronously processes BAM files with throttled breakpoint graph processing.
         """
-        import time
-        start_total = time.time()
-        print(f"\n=== FUSION PROCESS_BAM START: {bamfile} ===")
-        
         state.set_process_state("Fusion Analysis", ProcessState.RUNNING)
         try:
             try:
                 logger.info(f"Starting BAM processing for file: {bamfile}")
 
-                # Check for supplementary alignments
-                start_supp_check = time.time()
-                has_supp = has_supplementary(bamfile)
-                supp_check_time = time.time() - start_supp_check
-                print(f"  Supplementary check: {supp_check_time:.3f}s")
-
+                async def has_supp_background_work():
+                    return await run.cpu_bound(has_supplementary, bamfile)
+                
+                has_supp = background_tasks.create(has_supp_background_work())
+                # Check for supplementary alignments using run.cpu_bound
+                
                 if has_supp:
                     try:
                         # Process fusion candidates
-                        start_fusion = time.time()
                         logger.info(f"Processing BAM file for fusions: {bamfile}")
-
-                        # Execute fusion processing in background task
-                        try:
-                            async def fusion_background_work():
-                                loop = asyncio.get_event_loop()
-                                return await loop.run_in_executor(
-                                    None, 
-                                    fusion_work_pysam,
-                                    bamfile,
-                                    self.gene_bed,
-                                    self.all_gene_bed,
-                                )
-                            
-                            fusion_candidates, fusion_candidates_all = await background_tasks.create(
-                                fusion_background_work()
+                        
+                        async def fusion_background_work():
+                            return await run.cpu_bound(
+                                fusion_work_pysam, bamfile, self.gene_bed, self.all_gene_bed
                             )
-                            fusion_time = time.time() - start_fusion
-                            print(f"  Fusion processing: {fusion_time:.3f}s")
-                        except Exception as e:
-                            logger.error(f"Error in fusion processing: {str(e)}")
-                            fusion_candidates, fusion_candidates_all = None, None
-                            fusion_time = time.time() - start_fusion
-                            print(f"  Fusion processing (ERROR): {fusion_time:.3f}s")
+                        
+                        fusion_candidates, fusion_candidates_all = await background_tasks.create(fusion_background_work())
                         
                         # Store fusion candidates in the class dictionaries
-                        start_store_fusion = time.time()
                         if (
                             fusion_candidates is not None
                             and not fusion_candidates.empty
@@ -3183,44 +3118,27 @@ class FusionObject(BaseAnalysis):
                             logger.info(
                                 f"Added {len(fusion_candidates_all)} genome-wide fusion candidates for sample {self.sampleID}"
                             )
-                        store_fusion_time = time.time() - start_store_fusion
-                        print(f"  Store fusion candidates: {store_fusion_time:.3f}s")
-
+                        
                         # Save fusion results with pre-processing for display
-                        start_save_fusion = time.time()
                         await self._save_fusion_results()
-                        save_fusion_time = time.time() - start_save_fusion
-                        print(f"  Save fusion results: {save_fusion_time:.3f}s")
                         
                         # Process genome-wide structural variants with performance monitoring
-                        start_sv = time.time()
                         logger.info(
                             f"Processing BAM file for structural variants: {bamfile}"
                         )
 
-                        # Execute structural variant processing in background task
+                        # Execute structural variant processing using run.cpu_bound
                         try:
                             async def sv_background_work():
-                                loop = asyncio.get_event_loop()
-                                #return await loop.run_in_executor(None, process_bam_pipeline, bamfile)
                                 return await run.cpu_bound(process_bam_pipeline, bamfile)
                             
                             new_df = await background_tasks.create(sv_background_work())
-                            
-                            sv_time = time.time() - start_sv
-                            
-                            print(f"  Structural variant processing: {sv_time:.3f}s")
-                            logger.info(f"Structural variant processing completed in {sv_time:.2f} seconds")
                         except Exception as e:
                             logger.error(f"Error in structural variant processing: {str(e)}")
-                            new_df = pd.DataFrame()
-                            sv_time = time.time() - start_sv
-                            print(f"  Structural variant processing (ERROR): {sv_time:.3f}s")
-                        
+                            
                         
                         # Save the new_df to a file, appending to existing data with optimized I/O
                         if not new_df.empty:
-                            start_sv_save = time.time()
                             # Construct the output file path
                             output_dir = self.check_and_create_folder(
                                 self.output, self.sampleID
@@ -3268,88 +3186,23 @@ class FusionObject(BaseAnalysis):
                                 async def save_csv_work():
                                     return await run.io_bound(combined_df.to_csv, sv_links_file, index=False)
                                 
-                                await save_csv_work()
-                                sv_save_time = time.time() - start_sv_save
-                                print(f"    Save SV links to CSV: {sv_save_time:.3f}s")
+                                background_tasks.create(save_csv_work())
 
                                 # Generate bed_lines from combined_df for BedTree - focus on breakpoint boundaries only
-                                start_bed_lines = time.time()
-                                bed_lines = await run.cpu_bound(important_function, combined_df)
                                 
-                                """
-                                if not combined_df.empty:
-                                    # Get summary of structural variants
-                                    sv_summary = get_summary(combined_df, min_support=2)
+                                async def bed_lines_background_work():
+                                    return await run.cpu_bound(important_function, combined_df)
+                                
+                                bed_lines = await background_tasks.create(bed_lines_background_work())
+                                
+                                
 
-                                    if not sv_summary.empty:
-                                        # Convert summary to BED format lines - only breakpoint boundaries
-                                        for _, row in sv_summary.iterrows():
-                                            # Create BED line for primary breakpoint boundary
-                                            chrom1 = row["RNAME.1"]
-                                            coord1 = row["coord_1"]
-
-                                            # Define breakpoint boundary window (e.g., 500bp on each side)
-                                            boundary_window = (
-                                                500  # 500bp window around breakpoint
-                                            )
-                                            start1 = max(0, coord1 - boundary_window)
-                                            end1 = coord1 + boundary_window
-
-                                            # Create BED lines for primary breakpoint on both strands
-                                            bed_line1_plus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t+"
-                                            bed_line1_minus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t-"
-                                            bed_lines.append(bed_line1_plus)
-                                            bed_lines.append(bed_line1_minus)
-
-                                            # Handle different event types
-                                            if row["RNAME.1"] != row["RNAME.2"]:
-                                                # Translocation: add partner breakpoint boundary on both strands
-                                                chrom2 = row["RNAME.2"]
-                                                coord2 = row["coord_2"]
-
-                                                start2 = max(
-                                                    0, coord2 - boundary_window
-                                                )
-                                                end2 = coord2 + boundary_window
-
-                                                bed_line2_plus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
-                                                bed_line2_minus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
-                                                bed_lines.append(bed_line2_plus)
-                                                bed_lines.append(bed_line2_minus)
-
-                                            elif row["RNAME.1"] == row["RNAME.2"]:
-                                                # Same chromosome event (deletion, inversion, etc.)
-                                                coord2 = row["coord_2"]
-
-                                                # Only add second breakpoint if it's different from the first
-                                                # and the gap is significant (> 1kb to avoid very small events)
-                                                if abs(coord2 - coord1) > 1000:
-                                                    start2 = max(
-                                                        0, coord2 - boundary_window
-                                                    )
-                                                    end2 = coord2 + boundary_window
-
-                                                    bed_line2_plus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
-                                                    bed_line2_minus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
-                                                    bed_lines.append(bed_line2_plus)
-                                                    bed_lines.append(bed_line2_minus)
-                                    """
-
-                                bed_lines_time = time.time() - start_bed_lines
-                                print(f"    Generate BED lines: {bed_lines_time:.3f}s")
                                 logger.info(
                                     f"Saved {len(combined_df)} SV links to {sv_links_file}"
                                 )
-                                logger.info(
-                                    f"Generated {len(bed_lines)} breakpoint boundary BED lines for BedTree"
-                                )
-
+                                
                                 # Add to BedTree if needed
-                                start_bedtree = time.time()
-                                if (
-                                    bed_lines
-                                    and self.master_bed_tree[self.sampleID] is None
-                                ):
+                                if self.master_bed_tree[self.sampleID] is None:
                                     self.master_bed_tree.add_bed_tree(
                                         sample_id=self.sampleID,
                                         preserve_original_tree=True,
@@ -3375,18 +3228,13 @@ class FusionObject(BaseAnalysis):
                                         ),
                                         source_type="FUSION",
                                     )
-                                    bedtree_time = time.time() - start_bedtree
-                                    print(f"    BedTree operations: {bedtree_time:.3f}s")
                                     logger.info(
                                         f"Added {len(bed_lines)} structural variant breakpoint boundaries to BedTree"
                                     )
 
                                     # Save fusion results again after structural variant processing
-                                    start_save_final = time.time()
                                     await self._save_fusion_results()
-                                    save_final_time = time.time() - start_save_final
-                                    print(f"    Final save fusion results: {save_final_time:.3f}s")
-
+                                    
                             except Exception as e:
                                 logger.error(
                                     f"Error saving structural variant links: {str(e)}"
@@ -3394,7 +3242,6 @@ class FusionObject(BaseAnalysis):
                                 logger.error("Exception details:", exc_info=True)
                                 # Continue processing even if save fails
                         else:
-                            print(f"    No SV data to save")
                             logger.debug(
                                 "No structural variant links found in this BAM file"
                             )
@@ -3407,7 +3254,6 @@ class FusionObject(BaseAnalysis):
                     finally:
                         self.running = False
                 else:
-                    print(f"  No supplementary alignments found, skipping")
                     logger.info("BAM file has no supplementary alignments, skipping.")
                     self.running = False
 
@@ -3415,8 +3261,6 @@ class FusionObject(BaseAnalysis):
                 logger.error(f"Error in process_bam: {e}")
                 raise
         finally:
-            total_time = time.time() - start_total
-            print(f"=== FUSION PROCESS_BAM END: {total_time:.3f}s total ===\n")
             state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
 
     def _should_run_breakpoint_processing(self) -> bool:
@@ -3621,18 +3465,11 @@ class FusionObject(BaseAnalysis):
             try:
                 combined_sv_reads = pd.concat(self.pending_sv_reads, ignore_index=True)
 
-                async def final_bed_background_work(combined_sv_reads):
-                    loop = asyncio.get_event_loop()
-                    return await loop.run_in_executor(
-                        None,
-                        build_breakpoint_graph,
-                        combined_sv_reads,
-                        50000,  # max_proximity
-                        True,   # group_by_sv
-                    )
-
-                bed_lines = await background_tasks.create(
-                    final_bed_background_work(combined_sv_reads)
+                bed_lines = await run.cpu_bound(
+                    build_breakpoint_graph,
+                    combined_sv_reads,
+                    50000,  # max_proximity
+                    True,   # group_by_sv
                 )
 
                 if len(bed_lines) > 0:
@@ -3654,15 +3491,11 @@ class FusionObject(BaseAnalysis):
         Enhanced to pre-process all data needed by FusionVis to eliminate
         heavy lifting from the display layer.
         """
-        import time
-        start_total = time.time()
-        print(f"      _save_fusion_results START")
         
         try:
             output_dir = self.check_and_create_folder(self.output, self.sampleID)
             
             # Save fusion candidates within target regions
-            start_target = time.time()
             if (
                 self.sampleID in self.fusion_candidates
                 and not self.fusion_candidates[self.sampleID].empty
@@ -3681,26 +3514,18 @@ class FusionObject(BaseAnalysis):
                             index=False,
                         )
                         
-                        # Pre-process data for FusionVis in background task
-                        async def preprocess_master_background_work():
-                            loop = asyncio.get_event_loop()
-                            return await loop.run_in_executor(
-                                None,
-                                preprocess_fusion_data_standalone,
-                                result, 
-                                os.path.join(output_dir, "fusion_candidates_master_processed.csv")
-                            )
-                        
-                        background_tasks.create(preprocess_master_background_work())
+                        # Pre-process data for FusionVis using run.cpu_bound
+                        await run.cpu_bound(
+                            preprocess_fusion_data_standalone,
+                            result, 
+                            os.path.join(output_dir, "fusion_candidates_master_processed.csv")
+                        )
                         
                         logger.info(
                             f"Saved {len(result)} fusion candidates within target regions"
                         )
-            target_time = time.time() - start_target
-            print(f"        Target fusion processing: {target_time:.3f}s")
-
+        
             # Save genome-wide fusion candidates
-            start_all = time.time()
             if (
                 self.sampleID in self.fusion_candidates_all
                 and not self.fusion_candidates_all[self.sampleID].empty
@@ -3721,41 +3546,25 @@ class FusionObject(BaseAnalysis):
                             index=False,
                         )
                         
-                        # Pre-process data for FusionVis in background task
-                        async def preprocess_all_background_work():
-                            loop = asyncio.get_event_loop()
-                            return await loop.run_in_executor(
-                                None,
-                                preprocess_fusion_data_standalone,
-                                result_all, 
-                                os.path.join(output_dir, "fusion_candidates_all_processed.csv")
-                            )
-                        
-                        background_tasks.create(preprocess_all_background_work())
+                        # Pre-process data for FusionVis using run.cpu_bound
+                        await run.cpu_bound(
+                            preprocess_fusion_data_standalone,
+                            result_all, 
+                            os.path.join(output_dir, "fusion_candidates_all_processed.csv")
+                        )
                         
                         logger.info(
                             f"Saved {len(result_all)} genome-wide fusion candidates"
                         )
-            all_time = time.time() - start_all
-            print(f"        All fusion processing: {all_time:.3f}s")
-
-            # Pre-process structural variant summary data in background task
-            start_sv_preprocess = time.time()
-            async def preprocess_sv_background_work():
-                loop = asyncio.get_event_loop()
-                return await loop.run_in_executor(None, preprocess_structural_variants_standalone, output_dir)
-            
-            background_tasks.create(preprocess_sv_background_work())
-            sv_preprocess_time = time.time() - start_sv_preprocess
-            print(f"        SV preprocess background task: {sv_preprocess_time:.3f}s")
-
+        
+            # Pre-process structural variant summary data using run.cpu_bound
+            await run.cpu_bound(preprocess_structural_variants_standalone, output_dir)
+        
         except Exception as e:
             logger.error(f"Error saving fusion results: {str(e)}")
             logger.error("Exception details:", exc_info=True)
-        finally:
-            total_time = time.time() - start_total
-            print(f"      _save_fusion_results END: {total_time:.3f}s")
-
+        
+        
     def _preprocess_fusion_data_sync(
         self, 
         fusion_data: pd.DataFrame, 
