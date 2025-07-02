@@ -2541,10 +2541,8 @@ class CNVVis(BaseVis):
                     self.update_proportion_time_chart2(pivot_df2)
 
                 self.update_target_table()
-            async def load_bedranges_background_work():
-                return await run.cpu_bound(load_bedranges)
-            
-            background_tasks.create(load_bedranges_background_work())
+
+            await background_tasks.create(load_bedranges())
 
             if self.summary:
                 with self.summary:
