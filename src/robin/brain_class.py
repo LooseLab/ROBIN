@@ -97,7 +97,8 @@ from robin.subpages.RandomForest_object import (
 )
 from robin.subpages.CNV_object import CNVAnalysis, CNVVis
 from robin.subpages.TargetCoverage_object import TargetCoverage, TargetCoverageVis
-from robin.subpages.Fusion_object import FusionObject, FusionVis
+from robin.subpages.Fusion_object import FusionVis
+from robin.subpages.FusionObjectClass import FusionObject
 from robin.subpages.MNPFlex_object import MNPFlex_Object
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.bed_file import MasterBedTree
