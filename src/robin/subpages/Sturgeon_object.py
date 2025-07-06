@@ -54,47 +54,30 @@ from sturgeon.prediction import load_model, predict_sample
 
 from robin.core.state import state, ProcessState
 
+from robin.utilities.merge_bedmethyl import collapse_bedmethyl, load_minimal_modkit_data
+
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
 
 
 def load_modkit_data(parquet_path):
-    for attempt in range(5):  # Retry up to 5 times
-        try:
-            merged_modkit_df = pd.read_parquet(parquet_path)
-            logger.debug("Successfully read the Parquet file.")
-            break
-        except Exception as e:
-            logger.debug(f"Attempt {attempt+1}: File not ready ({e}). Retrying...")
-            time.sleep(10)
-    else:
-        logger.debug("Failed to read Parquet file after multiple attempts.")
-        return None
-
-    column_names = [
-        "chrom",
-        "chromStart",
-        "chromEnd",
-        "mod_code",
-        "score_bed",
-        "strand",
-        "thickStart",
-        "thickEnd",
-        "color",
-        "valid_cov",
-        "percent_modified",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
-
-    # Keep only the original 18 columns and sort by chrom and chromStart
-    df = merged_modkit_df[column_names]
-    return df.sort_values(by=["chrom", "chromStart"])
+    """
+    Load minimal bedmethyl data for Sturgeon analysis.
+    
+    This function loads only the essential columns needed for Sturgeon classification:
+    - chrom: Chromosome name
+    - chromStart: Start position  
+    - percent_modified: Primary methylation data
+    - mod_code: Modification code (required for 5mC filtering)
+    - strand: Strand information
+    
+    Args:
+        parquet_path (str): Path to the parquet file containing bedmethyl data
+        
+    Returns:
+        pd.DataFrame: DataFrame with minimal columns, sorted by chrom and chromStart
+    """
+    return load_minimal_modkit_data(parquet_path)
 
 
 def modkit_pileup_file_to_bed(
@@ -118,39 +101,71 @@ def modkit_pileup_file_to_bed(
     else:
         raise ValueError("input_data must be either a file path (str) or a DataFrame")
 
-    # Define column names
-    column_names = [
-        "chrom",
-        "chromStart",
-        "chromEnd",
-        "mod_code",
-        "score_bed",
-        "strand",
-        "thickStart",
-        "thickEnd",
-        "color",
-        "valid_cov",
-        "percent_modified",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
+    # For minimal data, we expect only the essential columns
+    if isinstance(input_data, pd.DataFrame) and len(modkit_df.columns) == 5:
+        # Minimal data format - columns should already be named correctly
+        expected_columns = ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
+        if list(modkit_df.columns) == expected_columns:
+            # Data is already in minimal format, just filter by mod_code
+            modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
+        else:
+            # Assign column names for minimal data
+            modkit_df.columns = expected_columns
+            modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
+    else:
+        # Full data format - use original logic
+        # Define column names
+        column_names = [
+            "chrom",
+            "chromStart",
+            "chromEnd",
+            "mod_code",
+            "score_bed",
+            "strand",
+            "thickStart",
+            "thickEnd",
+            "color",
+            "valid_cov",
+            "percent_modified",
+            "n_mod",
+            "n_canonical",
+            "n_othermod",
+            "n_delete",
+            "n_fail",
+            "n_diff",
+            "n_nocall",
+        ]
 
-    # Validate number of columns
-    if modkit_df.shape[1] != len(column_names):
-        raise AssertionError(
-            f"Invalid modkit pileup file. Expected {len(column_names)} columns, got {modkit_df.shape[1]}."
+        # Validate number of columns
+        if modkit_df.shape[1] != len(column_names):
+            raise AssertionError(
+                f"Invalid modkit pileup file. Expected {len(column_names)} columns, got {modkit_df.shape[1]}."
+            )
+
+        # Assign column names
+        modkit_df.columns = column_names
+
+        # Filter by modification code
+        modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
+
+        # Drop unnecessary columns
+        modkit_df.drop(
+            columns=[
+                "mod_code",
+                "thickStart",
+                "thickEnd",
+                "color",
+                "valid_cov",
+                "n_mod",
+                "n_canonical",
+                "n_othermod",
+                "n_delete",
+                "n_fail",
+                "n_diff",
+                "n_nocall",
+            ],
+            inplace=True,
         )
-
-    # Assign column names
-    modkit_df.columns = column_names
-
-    # Filter by modification code
-    modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
 
     # Rename and normalize score column
     modkit_df = modkit_df.rename(
@@ -161,25 +176,6 @@ def modkit_pileup_file_to_bed(
         }
     )
     modkit_df["score"] /= 100  # Convert from percentage to decimal fraction
-
-    # Drop unnecessary columns
-    modkit_df.drop(
-        columns=[
-            "mod_code",
-            "thickStart",
-            "thickEnd",
-            "color",
-            "valid_cov",
-            "n_mod",
-            "n_canonical",
-            "n_othermod",
-            "n_delete",
-            "n_fail",
-            "n_diff",
-            "n_nocall",
-        ],
-        inplace=True,
-    )
 
     # Remove invalid positions
     modkit_df = modkit_df[

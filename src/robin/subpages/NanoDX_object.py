@@ -59,7 +59,7 @@ import tempfile
 from typing import List, Tuple, Optional, Dict, Any
 from robin import models, theme, resources
 import logging
-from robin.utilities.merge_bedmethyl import collapse_bedmethyl
+from robin.utilities.merge_bedmethyl import collapse_bedmethyl, load_minimal_modkit_data, collapse_minimal_bedmethyl
 from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
 
 
@@ -100,42 +100,23 @@ else:
 
 
 def load_modkit_data(parquet_path):
-    for attempt in range(5):  # Retry up to 5 times
-        try:
-            merged_modkit_df = pd.read_parquet(parquet_path)
-            logger.debug("Successfully read the Parquet file.")
-            break
-        except Exception as e:
-            logger.debug(f"Attempt {attempt+1}: File not ready ({e}). Retrying...")
-            time.sleep(10)
-    else:
-        logger.debug("Failed to read Parquet file after multiple attempts.")
-        return None
-
-    column_names = [
-        "chrom",
-        "chromStart",
-        "chromEnd",
-        "mod_code",
-        "score_bed",
-        "strand",
-        "thickStart",
-        "thickEnd",
-        "color",
-        "valid_cov",
-        "percent_modified",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
-
-    # Keep only the original 18 columns and sort by chrom and chromStart
-    df = merged_modkit_df[column_names]
-    return df.sort_values(by=["chrom", "chromStart"])
+    """
+    Load minimal bedmethyl data for NanoDX analysis.
+    
+    This function loads only the essential columns needed for NanoDX classification:
+    - chrom: Chromosome name
+    - chromStart: Start position  
+    - percent_modified: Primary methylation data
+    - mod_code: Modification code
+    - strand: Strand information
+    
+    Args:
+        parquet_path (str): Path to the parquet file containing bedmethyl data
+        
+    Returns:
+        pd.DataFrame: DataFrame with minimal columns, sorted by chrom and chromStart
+    """
+    return load_minimal_modkit_data(parquet_path)
 
 
 def run_modkit(cpgs: str, sortfile: str, temp: str, threads: int) -> None:
@@ -329,35 +310,12 @@ class NanoDX_object(BaseAnalysis):
                             load_modkit_data, parquet_path
                         )
 
-                        merged_modkit_df.rename(
-                            columns={
-                                "chromStart": "start_pos",
-                                "chromEnd": "end_pos",
-                                "mod_code": "mod",
-                                "thickStart": "start_pos2",
-                                "thickEnd": "end_pos2",
-                                "color": "colour",
-                            },
-                            inplace=True,
-                        )
-                        merged_modkit_df.rename(
-                            columns={
-                                "n_canonical": "Ncanon",
-                                "n_delete": "Ndel",
-                                "n_diff": "Ndiff",
-                                "n_fail": "Nfail",
-                                "n_mod": "Nmod",
-                                "n_nocall": "Nnocall",
-                                "n_othermod": "Nother",
-                                "valid_cov": "Nvalid",
-                                "percent_modified": "score",
-                            },
-                            inplace=True,
+                        # Use minimal data processing - no need for complex renaming
+                        # The data already contains only essential columns
+                        nanodx_df = await run.cpu_bound(
+                            collapse_minimal_bedmethyl, merged_modkit_df
                         )
 
-                        nanodx_df = await run.cpu_bound(
-                            collapse_bedmethyl, merged_modkit_df
-                        )
                         test_df = pd.merge(
                             nanodx_df,
                             self.cpgs,

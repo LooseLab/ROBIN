@@ -40,6 +40,8 @@ from robin import submodules
 
 from robin.utilities.merge_bedmethyl import (
     collapse_bedmethyl,
+    load_minimal_modkit_data,
+    reconstruct_full_bedmethyl_data,
 )
 
 from typing import List, Tuple
@@ -141,42 +143,23 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
 
 
 def load_modkit_data(parquet_path):
-    for attempt in range(5):  # Retry up to 5 times
-        try:
-            merged_modkit_df = pd.read_parquet(parquet_path)
-            logger.debug("Successfully read the Parquet file.")
-            break
-        except Exception as e:
-            logger.debug(f"Attempt {attempt+1}: File not ready ({e}). Retrying...")
-            time.sleep(10)
-    else:
-        logger.debug("Failed to read Parquet file after multiple attempts.")
-        return None
-
-    column_names = [
-        "chrom",
-        "chromStart",
-        "chromEnd",
-        "mod_code",
-        "score_bed",
-        "strand",
-        "thickStart",
-        "thickEnd",
-        "color",
-        "valid_cov",
-        "percent_modified",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
-
-    # Keep only the original 18 columns and sort by chrom and chromStart
-    df = merged_modkit_df[column_names]
-    return df.sort_values(by=["chrom", "chromStart"])
+    """
+    Load minimal bedmethyl data for RandomForest analysis.
+    
+    This function loads only the essential columns needed for RandomForest classification:
+    - chrom: Chromosome name
+    - chromStart: Start position  
+    - percent_modified: Primary methylation data
+    - mod_code: Modification code
+    - strand: Strand information
+    
+    Args:
+        parquet_path (str): Path to the parquet file containing bedmethyl data
+        
+    Returns:
+        pd.DataFrame: DataFrame with minimal columns, sorted by chrom and chromStart
+    """
+    return load_minimal_modkit_data(parquet_path)
 
 
 class RandomForest_object(BaseAnalysis):
@@ -326,35 +309,17 @@ class RandomForest_object(BaseAnalysis):
                             load_modkit_data, parquet_path
                         )
 
-                        merged_modkit_df.rename(
-                            columns={
-                                "chromStart": "start_pos",
-                                "chromEnd": "end_pos",
-                                "mod_code": "mod",
-                                "thickStart": "start_pos2",
-                                "thickEnd": "end_pos2",
-                                "color": "colour",
-                            },
-                            inplace=True,
+                        # For RandomForest, we need to reconstruct the full data structure
+                        # since the R script expects all columns. We'll use the minimal data
+                        # but need to add the missing columns for compatibility
+                        full_modkit_df = await run.cpu_bound(
+                            reconstruct_full_bedmethyl_data, merged_modkit_df
                         )
-                        merged_modkit_df.rename(
-                            columns={
-                                "n_canonical": "Ncanon",
-                                "n_delete": "Ndel",
-                                "n_diff": "Ndiff",
-                                "n_fail": "Nfail",
-                                "n_mod": "Nmod",
-                                "n_nocall": "Nnocall",
-                                "n_othermod": "Nother",
-                                "valid_cov": "Nvalid",
-                                "percent_modified": "score",
-                            },
-                            inplace=True,
+                        
+                        forest_dx = await run.cpu_bound(
+                            collapse_bedmethyl, full_modkit_df
                         )
 
-                        forest_dx = await run.cpu_bound(
-                            collapse_bedmethyl, merged_modkit_df
-                        )
                         merged_modkit_df = forest_dx
                         if merged_modkit_df is None:
                             logger.error("Failed to load modkit data from parquet file")
