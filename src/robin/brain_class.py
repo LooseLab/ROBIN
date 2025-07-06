@@ -116,6 +116,7 @@ import json
 from robin.utils import (
     merge_modkit_files,
     run_modkit,
+    run_matkit,
     run_samtools_sort,
     check_bam,
     sort_bams,
@@ -535,6 +536,7 @@ class BrainMeth:
                     **common_args,
                 )
                 await self.Fusion_panel.process_data()
+            
 
         background_tasks.create(start_background_tasks())
 
@@ -2880,7 +2882,7 @@ class BrainMeth:
             for sample_id in list(files_by_sample.keys()):
                 # The length of bams we allow to be processed at once will influence memory usage.
                 if (
-                    len(files_by_sample[sample_id]) >= 5
+                    len(files_by_sample[sample_id]) >= 9
                 ):  # This can be changed at any time
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
@@ -3097,7 +3099,10 @@ class BrainMeth:
                 dir=self.check_and_create_folder(self.output, sampleID)
             ):
                 try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
-                    await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
+                    print(f"Running modkit on {sortfile}")
+                    #await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
+                    await run.cpu_bound(run_matkit, sortfile, temp.name, self.threads)
+                    print(f"Modkit run complete")
                     # run_modkit(sortfile, temp.name, self.threads)
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(

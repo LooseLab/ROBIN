@@ -27,7 +27,7 @@ from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 from .core.state import state, ProcessType, ProcessState
 
 
-DEV_TESTING: bool = False
+DEV_TESTING: bool = True
 
 DEFAULT_CFG: str = "config.ini"
 UNIQUE_ID: str = str(uuid.uuid4())
