@@ -46,7 +46,7 @@ Usage:
 
 from __future__ import annotations
 from robin.subpages.base_analysis import BaseAnalysis, BaseVis
-from nicegui import ui, app, run
+from nicegui import ui, app, run,background_tasks
 import time
 import os
 import sys
@@ -64,6 +64,8 @@ from robin.utilities.merge_bedmethyl import (
     collapse_minimal_bedmethyl,
 )
 from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
+
+from robin.core.state import state, ProcessState
 
 
 # Use the main logger configured in the main application
@@ -270,36 +272,24 @@ class NanoDX_object(BaseAnalysis):
         Results are stored in temporary directories and visualized in real-time.
         """
         try:
-            sampleID = self.sampleID
-            # Initialize directories for each sampleID if not already present
-            if sampleID not in self.dataDir.keys():
-                self.dataDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
-                self.bedDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
+            state.set_process_state(f"{self.name} Analysis", ProcessState.RUNNING)
+        except Exception as e:
+            print(f"Error setting process state: {e}")
+            logger.error(f"Error setting process state: {e}")
 
-            # Get latest timestamp from input files or use provided timestamp
-            if timestamp is not None:
+        if not self.parquetqueue.empty():
+            parquet_path, sampleID, num_bam_files_seen = self.parquetqueue.get()
+            if timestamp:
                 currenttime = timestamp * 1000
             else:
-                latest_file = (
-                    max(timestamp for _, timestamp in bamfile) if bamfile else 0
-                )
-                currenttime = latest_file * 1000 if latest_file else time.time() * 1000
+                currenttime = timestamp * 1000 if timestamp else time.time() * 1000
 
-            if (
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bam_count"
-                ]
-                > 0
-            ):
-                parquet_path = os.path.join(
-                    self.check_and_create_folder(self.output, sampleID),
-                    f"{sampleID}.parquet",
-                )
-
+            parquet_path = os.path.join(
+                self.check_and_create_folder(self.output, sampleID),
+                f"{sampleID}.parquet",
+            )
+            
+            async def nanodx_bam_background_work(sampleID, parquet_path):
                 try:
                     if self.check_file_time(parquet_path):
                         tomerge_length_file = os.path.join(
@@ -367,9 +357,13 @@ class NanoDX_object(BaseAnalysis):
                 except Exception as e:
                     logger.error(f"Error in process_bam (nanodx): {e}")
 
-            self.running = False
-        finally:
-            pass
+            await background_tasks.create(
+                nanodx_bam_background_work(sampleID, parquet_path)
+            )
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bams_in_processing"] -= num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_processed"] += num_bam_files_seen
+
+        state.set_process_state(f"{self.name} Analysis", ProcessState.WAITING_FOR_DATA)
 
 
 class NanoDXVis(BaseVis):

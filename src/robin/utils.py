@@ -879,7 +879,7 @@ def process_bam_counts_improved(
     # Debug tracking for specific positions
     debug_data = {} if debug_positions else None
 
-    for read in tqdm(iterable, desc="Processing reads", disable=True):
+    for read in tqdm(iterable, desc="Processing reads", disable=False):
         # Skip unmapped, secondary, and optionally supplementary alignments
         # Note: modkit appears to filter out secondary alignments by default
         # This matches the behavior of the original modkit tool

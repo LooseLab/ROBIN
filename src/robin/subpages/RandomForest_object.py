@@ -31,7 +31,7 @@ import os
 import tempfile
 import time
 import pandas as pd
-from nicegui import ui, app, run
+from nicegui import ui, app, run, background_tasks
 from robin import resources
 import logging
 from robin import models
@@ -251,37 +251,23 @@ class RandomForest_object(BaseAnalysis):
             Optional timestamp override for the current processing batch
         """
         state.set_process_state("Random Forest Analysis", ProcessState.RUNNING)
-        try:
-            sampleID = self.sampleID
-            # Initialize directories for each sampleID if not already present
-            if sampleID not in self.dataDir.keys():
-                self.dataDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
-                self.bedDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
-
-            # Get latest timestamp from input files or use provided timestamp
-            if timestamp is not None:
+        if not self.parquetqueue.empty():
+            num_bam_files_seen = 0
+            while not self.parquetqueue.empty():
+                parquet_path, sampleID, file_count = self.parquetqueue.get()
+                num_bam_files_seen += file_count
+                
+            if timestamp:
                 currenttime = timestamp * 1000
             else:
-                latest_file = (
-                    max(timestamp for _, timestamp in bamfile) if bamfile else 0
-                )
-                currenttime = latest_file * 1000 if latest_file else time.time() * 1000
+                currenttime = timestamp * 1000 if timestamp else time.time() * 1000
 
-            if (
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bam_count"
-                ]
-                > 0
-            ):
-                parquet_path = os.path.join(
-                    self.check_and_create_folder(self.output, sampleID),
-                    f"{sampleID}.parquet",
-                )
-
+            parquet_path = os.path.join(
+                self.check_and_create_folder(self.output, sampleID),
+                f"{sampleID}.parquet",
+            )
+            
+            async def forest_bam_background_work(sampleID, parquet_path):
                 try:
                     if self.check_file_time(parquet_path):
                         logger.debug("Parquet file exists and is ready for processing")
@@ -404,11 +390,13 @@ class RandomForest_object(BaseAnalysis):
                 except Exception as e:
                     logger.error(f"Error in process_bam: {str(e)}", exc_info=True)
 
-            self.running = False
-        finally:
-            state.set_process_state(
-                "Random Forest Analysis", ProcessState.WAITING_FOR_DATA
+                    
+            await background_tasks.create(
+                forest_bam_background_work(sampleID, parquet_path)
             )
+            self.running = False
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bams_in_processing"] -= num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_processed"] += num_bam_files_seen
 
     async def stop_analysis(self):
         """Stop the Random Forest analysis."""

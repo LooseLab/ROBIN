@@ -474,6 +474,7 @@ class BrainMeth:
                     batch=True,
                     bamqueue=self.bamforpannanodx,
                     model="pancan_devel_v5i_NN.pkl",
+                    parquetqueue=self.parquetqueuepannanodx,
                     **common_args,
                 )
                 await self.panNanoDX.process_data()
@@ -2846,7 +2847,6 @@ class BrainMeth:
             if sampleID not in files_by_sample:
                 files_by_sample[sampleID] = []
                 latest_files[sampleID] = 0
-
                 # Create temporary directories if needed
                 if sampleID not in self.dataDir:
                     self.dataDir[sampleID] = tempfile.TemporaryDirectory(
@@ -2865,15 +2865,8 @@ class BrainMeth:
                 for analysis in analyses:
                     if analysis.lower() not in self.exclude:
                         if analysis not in app.storage.general[self.mainuuid][sampleID]:
-                            app.storage.general[self.mainuuid][sampleID][analysis] = Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
-                            #{
-                            #    
-                            #    "counters": {
-                            #        "bams_in_processing": 0,
-                            #        "bam_processed": 0,
-                            #        "bams_failed": 0,
-                            #    }
-                            #}
+                            app.storage.general[self.mainuuid][sampleID][analysis] = {}
+                            app.storage.general[self.mainuuid][sampleID][analysis]["counters"]  = Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
                         elif (
                             "counters"
                             not in app.storage.general[self.mainuuid][sampleID][
@@ -2895,7 +2888,7 @@ class BrainMeth:
             for sample_id in list(files_by_sample.keys()):
                 # The length of bams we allow to be processed at once will influence memory usage.
                 if (
-                    len(files_by_sample[sample_id]) >= 10
+                    len(files_by_sample[sample_id]) >= 1
                 ):  # This can be changed at any time
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
@@ -2924,6 +2917,8 @@ class BrainMeth:
                     # Clear processed files
                     files_by_sample[sample_id] = []
                     latest_files[sample_id] = 0
+                
+                
 
         # Process remaining files for each sample
         for sample_id, files in files_by_sample.items():
@@ -3049,35 +3044,41 @@ class BrainMeth:
             # Write the updated length of the tomerge list to the output file
             with open(tomerge_length_file, "w") as f:
                 f.write(f"Length of tomerge list: {new_count}\n")
-
-            tempbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bam",
-            )
-            sorttempbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bam",
-            )
-            file = tempbam.name
-            temp = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
-            sortfile = sorttempbam.name
-
-            # Set process state to running
-            state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
-
-            # Sort and merge BAM files
-            try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
-                await run.cpu_bound(
-                    run_samtools_sort, file, tomerge, sortfile, self.threads
+                
+            if len(tomerge)>1:
+                tempbam = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, sampleID),
+                    suffix=".bam",
                 )
-            except concurrent.futures.process.BrokenProcessPool:
-                logger.warning(
-                    "Process pool was terminated. This is normal during shutdown."
+                sorttempbam = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, sampleID),
+                    suffix=".bam",
                 )
-                state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
-                return
+                file = tempbam.name
+                temp = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, sampleID)
+                )
+                sortfile = sorttempbam.name
+
+                # Set process state to running
+                state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
+
+                # Sort and merge BAM files
+                try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
+                    await run.cpu_bound(
+                        run_samtools_sort, file, tomerge, sortfile, self.threads
+                    )
+                except concurrent.futures.process.BrokenProcessPool:
+                    logger.warning(
+                        "Process pool was terminated. This is normal during shutdown."
+                    )
+                    state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                    return
+            else:
+                sortfile = tomerge[0]
+                temp = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, sampleID)
+                )
 
             with tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
@@ -3114,8 +3115,16 @@ class BrainMeth:
                         dict(self.mnpflex_config),
                         num_bam_files_seen,  # Pass the number of BAM files that contributed
                     )
-                    
-                    self.parquetqueuesturgeon.put((parquet_path, sampleID, num_bam_files_seen))
+                    for analysis in analyses:
+                        if analysis.lower() not in self.exclude:
+                            if analysis == "STURGEON":
+                                self.parquetqueuesturgeon.put((parquet_path, sampleID, num_bam_files_seen))
+                            elif analysis == "NANODX":
+                                self.parquetqueuenanodx.put((parquet_path, sampleID, num_bam_files_seen))
+                            elif analysis == "PANNANODX":
+                                self.parquetqueuepannanodx.put((parquet_path, sampleID, num_bam_files_seen))
+                            elif analysis == "FOREST":
+                                self.parquetqueuecns.put((parquet_path, sampleID, num_bam_files_seen))
                     
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(

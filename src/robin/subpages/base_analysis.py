@@ -622,7 +622,7 @@ class BaseAnalysis:
                     logger.debug(f"Error type: {type(e)}")
                 finally:
                     self._initialize_counters(self.sampleID)
-                    self._update_bam_processed_counter(1)
+                    #self._update_bam_processed_counter(1)
                 self.running = False
             state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
             # if not self.terminate:
