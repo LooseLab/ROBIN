@@ -488,13 +488,6 @@ class Sturgeon_object(BaseAnalysis):
             async def sturgeon_bam_background_work(sampleID, parquet_path):
                 try:
                     if self.check_file_time(parquet_path):
-                        tomerge_length_file = os.path.join(
-                            self.check_and_create_folder(self.output, sampleID),
-                            "tomerge_length.txt",
-                        )
-                        with open(tomerge_length_file, "r") as f:
-                            tomerge_length = int(f.readline().strip().split(": ")[1])
-
                         merged_modkit_df = await run.cpu_bound(
                             load_modkit_data, parquet_path
                         )
@@ -538,7 +531,8 @@ class Sturgeon_object(BaseAnalysis):
                                     "sturgeon_scores.csv",
                                 )
                             )
-                        self._update_bam_processed_counter(tomerge_length)
+                        # Update bam_processed counter with the number of BAM files that were merged into this parquet
+                        self._update_bam_processed_counter(num_bam_files_seen)
                 except Exception as e:
                     print(f"Error in process_bam (sturgeon): {e}")
                     logger.error(f"Error in process_bam (sturgeon): {e}")
@@ -547,13 +541,12 @@ class Sturgeon_object(BaseAnalysis):
                 sturgeon_bam_background_work(sampleID, parquet_path)
             )
             # Ensure counters are initialized before accessing them
-            self._initialize_counters(sampleID)
+            #self._initialize_counters(sampleID)
+            # Update bams_in_processing counter (decrement since we're processing them)
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] -= num_bam_files_seen
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                "bam_processed"
-            ] += num_bam_files_seen
+            # Note: bam_processed is already incremented in the background task above
 
         state.set_process_state("Sturgeon Analysis", ProcessState.WAITING_FOR_DATA)
 

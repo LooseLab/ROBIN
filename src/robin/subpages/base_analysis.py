@@ -710,6 +710,25 @@ class BaseAnalysis:
             return
         self.timer.active = False
         latest_timestamp = time.time()
+        
+        # For batch processing, we need to set a sampleID before calling process_bam
+        # This is especially important for Sturgeon_object which processes parquet files
+        if hasattr(self, 'parquetqueue') and not self.parquetqueue.empty():
+            # Get the sampleID from the parquet queue if available
+            try:
+                # Peek at the first item in the queue to get sampleID
+                parquet_path, sampleID, file_count = self.parquetqueue.queue[0]
+                self.sampleID = sampleID
+            except (IndexError, ValueError):
+                # Fallback to default sampleID
+                self.sampleID = "batch_processing"
+        elif hasattr(self, 'sampleID') and self.sampleID:
+            # Use existing sampleID if available
+            pass
+        else:
+            # Set a default sampleID for batch processing
+            self.sampleID = "batch_processing"
+            
         await self.process_bam("SasuagesNone", latest_timestamp)
 
         """
