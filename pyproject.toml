@@ -29,7 +29,7 @@ dependencies = [
   "flet",
   "cnv_from_bam",
   "watchdog",
-  "pysam",
+  "pysam>=0.23.1",
   "pandas",
   "readfish",
   "sturgeon@git+https://github.com/looselab/sturgeon@pysam",

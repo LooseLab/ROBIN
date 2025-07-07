@@ -335,9 +335,9 @@ class BaseVis:
                                 ]["counters"],
                                 "bam_count",
                                 backward=lambda n: str(
-                                    n
+                                    max(0, n
                                     # - self._get_counter_value("bam_processed", 0)
-                                    - self._get_counter_value("bams_in_processing", 0)
+                                    - self._get_counter_value("bams_in_processing", 0) - self._get_counter_value("bam_processed", 0))
                                 ),
                             ).classes("text-xs min-w-[30px] text-right")
 
@@ -486,11 +486,11 @@ class BaseVis:
             ]
             if counters.get("bam_count", 0) == 0:
                 return 0.0
-            not_analysed = (
+            not_analysed = max(0, (
                 counters.get("bam_count", 0)
                 - counters.get("bams_in_processing", 0)
                 - counters.get("bam_processed", 0)
-            )
+            ))
             if not_analysed == 0 or counters.get("bam_count") == 0:
                 return 0.0
             else:
@@ -595,7 +595,7 @@ class BaseAnalysis:
                     f"Processing BAM file: {bamfile} with timestamp: {timestamp} and sampleID: {sampleID}"
                 )
                 self.sampleID = sampleID
-
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_count"] += 1
                 if not timestamp:
                     timestamp = time.time()
                 try:
@@ -622,7 +622,7 @@ class BaseAnalysis:
                     logger.debug(f"Error type: {type(e)}")
                 finally:
                     self._initialize_counters(self.sampleID)
-                    #self._update_bam_processed_counter(1)
+                    self._update_bam_processed_counter(1)
                 self.running = False
             state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
             # if not self.terminate:
@@ -638,6 +638,15 @@ class BaseAnalysis:
         """Adds a BAM file to the queue for processing."""
         if sampleID is None:
             sampleID = self.sampleID
+        
+        # Initialize counters and increment bam_count for single processing mode
+        if not self.batch:
+            self._initialize_counters(sampleID)
+            try:
+                app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_count"] += 1
+            except Exception as e:
+                logger.warning(f"Could not increment bam_count counter: {e}")
+        
         self.bamqueue.put((bamfile, timestamp, sampleID))
 
     def batch_timer_run(self) -> None:

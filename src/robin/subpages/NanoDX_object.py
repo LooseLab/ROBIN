@@ -282,6 +282,7 @@ class NanoDX_object(BaseAnalysis):
             while not self.parquetqueue.empty():
                 parquet_path, sampleID, file_count = self.parquetqueue.get_nowait()
                 num_bam_files_seen += file_count
+                
             if timestamp:
                 currenttime = timestamp * 1000
             else:
