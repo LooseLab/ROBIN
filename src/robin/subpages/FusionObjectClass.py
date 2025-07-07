@@ -1490,9 +1490,6 @@ def important_function(combined_df):
     return bed_lines
 
 
-
-
-
 class FusionObject(BaseAnalysis):
     """
     Core class for gene fusion analysis.

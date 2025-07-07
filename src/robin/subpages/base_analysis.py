@@ -603,7 +603,20 @@ class BaseAnalysis:
                 logger.debug(
                     f"Processing BAM file: {bamfile} with timestamp: {timestamp} and sampleID: {sampleID}"
                 )
+
+                # Validate sampleID - if None, use a fallback
+                if sampleID is None:
+                    if hasattr(bamfile, "name"):
+                        sampleID = f"unknown_sample_{os.path.basename(bamfile.name)}"
+                    else:
+                        sampleID = f"unknown_sample_{id(bamfile)}"
+                    logger.warning(
+                        f"BAM file has no sampleID in queue, using fallback: {sampleID}"
+                    )
+
                 self.sampleID = sampleID
+                # Initialize counters before accessing them
+                self._initialize_counters(sampleID)
                 app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                     "bam_count"
                 ] += 1
@@ -632,8 +645,13 @@ class BaseAnalysis:
                     logger.debug(f"Error details: {str(e)}")
                     logger.debug(f"Error type: {type(e)}")
                 finally:
-                    self._initialize_counters(self.sampleID)
-                    self._update_bam_processed_counter(1)
+                    if self.sampleID:
+                        self._initialize_counters(self.sampleID)
+                        self._update_bam_processed_counter(1)
+                    else:
+                        logger.warning(
+                            f"No sample ID available for {self.name} in finally block - mainuuid: {getattr(self, 'mainuuid', 'None')}, sampleID: {getattr(self, 'sampleID', 'None')}"
+                        )
                 self.running = False
             state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
             # if not self.terminate:
@@ -650,6 +668,14 @@ class BaseAnalysis:
         if sampleID is None:
             sampleID = self.sampleID
 
+        # Validate sampleID - if still None, use a fallback
+        if sampleID is None:
+            if hasattr(bamfile, "name"):
+                sampleID = f"unknown_sample_{os.path.basename(bamfile.name)}"
+            else:
+                sampleID = f"unknown_sample_{id(bamfile)}"
+            logger.warning(f"BAM file has no sampleID, using fallback: {sampleID}")
+
         # Initialize counters and increment bam_count for single processing mode
         if not self.batch:
             self._initialize_counters(sampleID)
@@ -659,6 +685,16 @@ class BaseAnalysis:
                 ] += 1
             except Exception as e:
                 logger.warning(f"Could not increment bam_count counter: {e}")
+                # Try to re-initialize and increment again
+                try:
+                    self._initialize_counters(sampleID)
+                    app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                        "bam_count"
+                    ] += 1
+                except Exception as retry_e:
+                    logger.error(
+                        f"Failed to increment bam_count counter after retry: {retry_e}"
+                    )
 
         self.bamqueue.put((bamfile, timestamp, sampleID))
 
@@ -770,11 +806,31 @@ class BaseAnalysis:
             and hasattr(self, "name")
         ):
             try:
+                # Ensure sampleID is valid
+                if not self.sampleID:
+                    logger.warning(
+                        f"No sample ID available for {self.name} - mainuuid: {getattr(self, 'mainuuid', 'None')}, sampleID: {getattr(self, 'sampleID', 'None')}"
+                    )
+                    return
+
+                # Ensure counters are initialized before updating
+                self._initialize_counters(self.sampleID)
                 app.storage.general[self.mainuuid][self.sampleID][self.name][
                     "counters"
                 ]["bam_processed"] += increment
             except Exception as e:
                 logger.warning(f"Could not update bam_processed counter: {e}")
+                # Try to re-initialize and update again
+                try:
+                    if self.sampleID:
+                        self._initialize_counters(self.sampleID)
+                        app.storage.general[self.mainuuid][self.sampleID][self.name][
+                            "counters"
+                        ]["bam_processed"] += increment
+                except Exception as retry_e:
+                    logger.error(
+                        f"Failed to update bam_processed counter after retry: {retry_e}"
+                    )
 
     def _initialize_counters(self, sample_id: str) -> None:
         """
@@ -791,6 +847,9 @@ class BaseAnalysis:
             if not self.mainuuid:
                 logging.warning(f"No UUID provided for {self.name}")
                 return
+
+            # Ensure sample_id is a string
+            sample_id = str(sample_id)
 
             if self.mainuuid not in app.storage.general:
                 app.storage.general[self.mainuuid] = {}

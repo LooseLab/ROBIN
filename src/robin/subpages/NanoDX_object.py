@@ -300,7 +300,9 @@ class NanoDX_object(BaseAnalysis):
                             "tomerge_length.txt",
                         )
                         with open(tomerge_length_file, "r") as f:
-                            f.readline().strip().split(": ")[1]  # Read but don't assign to unused variable
+                            f.readline().strip().split(": ")[
+                                1
+                            ]  # Read but don't assign to unused variable
 
                         merged_modkit_df = await run.cpu_bound(
                             load_modkit_data, parquet_path
@@ -363,6 +365,8 @@ class NanoDX_object(BaseAnalysis):
             await background_tasks.create(
                 nanodx_bam_background_work(sampleID, parquet_path)
             )
+            # Ensure counters are initialized before accessing them
+            self._initialize_counters(sampleID)
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] -= num_bam_files_seen

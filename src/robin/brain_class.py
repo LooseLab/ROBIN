@@ -2843,6 +2843,13 @@ class BrainMeth:
             state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
             file, filetime, sampleID = self.bamforbigbadmerge.get()
 
+            # Validate sampleID - if None, use a fallback
+            if sampleID is None:
+                sampleID = f"unknown_sample_{os.path.basename(file)}"
+                logging.warning(
+                    f"BAM file {file} has no sampleID in queue, using fallback: {sampleID}"
+                )
+
             # Initialize containers for new sample IDs
             if sampleID not in files_by_sample:
                 files_by_sample[sampleID] = []
@@ -3258,6 +3265,21 @@ class BrainMeth:
                     if not self.force_sampleid
                     else self.force_sampleid
                 )
+
+                # Validate sample_id - if None, use a fallback or skip
+                if sample_id is None:
+                    if self.force_sampleid:
+                        sample_id = self.force_sampleid
+                        logging.warning(
+                            f"BAM file {filename} has no sample_id, using force_sampleid: {sample_id}"
+                        )
+                    else:
+                        # Generate a fallback sample ID based on filename
+                        sample_id = f"unknown_sample_{os.path.basename(filename)}"
+                        logging.warning(
+                            f"BAM file {filename} has no sample_id, using fallback: {sample_id}"
+                        )
+
                 logging.info(f"BAM file {filename} belongs to sample: {sample_id}")
 
                 # Initialize sample-specific counters if they don't exist
@@ -3394,6 +3416,21 @@ class BrainMeth:
                     if not self.force_sampleid
                     else self.force_sampleid
                 )
+
+                # Validate sample_id - if None, use a fallback or skip
+                if sample_id is None:
+                    if self.force_sampleid:
+                        sample_id = self.force_sampleid
+                        logging.warning(
+                            f"BAM file {file[0]} has no sample_id, using force_sampleid: {sample_id}"
+                        )
+                    else:
+                        # Generate a fallback sample ID based on filename
+                        sample_id = f"unknown_sample_{os.path.basename(file[0])}"
+                        logging.warning(
+                            f"BAM file {file[0]} has no sample_id, using fallback: {sample_id}"
+                        )
+
                 logging.info(f"BAM file {file[0]} belongs to sample: {sample_id}")
 
                 # Remove from sample-specific tracking as well

@@ -477,6 +477,9 @@ class Sturgeon_object(BaseAnalysis):
             else:
                 currenttime = timestamp * 1000 if timestamp else time.time() * 1000
 
+            # Set the sampleID for this processing session
+            self.sampleID = sampleID
+
             parquet_path = os.path.join(
                 self.check_and_create_folder(self.output, sampleID),
                 f"{sampleID}.parquet",
@@ -543,6 +546,8 @@ class Sturgeon_object(BaseAnalysis):
             await background_tasks.create(
                 sturgeon_bam_background_work(sampleID, parquet_path)
             )
+            # Ensure counters are initialized before accessing them
+            self._initialize_counters(sampleID)
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] -= num_bam_files_seen

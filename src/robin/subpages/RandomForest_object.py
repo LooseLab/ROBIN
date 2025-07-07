@@ -394,6 +394,8 @@ class RandomForest_object(BaseAnalysis):
                 forest_bam_background_work(sampleID, parquet_path)
             )
             self.running = False
+            # Ensure counters are initialized before accessing them
+            self._initialize_counters(sampleID)
             app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
                 "bams_in_processing"
             ] -= num_bam_files_seen
