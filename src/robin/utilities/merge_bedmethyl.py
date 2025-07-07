@@ -41,6 +41,8 @@ def load_minimal_modkit_data(parquet_path):
     - mod_code: Modification code (required by Sturgeon for filtering)
     - strand: Strand information (required for proper aggregation)
 
+    The function handles both old (18-column) and new (8-column optimized) formats.
+
     Args:
         parquet_path (str): Path to the parquet file containing bedmethyl data
 
@@ -65,43 +67,63 @@ def load_minimal_modkit_data(parquet_path):
     logger.info(f"Parquet file columns: {list(merged_modkit_df.columns)}")
     logger.info(f"Parquet file shape: {merged_modkit_df.shape}")
 
-    # Define minimal columns needed by classifiers with possible variations
-    column_mappings = {
-        "chrom": ["chrom", "chr", "chromosome"],
-        "chromStart": ["chromStart", "start", "start_pos", "pos"],
-        "percent_modified": [
-            "percent_modified",
-            "methylation_percent",
-            "mod_percent",
-            "score",
-        ],
-        "mod_code": ["mod_code", "mod", "modification_code"],
-        "strand": ["strand", "strand_info"],
-    }
+    # Check if this is the new optimized format (8 columns) or old format (18 columns)
+    is_optimized_format = len(merged_modkit_df.columns) <= 10  # 8 essential columns + potential extras
+    
+    if is_optimized_format:
+        logger.info("Detected optimized format - using essential columns directly")
+        # Optimized format already has the essential columns we need
+        essential_columns = ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
+        
+        # Verify all essential columns are present
+        missing_columns = [col for col in essential_columns if col not in merged_modkit_df.columns]
+        if missing_columns:
+            logger.error(f"Missing essential columns in optimized format: {missing_columns}")
+            raise KeyError(f"Missing required columns: {missing_columns}")
+        
+        # Select only the essential columns
+        df = merged_modkit_df[essential_columns].copy()
+        
+    else:
+        logger.info("Detected legacy format - extracting essential columns")
+        # Legacy format - use the original column mapping logic
+        # Define minimal columns needed by classifiers with possible variations
+        column_mappings = {
+            "chrom": ["chrom", "chr", "chromosome"],
+            "chromStart": ["chromStart", "start", "start_pos", "pos"],
+            "percent_modified": [
+                "percent_modified",
+                "methylation_percent",
+                "mod_percent",
+                "score",
+            ],
+            "mod_code": ["mod_code", "mod", "modification_code"],
+            "strand": ["strand", "strand_info"],
+        }
 
-    # Map available columns to our expected names
-    mapped_columns = {}
-    for expected_name, possible_names in column_mappings.items():
-        found = False
-        for possible_name in possible_names:
-            if possible_name in merged_modkit_df.columns:
-                mapped_columns[expected_name] = possible_name
-                found = True
-                break
-        if not found:
-            logger.error(
-                f"Could not find column for {expected_name}. Available columns: {list(merged_modkit_df.columns)}"
-            )
-            raise KeyError(f"Missing required column: {expected_name}")
+        # Map available columns to our expected names
+        mapped_columns = {}
+        for expected_name, possible_names in column_mappings.items():
+            found = False
+            for possible_name in possible_names:
+                if possible_name in merged_modkit_df.columns:
+                    mapped_columns[expected_name] = possible_name
+                    found = True
+                    break
+            if not found:
+                logger.error(
+                    f"Could not find column for {expected_name}. Available columns: {list(merged_modkit_df.columns)}"
+                )
+                raise KeyError(f"Missing required column: {expected_name}")
 
-    # Create a new DataFrame with the expected column names
-    df = merged_modkit_df[
-        [
-            mapped_columns[col]
-            for col in ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
-        ]
-    ].copy()
-    df.columns = ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
+        # Create a new DataFrame with the expected column names
+        df = merged_modkit_df[
+            [
+                mapped_columns[col]
+                for col in ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
+            ]
+        ].copy()
+        df.columns = ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
 
     logger.info(
         f"Loaded minimal bedmethyl data with {len(df)} rows and {len(df.columns)} columns"
@@ -301,10 +323,12 @@ def merge_bedmethyl(dfA: pd.DataFrame, dfB: pd.DataFrame) -> pd.DataFrame:
 
 def parquet_to_bed(parquet_file: str, output_bed: str) -> None:
     """
-    Convert a parquet file containing methylation data to BED format.
+    Convert a parquet file to BED format.
 
-    The function reads a parquet file with methylation data and converts it to
-    standard BED format. The input parquet file should have the following columns:
+    This function handles both old (18-column) and new (8-column optimized) formats.
+    For optimized format, it reconstructs the missing columns before conversion.
+
+    Expected columns in the parquet file:
     - chrom: chromosome name
     - chromStart: start position
     - chromEnd: end position
@@ -334,6 +358,23 @@ def parquet_to_bed(parquet_file: str, output_bed: str) -> None:
     try:
         # Read the parquet file
         df = pd.read_parquet(parquet_file)
+
+        # Check if this is the optimized format (8 columns) or full format (18 columns)
+        is_optimized_format = len(df.columns) <= 10  # 8 essential columns + potential extras
+        
+        if is_optimized_format:
+            logging.info("Detected optimized format - reconstructing full format for BED conversion")
+            # Reconstruct missing columns for BED format
+            df["chromEnd"] = df["chromStart"] + 1
+            df["score_bed"] = df["percent_modified"]
+            df["thickStart"] = df["chromStart"]
+            df["thickEnd"] = df["chromEnd"]
+            df["color"] = "255,0,0"
+            df["n_othermod"] = 0
+            df["n_delete"] = 0
+            df["n_fail"] = 0
+            df["n_diff"] = 0
+            df["n_nocall"] = 0
 
         # Ensure all required columns are present
         required_columns = [
@@ -400,6 +441,8 @@ def reconstruct_full_bedmethyl_data(minimal_df: pd.DataFrame) -> pd.DataFrame:
     structure expected by the RandomForest R script. Missing columns are filled with
     reasonable defaults or calculated values.
 
+    The function handles both old (18-column) and new (8-column optimized) formats.
+
     Args:
         minimal_df (pd.DataFrame): Minimal bedmethyl data with columns:
                                   chrom, chromStart, percent_modified, mod_code, strand
@@ -408,6 +451,11 @@ def reconstruct_full_bedmethyl_data(minimal_df: pd.DataFrame) -> pd.DataFrame:
         pd.DataFrame: Full bedmethyl data with all 18 columns
     """
     try:
+        # Check if this is already in full format
+        if len(minimal_df.columns) >= 15:  # Full format has 18 columns
+            logger.info("Data already in full format, returning as-is")
+            return minimal_df
+        
         # Create a copy of the minimal data
         full_df = minimal_df.copy()
 

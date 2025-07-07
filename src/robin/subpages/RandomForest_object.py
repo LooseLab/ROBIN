@@ -254,7 +254,7 @@ class RandomForest_object(BaseAnalysis):
         if not self.parquetqueue.empty():
             num_bam_files_seen = 0
             while not self.parquetqueue.empty():
-                parquet_path, sampleID, file_count = self.parquetqueue.get()
+                parquet_path, sampleID, file_count = self.parquetqueue.get_nowait()
                 num_bam_files_seen += file_count
                 
             if timestamp:

@@ -35,7 +35,15 @@ def merge_modkit_files(
     num_bam_files_seen: int,
 ) -> None:
     """
-    Merge modkit files with improved caching and error handling.
+    Merge modkit files with optimized column set and improved caching.
+
+    This function uses only essential columns to reduce memory usage and processing time:
+    - chrom, chromStart: Required for all classifiers
+    - mod_code: Required for Sturgeon filtering
+    - strand: Required for proper aggregation
+    - valid_cov: Required for coverage calculation
+    - percent_modified: Primary methylation data (required)
+    - n_mod, n_canonical: Required for modification counts
 
     Args:
         new_files (List[str]): List of new modkit files to merge
@@ -45,47 +53,41 @@ def merge_modkit_files(
         sample_id (str): Sample ID for organizing output files
         output_dir (str): Base output directory
         mnpflex_config (Optional[dict]): Configuration for MNP-FLEX integration
+        num_bam_files_seen (int): Number of BAM files being processed
     """
     # Create sample-specific output directory
     sample_output_dir = os.path.join(output_dir, sample_id)
     os.makedirs(sample_output_dir, exist_ok=True)
 
-    # Define schema
-    cols = [
+    # Define optimized schema with only essential columns
+    essential_cols = [
         "chrom",
-        "chromStart",
-        "chromEnd",
+        "chromStart", 
         "mod_code",
-        "score_bed",
         "strand",
-        "thickStart",
-        "thickEnd",
-        "color",
         "valid_cov",
         "percent_modified",
         "n_mod",
         "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
     ]
-    categorical_cols = ["chrom", "mod_code", "strand", "color"]
-    int_cols = ["thickStart", "thickEnd"]
-    unsigned_int_cols = [
-        "chromStart",
-        "chromEnd",
-        "valid_cov",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
-    float_cols = ["score_bed"]
+    
+    # Columns that can be calculated or have default values
+    calculated_cols = {
+        "chromEnd": lambda df: df["chromStart"] + 1,
+        "score_bed": lambda df: df["percent_modified"],
+        "thickStart": lambda df: df["chromStart"],
+        "thickEnd": lambda df: df["chromStart"] + 1,
+        "color": lambda df: "255,0,0",
+        "n_othermod": lambda df: 0,
+        "n_delete": lambda df: 0,
+        "n_fail": lambda df: 0,
+        "n_diff": lambda df: 0,
+        "n_nocall": lambda df: 0,
+    }
+    
+    categorical_cols = ["chrom", "mod_code", "strand"]
+    unsigned_int_cols = ["chromStart", "valid_cov", "n_mod", "n_canonical"]
+    float_cols = ["percent_modified"]
 
     try:
         # Enable StringCache for consistent categorical encoding
@@ -139,25 +141,33 @@ def merge_modkit_files(
         for bed in new_files:
             try:
                 # Read with pandas first to handle regex separator
+                # Read all 18 columns from the input file
+                full_cols = [
+                    "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
+                    "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
+                    "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
+                ]
+                
                 df = pd.read_csv(
                     bed,
                     sep="\s+",
                     header=None,
-                    names=cols,
-                    dtype={c: str for c in categorical_cols},
+                    names=full_cols,
+                    dtype={c: str for c in ["chrom", "mod_code", "strand", "color"]},
                 )
 
                 # Validate required columns
-                missing_cols = set(cols) - set(df.columns)
+                missing_cols = set(full_cols) - set(df.columns)
                 if missing_cols:
                     raise ValueError(f"Missing required columns: {missing_cols}")
 
+                # Extract only essential columns for processing
+                df_essential = df[essential_cols].copy()
+
                 # Convert to Polars for efficient processing
-                pl_df = pl.from_pandas(df)
+                pl_df = pl.from_pandas(df_essential)
 
                 # Convert numeric columns with proper error handling
-                for c in int_cols:
-                    pl_df = pl_df.with_columns(pl.col(c).cast(pl.Int64, strict=False))
                 for c in unsigned_int_cols:
                     pl_df = pl_df.with_columns(pl.col(c).cast(pl.UInt32, strict=False))
                 for c in float_cols:
@@ -166,8 +176,11 @@ def merge_modkit_files(
                 # Filter using PyRanges
                 # Rename columns using Polars syntax
                 pr_df = pl_df.rename(
-                    {"chrom": "Chromosome", "chromStart": "Start", "chromEnd": "End"}
+                    {"chrom": "Chromosome", "chromStart": "Start"}
                 )
+                # Add chromEnd for filtering (calculate from chromStart)
+                pr_df = pr_df.with_columns((pl.col("Start") + 1).alias("End"))
+                
                 # Convert to pandas for PyRanges
                 pr_df_pandas = pr_df.to_pandas()
                 gr = pr.PyRanges(pr_df_pandas[["Chromosome", "Start", "End"]])
@@ -177,11 +190,10 @@ def merge_modkit_files(
                         columns={
                             "Chromosome": "chrom",
                             "Start": "chromStart",
-                            "End": "chromEnd",
                         }
                     ),
                     pl_df.to_pandas(),
-                    on=["chrom", "chromStart", "chromEnd"],
+                    on=["chrom", "chromStart"],
                     how="inner",
                 )
                 new_frames.append(filt)
@@ -209,35 +221,32 @@ def merge_modkit_files(
                 'bam_file_count': cumulative_bam_file_count,
                 'last_updated': datetime.now().isoformat(),
                 'sample_id': sample_id,
-                'files_added_in_this_update': num_bam_files_seen
+                'files_added_in_this_update': num_bam_files_seen,
+                'column_format': 'optimized'  # Mark as optimized format
             }
             metadata_file = output_file.replace('.parquet', '_metadata.json')
             with open(metadata_file, 'w') as f:
                 json.dump(metadata, f, indent=2)
             
-            logging.info(f"Created new parquet file with {cumulative_bam_file_count} cumulative BAM files")
+            logging.info(f"Created new optimized parquet file with {cumulative_bam_file_count} cumulative BAM files")
             return
 
         # Process existing data in chunks
         existing_df = pl.scan_parquet(existing_file)
-
-        # Combine and aggregate using Polars lazy evaluation
-        count_cols = [
-            "n_mod",
-            "n_canonical",
-            "n_othermod",
-            "n_delete",
-            "n_fail",
-            "n_diff",
-            "n_nocall",
-            "valid_cov",
-        ]
 
         # Convert new data to Polars
         pl_new_df = pl.from_pandas(new_df)
 
         # Convert existing data to regular DataFrame for concatenation
         existing_df = existing_df.collect()
+
+        # Check if existing file is in old format (18 columns) or new format (8 columns)
+        is_old_format = len(existing_df.columns) > 10  # More than 10 columns indicates old format
+        
+        if is_old_format:
+            # Convert old format to new format by selecting only essential columns
+            logging.info("Converting existing file from old format to optimized format")
+            existing_df = existing_df.select(essential_cols)
 
         # Ensure consistent data types and column order
         for c in categorical_cols:
@@ -259,24 +268,16 @@ def merge_modkit_files(
         # Combine existing and new data
         combined = pl.concat([existing_df, pl_new_df])
 
-        # Define aggregation expressions
+        # Define aggregation expressions for essential columns only
         exprs = [
             pl.first("mod_code"),
-            pl.mean("score_bed").alias("score_bed"),
             pl.first("strand"),
-            pl.first("thickStart"),
-            pl.first("thickEnd"),
-            pl.first("color"),
-            *[pl.sum(c).alias(c) for c in count_cols],
+            pl.mean("percent_modified").alias("percent_modified"),
+            *[pl.sum(c).alias(c) for c in ["valid_cov", "n_mod", "n_canonical"]],
         ]
 
         # Perform groupby and aggregation
-        grouped = combined.group_by(["chrom", "chromStart", "chromEnd"]).agg(exprs)
-
-        # Calculate percent_modified with error handling
-        grouped = grouped.with_columns(
-            [(pl.col("n_mod") / pl.col("valid_cov") * 100).alias("percent_modified")]
-        )
+        grouped = combined.group_by(["chrom", "chromStart"]).agg(exprs)
 
         # Save using Polars' efficient parquet writer
         grouped.write_parquet(output_file)
@@ -286,19 +287,21 @@ def merge_modkit_files(
             'bam_file_count': cumulative_bam_file_count,
             'last_updated': datetime.now().isoformat(),
             'sample_id': sample_id,
-            'files_added_in_this_update': num_bam_files_seen
+            'files_added_in_this_update': num_bam_files_seen,
+            'column_format': 'optimized'  # Mark as optimized format
         }
         metadata_file = output_file.replace('.parquet', '_metadata.json')
         with open(metadata_file, 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        logging.info(f"Updated parquet file with {cumulative_bam_file_count} cumulative BAM files (added {num_bam_files_seen} in this update)")
+        logging.info(f"Updated optimized parquet file with {cumulative_bam_file_count} cumulative BAM files (added {num_bam_files_seen} in this update)")
 
         # If we are running with mnp_flex, send the file to the server
         if mnpflex_config["mnpuser"] and mnpflex_config["mnppass"]:
             logging.info("Prepare data for mnpflex")
-            test_df = load_modkit_data(output_file)
-            logging.info(f"Loaded modkit data with shape: {test_df.shape}")
+            # Load the optimized data and reconstruct full format for MNP-FLEX compatibility
+            test_df = reconstruct_full_bedmethyl_for_mnpflex(output_file)
+            logging.info(f"Reconstructed full bedmethyl data with shape: {test_df.shape}")
 
             test_df.rename(
                 columns={
@@ -467,6 +470,62 @@ def merge_modkit_files(
                 logging.error(f"Error removing cache file: {str(e)}")
         # Disable StringCache
         pl.disable_string_cache()
+
+
+def reconstruct_full_bedmethyl_for_mnpflex(parquet_file_path: str) -> pd.DataFrame:
+    """
+    Reconstruct full 18-column bedmethyl format from optimized parquet file for MNP-FLEX compatibility.
+    
+    This function takes the optimized 8-column parquet file and reconstructs the full
+    18-column format expected by MNP-FLEX integration.
+    
+    Args:
+        parquet_file_path (str): Path to the optimized parquet file
+        
+    Returns:
+        pd.DataFrame: Full 18-column bedmethyl data compatible with MNP-FLEX
+    """
+    try:
+        # Read the optimized parquet file
+        df = pd.read_parquet(parquet_file_path)
+        
+        # Check if this is already in full format
+        if len(df.columns) >= 15:  # Full format has 18 columns
+            logging.info("Parquet file already in full format, returning as-is")
+            return df
+        
+        # Reconstruct missing columns
+        logging.info("Reconstructing full bedmethyl format from optimized data")
+        
+        # Add calculated columns
+        df["chromEnd"] = df["chromStart"] + 1
+        df["score_bed"] = df["percent_modified"]
+        df["thickStart"] = df["chromStart"]
+        df["thickEnd"] = df["chromEnd"]
+        df["color"] = "255,0,0"
+        
+        # Add columns with default values
+        df["n_othermod"] = 0
+        df["n_delete"] = 0
+        df["n_fail"] = 0
+        df["n_diff"] = 0
+        df["n_nocall"] = 0
+        
+        # Ensure correct column order
+        full_columns = [
+            "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
+            "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
+            "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
+        ]
+        
+        df = df[full_columns]
+        
+        logging.info(f"Reconstructed full bedmethyl data with {len(df)} rows and {len(df.columns)} columns")
+        return df
+        
+    except Exception as e:
+        logging.error(f"Error reconstructing full bedmethyl data: {str(e)}")
+        raise
 
 
 # Pre-compile default count dictionary to avoid repeated creation

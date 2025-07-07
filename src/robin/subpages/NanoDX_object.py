@@ -278,7 +278,10 @@ class NanoDX_object(BaseAnalysis):
             logger.error(f"Error setting process state: {e}")
 
         if not self.parquetqueue.empty():
-            parquet_path, sampleID, num_bam_files_seen = self.parquetqueue.get()
+            num_bam_files_seen = 0
+            while not self.parquetqueue.empty():
+                parquet_path, sampleID, file_count = self.parquetqueue.get_nowait()
+                num_bam_files_seen += file_count
             if timestamp:
                 currenttime = timestamp * 1000
             else:
