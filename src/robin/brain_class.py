@@ -416,7 +416,7 @@ class BrainMeth:
             logging.info("Initializing processing queues")
             self.bam_tracking = Queue()
             self.bamforcns = Queue()
-            
+
             self.bamforcnv = Queue()
             self.bamfortargetcoverage = Queue()
             self.bamformgmt = Queue()
@@ -2842,7 +2842,7 @@ class BrainMeth:
         while self.bamforbigbadmerge.qsize() > 0:
             state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
             file, filetime, sampleID = self.bamforbigbadmerge.get()
-            
+
             # Initialize containers for new sample IDs
             if sampleID not in files_by_sample:
                 files_by_sample[sampleID] = []
@@ -2861,12 +2861,16 @@ class BrainMeth:
                     app.storage.general[self.mainuuid][sampleID] = {}
 
                 # Initialize counters for this sample if they don't exist
-                
+
                 for analysis in analyses:
                     if analysis.lower() not in self.exclude:
                         if analysis not in app.storage.general[self.mainuuid][sampleID]:
                             app.storage.general[self.mainuuid][sampleID][analysis] = {}
-                            app.storage.general[self.mainuuid][sampleID][analysis]["counters"]  = Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
+                            app.storage.general[self.mainuuid][sampleID][analysis][
+                                "counters"
+                            ] = Counter(
+                                bam_count=0, bam_processed=0, bams_in_processing=0
+                            )
                         elif (
                             "counters"
                             not in app.storage.general[self.mainuuid][sampleID][
@@ -2875,11 +2879,15 @@ class BrainMeth:
                         ):
                             app.storage.general[self.mainuuid][sampleID][analysis][
                                 "counters"
-                            ] = Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
-                        
+                            ] = Counter(
+                                bam_count=0, bam_processed=0, bams_in_processing=0
+                            )
+
             for analysis in analyses:
-                    if analysis.lower() not in self.exclude:
-                        app.storage.general[self.mainuuid][sampleID][analysis]["counters"]["bam_count"] += 1
+                if analysis.lower() not in self.exclude:
+                    app.storage.general[self.mainuuid][sampleID][analysis]["counters"][
+                        "bam_count"
+                    ] += 1
             # Add file to the list for this sample
             files_by_sample[sampleID].append(file)
             latest_files[sampleID] = max(latest_files[sampleID], filetime or 0)
@@ -2917,8 +2925,6 @@ class BrainMeth:
                     # Clear processed files
                     files_by_sample[sample_id] = []
                     latest_files[sample_id] = 0
-                
-                
 
         # Process remaining files for each sample
         for sample_id, files in files_by_sample.items():
@@ -3044,8 +3050,8 @@ class BrainMeth:
             # Write the updated length of the tomerge list to the output file
             with open(tomerge_length_file, "w") as f:
                 f.write(f"Length of tomerge list: {new_count}\n")
-                
-            if len(tomerge)>1:
+
+            if len(tomerge) > 1:
                 tempbam = tempfile.NamedTemporaryFile(
                     dir=self.check_and_create_folder(self.output, sampleID),
                     suffix=".bam",
@@ -3084,10 +3090,10 @@ class BrainMeth:
                 dir=self.check_and_create_folder(self.output, sampleID)
             ):
                 try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
-                    #print(f"Running modkit on {sortfile}")
+                    # print(f"Running modkit on {sortfile}")
                     # await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
                     await run.cpu_bound(run_matkit, sortfile, temp.name, self.threads)
-                    #print("Modkit run complete")
+                    # print("Modkit run complete")
                     # run_modkit(sortfile, temp.name, self.threads)
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(
@@ -3118,14 +3124,22 @@ class BrainMeth:
                     for analysis in analyses:
                         if analysis.lower() not in self.exclude:
                             if analysis == "STURGEON":
-                                self.parquetqueuesturgeon.put((parquet_path, sampleID, num_bam_files_seen))
+                                self.parquetqueuesturgeon.put(
+                                    (parquet_path, sampleID, num_bam_files_seen)
+                                )
                             elif analysis == "NANODX":
-                                self.parquetqueuenanodx.put((parquet_path, sampleID, num_bam_files_seen))
+                                self.parquetqueuenanodx.put(
+                                    (parquet_path, sampleID, num_bam_files_seen)
+                                )
                             elif analysis == "PANNANODX":
-                                self.parquetqueuepannanodx.put((parquet_path, sampleID, num_bam_files_seen))
+                                self.parquetqueuepannanodx.put(
+                                    (parquet_path, sampleID, num_bam_files_seen)
+                                )
                             elif analysis == "FOREST":
-                                self.parquetqueuecns.put((parquet_path, sampleID, num_bam_files_seen))
-                    
+                                self.parquetqueuecns.put(
+                                    (parquet_path, sampleID, num_bam_files_seen)
+                                )
+
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(
                         "Process pool was terminated. This is normal during shutdown."
@@ -3170,7 +3184,6 @@ class BrainMeth:
                             counters["bams_in_processing"] = max(
                                 0, counters["bams_in_processing"] - num_bam_files_seen
                             )
-                            
 
                             logging.debug(
                                 f"Updated {analysis} processed counter for {sampleID} by {num_bam_files_seen}"

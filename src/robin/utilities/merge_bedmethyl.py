@@ -68,22 +68,34 @@ def load_minimal_modkit_data(parquet_path):
     logger.info(f"Parquet file shape: {merged_modkit_df.shape}")
 
     # Check if this is the new optimized format (8 columns) or old format (18 columns)
-    is_optimized_format = len(merged_modkit_df.columns) <= 10  # 8 essential columns + potential extras
-    
+    is_optimized_format = (
+        len(merged_modkit_df.columns) <= 10
+    )  # 8 essential columns + potential extras
+
     if is_optimized_format:
         logger.info("Detected optimized format - using essential columns directly")
         # Optimized format already has the essential columns we need
-        essential_columns = ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
-        
+        essential_columns = [
+            "chrom",
+            "chromStart",
+            "percent_modified",
+            "mod_code",
+            "strand",
+        ]
+
         # Verify all essential columns are present
-        missing_columns = [col for col in essential_columns if col not in merged_modkit_df.columns]
+        missing_columns = [
+            col for col in essential_columns if col not in merged_modkit_df.columns
+        ]
         if missing_columns:
-            logger.error(f"Missing essential columns in optimized format: {missing_columns}")
+            logger.error(
+                f"Missing essential columns in optimized format: {missing_columns}"
+            )
             raise KeyError(f"Missing required columns: {missing_columns}")
-        
+
         # Select only the essential columns
         df = merged_modkit_df[essential_columns].copy()
-        
+
     else:
         logger.info("Detected legacy format - extracting essential columns")
         # Legacy format - use the original column mapping logic
@@ -120,7 +132,13 @@ def load_minimal_modkit_data(parquet_path):
         df = merged_modkit_df[
             [
                 mapped_columns[col]
-                for col in ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
+                for col in [
+                    "chrom",
+                    "chromStart",
+                    "percent_modified",
+                    "mod_code",
+                    "strand",
+                ]
             ]
         ].copy()
         df.columns = ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
@@ -360,10 +378,14 @@ def parquet_to_bed(parquet_file: str, output_bed: str) -> None:
         df = pd.read_parquet(parquet_file)
 
         # Check if this is the optimized format (8 columns) or full format (18 columns)
-        is_optimized_format = len(df.columns) <= 10  # 8 essential columns + potential extras
-        
+        is_optimized_format = (
+            len(df.columns) <= 10
+        )  # 8 essential columns + potential extras
+
         if is_optimized_format:
-            logging.info("Detected optimized format - reconstructing full format for BED conversion")
+            logging.info(
+                "Detected optimized format - reconstructing full format for BED conversion"
+            )
             # Reconstruct missing columns for BED format
             df["chromEnd"] = df["chromStart"] + 1
             df["score_bed"] = df["percent_modified"]
@@ -455,7 +477,7 @@ def reconstruct_full_bedmethyl_data(minimal_df: pd.DataFrame) -> pd.DataFrame:
         if len(minimal_df.columns) >= 15:  # Full format has 18 columns
             logger.info("Data already in full format, returning as-is")
             return minimal_df
-        
+
         # Create a copy of the minimal data
         full_df = minimal_df.copy()
 

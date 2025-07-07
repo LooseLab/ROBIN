@@ -47,6 +47,7 @@ from robin.core.state import state, ProcessState
 from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
+from robin.subpages.Fusion_object import build_breakpoint_graph
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -752,7 +753,6 @@ class StructuralVariantAnalyzer:
             return pd.DataFrame()
 
         # Pre-allocate lists for better memory efficiency
-        estimated_capacity = len(df) // 2
         link_data = {
             "qnames": [],
             "rname1s": [],
@@ -1490,21 +1490,7 @@ def important_function(combined_df):
     return bed_lines
 
 
-def has_supplementary(bam_file_path):
-    """
-    Quickly checks if a BAM file has any supplementary alignments.
 
-    Parameters:
-        bam_file_path (str): Path to the BAM file.
-
-    Returns:
-        bool: True if supplementary alignment is found, else False.
-    """
-    with pysam.AlignmentFile(bam_file_path, "rb", check_sq=False) as bam:
-        for read in bam.fetch(until_eof=True):
-            if read.is_supplementary:
-                return True
-    return False
 
 
 class FusionObject(BaseAnalysis):

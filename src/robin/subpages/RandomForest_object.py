@@ -256,7 +256,7 @@ class RandomForest_object(BaseAnalysis):
             while not self.parquetqueue.empty():
                 parquet_path, sampleID, file_count = self.parquetqueue.get_nowait()
                 num_bam_files_seen += file_count
-                
+
             if timestamp:
                 currenttime = timestamp * 1000
             else:
@@ -266,7 +266,7 @@ class RandomForest_object(BaseAnalysis):
                 self.check_and_create_folder(self.output, sampleID),
                 f"{sampleID}.parquet",
             )
-            
+
             async def forest_bam_background_work(sampleID, parquet_path):
                 try:
                     if self.check_file_time(parquet_path):
@@ -390,13 +390,16 @@ class RandomForest_object(BaseAnalysis):
                 except Exception as e:
                     logger.error(f"Error in process_bam: {str(e)}", exc_info=True)
 
-                    
             await background_tasks.create(
                 forest_bam_background_work(sampleID, parquet_path)
             )
             self.running = False
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bams_in_processing"] -= num_bam_files_seen
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_processed"] += num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bams_in_processing"
+            ] -= num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_processed"
+            ] += num_bam_files_seen
 
     async def stop_analysis(self):
         """Stop the Random Forest analysis."""

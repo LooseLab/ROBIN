@@ -306,7 +306,7 @@ def predict_sample_from_dataframe(
     model_path = get_model_path(modelfile)
     if not validate_model_file(modelfile):
         raise ValueError(f"Invalid model file: {modelfile}")
-    
+
     logging.info(f"Loading model from {modelfile}...")
     inference_session, probes_df, decoding_dict, temperatures, merge_dict = load_model(
         model_path
@@ -482,7 +482,6 @@ class Sturgeon_object(BaseAnalysis):
                 f"{sampleID}.parquet",
             )
 
-            
             async def sturgeon_bam_background_work(sampleID, parquet_path):
                 try:
                     if self.check_file_time(parquet_path):
@@ -491,9 +490,7 @@ class Sturgeon_object(BaseAnalysis):
                             "tomerge_length.txt",
                         )
                         with open(tomerge_length_file, "r") as f:
-                            tomerge_length = int(
-                                f.readline().strip().split(": ")[1]
-                            )
+                            tomerge_length = int(f.readline().strip().split(": ")[1])
 
                         merged_modkit_df = await run.cpu_bound(
                             load_modkit_data, parquet_path
@@ -534,9 +531,7 @@ class Sturgeon_object(BaseAnalysis):
                             )
                             self.sturgeon_df_store[sampleID].to_csv(
                                 os.path.join(
-                                    self.check_and_create_folder(
-                                        self.output, sampleID
-                                    ),
+                                    self.check_and_create_folder(self.output, sampleID),
                                     "sturgeon_scores.csv",
                                 )
                             )
@@ -548,12 +543,14 @@ class Sturgeon_object(BaseAnalysis):
             await background_tasks.create(
                 sturgeon_bam_background_work(sampleID, parquet_path)
             )
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bams_in_processing"] -= num_bam_files_seen
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_processed"] += num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bams_in_processing"
+            ] -= num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_processed"
+            ] += num_bam_files_seen
 
         state.set_process_state("Sturgeon Analysis", ProcessState.WAITING_FOR_DATA)
-        
-        
 
     async def stop_analysis(self):
         """Stop the Sturgeon analysis."""

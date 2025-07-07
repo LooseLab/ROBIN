@@ -46,7 +46,7 @@ Usage:
 
 from __future__ import annotations
 from robin.subpages.base_analysis import BaseAnalysis, BaseVis
-from nicegui import ui, app, run,background_tasks
+from nicegui import ui, app, run, background_tasks
 import time
 import os
 import sys
@@ -55,7 +55,6 @@ from pathlib import Path
 import numpy as np
 import pysam
 import pandas as pd
-import tempfile
 from typing import List, Tuple, Optional, Dict, Any
 from robin import models, theme, resources
 import logging
@@ -282,7 +281,7 @@ class NanoDX_object(BaseAnalysis):
             while not self.parquetqueue.empty():
                 parquet_path, sampleID, file_count = self.parquetqueue.get_nowait()
                 num_bam_files_seen += file_count
-                
+
             if timestamp:
                 currenttime = timestamp * 1000
             else:
@@ -292,7 +291,7 @@ class NanoDX_object(BaseAnalysis):
                 self.check_and_create_folder(self.output, sampleID),
                 f"{sampleID}.parquet",
             )
-            
+
             async def nanodx_bam_background_work(sampleID, parquet_path):
                 try:
                     if self.check_file_time(parquet_path):
@@ -301,7 +300,7 @@ class NanoDX_object(BaseAnalysis):
                             "tomerge_length.txt",
                         )
                         with open(tomerge_length_file, "r") as f:
-                            tomerge_length = int(f.readline().strip().split(": ")[1])
+                            f.readline().strip().split(": ")[1]  # Read but don't assign to unused variable
 
                         merged_modkit_df = await run.cpu_bound(
                             load_modkit_data, parquet_path
@@ -364,8 +363,12 @@ class NanoDX_object(BaseAnalysis):
             await background_tasks.create(
                 nanodx_bam_background_work(sampleID, parquet_path)
             )
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bams_in_processing"] -= num_bam_files_seen
-            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_processed"] += num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bams_in_processing"
+            ] -= num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_processed"
+            ] += num_bam_files_seen
 
         state.set_process_state(f"{self.name} Analysis", ProcessState.WAITING_FOR_DATA)
 

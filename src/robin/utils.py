@@ -1,8 +1,4 @@
-from multiprocessing import Manager
-from queue import Empty, Queue
-from typing import Callable, Generator, List, Optional
-from nicegui import background_tasks, run
-import asyncio
+from typing import List, Optional
 import gc
 import os
 import logging
@@ -16,13 +12,12 @@ import polars as pl
 import pyranges as pr
 import pysam
 from alive_progress import alive_bar
-from collections import defaultdict
 from tqdm import tqdm
 from robin.utilities.ReadBam import ReadBam
 from robin.utilities.mnp_flex import APIClient as MnpFlexClient
 from robin import resources
-from robin.subpages.RandomForest_object import load_modkit_data
 import json
+
 
 def merge_modkit_files(
     new_files: List[str],
@@ -62,7 +57,7 @@ def merge_modkit_files(
     # Define optimized schema with only essential columns
     essential_cols = [
         "chrom",
-        "chromStart", 
+        "chromStart",
         "mod_code",
         "strand",
         "valid_cov",
@@ -70,21 +65,7 @@ def merge_modkit_files(
         "n_mod",
         "n_canonical",
     ]
-    
-    # Columns that can be calculated or have default values
-    calculated_cols = {
-        "chromEnd": lambda df: df["chromStart"] + 1,
-        "score_bed": lambda df: df["percent_modified"],
-        "thickStart": lambda df: df["chromStart"],
-        "thickEnd": lambda df: df["chromStart"] + 1,
-        "color": lambda df: "255,0,0",
-        "n_othermod": lambda df: 0,
-        "n_delete": lambda df: 0,
-        "n_fail": lambda df: 0,
-        "n_diff": lambda df: 0,
-        "n_nocall": lambda df: 0,
-    }
-    
+
     categorical_cols = ["chrom", "mod_code", "strand"]
     unsigned_int_cols = ["chromStart", "valid_cov", "n_mod", "n_canonical"]
     float_cols = ["percent_modified"]
@@ -95,25 +76,29 @@ def merge_modkit_files(
 
         # Track cumulative BAM file count
         cumulative_bam_file_count = 0
-        
+
         # Check if existing file has metadata about BAM file count
         if os.path.exists(existing_file):
             try:
                 # Read existing metadata
-                metadata_file = existing_file.replace('.parquet', '_metadata.json')
+                metadata_file = existing_file.replace(".parquet", "_metadata.json")
                 if os.path.exists(metadata_file):
-                    with open(metadata_file, 'r') as f:
+                    with open(metadata_file, "r") as f:
                         metadata = json.load(f)
-                        cumulative_bam_file_count = metadata.get('bam_file_count', 0)
-                        logging.info(f"Found existing metadata with {cumulative_bam_file_count} BAM files")
+                        cumulative_bam_file_count = metadata.get("bam_file_count", 0)
+                        logging.info(
+                            f"Found existing metadata with {cumulative_bam_file_count} BAM files"
+                        )
             except Exception as e:
                 logging.warning(f"Could not read existing metadata: {str(e)}")
                 cumulative_bam_file_count = 0
-        
+
         # Add the number of new BAM files being processed
         cumulative_bam_file_count += num_bam_files_seen
-        
-        logging.info(f"Total cumulative BAM files contributing to parquet: {cumulative_bam_file_count} (added {num_bam_files_seen} new files)")
+
+        logging.info(
+            f"Total cumulative BAM files contributing to parquet: {cumulative_bam_file_count} (added {num_bam_files_seen} new files)"
+        )
 
         # Cache or build PyRanges filter with improved caching
         cache_path = os.path.join(
@@ -143,11 +128,26 @@ def merge_modkit_files(
                 # Read with pandas first to handle regex separator
                 # Read all 18 columns from the input file
                 full_cols = [
-                    "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
-                    "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
-                    "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
+                    "chrom",
+                    "chromStart",
+                    "chromEnd",
+                    "mod_code",
+                    "score_bed",
+                    "strand",
+                    "thickStart",
+                    "thickEnd",
+                    "color",
+                    "valid_cov",
+                    "percent_modified",
+                    "n_mod",
+                    "n_canonical",
+                    "n_othermod",
+                    "n_delete",
+                    "n_fail",
+                    "n_diff",
+                    "n_nocall",
                 ]
-                
+
                 df = pd.read_csv(
                     bed,
                     sep="\s+",
@@ -175,12 +175,10 @@ def merge_modkit_files(
 
                 # Filter using PyRanges
                 # Rename columns using Polars syntax
-                pr_df = pl_df.rename(
-                    {"chrom": "Chromosome", "chromStart": "Start"}
-                )
+                pr_df = pl_df.rename({"chrom": "Chromosome", "chromStart": "Start"})
                 # Add chromEnd for filtering (calculate from chromStart)
                 pr_df = pr_df.with_columns((pl.col("Start") + 1).alias("End"))
-                
+
                 # Convert to pandas for PyRanges
                 pr_df_pandas = pr_df.to_pandas()
                 gr = pr.PyRanges(pr_df_pandas[["Chromosome", "Start", "End"]])
@@ -215,20 +213,22 @@ def merge_modkit_files(
         if not os.path.exists(existing_file):
             pl_df = pl.from_pandas(new_df)
             pl_df.write_parquet(output_file)
-            
+
             # Save metadata with cumulative BAM file count
             metadata = {
-                'bam_file_count': cumulative_bam_file_count,
-                'last_updated': datetime.now().isoformat(),
-                'sample_id': sample_id,
-                'files_added_in_this_update': num_bam_files_seen,
-                'column_format': 'optimized'  # Mark as optimized format
+                "bam_file_count": cumulative_bam_file_count,
+                "last_updated": datetime.now().isoformat(),
+                "sample_id": sample_id,
+                "files_added_in_this_update": num_bam_files_seen,
+                "column_format": "optimized",  # Mark as optimized format
             }
-            metadata_file = output_file.replace('.parquet', '_metadata.json')
-            with open(metadata_file, 'w') as f:
+            metadata_file = output_file.replace(".parquet", "_metadata.json")
+            with open(metadata_file, "w") as f:
                 json.dump(metadata, f, indent=2)
-            
-            logging.info(f"Created new optimized parquet file with {cumulative_bam_file_count} cumulative BAM files")
+
+            logging.info(
+                f"Created new optimized parquet file with {cumulative_bam_file_count} cumulative BAM files"
+            )
             return
 
         # Process existing data in chunks
@@ -241,8 +241,10 @@ def merge_modkit_files(
         existing_df = existing_df.collect()
 
         # Check if existing file is in old format (18 columns) or new format (8 columns)
-        is_old_format = len(existing_df.columns) > 10  # More than 10 columns indicates old format
-        
+        is_old_format = (
+            len(existing_df.columns) > 10
+        )  # More than 10 columns indicates old format
+
         if is_old_format:
             # Convert old format to new format by selecting only essential columns
             logging.info("Converting existing file from old format to optimized format")
@@ -281,27 +283,31 @@ def merge_modkit_files(
 
         # Save using Polars' efficient parquet writer
         grouped.write_parquet(output_file)
-        
+
         # Save metadata with updated cumulative BAM file count
         metadata = {
-            'bam_file_count': cumulative_bam_file_count,
-            'last_updated': datetime.now().isoformat(),
-            'sample_id': sample_id,
-            'files_added_in_this_update': num_bam_files_seen,
-            'column_format': 'optimized'  # Mark as optimized format
+            "bam_file_count": cumulative_bam_file_count,
+            "last_updated": datetime.now().isoformat(),
+            "sample_id": sample_id,
+            "files_added_in_this_update": num_bam_files_seen,
+            "column_format": "optimized",  # Mark as optimized format
         }
-        metadata_file = output_file.replace('.parquet', '_metadata.json')
-        with open(metadata_file, 'w') as f:
+        metadata_file = output_file.replace(".parquet", "_metadata.json")
+        with open(metadata_file, "w") as f:
             json.dump(metadata, f, indent=2)
-        
-        logging.info(f"Updated optimized parquet file with {cumulative_bam_file_count} cumulative BAM files (added {num_bam_files_seen} in this update)")
+
+        logging.info(
+            f"Updated optimized parquet file with {cumulative_bam_file_count} cumulative BAM files (added {num_bam_files_seen} in this update)"
+        )
 
         # If we are running with mnp_flex, send the file to the server
         if mnpflex_config["mnpuser"] and mnpflex_config["mnppass"]:
             logging.info("Prepare data for mnpflex")
             # Load the optimized data and reconstruct full format for MNP-FLEX compatibility
             test_df = reconstruct_full_bedmethyl_for_mnpflex(output_file)
-            logging.info(f"Reconstructed full bedmethyl data with shape: {test_df.shape}")
+            logging.info(
+                f"Reconstructed full bedmethyl data with shape: {test_df.shape}"
+            )
 
             test_df.rename(
                 columns={
@@ -475,54 +481,71 @@ def merge_modkit_files(
 def reconstruct_full_bedmethyl_for_mnpflex(parquet_file_path: str) -> pd.DataFrame:
     """
     Reconstruct full 18-column bedmethyl format from optimized parquet file for MNP-FLEX compatibility.
-    
+
     This function takes the optimized 8-column parquet file and reconstructs the full
     18-column format expected by MNP-FLEX integration.
-    
+
     Args:
         parquet_file_path (str): Path to the optimized parquet file
-        
+
     Returns:
         pd.DataFrame: Full 18-column bedmethyl data compatible with MNP-FLEX
     """
     try:
         # Read the optimized parquet file
         df = pd.read_parquet(parquet_file_path)
-        
+
         # Check if this is already in full format
         if len(df.columns) >= 15:  # Full format has 18 columns
             logging.info("Parquet file already in full format, returning as-is")
             return df
-        
+
         # Reconstruct missing columns
         logging.info("Reconstructing full bedmethyl format from optimized data")
-        
+
         # Add calculated columns
         df["chromEnd"] = df["chromStart"] + 1
         df["score_bed"] = df["percent_modified"]
         df["thickStart"] = df["chromStart"]
         df["thickEnd"] = df["chromEnd"]
         df["color"] = "255,0,0"
-        
+
         # Add columns with default values
         df["n_othermod"] = 0
         df["n_delete"] = 0
         df["n_fail"] = 0
         df["n_diff"] = 0
         df["n_nocall"] = 0
-        
+
         # Ensure correct column order
         full_columns = [
-            "chrom", "chromStart", "chromEnd", "mod_code", "score_bed", "strand",
-            "thickStart", "thickEnd", "color", "valid_cov", "percent_modified",
-            "n_mod", "n_canonical", "n_othermod", "n_delete", "n_fail", "n_diff", "n_nocall"
+            "chrom",
+            "chromStart",
+            "chromEnd",
+            "mod_code",
+            "score_bed",
+            "strand",
+            "thickStart",
+            "thickEnd",
+            "color",
+            "valid_cov",
+            "percent_modified",
+            "n_mod",
+            "n_canonical",
+            "n_othermod",
+            "n_delete",
+            "n_fail",
+            "n_diff",
+            "n_nocall",
         ]
-        
+
         df = df[full_columns]
-        
-        logging.info(f"Reconstructed full bedmethyl data with {len(df)} rows and {len(df.columns)} columns")
+
+        logging.info(
+            f"Reconstructed full bedmethyl data with {len(df)} rows and {len(df.columns)} columns"
+        )
         return df
-        
+
     except Exception as e:
         logging.error(f"Error reconstructing full bedmethyl data: {str(e)}")
         raise
@@ -1087,7 +1110,7 @@ def process_bam_counts_improved(
                                     )
                                     if expected_base and ref_base != expected_base:
                                         continue
-                                except:
+                                except Exception:
                                     continue
 
                             site_key = (rp, strand, mod_code)
@@ -1177,19 +1200,19 @@ def process_bam_counts_improved(
 def get_bam_file_count(parquet_file_path: str) -> int:
     """
     Get the cumulative number of BAM files that have contributed to a parquet file.
-    
+
     Args:
         parquet_file_path (str): Path to the parquet file
-        
+
     Returns:
         int: Cumulative number of BAM files that have contributed to the parquet file
     """
     try:
-        metadata_file = parquet_file_path.replace('.parquet', '_metadata.json')
+        metadata_file = parquet_file_path.replace(".parquet", "_metadata.json")
         if os.path.exists(metadata_file):
-            with open(metadata_file, 'r') as f:
+            with open(metadata_file, "r") as f:
                 metadata = json.load(f)
-                return metadata.get('bam_file_count', 0)
+                return metadata.get("bam_file_count", 0)
         else:
             logging.warning(f"No metadata file found for {parquet_file_path}")
             return 0
@@ -1201,17 +1224,17 @@ def get_bam_file_count(parquet_file_path: str) -> int:
 def get_parquet_metadata(parquet_file_path: str) -> dict:
     """
     Get all metadata associated with a parquet file.
-    
+
     Args:
         parquet_file_path (str): Path to the parquet file
-        
+
     Returns:
         dict: Dictionary containing metadata (bam_file_count, last_updated, sample_id, files_added_in_this_update)
     """
     try:
-        metadata_file = parquet_file_path.replace('.parquet', '_metadata.json')
+        metadata_file = parquet_file_path.replace(".parquet", "_metadata.json")
         if os.path.exists(metadata_file):
-            with open(metadata_file, 'r') as f:
+            with open(metadata_file, "r") as f:
                 return json.load(f)
         else:
             logging.warning(f"No metadata file found for {parquet_file_path}")
@@ -1224,21 +1247,21 @@ def get_parquet_metadata(parquet_file_path: str) -> dict:
 def get_bam_file_history(parquet_file_path: str) -> dict:
     """
     Get detailed BAM file contribution history for a parquet file.
-    
+
     Args:
         parquet_file_path (str): Path to the parquet file
-        
+
     Returns:
         dict: Dictionary containing detailed history information
     """
     metadata = get_parquet_metadata(parquet_file_path)
     if not metadata:
         return {}
-    
+
     return {
-        'total_bam_files': metadata.get('bam_file_count', 0),
-        'last_update': metadata.get('last_updated', 'Unknown'),
-        'sample_id': metadata.get('sample_id', 'Unknown'),
-        'files_in_last_update': metadata.get('files_added_in_this_update', 0),
-        'metadata_file': parquet_file_path.replace('.parquet', '_metadata.json')
+        "total_bam_files": metadata.get("bam_file_count", 0),
+        "last_update": metadata.get("last_updated", "Unknown"),
+        "sample_id": metadata.get("sample_id", "Unknown"),
+        "files_in_last_update": metadata.get("files_added_in_this_update", 0),
+        "metadata_file": parquet_file_path.replace(".parquet", "_metadata.json"),
     }

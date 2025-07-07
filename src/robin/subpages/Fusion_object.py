@@ -112,16 +112,16 @@ def get_aligned_read_coords(aln):
     ct = aln.cigartuples or []
     # 1) leading S/H
     rs = 0
-    for op, l in ct:
+    for op, length in ct:
         if op in (4, 5):  # S or H
-            rs += l
+            rs += length
         else:
             break
     # 2) trailing S/H
     te = 0
-    for op, l in reversed(ct):
+    for op, length in reversed(ct):
         if op in (4, 5):
-            te += l
+            te += length
         else:
             break
     re = aln.query_length - te
@@ -138,8 +138,7 @@ def extract_split_read_alignments(bam_path):
     - Pre-allocated lists for better memory efficiency
     - Optimized CIGAR parsing
     """
-    # Pre-allocate lists with estimated capacity to avoid resizing
-    estimated_capacity = 10000  # Conservative estimate
+    # Pre-allocate lists for better memory efficiency
     qnames = []
     types = []
     rnames = []
@@ -172,21 +171,21 @@ def extract_split_read_alignments(bam_path):
 
             # Compute left-end clipping efficiently
             left_soft = left_hard = 0
-            for op, l in ct:
+            for op, length in ct:
                 if op == 4:  # soft clip
-                    left_soft += l
+                    left_soft += length
                 elif op == 5:  # hard clip
-                    left_hard += l
+                    left_hard += length
                 else:
                     break
 
             # Compute right-end clipping efficiently
             right_soft = right_hard = 0
-            for op, l in reversed(ct):
+            for op, length in reversed(ct):
                 if op == 4:
-                    right_soft += l
+                    right_soft += length
                 elif op == 5:
-                    right_hard += l
+                    right_hard += length
                 else:
                     break
 
@@ -266,8 +265,7 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
-    # Pre-allocate lists with estimated capacity
-    estimated_capacity = len(df) // 2  # Conservative estimate
+    # Pre-allocate lists for better memory efficiency
     qnames = []
     rname1s = []
     rname2s = []

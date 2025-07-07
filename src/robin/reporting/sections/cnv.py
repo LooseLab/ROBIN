@@ -120,16 +120,6 @@ class CNVSection(ReportSection):
             cnv_analyzer.cytobands_bed = cytobands_bed
             cnv_analyzer.cnv_dict = cnv_dict
 
-            # Load reference CNV data
-            ref_file = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)),
-                "HG01280_control_new.pkl",
-            )
-            logger.debug("Loading reference CNV data from %s", ref_file)
-            with open(ref_file, "rb") as f:
-                ref_cnv_dict = pickle.load(f)
-            logger.debug("Reference CNV data loaded")
-
             # Get reference CNV data with matching bin width
             logger.debug(
                 "Getting reference CNV data with bin width %s", cnv_dict["bin_width"]
