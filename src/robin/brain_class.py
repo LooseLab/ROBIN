@@ -77,7 +77,7 @@ from dateutil import parser
 import os
 import psutil
 import tempfile
-from nicegui import ui, app, run, background_tasks, binding
+from nicegui import ui, app, run, background_tasks
 import concurrent.futures
 import time
 
@@ -115,7 +115,6 @@ import json
 
 from robin.utils import (
     merge_modkit_files,
-    run_modkit,
     run_matkit,
     run_samtools_sort,
     check_bam,
@@ -417,9 +416,7 @@ class BrainMeth:
             logging.info("Initializing processing queues")
             self.bam_tracking = Queue()
             self.bamforcns = Queue()
-            self.bamforsturgeon = Queue()
-            self.bamfornanodx = Queue()
-            self.bamforpannanodx = Queue()
+            
             self.bamforcnv = Queue()
             self.bamfortargetcoverage = Queue()
             self.bamformgmt = Queue()
@@ -443,10 +440,13 @@ class BrainMeth:
             # Initialize analysis objects with batch processing
             if "sturgeon" not in self.exclude:
                 logging.info("Initializing Sturgeon analysis with batch processing")
+                self.parquetqueuesturgeon = Queue()
+                self.bamforsturgeon = Queue()
                 self.Sturgeon = Sturgeon_object(
                     analysis_name="STURGEON",
                     batch=True,
                     bamqueue=self.bamforsturgeon,
+                    parquetqueue=self.parquetqueuesturgeon,
                     **common_args,
                 )
 
@@ -454,16 +454,21 @@ class BrainMeth:
 
             if "nanodx" not in self.exclude:
                 logging.info("Initializing NanoDX analysis with batch processing")
+                self.bamfornanodx = Queue()
+                self.parquetqueuenanodx = Queue()
                 self.NanoDX = NanoDX_object(
                     analysis_name="NANODX",
                     batch=True,
                     bamqueue=self.bamfornanodx,
+                    parquetqueue=self.parquetqueuenanodx,
                     **common_args,
                 )
                 await self.NanoDX.process_data()
 
             if "pannanodx" not in self.exclude:
                 logging.info("Initializing PanNanoDX analysis with batch processing")
+                self.bamforpannanodx = Queue()
+                self.parquetqueuepannanodx = Queue()
                 self.panNanoDX = NanoDX_object(
                     analysis_name="PANNANODX",
                     batch=True,
@@ -475,11 +480,14 @@ class BrainMeth:
 
             if "forest" not in self.exclude:
                 logging.info("Initializing RandomForest analysis with batch processing")
+                self.bamforcns = Queue()
+                self.parquetqueuecns = Queue()
                 self.RandomForest = RandomForest_object(
                     analysis_name="FOREST",
                     batch=True,
                     showerrors=self.showerrors,
                     bamqueue=self.bamforcns,
+                    parquetqueue=self.parquetqueuecns,
                     **common_args,
                 )
                 await self.RandomForest.process_data()
@@ -536,7 +544,6 @@ class BrainMeth:
                     **common_args,
                 )
                 await self.Fusion_panel.process_data()
-            
 
         background_tasks.create(start_background_tasks())
 
@@ -2285,7 +2292,9 @@ class BrainMeth:
                 # Detailed Analysis Tabs
                 if sample_id:
                     selectedtab = None
-                    with ui.tabs().classes("w-full") as tabs: #.on('click', lambda: ui.notify('You clicked a tab.'))
+                    with ui.tabs().classes(
+                        "w-full"
+                    ) as tabs:  # .on('click', lambda: ui.notify('You clicked a tab.'))
                         if not (
                             set(["sturgeon", "pannanodx", "nanodx", "forest"]).issubset(
                                 set(self.exclude)
@@ -2315,7 +2324,9 @@ class BrainMeth:
                             if not selectedtab:
                                 selectedtab = mnpflextab
 
-                    with ui.tab_panels(tabs, value=selectedtab).classes("w-full"):# , on_change=lambda e: print(e))
+                    with ui.tab_panels(tabs, value=selectedtab).classes(
+                        "w-full"
+                    ):  # , on_change=lambda e: print(e))
                         display_args = {
                             "threads": self.threads,
                             "output": self.output,
@@ -2670,9 +2681,9 @@ class BrainMeth:
         """
         try:
             # Get the current process
-            #print('a. links:', len(binding.active_links))
-            #print(binding.active_links)
-            
+            # print('a. links:', len(binding.active_links))
+            # print(binding.active_links)
+
             current_process = psutil.Process(os.getpid())
             memory = psutil.virtual_memory()
             available_memory_gb = memory.available / (1024**3)
@@ -2825,11 +2836,12 @@ class BrainMeth:
         state.start_process("Merge Bam Analysis", ProcessType.BACKGROUND)
         state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
 
+        analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
         # Process queue and organize files by sample ID
         while self.bamforbigbadmerge.qsize() > 0:
             state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
             file, filetime, sampleID = self.bamforbigbadmerge.get()
-
+            
             # Initialize containers for new sample IDs
             if sampleID not in files_by_sample:
                 files_by_sample[sampleID] = []
@@ -2849,17 +2861,19 @@ class BrainMeth:
                     app.storage.general[self.mainuuid][sampleID] = {}
 
                 # Initialize counters for this sample if they don't exist
-                analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
+                
                 for analysis in analyses:
                     if analysis.lower() not in self.exclude:
                         if analysis not in app.storage.general[self.mainuuid][sampleID]:
-                            app.storage.general[self.mainuuid][sampleID][analysis] = {
-                                "counters": {
-                                    "bams_in_processing": 0,
-                                    "bam_processed": 0,
-                                    "bams_failed": 0,
-                                }
-                            }
+                            app.storage.general[self.mainuuid][sampleID][analysis] = Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
+                            #{
+                            #    
+                            #    "counters": {
+                            #        "bams_in_processing": 0,
+                            #        "bam_processed": 0,
+                            #        "bams_failed": 0,
+                            #    }
+                            #}
                         elif (
                             "counters"
                             not in app.storage.general[self.mainuuid][sampleID][
@@ -2868,12 +2882,11 @@ class BrainMeth:
                         ):
                             app.storage.general[self.mainuuid][sampleID][analysis][
                                 "counters"
-                            ] = {
-                                "bams_in_processing": 0,
-                                "bam_processed": 0,
-                                "bams_failed": 0,
-                            }
-
+                            ] = Counter(bam_count=0, bam_processed=0, bams_in_processing=0)
+                        
+            for analysis in analyses:
+                    if analysis.lower() not in self.exclude:
+                        app.storage.general[self.mainuuid][sampleID][analysis]["counters"]["bam_count"] += 1
             # Add file to the list for this sample
             files_by_sample[sampleID].append(file)
             latest_files[sampleID] = max(latest_files[sampleID], filetime or 0)
@@ -2882,46 +2895,17 @@ class BrainMeth:
             for sample_id in list(files_by_sample.keys()):
                 # The length of bams we allow to be processed at once will influence memory usage.
                 if (
-                    len(files_by_sample[sample_id]) >= 9
+                    len(files_by_sample[sample_id]) >= 10
                 ):  # This can be changed at any time
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
                         f"Processing batch of {files_to_process} files for sample {sample_id}"
                     )
 
-                    # Update counters for each non-excluded analysis
-                    analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
                     for analysis in analyses:
                         if analysis.lower() not in self.exclude:
                             try:
                                 # Ensure the counter structure exists
-                                if (
-                                    analysis
-                                    not in app.storage.general[self.mainuuid][sample_id]
-                                ):
-                                    app.storage.general[self.mainuuid][sample_id][
-                                        analysis
-                                    ] = {
-                                        "counters": {
-                                            "bams_in_processing": 0,
-                                            "bam_processed": 0,
-                                            "bams_failed": 0,
-                                        }
-                                    }
-                                elif (
-                                    "counters"
-                                    not in app.storage.general[self.mainuuid][
-                                        sample_id
-                                    ][analysis]
-                                ):
-                                    app.storage.general[self.mainuuid][sample_id][
-                                        analysis
-                                    ]["counters"] = {
-                                        "bams_in_processing": 0,
-                                        "bam_processed": 0,
-                                        "bams_failed": 0,
-                                    }
-
                                 app.storage.general[self.mainuuid][sample_id][analysis][
                                     "counters"
                                 ]["bams_in_processing"] += files_to_process
@@ -3099,10 +3083,10 @@ class BrainMeth:
                 dir=self.check_and_create_folder(self.output, sampleID)
             ):
                 try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
-                    print(f"Running modkit on {sortfile}")
-                    #await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
+                    #print(f"Running modkit on {sortfile}")
+                    # await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
                     await run.cpu_bound(run_matkit, sortfile, temp.name, self.threads)
-                    print(f"Modkit run complete")
+                    #print("Modkit run complete")
                     # run_modkit(sortfile, temp.name, self.threads)
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(
@@ -3128,7 +3112,11 @@ class BrainMeth:
                         sampleID,
                         self.output,
                         dict(self.mnpflex_config),
+                        num_bam_files_seen,  # Pass the number of BAM files that contributed
                     )
+                    
+                    self.parquetqueuesturgeon.put((parquet_path, sampleID, num_bam_files_seen))
+                    
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(
                         "Process pool was terminated. This is normal during shutdown."
@@ -3173,7 +3161,7 @@ class BrainMeth:
                             counters["bams_in_processing"] = max(
                                 0, counters["bams_in_processing"] - num_bam_files_seen
                             )
-                            counters["bam_processed"] += num_bam_files_seen
+                            
 
                             logging.debug(
                                 f"Updated {analysis} processed counter for {sampleID} by {num_bam_files_seen}"

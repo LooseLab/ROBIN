@@ -116,7 +116,7 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
             )
             logger.info("R script executed successfully")
             logger.debug(f"R script stdout: {result.stdout}")
-            #print(f"R script stdout: {result.stdout}")
+            # print(f"R script stdout: {result.stdout}")
             if result.stderr:
                 pass
                 # logger.warning(f"R script stderr: {result.stderr}")
@@ -145,17 +145,17 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
 def load_modkit_data(parquet_path):
     """
     Load minimal bedmethyl data for RandomForest analysis.
-    
+
     This function loads only the essential columns needed for RandomForest classification:
     - chrom: Chromosome name
-    - chromStart: Start position  
+    - chromStart: Start position
     - percent_modified: Primary methylation data
     - mod_code: Modification code
     - strand: Strand information
-    
+
     Args:
         parquet_path (str): Path to the parquet file containing bedmethyl data
-        
+
     Returns:
         pd.DataFrame: DataFrame with minimal columns, sorted by chrom and chromStart
     """
@@ -315,7 +315,7 @@ class RandomForest_object(BaseAnalysis):
                         full_modkit_df = await run.cpu_bound(
                             reconstruct_full_bedmethyl_data, merged_modkit_df
                         )
-                        
+
                         forest_dx = await run.cpu_bound(
                             collapse_bedmethyl, full_modkit_df
                         )
@@ -399,9 +399,7 @@ class RandomForest_object(BaseAnalysis):
                         else:
                             logger.error(f"Votes file not found: {votes_file}")
 
-                        app.storage.general[self.mainuuid][sampleID][self.name][
-                            "counters"
-                        ]["bam_processed"] = tomerge_length
+                            # Counter updated automatically by BaseAnalysis._batch_worker()
 
                 except Exception as e:
                     logger.error(f"Error in process_bam: {str(e)}", exc_info=True)
@@ -508,7 +506,7 @@ class RandomForestVis(BaseVis):
         if self.summary:
             with self.summary:
                 ui.label("Forest classification: Unknown")
-        #await ui.context.client.connected()
+        # await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

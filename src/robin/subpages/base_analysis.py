@@ -36,8 +36,8 @@ Key Components:
 
 Dependencies:
 - `queue`
-- `nicegui` (ui, app)
-- `typing` (BinaryIO, Optional, List, Tuple)
+- `nicegui` (ui, app, run)
+- `typing` (BinaryIO, Optional, List, Tuple, Dict)
 - `pandas`
 - `time`
 - `asyncio`
@@ -363,9 +363,18 @@ class BaseVis:
                             ).classes("text-xs min-w-[30px] text-right")
 
             if not state.shutdown_event:
-                ui.timer(1, callback=lambda: progress_summary.set_value(self._progress_processed)) # total
-                ui.timer(1, callback=lambda: progressbar3.set_value(self._not_analysed)) # not processed
-                ui.timer(1, callback=lambda: progressbar.set_value(self._progress_processed)) # processed
+                ui.timer(
+                    1,
+                    callback=lambda: progress_summary.set_value(
+                        self._progress_processed
+                    ),
+                )  # total
+                ui.timer(
+                    1, callback=lambda: progressbar3.set_value(self._not_analysed)
+                )  # not processed
+                ui.timer(
+                    1, callback=lambda: progressbar.set_value(self._progress_processed)
+                )  # processed
 
         except Exception as e:
             logging.error(f"Error creating progress bars for {self.name}: {str(e)}")
@@ -431,8 +440,6 @@ class BaseVis:
     def _get_counter_value(self, counter_name: str, default: int = 0) -> int:
         """Safely get a counter value from storage."""
         try:
-            sample_id = self.sampleID
-            app.storage.general[self.mainuuid][sample_id][self.name]["counters"]["bam_total"] = app.storage.general[self.mainuuid][sample_id][self.name]["counters"]["bams_in_processing"] + app.storage.general[self.mainuuid][sample_id][self.name]["counters"]["bam_processed"]
             return app.storage.general[self.mainuuid][self.sampleID][self.name][
                 "counters"
             ].get(counter_name, default)
@@ -449,10 +456,10 @@ class BaseVis:
             ]
             if counters.get("bam_processed", 0) == 0:
                 return 0.0
-            return counters.get("bam_processed", 0) / counters.get("bam_total", 1)
+            return counters.get("bam_processed", 0) / counters.get("bam_count", 1)
         except (KeyError, TypeError):
             return 0.0
-        
+
     @property
     def _progress_processed(self) -> float:
         """Calculate the progress of BAM file processing."""
@@ -463,9 +470,9 @@ class BaseVis:
             ]
             if counters.get("bam_processed", 0) == 0:
                 return 0.0
-            if counters.get("bam_total") == 0:
+            if counters.get("bam_count") == 0:
                 return 0.0
-            return counters.get("bam_processed", 0) / counters.get("bam_total", 1)
+            return counters.get("bam_processed", 0) / counters.get("bam_count", 1)
         except (KeyError, TypeError):
             return 0.0
 
@@ -479,11 +486,15 @@ class BaseVis:
             ]
             if counters.get("bam_count", 0) == 0:
                 return 0.0
-            not_analysed = counters.get("bam_count", 0) - counters.get("bams_in_processing", 0) - counters.get("bam_processed", 0)
-            if not_analysed == 0 or counters.get("bam_total") == 0:
+            not_analysed = (
+                counters.get("bam_count", 0)
+                - counters.get("bams_in_processing", 0)
+                - counters.get("bam_processed", 0)
+            )
+            if not_analysed == 0 or counters.get("bam_count") == 0:
                 return 0.0
             else:
-                return not_analysed / counters.get("bam_total", 1)
+                return not_analysed / counters.get("bam_count", 1)
         except (KeyError, TypeError):
             return 0.0
 
@@ -511,6 +522,7 @@ class BaseAnalysis:
         analysis_name: str = None,
         summary: Optional[str] = None,
         bamqueue: Optional[queue.Queue] = None,
+        parquetqueue: Optional[queue.Queue] = None,
         progress: bool = False,
         batch: bool = False,
         start_time: Optional[float] = None,
@@ -525,6 +537,7 @@ class BaseAnalysis:
     ) -> None:
         # Initialize core analysis properties
         self.bamqueue = bamqueue if bamqueue else queue.Queue()
+        self.parquetqueue = parquetqueue if parquetqueue else queue.Queue()
         self.name = analysis_name
         self.mainuuid = uuid
         self.start_time = start_time
@@ -609,18 +622,23 @@ class BaseAnalysis:
                     logger.debug(f"Error type: {type(e)}")
                 finally:
                     self._initialize_counters(self.sampleID)
-                    app.storage.general[self.mainuuid][self.sampleID][self.name][
-                        "counters"
-                    ]["bam_processed"] += 1
+                    self._update_bam_processed_counter(1)
                 self.running = False
             state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
             # if not self.terminate:
             # self.timer.active = True
             await asyncio.sleep(1)
 
-    def add_bam(self, bamfile: BinaryIO, timestamp: Optional[float] = None) -> None:
+    def add_bam(
+        self,
+        bamfile: BinaryIO,
+        timestamp: Optional[float] = None,
+        sampleID: Optional[str] = None,
+    ) -> None:
         """Adds a BAM file to the queue for processing."""
-        self.bamqueue.put((bamfile, timestamp))
+        if sampleID is None:
+            sampleID = self.sampleID
+        self.bamqueue.put((bamfile, timestamp, sampleID))
 
     def batch_timer_run(self) -> None:
         """Set up a timer to periodically run the _batch_worker method for batch processing."""
@@ -633,12 +651,17 @@ class BaseAnalysis:
             await self.stop_analysis()
             return
         self.timer.active = False
+        latest_timestamp = time.time()
+        await self.process_bam("SasuagesNone", latest_timestamp)
+        
+        """
         if self.bamqueue.qsize() > 0:
             count = 0
             while self.bamqueue.qsize() > 0:
                 state.set_process_state(self.name, ProcessState.RUNNING)
 
                 bamfile, timestamp, sampleID = self.bamqueue.get()
+                print(f"Batch worker: {sampleID} {bamfile} {timestamp}")
 
                 if sampleID not in self.bams:
                     self.bams[sampleID] = []
@@ -651,15 +674,16 @@ class BaseAnalysis:
                     "bam_count"
                 ] += 1
 
-                if count >= 100:
-                    break
-
+                #if count >= 50:
+                #    break
+            
             for sample_id, data_list in self.bams.items():
                 if not self.running and len(data_list) > 0:
                     state.set_process_state(self.name, ProcessState.RUNNING)
                     self.running = True
                     self.sampleID = sample_id
-
+                    batch_size = len(data_list)
+                    print(f"Batch worker: {sample_id} {batch_size}")
                     try:
                         bamfiles, latest_timestamp = await run.cpu_bound(
                             sort_bams,
@@ -670,7 +694,16 @@ class BaseAnalysis:
 
                     except Exception as e:
                         logger.error(f"Error processing BAM files: {e}")
-            state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
+                        print(f"Error processing BAM files in {self.name}: {e}")
+                    finally:
+                        # Always update bam_processed counter for each file in the batch
+                        # regardless of success or failure
+                        #self._update_bam_processed_counter(batch_size)
+                        # Clear the processed batch
+                        self.bams[sampleID] = []
+                        self.running = False
+        """
+        state.set_process_state(self.name, ProcessState.WAITING_FOR_DATA)
         self.timer.active = True
 
     def check_file_time(self, file_path: str) -> bool:
@@ -706,6 +739,20 @@ class BaseAnalysis:
             return full_path
         else:
             return path
+
+    def _update_bam_processed_counter(self, increment: int = 1) -> None:
+        """Safely update the bam_processed counter."""
+        if (
+            hasattr(self, "mainuuid")
+            and hasattr(self, "sampleID")
+            and hasattr(self, "name")
+        ):
+            try:
+                app.storage.general[self.mainuuid][self.sampleID][self.name][
+                    "counters"
+                ]["bam_processed"] += increment
+            except Exception as e:
+                logger.warning(f"Could not update bam_processed counter: {e}")
 
     def _initialize_counters(self, sample_id: str) -> None:
         """
@@ -750,7 +797,6 @@ class BaseAnalysis:
                 logging.debug(
                     f"Initialized missing counters for {self.name} in sample {sample_id}"
                 )
-            
 
         except Exception as e:
             logging.error(
@@ -769,8 +815,6 @@ class BaseAnalysis:
                 }
             except Exception as nested_e:
                 logging.error(f"Failed to create fallback counters: {str(nested_e)}")
-        
-            
 
     async def stop_analysis(self):
         """Stop the analysis and clean up resources."""

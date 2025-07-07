@@ -59,7 +59,10 @@ import tempfile
 from typing import List, Tuple, Optional, Dict, Any
 from robin import models, theme, resources
 import logging
-from robin.utilities.merge_bedmethyl import collapse_bedmethyl, load_minimal_modkit_data, collapse_minimal_bedmethyl
+from robin.utilities.merge_bedmethyl import (
+    load_minimal_modkit_data,
+    collapse_minimal_bedmethyl,
+)
 from robin.submodules.nanoDX.workflow.scripts.NN_model import NN_classifier
 
 
@@ -102,17 +105,17 @@ else:
 def load_modkit_data(parquet_path):
     """
     Load minimal bedmethyl data for NanoDX analysis.
-    
+
     This function loads only the essential columns needed for NanoDX classification:
     - chrom: Chromosome name
-    - chromStart: Start position  
+    - chromStart: Start position
     - percent_modified: Primary methylation data
     - mod_code: Modification code
     - strand: Strand information
-    
+
     Args:
         parquet_path (str): Path to the parquet file containing bedmethyl data
-        
+
     Returns:
         pd.DataFrame: DataFrame with minimal columns, sorted by chrom and chromStart
     """
@@ -359,9 +362,7 @@ class NanoDX_object(BaseAnalysis):
                             )
                         )
 
-                        app.storage.general[self.mainuuid][sampleID][self.name][
-                            "counters"
-                        ]["bam_processed"] = tomerge_length
+                        # Counter updated automatically by BaseAnalysis._batch_worker()
 
                 except Exception as e:
                     logger.error(f"Error in process_bam (nanodx): {e}")
@@ -444,8 +445,8 @@ class NanoDXVis(BaseVis):
         if self.summary:
             with self.summary:
                 ui.label(f"NanoDX classification {self.model}: Unknown")
-                
-        #await ui.context.client.connected()
+
+        # await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

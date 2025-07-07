@@ -144,7 +144,7 @@ def run_matkit(
 ) -> None:
     """
     Processes the BAM file with matkit and runs an R script for MGMT prediction.
-    
+
     This function uses matkit to generate BEDMethyl format output, then converts
     it to the mixed-delim format expected by the R script for MGMT prediction.
 
@@ -164,12 +164,13 @@ def run_matkit(
         )
         # Use matkit instead of modkit
         from robin.utils import run_matkit as run_matkit_util
+
         temp_bed_file = os.path.join(tempmgmtdir, "temp_mgmt.bed")
         run_matkit_util(os.path.join(tempmgmtdir, "mgmt.bam"), temp_bed_file, threads)
-        
+
         # Convert standard BEDMethyl format to mixed-delim format for R script compatibility
         convert_to_mixed_delim(temp_bed_file, output_mgmt_bed)
-        
+
         if os.path.exists(output_mgmt_bed):
             cmd = f"Rscript {HVPATH}/bin/mgmt_pred_v0.3.R --input={output_mgmt_bed} --out_dir={tempmgmtdir} --probes={HVPATH}/bin/mgmt_probes.Rdata --model={HVPATH}/bin/mgmt_137sites_mean_model.Rdata --sample=live_analysis"
             os.system(cmd)
@@ -180,35 +181,35 @@ def run_matkit(
 def convert_to_mixed_delim(input_file: str, output_file: str) -> None:
     """
     Converts standard BEDMethyl format to mixed-delim format for R script compatibility.
-    
+
     The R script expects column V10 to contain a space-separated string like "10 0.5"
     instead of separate columns for coverage and fraction.
-    
+
     Args:
         input_file (str): Path to the input BEDMethyl file (standard format)
         output_file (str): Path to the output file (mixed-delim format)
     """
     try:
-        with open(input_file, 'r') as infile, open(output_file, 'w') as outfile:
+        with open(input_file, "r") as infile, open(output_file, "w") as outfile:
             for line in infile:
-                fields = line.strip().split('\t')
+                fields = line.strip().split("\t")
                 if len(fields) >= 18:
                     # Standard BEDMethyl format has:
                     # V10: coverage (column 10, 0-indexed)
                     # V11: fraction modified (column 11, 0-indexed)
-                    
+
                     # Create mixed-delim format by combining V10 and V11 into V10
                     coverage = fields[9]  # V10 (0-indexed)
                     fraction = fields[10]  # V11 (0-indexed)
-                    
+
                     # Create the mixed-delim format: "coverage fraction"
                     mixed_delim = f"{coverage} {fraction}"
-                    
+
                     # Replace V10 with the mixed-delim string
                     fields[9] = mixed_delim
-                    
+
                     # Write the converted line
-                    outfile.write('\t'.join(fields) + '\n')
+                    outfile.write("\t".join(fields) + "\n")
                 else:
                     # If the line doesn't have enough columns, write it as-is
                     outfile.write(line)
@@ -284,8 +285,8 @@ class MGMTVis(BaseVis):
                         "w-full mt-4 text-sm text-gray-500 justify-center"
                     ):
                         ui.label("Methylation status based on MGMT promoter analysis")
-                        
-        #await ui.context.client.connected()
+
+        # await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:
@@ -1061,9 +1062,8 @@ class MGMT_Object(BaseAnalysis):
                                     ),
                                     index=False,
                                 )
-                                
-                                # Update the bam_processed counter for progress tracking
-                                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]["bam_processed"] += 1
+
+                                # Counter updated automatically by BaseAnalysis._worker()
                         except Exception:
                             # logger.error(f"Error processing results: {e}")
                             raise

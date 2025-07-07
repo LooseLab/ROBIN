@@ -49,7 +49,7 @@ import click
 import time
 import subprocess
 from pathlib import Path
-from nicegui import ui, run, app, background_tasks
+from nicegui import ui, run, app
 from io import StringIO
 import pysam
 import tempfile
@@ -797,7 +797,7 @@ class TargetCoverageVis(BaseVis):
                 # self.INDELview = SNPview(self.INDELplaceholder)
                 # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
 
-        #await ui.context.client.connected()
+        # await ui.context.client.connected()
         self.mybutton = None
         if self.browse:
             self.page_timer = ui.timer(0.1, callback=self.show_previous_data, once=True)
@@ -1666,14 +1666,14 @@ class TargetCoverageVis(BaseVis):
 
                     # Define the async functions that will be used by the buttons
                     async def clear_and_reload():
-                        #await ui.context.client.connected()
+                        # await ui.context.client.connected()
                         ui.run_javascript(js_code, timeout=30.0)
                         self.mybutton.disable()
                         dataload.enable()
 
                     async def data_load():
                         ui.notify("Data Loading")
-                        #await ui.context.client.connected()
+                        # await ui.context.client.connected()
                         ui.run_javascript(js_clear_track, timeout=30)
                         ui.run_javascript(js_code_track, timeout=100)
                         ui.notify("Data Loaded")
@@ -2211,10 +2211,9 @@ class TargetCoverage(BaseAnalysis):
         # await loop.run_in_executor(
         #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
         # )
-        #run_bedtools(bamfile, self.bedfile, tempbamfile.name)
+        # run_bedtools(bamfile, self.bedfile, tempbamfile.name)
         await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
-        
-        
+
         '''
         async def run_bedtools(bamfile, bedfile, tempbamfile):
             """
@@ -2253,7 +2252,7 @@ class TargetCoverage(BaseAnalysis):
             run_bedtools(bamfile, self.bedfile, tempbamfile.name)
         )
         '''
-        
+
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if self.sampleID not in self.targetbamfile.keys():
                 self.targetbamfile[self.sampleID] = os.path.join(
@@ -2400,12 +2399,7 @@ class TargetCoverage(BaseAnalysis):
 
         self.running = False
 
-        # At the end of the method, after all processing and before the method returns:
-        if hasattr(self, 'mainuuid') and hasattr(self, 'sampleID') and hasattr(self, 'name'):
-            try:
-                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]["bam_processed"] += 1
-            except Exception as e:
-                logger.warning(f"Could not update bam_processed counter: {e}")
+        # Counter updated automatically by BaseAnalysis._worker()
 
     async def rerun_snp_analysis(self):
         """

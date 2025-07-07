@@ -33,22 +33,22 @@ def configure_logging(level: int = logging.INFO) -> None:
 def load_minimal_modkit_data(parquet_path):
     """
     Load only essential bedmethyl columns for optimized storage and processing.
-    
+
     This function loads only the minimal columns required by the classifiers:
     - chrom: Chromosome name (required by all classifiers)
     - chromStart: Start position (required by all classifiers)
     - percent_modified: Primary methylation data (required by all classifiers)
     - mod_code: Modification code (required by Sturgeon for filtering)
     - strand: Strand information (required for proper aggregation)
-    
+
     Args:
         parquet_path (str): Path to the parquet file containing bedmethyl data
-        
+
     Returns:
         pd.DataFrame: DataFrame with only essential columns, sorted by chrom and chromStart
     """
     import time
-    
+
     for attempt in range(5):  # Retry up to 5 times
         try:
             merged_modkit_df = pd.read_parquet(parquet_path)
@@ -69,9 +69,14 @@ def load_minimal_modkit_data(parquet_path):
     column_mappings = {
         "chrom": ["chrom", "chr", "chromosome"],
         "chromStart": ["chromStart", "start", "start_pos", "pos"],
-        "percent_modified": ["percent_modified", "methylation_percent", "mod_percent", "score"],
+        "percent_modified": [
+            "percent_modified",
+            "methylation_percent",
+            "mod_percent",
+            "score",
+        ],
         "mod_code": ["mod_code", "mod", "modification_code"],
-        "strand": ["strand", "strand_info"]
+        "strand": ["strand", "strand_info"],
     }
 
     # Map available columns to our expected names
@@ -84,14 +89,23 @@ def load_minimal_modkit_data(parquet_path):
                 found = True
                 break
         if not found:
-            logger.error(f"Could not find column for {expected_name}. Available columns: {list(merged_modkit_df.columns)}")
+            logger.error(
+                f"Could not find column for {expected_name}. Available columns: {list(merged_modkit_df.columns)}"
+            )
             raise KeyError(f"Missing required column: {expected_name}")
 
     # Create a new DataFrame with the expected column names
-    df = merged_modkit_df[[mapped_columns[col] for col in ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]]].copy()
+    df = merged_modkit_df[
+        [
+            mapped_columns[col]
+            for col in ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
+        ]
+    ].copy()
     df.columns = ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
-    
-    logger.info(f"Loaded minimal bedmethyl data with {len(df)} rows and {len(df.columns)} columns")
+
+    logger.info(
+        f"Loaded minimal bedmethyl data with {len(df)} rows and {len(df.columns)} columns"
+    )
     return df.sort_values(by=["chrom", "chromStart"])
 
 
@@ -127,7 +141,7 @@ def save_bedmethyl(result_df: pd.DataFrame, output_file: str) -> None:
 def collapse_minimal_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
     """
     Collapse and aggregate minimal bedmethyl dataframe.
-    
+
     This function aggregates the minimal bedmethyl data by genomic position
     and calculates the fraction of methylation. Optimized for the minimal
     column set used by classifiers.
@@ -162,10 +176,9 @@ def collapse_minimal_bedmethyl(concat_df: pd.DataFrame) -> pd.DataFrame:
         result_df = grouped.agg(agg_funcs).reset_index()
 
         # Rename for consistency with existing code
-        result_df = result_df.rename(columns={
-            "chromStart": "start_pos",
-            "percent_modified": "fraction"
-        })
+        result_df = result_df.rename(
+            columns={"chromStart": "start_pos", "percent_modified": "fraction"}
+        )
 
         # Add end_pos column (same as start_pos for single-base positions)
         result_df["end_pos"] = result_df["start_pos"] + 1
@@ -382,75 +395,97 @@ def parquet_to_bed(parquet_file: str, output_bed: str) -> None:
 def reconstruct_full_bedmethyl_data(minimal_df: pd.DataFrame) -> pd.DataFrame:
     """
     Reconstruct full bedmethyl data structure from minimal data for RandomForest compatibility.
-    
+
     This function takes minimal bedmethyl data and reconstructs the full 18-column
     structure expected by the RandomForest R script. Missing columns are filled with
     reasonable defaults or calculated values.
-    
+
     Args:
         minimal_df (pd.DataFrame): Minimal bedmethyl data with columns:
                                   chrom, chromStart, percent_modified, mod_code, strand
-                                  
+
     Returns:
         pd.DataFrame: Full bedmethyl data with all 18 columns
     """
     try:
         # Create a copy of the minimal data
         full_df = minimal_df.copy()
-        
+
         # Add missing columns with reasonable defaults
         full_df["chromEnd"] = full_df["chromStart"] + 1
-        full_df["score_bed"] = full_df["percent_modified"]  # Use methylation percentage as score
+        full_df["score_bed"] = full_df[
+            "percent_modified"
+        ]  # Use methylation percentage as score
         full_df["thickStart"] = full_df["chromStart"]
         full_df["thickEnd"] = full_df["chromEnd"]
         full_df["color"] = "0,0,0"  # Default black color
-        
+
         # Calculate coverage and modification counts based on methylation percentage
         # Assume a reasonable coverage value and calculate modifications
         full_df["valid_cov"] = 10  # Default coverage of 10 reads
-        full_df["n_mod"] = (full_df["percent_modified"] * full_df["valid_cov"] / 100).round().astype(int)
+        full_df["n_mod"] = (
+            (full_df["percent_modified"] * full_df["valid_cov"] / 100)
+            .round()
+            .astype(int)
+        )
         full_df["n_canonical"] = full_df["valid_cov"] - full_df["n_mod"]
-        
+
         # Set other modification counts to 0 (not used by RandomForest)
         full_df["n_othermod"] = 0
         full_df["n_delete"] = 0
         full_df["n_fail"] = 0
         full_df["n_diff"] = 0
         full_df["n_nocall"] = 0
-        
+
         # Rename columns to match expected format
-        full_df = full_df.rename(columns={
-            "chromStart": "start_pos",
-            "chromEnd": "end_pos",
-            "mod_code": "mod",
-            "thickStart": "start_pos2",
-            "thickEnd": "end_pos2",
-            "color": "colour",
-            "n_canonical": "Ncanon",
-            "n_delete": "Ndel",
-            "n_diff": "Ndiff",
-            "n_fail": "Nfail",
-            "n_mod": "Nmod",
-            "n_nocall": "Nnocall",
-            "n_othermod": "Nother",
-            "valid_cov": "Nvalid",
-            "percent_modified": "score",
-        })
-        
+        full_df = full_df.rename(
+            columns={
+                "chromStart": "start_pos",
+                "chromEnd": "end_pos",
+                "mod_code": "mod",
+                "thickStart": "start_pos2",
+                "thickEnd": "end_pos2",
+                "color": "colour",
+                "n_canonical": "Ncanon",
+                "n_delete": "Ndel",
+                "n_diff": "Ndiff",
+                "n_fail": "Nfail",
+                "n_mod": "Nmod",
+                "n_nocall": "Nnocall",
+                "n_othermod": "Nother",
+                "valid_cov": "Nvalid",
+                "percent_modified": "score",
+            }
+        )
+
         # Ensure all required columns are present
         required_columns = [
-            "chrom", "start_pos", "end_pos", "mod", "score", "strand",
-            "start_pos2", "end_pos2", "colour", "Nvalid", "Nmod", "Ncanon",
-            "Nother", "Ndel", "Nfail", "Ndiff", "Nnocall"
+            "chrom",
+            "start_pos",
+            "end_pos",
+            "mod",
+            "score",
+            "strand",
+            "start_pos2",
+            "end_pos2",
+            "colour",
+            "Nvalid",
+            "Nmod",
+            "Ncanon",
+            "Nother",
+            "Ndel",
+            "Nfail",
+            "Ndiff",
+            "Nnocall",
         ]
-        
+
         for col in required_columns:
             if col not in full_df.columns:
                 full_df[col] = 0  # Default to 0 for missing columns
-        
+
         logger.info(f"Reconstructed full bedmethyl data with {len(full_df)} rows")
         return full_df[required_columns]
-        
+
     except Exception as e:
         logger.error(f"Error reconstructing full bedmethyl data: {e}")
         raise

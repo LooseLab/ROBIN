@@ -3327,7 +3327,6 @@ class FusionObject(BaseAnalysis):
                 logger.error(f"Error in process_bam: {e}")
                 raise
         finally:
-            # Counter updated automatically by BaseAnalysis._worker()
             state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
 
     def _should_run_breakpoint_processing(self) -> bool:

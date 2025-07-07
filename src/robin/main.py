@@ -622,7 +622,7 @@ class Methnice:
                         logging.warning(
                             "No telemetry instance available for map display"
                         )
-        #await ui.context.client.connected()
+        # await ui.context.client.connected()
 
     async def index_page(self) -> None:
         """
@@ -648,7 +648,7 @@ class Methnice:
                 smalltitle=self.smalltitle,
                 batphone=self.batphone,
             ):
-                #await ui.context.client.connected()
+                # await ui.context.client.connected()
                 with ui.column().classes("w-full"):
                     # Set up MinKNOW connection if necessary
                     if self.watchfolder is None and not self.browse:

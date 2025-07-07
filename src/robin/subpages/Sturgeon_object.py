@@ -54,7 +54,7 @@ from sturgeon.prediction import load_model, predict_sample
 
 from robin.core.state import state, ProcessState
 
-from robin.utilities.merge_bedmethyl import collapse_bedmethyl, load_minimal_modkit_data
+from robin.utilities.merge_bedmethyl import load_minimal_modkit_data
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
@@ -63,17 +63,17 @@ logger = logging.getLogger(__name__)
 def load_modkit_data(parquet_path):
     """
     Load minimal bedmethyl data for Sturgeon analysis.
-    
+
     This function loads only the essential columns needed for Sturgeon classification:
     - chrom: Chromosome name
-    - chromStart: Start position  
+    - chromStart: Start position
     - percent_modified: Primary methylation data
     - mod_code: Modification code (required for 5mC filtering)
     - strand: Strand information
-    
+
     Args:
         parquet_path (str): Path to the parquet file containing bedmethyl data
-        
+
     Returns:
         pd.DataFrame: DataFrame with minimal columns, sorted by chrom and chromStart
     """
@@ -104,7 +104,13 @@ def modkit_pileup_file_to_bed(
     # For minimal data, we expect only the essential columns
     if isinstance(input_data, pd.DataFrame) and len(modkit_df.columns) == 5:
         # Minimal data format - columns should already be named correctly
-        expected_columns = ["chrom", "chromStart", "percent_modified", "mod_code", "strand"]
+        expected_columns = [
+            "chrom",
+            "chromStart",
+            "percent_modified",
+            "mod_code",
+            "strand",
+        ]
         if list(modkit_df.columns) == expected_columns:
             # Data is already in minimal format, just filter by mod_code
             modkit_df = modkit_df[modkit_df["mod_code"] == fivemc_code]
@@ -300,7 +306,7 @@ def predict_sample_from_dataframe(
     model_path = get_model_path(modelfile)
     if not validate_model_file(modelfile):
         raise ValueError(f"Invalid model file: {modelfile}")
-
+    
     logging.info(f"Loading model from {modelfile}...")
     inference_session, probes_df, decoding_dict, temperatures, merge_dict = load_model(
         model_path
@@ -461,114 +467,90 @@ class Sturgeon_object(BaseAnalysis):
     async def process_bam(self, bamfile, timestamp):
         """Process BAM files for Sturgeon analysis."""
         state.set_process_state("Sturgeon Analysis", ProcessState.RUNNING)
-        try:
-            sampleID = self.sampleID
+        if not self.parquetqueue.empty():
+            parquet_path, sampleID, num_bam_files_seen = self.parquetqueue.get()
+            if timestamp:
+                currenttime = timestamp * 1000
+            else:
+                currenttime = timestamp * 1000 if timestamp else time.time() * 1000
 
-            # Initialize directories if needed
-            if sampleID not in self.dataDir.keys():
-                self.dataDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
-                self.bedDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
+            parquet_path = os.path.join(
+                self.check_and_create_folder(self.output, sampleID),
+                f"{sampleID}.parquet",
+            )
 
-            latest_file = 0
-
-            if (
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bam_count"
-                ]
-                > 0
-            ):
-                if latest_file:
-                    currenttime = latest_file * 1000
-                else:
-                    currenttime = timestamp * 1000 if timestamp else time.time() * 1000
-
-                parquet_path = os.path.join(
-                    self.check_and_create_folder(self.output, sampleID),
-                    f"{sampleID}.parquet",
-                )
-
-                async def sturgeon_bam_background_work(sampleID, parquet_path):
-                    try:
-                        if self.check_file_time(parquet_path):
-                            tomerge_length_file = os.path.join(
-                                self.check_and_create_folder(self.output, sampleID),
-                                "tomerge_length.txt",
+            
+            async def sturgeon_bam_background_work(sampleID, parquet_path):
+                try:
+                    if self.check_file_time(parquet_path):
+                        tomerge_length_file = os.path.join(
+                            self.check_and_create_folder(self.output, sampleID),
+                            "tomerge_length.txt",
+                        )
+                        with open(tomerge_length_file, "r") as f:
+                            tomerge_length = int(
+                                f.readline().strip().split(": ")[1]
                             )
-                            with open(tomerge_length_file, "r") as f:
-                                tomerge_length = int(
-                                    f.readline().strip().split(": ")[1]
+
+                        merged_modkit_df = await run.cpu_bound(
+                            load_modkit_data, parquet_path
+                        )
+
+                        temp_pileup = tempfile.NamedTemporaryFile(
+                            dir=self.check_and_create_folder(self.output, sampleID)
+                        )
+
+                        # Pass the cleaned data
+                        result_df = await run.cpu_bound(
+                            modkit_pileup_file_to_bed,
+                            merged_modkit_df,
+                            temp_pileup.name,
+                            self.probes_file,
+                        )
+
+                        diagnosis = await run.cpu_bound(
+                            predict_sample_from_dataframe, result_df
+                        )
+                        self.st_num_probes[sampleID] = diagnosis.iloc[-1][
+                            "number_probes"
+                        ]
+                        # lastrow = mydf.iloc[-1].drop("number_probes")
+                        mydf_to_save = diagnosis
+                        mydf_to_save["timestamp"] = currenttime
+
+                        if sampleID not in self.sturgeon_df_store:
+                            self.sturgeon_df_store[sampleID] = pd.DataFrame()
+
+                        # Exclude empty or all-NA entries before concatenation
+                        if not mydf_to_save.dropna(how="all").empty:
+                            self.sturgeon_df_store[sampleID] = pd.concat(
+                                [
+                                    self.sturgeon_df_store[sampleID],
+                                    mydf_to_save.set_index("timestamp"),
+                                ]
+                            )
+                            self.sturgeon_df_store[sampleID].to_csv(
+                                os.path.join(
+                                    self.check_and_create_folder(
+                                        self.output, sampleID
+                                    ),
+                                    "sturgeon_scores.csv",
                                 )
-
-                            merged_modkit_df = await run.cpu_bound(
-                                load_modkit_data, parquet_path
                             )
+                        self._update_bam_processed_counter(tomerge_length)
+                except Exception as e:
+                    print(f"Error in process_bam (sturgeon): {e}")
+                    logger.error(f"Error in process_bam (sturgeon): {e}")
 
-                            temp_pileup = tempfile.NamedTemporaryFile(
-                                dir=self.check_and_create_folder(self.output, sampleID)
-                            )
+            await background_tasks.create(
+                sturgeon_bam_background_work(sampleID, parquet_path)
+            )
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bams_in_processing"] -= num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"]["bam_processed"] += num_bam_files_seen
 
-                            # Pass the cleaned data
-                            result_df = await run.cpu_bound(
-                                modkit_pileup_file_to_bed,
-                                merged_modkit_df,
-                                temp_pileup.name,
-                                self.probes_file,
-                            )
-
-                            diagnosis = await run.cpu_bound(
-                                predict_sample_from_dataframe, result_df
-                            )
-                            self.st_num_probes[sampleID] = diagnosis.iloc[-1][
-                                "number_probes"
-                            ]
-                            # lastrow = mydf.iloc[-1].drop("number_probes")
-                            mydf_to_save = diagnosis
-                            mydf_to_save["timestamp"] = currenttime
-
-                            if sampleID not in self.sturgeon_df_store:
-                                self.sturgeon_df_store[sampleID] = pd.DataFrame()
-
-                            # Exclude empty or all-NA entries before concatenation
-                            if not mydf_to_save.dropna(how="all").empty:
-                                self.sturgeon_df_store[sampleID] = pd.concat(
-                                    [
-                                        self.sturgeon_df_store[sampleID],
-                                        mydf_to_save.set_index("timestamp"),
-                                    ]
-                                )
-                                self.sturgeon_df_store[sampleID].to_csv(
-                                    os.path.join(
-                                        self.check_and_create_folder(
-                                            self.output, sampleID
-                                        ),
-                                        "sturgeon_scores.csv",
-                                    )
-                                )
-                            app.storage.general[self.mainuuid][sampleID][self.name][
-                                "counters"
-                            ]["bam_processed"] = tomerge_length
-
-                            # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                            #    "bams_in_processing"
-                        # ] = 0
-                        # app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                        #    "bam_count"
-                        # ] -= tomerge_length
-                        # print(app.storage.general[self.mainuuid][sampleID][self.name]["counters"])
-                    except Exception as e:
-                        logger.error(f"Error in process_bam (sturgeon): {e}")
-
-                await background_tasks.create(
-                    sturgeon_bam_background_work(sampleID, parquet_path)
-                )
-
-            self.running = False
-        finally:
-            state.set_process_state("Sturgeon Analysis", ProcessState.WAITING_FOR_DATA)
+        state.set_process_state("Sturgeon Analysis", ProcessState.WAITING_FOR_DATA)
+        
+        
 
     async def stop_analysis(self):
         """Stop the Sturgeon analysis."""
@@ -670,7 +652,7 @@ class SturgeonVis(BaseVis):
         if self.summary:
             with self.summary:
                 ui.label("Sturgeon classification: Unknown")
-        #await ui.context.client.connected()
+        # await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

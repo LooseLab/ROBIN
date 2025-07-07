@@ -438,7 +438,7 @@ class CNVVis(BaseVis):
         self.y_axis_log = False  # Default to linear scale
         # Add show_breakpoints attribute
         self.show_breakpoints = True  # Default to showing breakpoints
-        
+
         # Add DATA_ARRAY for breakpoint visualization
         self.DATA_ARRAY = None
         self.data_array_path = None
@@ -447,7 +447,7 @@ class CNVVis(BaseVis):
         """
         Set up the user interface for CNV analysis.
         """
-        
+
         self.display_row = ui.row().style("width: 100")
         if self.summary:
             with self.summary:
@@ -858,20 +858,19 @@ class CNVVis(BaseVis):
             self.create_proportion_time_chart2("Proportions over time - Genome Wide.")
             self.create_proportion_time_chart("Proportions over time.")
 
-
-
-        #await ui.context.client.connected()
-        
+        # await ui.context.client.connected()
 
         if self.browse:
             ui.timer(0.1, lambda: self.show_previous_data(), once=True)
         else:
             ui.timer(15, lambda: self.show_previous_data())
 
-    def update_plots(self, gene_target: Optional[str] = None, preserve_zoom: bool = False) -> None:
+    def update_plots(
+        self, gene_target: Optional[str] = None, preserve_zoom: bool = False
+    ) -> None:
         """
         Update CNV plots with new data and annotations.
-        
+
         Parameters
         ----------
         gene_target : Optional[str], optional
@@ -896,11 +895,14 @@ class CNVVis(BaseVis):
                 # If the toggle UI exists, update it to reflect the state
                 try:
                     for child in self.chrom_select.parent.children:
-                        if hasattr(child, 'label') and getattr(child, 'label', None) == "Breakpoints:":
+                        if (
+                            hasattr(child, "label")
+                            and getattr(child, "label", None) == "Breakpoints:"
+                        ):
                             # The next child should be the toggle
                             idx = self.chrom_select.parent.children.index(child)
                             toggle = self.chrom_select.parent.children[idx + 1]
-                            if hasattr(toggle, 'value'):
+                            if hasattr(toggle, "value"):
                                 toggle.value = "hide"
                                 ui.update(toggle)
                 except Exception:
@@ -909,11 +911,14 @@ class CNVVis(BaseVis):
                 preserve_zoom = False
             else:
                 # In single chromosome view, allow breakpoints to be shown (default to previous state or 'show')
-                if not hasattr(self, '_breakpoint_toggle_initialized'):
+                if not hasattr(self, "_breakpoint_toggle_initialized"):
                     self.show_breakpoints = True
                     self._breakpoint_toggle_initialized = True
             self._update_cnv_plot(
-                plot_to_update=self.scatter_echart, result=self.result, title="CNV", preserve_zoom=preserve_zoom
+                plot_to_update=self.scatter_echart,
+                result=self.result,
+                title="CNV",
+                preserve_zoom=preserve_zoom,
             )
             self._update_cnv_plot(
                 plot_to_update=self.reference_scatter_echart,
@@ -1017,7 +1022,6 @@ class CNVVis(BaseVis):
             title (str): Title of the chart.
         """
         self.proportion_time_chart = self.create_time_chart(title)
-        
 
     def update_proportion_time_chart(self, datadf: pd.DataFrame) -> None:
         """
@@ -1421,7 +1425,7 @@ class CNVVis(BaseVis):
     ) -> None:
         """
         Update CNV plots with new data and annotations.
-        
+
         Parameters
         ----------
         plot_to_update : ui.echart
@@ -2061,12 +2065,17 @@ class CNVVis(BaseVis):
                         try:
                             # Initialize cnv_state with a default value
                             cnv_state = "NORMAL"
-                            
+
                             # Verify that the row has the expected columns
-                            if not all(col in row.index for col in ["start_pos", "end_pos", "name"]):
-                                logger.warning(f"Cytoband row missing expected columns: {row.index.tolist()}")
+                            if not all(
+                                col in row.index
+                                for col in ["start_pos", "end_pos", "name"]
+                            ):
+                                logger.warning(
+                                    f"Cytoband row missing expected columns: {row.index.tolist()}"
+                                )
                                 continue
-                            
+
                             # Get CNV state for this region from analysis
                             region_analysis = self.analyze_cytoband_cnv(
                                 self.result3.cnv, contig
@@ -2084,9 +2093,7 @@ class CNVVis(BaseVis):
                                 elif cnv_state == "LOSS":
                                     color = "rgba(255, 45, 85, 0.15)"  # Red for losses
                                 else:
-                                    color = (
-                                        "rgba(0, 0, 0, 0.02)"  # Very subtle gray for normal
-                                    )
+                                    color = "rgba(0, 0, 0, 0.02)"  # Very subtle gray for normal
                             else:
                                 color = "rgba(0, 0, 0, 0.02)"  # Default subtle gray
 
@@ -2114,7 +2121,8 @@ class CNVVis(BaseVis):
                                                 or cnv_state == "LOSS"
                                                 and "#E0162B"  # Brighter, more saturated red for losses
                                                 or "#000000",  # Black for normal
-                                                "fontWeight": cnv_state in ["GAIN", "LOSS"]
+                                                "fontWeight": cnv_state
+                                                in ["GAIN", "LOSS"]
                                                 and "bold"
                                                 or "normal",
                                                 "show": True,
@@ -2195,16 +2203,16 @@ class CNVVis(BaseVis):
                     target_chromosome = None
                     if self.chrom_filter != "All":
                         target_chromosome = valueslist[int(self.chrom_filter)]
-                    
+
                     # Get breakpoint visualization data
                     breakpoint_series = self.get_breakpoint_visualization_data(
                         plot_to_update, target_chromosome
                     )
-                
+
                 # Add breakpoint series to the plot
                 for series in breakpoint_series:
                     plot_to_update.options["series"].append(series)
-                    
+
                 # Update right y-axis limits for breakpoint data
                 if breakpoint_series:
                     # Calculate max value for right y-axis
@@ -2213,14 +2221,16 @@ class CNVVis(BaseVis):
                         if series["data"]:
                             series_max = max([point[1] for point in series["data"]])
                             max_breakpoint_value = max(max_breakpoint_value, series_max)
-                    
+
                     if max_breakpoint_value > 0:
                         # Update right y-axis limits
-                        plot_to_update.options["yAxis"][1].update({
-                            "min": 0,
-                            "max": max_breakpoint_value * 1.2  # Add 20% padding
-                        })
-                        
+                        plot_to_update.options["yAxis"][1].update(
+                            {
+                                "min": 0,
+                                "max": max_breakpoint_value * 1.2,  # Add 20% padding
+                            }
+                        )
+
             except Exception as e:
                 logger.warning(f"Error adding breakpoint visualization: {e}")
 
@@ -2281,7 +2291,7 @@ class CNVVis(BaseVis):
                 # Only apply log scale to the absolute CNV plot (scatter_echart), not the difference plot
                 is_absolute_plot = plot_to_update == self.scatter_echart
                 should_use_log = is_absolute_plot and self.y_axis_log
-                
+
                 # Calculate y-axis limits
                 data_min = (
                     max(0.1, min(all_values)) if should_use_log else min(all_values)
@@ -2468,7 +2478,7 @@ class CNVVis(BaseVis):
                         os.path.join(output, "ruptures.npy"),
                         allow_pickle="TRUE",
                     ).item()
-                
+
                 # Load breakpoint data for visualization
                 data_array_path = os.path.join(output, "cnv_data_array.npy")
                 if os.path.exists(data_array_path):
@@ -2476,35 +2486,50 @@ class CNVVis(BaseVis):
                         # Check file size first
                         file_size = os.path.getsize(data_array_path)
                         logger.info(f"Breakpoint file size: {file_size} bytes")
-                        
+
                         if file_size == 0:
                             logger.warning("Breakpoint file is empty")
                             self.DATA_ARRAY = None
                         else:
                             # Try loading as standard numpy array
                             try:
-                                logger.info("Attempting to load as standard numpy array...")
-                                self.DATA_ARRAY = np.load(data_array_path, allow_pickle=True)
-                                logger.info("Successfully loaded as standard numpy array")
+                                logger.info(
+                                    "Attempting to load as standard numpy array..."
+                                )
+                                self.DATA_ARRAY = np.load(
+                                    data_array_path, allow_pickle=True
+                                )
+                                logger.info(
+                                    "Successfully loaded as standard numpy array"
+                                )
                             except Exception as array_error:
-                                logger.warning(f"Failed to load breakpoint data: {array_error}")
+                                logger.warning(
+                                    f"Failed to load breakpoint data: {array_error}"
+                                )
                                 self.DATA_ARRAY = None
-                        
+
                         # Filter out empty entries (where name is empty string)
                         if self.DATA_ARRAY is not None and len(self.DATA_ARRAY) > 0:
                             # Check if it has the expected structure
-                            if hasattr(self.DATA_ARRAY, 'dtype') and 'name' in self.DATA_ARRAY.dtype.names:
+                            if (
+                                hasattr(self.DATA_ARRAY, "dtype")
+                                and "name" in self.DATA_ARRAY.dtype.names
+                            ):
                                 # Remove entries with empty names
                                 valid_mask = self.DATA_ARRAY["name"] != ""
                                 self.DATA_ARRAY = self.DATA_ARRAY[valid_mask]
-                                logger.info(f"Loaded breakpoint data: {len(self.DATA_ARRAY)} breakpoints")
+                                logger.info(
+                                    f"Loaded breakpoint data: {len(self.DATA_ARRAY)} breakpoints"
+                                )
                             else:
-                                logger.warning("Breakpoint data doesn't have expected structure")
+                                logger.warning(
+                                    "Breakpoint data doesn't have expected structure"
+                                )
                                 self.DATA_ARRAY = None
                         else:
                             logger.info("No breakpoint data found")
                             self.DATA_ARRAY = None
-                            
+
                     except Exception as e:
                         logger.warning(f"Failed to load breakpoint data: {e}")
                         self.DATA_ARRAY = None
@@ -3141,142 +3166,163 @@ class CNVVis(BaseVis):
     def calculate_breakpoint_metrics(self, chromosome: str = None) -> dict:
         """
         Calculate breakpoint metrics for visualization on the right y-axis.
-        
+
         Args:
             chromosome (str): Specific chromosome to analyze, or None for all
-            
+
         Returns:
             dict: Dictionary containing breakpoint metrics for visualization
         """
-        if not hasattr(self, 'DATA_ARRAY') or self.DATA_ARRAY is None:
+        if not hasattr(self, "DATA_ARRAY") or self.DATA_ARRAY is None:
             logger.debug("No DATA_ARRAY available for breakpoint metrics")
             return {}
-            
-        logger.debug(f"DATA_ARRAY type: {type(self.DATA_ARRAY)}, length: {len(self.DATA_ARRAY) if self.DATA_ARRAY is not None else 0}")
-        
+
+        logger.debug(
+            f"DATA_ARRAY type: {type(self.DATA_ARRAY)}, length: {len(self.DATA_ARRAY) if self.DATA_ARRAY is not None else 0}"
+        )
+
         metrics = {
-            'density': [],      # Breakpoint density per bin
-            'confidence': [],   # Confidence scores
-            'positions': [],    # Breakpoint positions
-            'timeline': []      # Detection timeline
+            "density": [],  # Breakpoint density per bin
+            "confidence": [],  # Confidence scores
+            "positions": [],  # Breakpoint positions
+            "timeline": [],  # Detection timeline
         }
-        
+
         # Get breakpoints for the specified chromosome or all chromosomes
         if chromosome:
             breakpoints = self.DATA_ARRAY[self.DATA_ARRAY["name"] == chromosome]
-            logger.debug(f"Filtering for chromosome {chromosome}: {len(breakpoints)} breakpoints")
+            logger.debug(
+                f"Filtering for chromosome {chromosome}: {len(breakpoints)} breakpoints"
+            )
         else:
             breakpoints = self.DATA_ARRAY
             logger.debug(f"Using all breakpoints: {len(breakpoints)} breakpoints")
-            
+
         if len(breakpoints) == 0:
             logger.debug("No breakpoints found for visualization")
             return metrics
-            
+
         # Calculate breakpoint density across the genome
         bin_width = self.cnv_dict.get("bin_width", 1_000_000)
         logger.debug(f"Using bin width: {bin_width}")
-        
+
         # Group breakpoints by chromosome
         unique_chroms = np.unique(breakpoints["name"])
         logger.debug(f"Unique chromosomes in breakpoints: {unique_chroms}")
-        
+
         for chrom in unique_chroms:
             chrom_breakpoints = breakpoints[breakpoints["name"] == chrom]
-            logger.debug(f"Processing chromosome {chrom}: {len(chrom_breakpoints)} breakpoints")
-            
+            logger.debug(
+                f"Processing chromosome {chrom}: {len(chrom_breakpoints)} breakpoints"
+            )
+
             if len(chrom_breakpoints) == 0:
                 continue
-                
+
             # Calculate density per bin
             max_pos = np.max(chrom_breakpoints["end"])
             num_bins = int(max_pos / bin_width) + 1
             logger.debug(f"Chromosome {chrom}: max_pos={max_pos}, num_bins={num_bins}")
-            
+
             # Initialize density array
             density = np.zeros(num_bins)
-            
+
             # Count breakpoints in each bin
             for bp in chrom_breakpoints:
                 start_bin = int(bp["start"] / bin_width)
                 end_bin = int(bp["end"] / bin_width)
-                
+
                 # Ensure bins are within bounds
                 start_bin = max(0, min(start_bin, num_bins - 1))
                 end_bin = max(0, min(end_bin, num_bins - 1))
-                
+
                 # Add to density (weighted by breakpoint size)
                 for bin_idx in range(start_bin, end_bin + 1):
                     density[bin_idx] += 1
-                    
+
             # Convert to positions and values for plotting
             for i, count in enumerate(density):
                 if count > 0:
                     pos = i * bin_width
-                    metrics['density'].append([pos, count])
-                    metrics['positions'].append(pos)
-                    
-        logger.debug(f"Generated metrics - density: {len(metrics['density'])}, positions: {len(metrics['positions'])}")
-                    
+                    metrics["density"].append([pos, count])
+                    metrics["positions"].append(pos)
+
+        logger.debug(
+            f"Generated metrics - density: {len(metrics['density'])}, positions: {len(metrics['positions'])}"
+        )
+
         # Calculate confidence scores (simplified - based on breakpoint frequency)
-        if metrics['density']:
-            max_density = max([d[1] for d in metrics['density']])
-            for pos, density in metrics['density']:
+        if metrics["density"]:
+            max_density = max([d[1] for d in metrics["density"]])
+            for pos, density in metrics["density"]:
                 confidence = min(1.0, density / max_density) if max_density > 0 else 0
-                metrics['confidence'].append([pos, confidence])
-                
+                metrics["confidence"].append([pos, confidence])
+
         return metrics
 
-    def get_breakpoint_visualization_data(self, plot_to_update: ui.echart, chromosome: str = None) -> list:
+    def get_breakpoint_visualization_data(
+        self, plot_to_update: ui.echart, chromosome: str = None
+    ) -> list:
         """
         Generate breakpoint visualization data for the right y-axis.
-        
+
         Args:
             plot_to_update: The chart to update
             chromosome (str): Specific chromosome to visualize
-            
+
         Returns:
             list: List of series data for breakpoint visualization
         """
-        logger.debug(f"Generating breakpoint visualization for chromosome: {chromosome}")
+        logger.debug(
+            f"Generating breakpoint visualization for chromosome: {chromosome}"
+        )
         metrics = self.calculate_breakpoint_metrics(chromosome)
         series_data = []
-        
+
         logger.debug(f"Breakpoint metrics: {metrics}")
-        
+
         if not metrics or not any(metrics.values()):
             logger.debug("No breakpoint metrics available for visualization")
             return series_data
-        
+
         # Show only points at bins with breakpoints (scatter plot)
-        if metrics['density']:
-            unique_breakpoints = sorted(set(metrics['positions']))
-            series_data.append({
-                "type": "scatter",
-                "name": "Breakpoint Density",
-                "yAxisIndex": 1,  # Use right y-axis
-                "data": metrics['density'],
-                "symbolSize": 10,
-                "itemStyle": {
-                    "color": "rgba(255, 69, 0, 0.7)",
-                    "borderColor": "#FF4500",
-                    "borderWidth": 2
-                },
-                "emphasis": {
+        if metrics["density"]:
+            unique_breakpoints = sorted(set(metrics["positions"]))
+            series_data.append(
+                {
+                    "type": "scatter",
+                    "name": "Breakpoint Density",
+                    "yAxisIndex": 1,  # Use right y-axis
+                    "data": metrics["density"],
+                    "symbolSize": 10,
                     "itemStyle": {
-                        "color": "rgba(255, 69, 0, 0.9)",
-                        "borderWidth": 2
-                    }
-                },
-                "markLine": {
-                    "symbol": "none",
-                    "data": [
-                        {"xAxis": pos, "lineStyle": {"color": "#FF0000", "type": "dashed", "width": 2}}
-                        for pos in unique_breakpoints
-                    ]
+                        "color": "rgba(255, 69, 0, 0.7)",
+                        "borderColor": "#FF4500",
+                        "borderWidth": 2,
+                    },
+                    "emphasis": {
+                        "itemStyle": {
+                            "color": "rgba(255, 69, 0, 0.9)",
+                            "borderWidth": 2,
+                        }
+                    },
+                    "markLine": {
+                        "symbol": "none",
+                        "data": [
+                            {
+                                "xAxis": pos,
+                                "lineStyle": {
+                                    "color": "#FF0000",
+                                    "type": "dashed",
+                                    "width": 2,
+                                },
+                            }
+                            for pos in unique_breakpoints
+                        ],
+                    },
                 }
-            })
-        
+            )
+
         logger.debug(f"Generated {len(series_data)} breakpoint series")
         return series_data
 
@@ -3452,7 +3498,7 @@ class CNVAnalysis(BaseAnalysis):
         self.y_axis_log = False  # Default to linear scale
         # Add show_breakpoints attribute
         self.show_breakpoints = True  # Default to showing breakpoints
-        
+
         # Add DATA_ARRAY for breakpoint visualization
         self.DATA_ARRAY = None
         self.data_array_path = None
@@ -3865,7 +3911,7 @@ class CNVAnalysis(BaseAnalysis):
                             approx_chrom_length = len(r_cnv[key]) * r_bin
                             # Define padding around centromere regions to avoid false positives
                             padding = 2_500_000  # 2.5 Mb padding
-                            
+
                             # Process each detected change point (start, end) pair
                             for start, end in paired_changepoints:
                                 # Filter out invalid or problematic regions:
@@ -3893,14 +3939,14 @@ class CNVAnalysis(BaseAnalysis):
                                 # Create a structured array entry for this breakpoint
                                 # dtype format: (chromosome_name, start_position, end_position)
                                 item = np.array([(key, start, end)], dtype=self.dtype)
-                                
+
                                 # Append to local array (current processing batch)
                                 self.local_data_array = np.append(
                                     self.local_data_array, item
                                 )
                                 # Append to persistent data array (all breakpoints for this sample)
                                 self.DATA_ARRAY = np.append(self.DATA_ARRAY, item)
-                                
+
                                 # Save the updated data array to file immediately
                                 try:
                                     np.save(self.data_array_path, self.DATA_ARRAY)
@@ -3927,11 +3973,11 @@ class CNVAnalysis(BaseAnalysis):
                                     # Add the detected breakpoints to the CNV change detector
                                     # This updates the internal tracking and generates BED targets
                                     self.CNVchangedetector.add_breakpoints(
-                                        key,                    # chromosome name
-                                        breakpoints,            # all historical breakpoints for this chromosome
-                                        local_breakpoints,      # newly detected breakpoints
-                                        approx_chrom_length,    # chromosome length estimate
-                                        r_bin,                  # current bin width
+                                        key,  # chromosome name
+                                        breakpoints,  # all historical breakpoints for this chromosome
+                                        local_breakpoints,  # newly detected breakpoints
+                                        approx_chrom_length,  # chromosome length estimate
+                                        r_bin,  # current bin width
                                     )
                                 except Exception as e:
                                     logger.error(
@@ -4011,12 +4057,6 @@ class CNVAnalysis(BaseAnalysis):
                     raise
 
         finally:
-            # Update the bam_processed counter for progress tracking
-            if hasattr(self, 'mainuuid') and hasattr(self, 'sampleID') and hasattr(self, 'name'):
-                try:
-                    app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]["bam_processed"] += 1
-                except Exception as e:
-                    logger.warning(f"Could not update bam_processed counter: {e}")
             # Clean up temporary files but preserve CNV detector
             self._cleanup_state()
             self.running = False
