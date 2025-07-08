@@ -64,7 +64,7 @@ Example usage::
 """
 
 import queue
-from nicegui import ui, app
+from nicegui import ui, app, binding
 from typing import BinaryIO, Optional, List, Tuple, Dict
 import pandas as pd
 import time
@@ -121,6 +121,7 @@ class BaseVis:
         self.start_time = start_time
         self.threads = threads
         self.sampleID = sampleID
+        self.progress_state = ProgressDisplayState()
 
     async def render_ui(self, sample_id=None) -> None:
         """Set up the visualization components of the UI"""
@@ -285,6 +286,8 @@ class BaseVis:
             logger.debug(f"Progress bars for {self.name} and {self.sampleID}")
 
             self._initialize_counters(self.sampleID)
+            counters = app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]
+            self.progress_state.update_from_counters(counters)
 
             with self.progress_trackers:
                 with ui.expansion().classes("w-full") as expansion:
@@ -307,12 +310,11 @@ class BaseVis:
                                         .classes("flex-grow my-1")
                                         .props("instant-feedback")
                                     )
+                                    progress_summary.bind_value_from(self.progress_state, "progress")
                                     ui.label().bind_text_from(
-                                        app.storage.general[self.mainuuid][
-                                            self.sampleID
-                                        ][self.name]["counters"],
+                                        self.progress_state,
                                         "bam_processed",
-                                        backward=lambda n: f"{n}/{self._get_counter_value('bam_count', 0)}",
+                                        backward=lambda n: f"{n}/{self.progress_state.bam_count}",
                                     ).classes("text-xs min-w-fit")
 
                     with ui.column().classes("w-full gap-0 mt-1"):
@@ -329,20 +331,16 @@ class BaseVis:
                                 .props("instant-feedback")
                                 .classes("flex-grow my-0")
                             )
+                            progressbar3.bind_value_from(self.progress_state, "not_analysed")
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid][self.sampleID][
-                                    self.name
-                                ]["counters"],
+                                self.progress_state,
                                 "bam_count",
                                 backward=lambda n: str(
                                     max(
                                         0,
                                         n
-                                        # - self._get_counter_value("bam_processed", 0)
-                                        - self._get_counter_value(
-                                            "bams_in_processing", 0
-                                        )
-                                        - self._get_counter_value("bam_processed", 0),
+                                        - self.progress_state.bams_in_processing
+                                        - self.progress_state.bam_processed,
                                     )
                                 ),
                             ).classes("text-xs min-w-[30px] text-right")
@@ -360,10 +358,9 @@ class BaseVis:
                                 .props("instant-feedback")
                                 .classes("flex-grow my-0")
                             )
+                            progressbar.bind_value_from(self.progress_state, "progress")
                             ui.label().bind_text_from(
-                                app.storage.general[self.mainuuid][self.sampleID][
-                                    self.name
-                                ]["counters"],
+                                self.progress_state,
                                 "bam_processed",
                                 backward=lambda n: str(n or 0),
                             ).classes("text-xs min-w-[30px] text-right")
@@ -371,16 +368,10 @@ class BaseVis:
             if not state.shutdown_event:
                 ui.timer(
                     1,
-                    callback=lambda: progress_summary.set_value(
-                        self._progress_processed
+                    callback=lambda: self.progress_state.update_from_counters(
+                        app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]
                     ),
-                )  # total
-                ui.timer(
-                    1, callback=lambda: progressbar3.set_value(self._not_analysed)
-                )  # not processed
-                ui.timer(
-                    1, callback=lambda: progressbar.set_value(self._progress_processed)
-                )  # processed
+                )
 
         except Exception as e:
             logging.error(f"Error creating progress bars for {self.name}: {str(e)}")
@@ -977,3 +968,28 @@ class BaseAnalysis:
                 self.add_bam(
                     row["full_path"], playback_start_time + row["file_produced"]
                 )
+
+class ProgressDisplayState:
+    bam_count = binding.BindableProperty()
+    bam_processed = binding.BindableProperty()
+    bams_in_processing = binding.BindableProperty()
+    progress = binding.BindableProperty()
+    not_analysed = binding.BindableProperty()
+
+    def __init__(self):
+        self.bam_count = 0
+        self.bam_processed = 0
+        self.bams_in_processing = 0
+        self.progress = 0.0
+        self.not_analysed = 0.0
+
+    def update_from_counters(self, counters):
+        self.bam_count = counters.get('bam_count', 0)
+        self.bam_processed = counters.get('bam_processed', 0)
+        self.bams_in_processing = counters.get('bams_in_processing', 0)
+        if self.bam_count > 0:
+            self.progress = self.bam_processed / self.bam_count
+            self.not_analysed = max(0, self.bam_count - self.bams_in_processing - self.bam_processed) / self.bam_count
+        else:
+            self.progress = 0.0
+            self.not_analysed = 0.0

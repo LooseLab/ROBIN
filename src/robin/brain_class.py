@@ -95,7 +95,8 @@ from robin.subpages.RandomForest_object import (
     RandomForest_object,
     RandomForestVis,
 )
-from robin.subpages.CNV_object import CNVAnalysis, CNVVis
+from robin.subpages.CNVObjectClass import CNVAnalysis
+from robin.subpages.CNV_object import CNVVis
 from robin.subpages.TargetCoverage_object import TargetCoverage, TargetCoverageVis
 from robin.subpages.Fusion_object import FusionVis
 from robin.subpages.FusionObjectClass import FusionObject

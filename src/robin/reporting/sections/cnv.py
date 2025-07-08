@@ -16,7 +16,7 @@ from reportlab.platypus import PageBreak, Paragraph, Image, Spacer, Table, Table
 from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
 from ..plotting import create_CNV_plot, create_CNV_plot_per_chromosome
-from robin.subpages.CNV_object import (
+from robin.subpages.CNVObjectClass import (
     Result,
     CNVAnalysis,
     CNV_Difference,

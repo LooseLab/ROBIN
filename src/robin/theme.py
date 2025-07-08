@@ -54,6 +54,7 @@ from robin.core.state import state, ProcessState, ProcessType
 import os
 import psutil
 import platform
+from nicegui import binding
 
 
 def get_version_from_github():
@@ -699,6 +700,8 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
 
                     # Create a data model for system metrics
                     class SystemMetrics:
+                        cpu = binding.BindableProperty()
+                        ram = binding.BindableProperty()
                         def __init__(self):
                             self.cpu = 0
                             self.ram = 0

@@ -56,7 +56,7 @@ import numpy as np
 import re
 import click
 from typing import Optional, Tuple, Dict, List, Set
-from nicegui import ui, run, app, background_tasks
+from nicegui import ui, run, app, background_tasks, binding
 from robin import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
@@ -76,6 +76,32 @@ from matplotlib import pyplot as plt
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
+
+
+class FusionDisplayState:
+    """Optimized display state for fusion analysis using NiceGUI BindableProperty."""
+    
+    # Define bindable properties
+    candidates_formatted = binding.BindableProperty()
+    all_candidates_formatted = binding.BindableProperty()
+    sv_count_formatted = binding.BindableProperty()
+    candidates_with_label = binding.BindableProperty()
+    all_candidates_with_label = binding.BindableProperty()
+    
+    def __init__(self):
+        self.candidates_formatted = "0"
+        self.all_candidates_formatted = "0"
+        self.sv_count_formatted = "0"
+        self.candidates_with_label = "0 between target fusions"
+        self.all_candidates_with_label = "0 genome wide fusions"
+    
+    def update_from_data(self, candidates: int, all_candidates: int, sv_count: int):
+        """Update display state from fusion data."""
+        self.candidates_formatted = f"{candidates}"
+        self.all_candidates_formatted = f"{all_candidates}"
+        self.sv_count_formatted = f"{sv_count}"
+        self.candidates_with_label = f"{candidates} between target fusions"
+        self.all_candidates_with_label = f"{all_candidates} genome wide fusions"
 
 # Configure matplotlib font settings
 plt.rcParams["font.family"] = ["sans-serif"]
@@ -1497,6 +1523,10 @@ class FusionVis(BaseVis):
         self.fstable_row_count = 0
         self.candidates = 0
 
+        # Initialize optimized display state after all relevant attributes are set
+        self.display_state = FusionDisplayState()
+        self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
+
         # Initialize UI elements
         self.sv_plot = None
         self.sv_table_container = None
@@ -1604,18 +1634,16 @@ class FusionVis(BaseVis):
                                     "text-gray-600 font-medium"
                                 )
                                 ui.label("0").bind_text_from(
-                                    self,
-                                    "candidates",
-                                    backward=lambda n: f"{n} between target fusions",
+                                    self.display_state,
+                                    "candidates_with_label",
                                 ).classes("px-2 py-1 rounded bg-blue-100 text-blue-600")
 
                         # Right side - Additional metrics
                         with ui.column().classes("gap-2 text-right"):
                             ui.label("Analysis Details").classes("font-medium")
                             ui.label("0").bind_text_from(
-                                self,
-                                "all_candidates",
-                                backward=lambda n: f"{n} genome wide fusions",
+                                self.display_state,
+                                "all_candidates_with_label",
                             ).classes("text-gray-600")
 
                     # Bottom row - Information
@@ -1646,7 +1674,7 @@ class FusionVis(BaseVis):
                 with one:
                     self.badge_one = (
                         ui.badge("0", color="red")
-                        .bind_text_from(self, "candidates", backward=lambda n: f"{n}")
+                        .bind_text_from(self.display_state, "candidates_formatted")
                         .props("floating rounded outline")
                     )
                 two = ui.tab("Genome Wide Fusions").style(
@@ -1656,7 +1684,7 @@ class FusionVis(BaseVis):
                     self.badge_two = (
                         ui.badge("0", color="red")
                         .bind_text_from(
-                            self, "all_candidates", backward=lambda n: f"{n}"
+                            self.display_state, "all_candidates_formatted"
                         )
                         .props("floating rounded outline")
                     )
@@ -1666,7 +1694,7 @@ class FusionVis(BaseVis):
                 with three:
                     self.badge_three = (
                         ui.badge("0", color="red")
-                        .bind_text_from(self, "sv_count", backward=lambda n: f"{n}")
+                        .bind_text_from(self.display_state, "sv_count_formatted")
                         .props("floating rounded outline")
                     )
 
@@ -1967,6 +1995,7 @@ class FusionVis(BaseVis):
                         if len(reads) > 1:
                             gene_groups.append(gene_group)
                     self.all_candidates = len(gene_groups)
+                    self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
                     with ui.row().classes("w-full"):
                         ui.select(
                             options=gene_groups,
@@ -2142,6 +2171,7 @@ class FusionVis(BaseVis):
                         if len(reads) > 1:
                             gene_groups.append(gene_group)
                     self.candidates = len(gene_groups)
+                    self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
                     with ui.row().classes("w-full"):
                         ui.select(
                             options=gene_groups,
@@ -2493,6 +2523,7 @@ class FusionVis(BaseVis):
             if os.path.exists(sv_count_file):
                 with open(sv_count_file, "r") as f:
                     self.sv_count = int(f.read().strip())
+                self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
 
             # Load processed structural variant data
             sv_processed_file = os.path.join(
@@ -2940,6 +2971,10 @@ class FusionObject(BaseAnalysis):
         self.all_candidates = 0
         self.fstable_row_count = 0
         self.candidates = 0
+
+        # Initialize optimized display state after all relevant attributes are set
+        self.display_state = FusionDisplayState()
+        self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
 
         # Initialize UI elements
         self.sv_plot = None
