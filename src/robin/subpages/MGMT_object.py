@@ -166,7 +166,7 @@ def run_matkit(
         from robin.utils import run_matkit as run_matkit_util
 
         temp_bed_file = os.path.join(tempmgmtdir, "temp_mgmt.bed")
-        run_matkit_util(os.path.join(tempmgmtdir, "mgmt.bam"), temp_bed_file, threads)
+        run_matkit_util(os.path.join(tempmgmtdir, "mgmt.bam"), temp_bed_file)
 
         # Convert standard BEDMethyl format to mixed-delim format for R script compatibility
         convert_to_mixed_delim(temp_bed_file, output_mgmt_bed)

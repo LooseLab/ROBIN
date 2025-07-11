@@ -423,7 +423,7 @@ class BrainMeth:
             self.bamformgmt = Queue()
             self.bamforfusions = Queue()
             self.bamforbigbadmerge = Queue()
-            self.mergecounter = 0
+            #self.mergecounter = 0
 
             if self.watchfolder:
                 logging.info(f"Adding watchfolder: {self.watchfolder}")
@@ -2837,7 +2837,9 @@ class BrainMeth:
         latest_files = {}  # Track latest file time per sample
         state.start_process("Merge Bam Analysis", ProcessType.BACKGROUND)
         state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
-
+        
+        # Stopping Analysis to check for memory
+        
         analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
         # Process queue and organize files by sample ID
         while self.bamforbigbadmerge.qsize() > 0:
@@ -2896,6 +2898,7 @@ class BrainMeth:
                     app.storage.general[self.mainuuid][sampleID][analysis]["counters"][
                         "bam_count"
                     ] += 1
+            
             # Add file to the list for this sample
             files_by_sample[sampleID].append(file)
             latest_files[sampleID] = max(latest_files[sampleID], filetime or 0)
@@ -2925,7 +2928,7 @@ class BrainMeth:
                                 logging.error(
                                     f"Failed to update counter for {analysis}: {str(e)}"
                                 )
-
+            
                     await self.process_sample_files(
                         sample_id, files_by_sample[sample_id], latest_files[sample_id]
                     )
@@ -2933,7 +2936,8 @@ class BrainMeth:
                     # Clear processed files
                     files_by_sample[sample_id] = []
                     latest_files[sample_id] = 0
-
+            
+        """
         # Process remaining files for each sample
         for sample_id, files in files_by_sample.items():
             if files:  # Only process if there are files
@@ -2990,7 +2994,7 @@ class BrainMeth:
                     await self.process_sample_files(
                         sample_id, files, latest_files[sample_id]
                     )
-
+        """
         if not state.shutdown_event:
             self.process_bigbadmerge_tracker.active = True
             state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
@@ -3058,7 +3062,7 @@ class BrainMeth:
             # Write the updated length of the tomerge list to the output file
             with open(tomerge_length_file, "w") as f:
                 f.write(f"Length of tomerge list: {new_count}\n")
-
+            
             if len(tomerge) > 1:
                 tempbam = tempfile.NamedTemporaryFile(
                     dir=self.check_and_create_folder(self.output, sampleID),
@@ -3093,14 +3097,15 @@ class BrainMeth:
                 temp = tempfile.NamedTemporaryFile(
                     dir=self.check_and_create_folder(self.output, sampleID)
                 )
+            
 
             with tempfile.TemporaryDirectory(
                 dir=self.check_and_create_folder(self.output, sampleID)
             ):
                 try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
-                    # print(f"Running modkit on {sortfile}")
+                    print(f"Running modkit on {sortfile}")
                     # await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
-                    await run.cpu_bound(run_matkit, sortfile, temp.name, self.threads)
+                    await run.cpu_bound(run_matkit, sortfile, temp.name)
                     # print("Modkit run complete")
                     # run_modkit(sortfile, temp.name, self.threads)
                 except concurrent.futures.process.BrokenProcessPool:
@@ -3109,13 +3114,13 @@ class BrainMeth:
                     )
                     state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
                     return
-
+                
                 # Create output path specific to this sample
                 parquet_path = os.path.join(
                     self.check_and_create_folder(self.output, sampleID),
                     f"{sampleID}.parquet",  # Use sampleID for the output filename
                 )
-
+                
                 # Merge modkit files for this sample
                 try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
                     await run.cpu_bound(
@@ -3129,6 +3134,7 @@ class BrainMeth:
                         dict(self.mnpflex_config),
                         num_bam_files_seen,  # Pass the number of BAM files that contributed
                     )
+                    
                     for analysis in analyses:
                         if analysis.lower() not in self.exclude:
                             if analysis == "STURGEON":
@@ -3147,20 +3153,19 @@ class BrainMeth:
                                 self.parquetqueuecns.put(
                                     (parquet_path, sampleID, num_bam_files_seen)
                                 )
-
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(
                         "Process pool was terminated. This is normal during shutdown."
                     )
                     state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
                     return
-
+                
                 # Log the number of BAM files processed
                 logging.info(
                     f"Merged {num_bam_files_seen} BAM files into {parquet_path} for sample ID: {sampleID}"
                 )
-                self.mergecounter += len(tomerge)
-
+                #self.mergecounter += len(tomerge)
+                
                 # Update the processed counters for each analysis type
                 analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
                 for analysis in analyses:
@@ -3205,6 +3210,7 @@ class BrainMeth:
                                 "Merge Bam Analysis", ProcessState.STOPPED
                             )
                             return
+            
 
         except concurrent.futures.process.BrokenProcessPool:
             logger.warning(
@@ -3695,7 +3701,7 @@ class BrainMeth:
                         f"Routing {file[0]} to bigbadmerge queue for batch processing"
                     )
                     self.bamforbigbadmerge.put([file[0], file[1], sample_id])
-
+                """
                 # Individual analysis queue routing
                 if "forest" not in self.exclude:
                     logging.info(f"Routing {file[0]} to forest analysis queue")
@@ -3709,6 +3715,7 @@ class BrainMeth:
                 if "pannanodx" not in self.exclude:
                     logging.info(f"Routing {file[0]} to pannanodx analysis queue")
                     self.bamforpannanodx.put([file[0], file[1], sample_id])
+                """
                 if "cnv" not in self.exclude:
                     logging.info(f"Routing {file[0]} to cnv analysis queue")
                     self.bamforcnv.put([file[0], file[1], sample_id])

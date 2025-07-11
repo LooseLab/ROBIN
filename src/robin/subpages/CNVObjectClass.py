@@ -342,6 +342,7 @@ class CNVAnalysis(BaseAnalysis):
         reference_file: Optional[str] = None,
         bed_file: Optional[str] = None,
         readfish_toml: Optional[Path] = None,
+        # This needs to be shared between different tools but is most likely a memory hog
         master_bed_tree: Optional[MasterBedTree] = None,
         **kwargs,
     ) -> None:
@@ -356,8 +357,7 @@ class CNVAnalysis(BaseAnalysis):
         self.readfish_toml = readfish_toml
         # Define dtype for memmap - using numpy dtype
         self.dtype = np.dtype([("name", "U10"), ("start", "i8"), ("end", "i8")])
-        self.cnv_dict = {"bin_width": 0, "variance": 0}
-        self.update_cnv_dict = {}
+        #self.cnv_dict = {"bin_width": 0, "variance": 0}
         self.result = None
         self.result3 = CNV_Difference()
         self.ref_result = None
@@ -374,9 +374,6 @@ class CNVAnalysis(BaseAnalysis):
         self.color_mode = "chromosome"
 
         # Initialize data array related attributes
-        self.DATA_ARRAY = None
-        self.data_array_size = 0
-        self.data_array_path = None
         self.local_data_array = None
 
         # self.len_tracker = defaultdict(lambda: 0)
@@ -436,12 +433,6 @@ class CNVAnalysis(BaseAnalysis):
         # Add state directory path
         self.state_dir = None  # Will be set in do_cnv_work
 
-        # Initialize CNV detector with proper temp directory
-        self.CNVchangedetector = CNVChangeDetectorTracker(
-            base_proportion=0.02,
-            temp_dir=self.output,  # Will use system temp dir by default
-        )
-
         # Add target_table as instance variable
         self.target_table = None
         self.target_table_placeholder = None
@@ -452,9 +443,7 @@ class CNVAnalysis(BaseAnalysis):
         # Add show_breakpoints attribute
         self.show_breakpoints = True  # Default to showing breakpoints
 
-        # Add DATA_ARRAY for breakpoint visualization
-        self.DATA_ARRAY = None
-        self.data_array_path = None
+        
 
     def _get_state_dir(self) -> Path:
         """Get the directory for storing CNV detector state."""
@@ -467,14 +456,48 @@ class CNVAnalysis(BaseAnalysis):
         return self.state_dir
 
     def _cleanup_state(self) -> None:
-        """Clean up temporary files and state."""
-        if self.CNVchangedetector:
-            self.CNVchangedetector.storage.clear()
-        if self.state_dir and self.state_dir.exists():
+        """Clean up temporary files but preserve CNV detector state."""
+        # Don't delete the state directory as it contains the CNV detector state
+        # that needs to persist between processing calls
+        pass
+
+    def _get_update_cnv_dict_path(self) -> str:
+        """Get the path for storing the update_cnv_dict."""
+        return os.path.join(
+            self.check_and_create_folder(self.output, self.sampleID),
+            "update_cnv_dict.pkl",
+        )
+
+    def _load_update_cnv_dict(self) -> dict:
+        """Load the update_cnv_dict from file."""
+        update_cnv_dict_path = self._get_update_cnv_dict_path()
+        if os.path.exists(update_cnv_dict_path):
             try:
-                shutil.rmtree(self.state_dir)
+                with open(update_cnv_dict_path, "rb") as f:
+                    update_cnv_dict = pickle.load(f)
+                logger.info("Successfully loaded update_cnv_dict from file")
+                return update_cnv_dict
             except Exception as e:
-                logger.warning(f"Failed to clean up state directory: {e}")
+                logger.warning(f"Failed to load update_cnv_dict: {e}")
+                return {}
+        return {}
+
+    def _save_update_cnv_dict(self, update_cnv_dict: dict) -> None:
+        """Save the update_cnv_dict to file."""
+        try:
+            update_cnv_dict_path = self._get_update_cnv_dict_path()
+            with open(update_cnv_dict_path, "wb") as f:
+                pickle.dump(update_cnv_dict, f)
+            logger.info("Successfully saved update_cnv_dict to file")
+        except Exception as e:
+            logger.error(f"Failed to save update_cnv_dict: {e}")
+            raise
+
+    def get_update_cnv_dict(self) -> dict:
+        """Get the current update_cnv_dict data from file."""
+        return self._load_update_cnv_dict()
+
+
 
     def calculate_chromosome_stats(self, result, ref_result):
         """Calculate chromosome-wide statistics and baselines.
@@ -545,166 +568,6 @@ class CNVAnalysis(BaseAnalysis):
         self.chromosome_stats = stats
         return stats
 
-    def detect_chromosome_events(self, z_score_threshold=3.0):
-        """
-        Detect whole chromosome copy number events.
-
-        Args:
-            z_score_threshold (float): Z-score threshold for detecting events.
-
-        Returns:
-            List[Dict]: List of detected chromosome events.
-        """
-        # Initialize list to store events
-        events = []
-
-        # Get CNV data
-        cnv_data = self.result3.cnv
-
-        # Calculate means for all chromosomes
-        chromosome_means = {}
-        for chrom, data in cnv_data.items():
-            if chrom != "chrM" and re.match(r"^chr(\d+|X|Y)$", chrom):
-                # Exclude centromere region if present
-                mask = np.ones_like(data, dtype=bool)
-                cent = self.centromere_bed[self.centromere_bed["chrom"] == chrom]
-                if not cent.empty:
-                    cent_start = int(
-                        cent["start_pos"].iloc[0] / self.cnv_dict["bin_width"]
-                    )
-                    cent_end = int(cent["end_pos"].iloc[0] / self.cnv_dict["bin_width"])
-                    if cent_start < len(mask) and cent_end <= len(mask):
-                        mask[cent_start:cent_end] = False
-                filtered_data = data[mask]
-
-                # Handle empty arrays
-                if len(filtered_data) > 0:
-                    chromosome_means[chrom] = np.mean(filtered_data)
-
-        # Calculate mean and standard deviation of autosomal chromosomes
-        autosomal_means = [
-            v
-            for k, v in chromosome_means.items()
-            if k.startswith("chr") and k[3:].isdigit()
-        ]
-        if autosomal_means:
-            mean_of_means = np.mean(autosomal_means)
-            std_of_means = np.std(autosomal_means)
-        else:
-            mean_of_means = 0
-            std_of_means = 0
-
-        # Detect events for each chromosome
-        for chrom, mean_cnv in chromosome_means.items():
-            # Handle sex chromosomes specially
-            if chrom == "chrX":
-                if self.sex_estimate in ["Female", "XX"]:  # Female
-                    # For females, X should be treated like autosomes
-                    z_score = (mean_cnv - mean_of_means) / std_of_means
-                    if z_score > z_score_threshold:
-                        events.append(
-                            {
-                                "chromosome": chrom,
-                                "mean_cnv": mean_cnv,
-                                "type": "GAIN",
-                                "description": f"Chromosome X gain (z-score: {z_score:.2f})",
-                            }
-                        )
-                    elif z_score < -z_score_threshold:
-                        events.append(
-                            {
-                                "chromosome": chrom,
-                                "mean_cnv": mean_cnv,
-                                "type": "LOSS",
-                                "description": f"Chromosome X loss (z-score: {z_score:.2f})",
-                            }
-                        )
-                elif self.sex_estimate in ["Male", "XY"]:  # Male
-                    # For males, X should have one copy
-                    if mean_cnv > 0.5:  # Threshold for X gain in males
-                        events.append(
-                            {
-                                "chromosome": chrom,
-                                "mean_cnv": mean_cnv,
-                                "type": "GAIN",
-                                "description": "Chromosome X gain (expected single copy in males)",
-                            }
-                        )
-                    elif mean_cnv < -0.5:  # Threshold for X loss in males
-                        events.append(
-                            {
-                                "chromosome": chrom,
-                                "mean_cnv": mean_cnv,
-                                "type": "LOSS",
-                                "description": "Chromosome X loss (expected single copy in males)",
-                            }
-                        )
-            elif chrom == "chrY":
-                if self.sex_estimate in ["Male", "XY"]:  # Male
-                    # For males, Y should have one copy
-                    if mean_cnv > 0.5:  # Threshold for Y gain in males
-                        events.append(
-                            {
-                                "chromosome": chrom,
-                                "mean_cnv": mean_cnv,
-                                "type": "GAIN",
-                                "description": "Chromosome Y gain (expected single copy in males)",
-                            }
-                        )
-                    elif mean_cnv < -0.5:  # Threshold for Y loss in males
-                        events.append(
-                            {
-                                "chromosome": chrom,
-                                "mean_cnv": mean_cnv,
-                                "type": "LOSS",
-                                "description": "Chromosome Y loss (expected single copy in males)",
-                            }
-                        )
-                elif self.sex_estimate in ["Female", "XX"]:  # Female
-                    # For females, Y should not be present
-                    if mean_cnv > 0.3:  # Threshold for Y presence in females
-                        events.append(
-                            {
-                                "chromosome": chrom,
-                                "mean_cnv": mean_cnv,
-                                "type": "GAIN",
-                                "description": "Unexpected Y chromosome presence (expected absent in females)",
-                            }
-                        )
-                    elif mean_cnv > -0.2 and self.sex_estimate in ["Female", "XX"]:
-                        # Not quite a Y gain but stronger signal than expected for females
-                        events.append(
-                            {
-                                "chromosome": chrom,
-                                "mean_cnv": mean_cnv,
-                                "type": "NORMAL",
-                                "description": "Slight Y chromosome signal (check sample quality)",
-                            }
-                        )
-            else:  # Autosomal chromosomes
-                # Calculate z-score relative to other chromosomes
-                z_score = (mean_cnv - mean_of_means) / std_of_means
-                if z_score > z_score_threshold:
-                    events.append(
-                        {
-                            "chromosome": chrom,
-                            "mean_cnv": mean_cnv,
-                            "type": "GAIN",
-                            "description": f"Whole chromosome gain (z-score: {z_score:.2f})",
-                        }
-                    )
-                elif z_score < -z_score_threshold:
-                    events.append(
-                        {
-                            "chromosome": chrom,
-                            "mean_cnv": mean_cnv,
-                            "type": "LOSS",
-                            "description": f"Whole chromosome loss (z-score: {z_score:.2f})",
-                        }
-                    )
-
-        return events
-
     def estimate_XY(self) -> None:
         """
         Estimate genetic sex (XX or XY) based on CNV data.
@@ -751,27 +614,23 @@ class CNVAnalysis(BaseAnalysis):
             state_dir = self._get_state_dir()
 
             # Initialize CNV detector only if it doesn't exist
-            if self.CNVchangedetector is None:
-                self.CNVchangedetector = CNVChangeDetectorTracker(
-                    base_proportion=0.02, temp_dir=self.output
-                )
-
+            
+            CNVchangedetector = CNVChangeDetectorTracker(
+                base_proportion=0.02, temp_dir=self.output
+            )
+            
             # Load previous state if it exists
-            if self.load_data and (state_dir / "tracker_metadata.pkl").exists():
+            if (state_dir / "tracker_metadata.pkl").exists():
                 try:
-                    self.CNVchangedetector.load_state(str(state_dir))
+                    CNVchangedetector.load_state(str(state_dir))
                     logger.info("Successfully loaded CNV detector state")
                 except Exception as e:
-                    logger.warning(f"Failed to load CNV detector state: {e}")
-                    # Initialize fresh state if loading fails
-                    if self.CNVchangedetector is None:
-                        self.CNVchangedetector = CNVChangeDetectorTracker(
-                            base_proportion=0.02, temp_dir=self.output
-                        )
+                    logger.warning(f"Failed to load CNV detector state: {e}")                    
 
             # Initialize data structures
-            if self.sampleID not in self.update_cnv_dict.keys():
-                self.update_cnv_dict[self.sampleID] = {}
+            update_cnv_dict = self._load_update_cnv_dict()
+            if self.sampleID not in update_cnv_dict.keys():
+                update_cnv_dict[self.sampleID] = {}
 
             # Set up bed tree if needed
             if self.master_bed_tree[self.sampleID] is None:
@@ -788,25 +647,25 @@ class CNVAnalysis(BaseAnalysis):
 
             # Set up BAM file and data array
             bamdata = pysam.AlignmentFile(bamfile, "rb")
-            self.data_array_path = os.path.join(
+            data_array_path = os.path.join(
                 self.check_and_create_folder(self.output, self.sampleID),
                 "cnv_data_array.npy",
             )
 
             # Initialize or load data array using standard file operations
-            if not os.path.exists(self.data_array_path):
+            if not os.path.exists(data_array_path):
                 # Initialize with empty array
-                self.DATA_ARRAY = np.array([], dtype=self.dtype)
-                self.data_array_size = 0
+                DATA_ARRAY = np.array([], dtype=self.dtype)
+                data_array_size = 0
             else:
                 # Load existing data
                 try:
-                    self.DATA_ARRAY = np.load(self.data_array_path, allow_pickle=True)
-                    self.data_array_size = len(self.DATA_ARRAY)
+                    DATA_ARRAY = np.load(data_array_path, allow_pickle=True)
+                    data_array_size = len(DATA_ARRAY)
                 except Exception as e:
                     logger.warning(f"Failed to load existing data array: {e}")
-                    self.DATA_ARRAY = np.array([], dtype=self.dtype)
-                    self.data_array_size = 0
+                    DATA_ARRAY = np.array([], dtype=self.dtype)
+                    data_array_size = 0
 
             # Update map tracker
             self.map_tracker.update(
@@ -822,7 +681,7 @@ class CNVAnalysis(BaseAnalysis):
                 r_cnv,
                 r_bin,
                 r_var,
-                self.update_cnv_dict[self.sampleID],
+                updated_copy_numbers,
                 genome_length,
                 r2_cnv,
             ) = await run.cpu_bound(
@@ -830,18 +689,22 @@ class CNVAnalysis(BaseAnalysis):
                 bamfile,
                 self.threads,
                 60,
-                self.update_cnv_dict[self.sampleID],
+                update_cnv_dict[self.sampleID],
                 int(logging.ERROR),
                 self.ref_cnv_dict,
             )
-
-            self.cnv_dict["bin_width"] = r_bin
-            self.cnv_dict["variance"] = r_var
+            
+            # Update the local copy with the returned data
+            update_cnv_dict[self.sampleID] = updated_copy_numbers
+            
+            cnv_dict = {}
+            cnv_dict["bin_width"] = r_bin
+            cnv_dict["variance"] = r_var
 
             # Process breakpoints and update CNV detector
             cnvupdate = False
             for key in r_cnv.keys():
-                self.local_data_array = np.empty(0, dtype=self.dtype)
+                local_data_array = np.empty(0, dtype=self.dtype)
                 if key != "chrM" and re.match(r"^chr(\d+|X|Y)$", key):
                     moving_avg_data1 = await run.cpu_bound(moving_average, r_cnv[key])
                     moving_avg_data2 = await run.cpu_bound(moving_average, r2_cnv[key])
@@ -855,7 +718,7 @@ class CNVAnalysis(BaseAnalysis):
                             run_ruptures,
                             r_cnv[key],
                             5,  # penalty_value
-                            self.cnv_dict["bin_width"],
+                            cnv_dict["bin_width"],
                         )
 
                         # Check if any change points were detected by the ruptures algorithm
@@ -894,15 +757,15 @@ class CNVAnalysis(BaseAnalysis):
                                 item = np.array([(key, start, end)], dtype=self.dtype)
 
                                 # Append to local array (current processing batch)
-                                self.local_data_array = np.append(
-                                    self.local_data_array, item
+                                local_data_array = np.append(
+                                    local_data_array, item
                                 )
                                 # Append to persistent data array (all breakpoints for this sample)
-                                self.DATA_ARRAY = np.append(self.DATA_ARRAY, item)
+                                DATA_ARRAY = np.append(DATA_ARRAY, item)
 
                                 # Save the updated data array to file immediately
                                 try:
-                                    np.save(self.data_array_path, self.DATA_ARRAY)
+                                    np.save(data_array_path, DATA_ARRAY)
                                 except Exception as e:
                                     logger.warning(f"Failed to save data array: {e}")
 
@@ -912,12 +775,12 @@ class CNVAnalysis(BaseAnalysis):
                             cnvupdate = True
 
                             # Extract all breakpoints for this chromosome from persistent storage
-                            breakpoints = self.DATA_ARRAY[
-                                self.DATA_ARRAY["name"] == key
+                            breakpoints = DATA_ARRAY[
+                                DATA_ARRAY["name"] == key
                             ]
                             # Extract breakpoints from current processing batch
-                            local_breakpoints = self.local_data_array[
-                                self.local_data_array["name"] == key
+                            local_breakpoints = local_data_array[
+                                local_data_array["name"] == key
                             ]
 
                             # Only proceed if we have valid breakpoints to process
@@ -925,7 +788,7 @@ class CNVAnalysis(BaseAnalysis):
                                 try:
                                     # Add the detected breakpoints to the CNV change detector
                                     # This updates the internal tracking and generates BED targets
-                                    self.CNVchangedetector.add_breakpoints(
+                                    CNVchangedetector.add_breakpoints(
                                         key,  # chromosome name
                                         breakpoints,  # all historical breakpoints for this chromosome
                                         local_breakpoints,  # newly detected breakpoints
@@ -946,20 +809,19 @@ class CNVAnalysis(BaseAnalysis):
                 try:
 
                     # Save CNV detector state
-
-                    self.CNVchangedetector.save_state(str(state_dir))
+                    CNVchangedetector.save_state(str(state_dir))
                     logger.info("Successfully saved CNV detector state")
 
                     # Generate and save BED content
                     bedcontent = ""
                     bedcontent2 = ""
                     for chrom in r_cnv.keys():
-                        tempbedcontent = self.CNVchangedetector.get_bed_targets(chrom)
+                        tempbedcontent = CNVchangedetector.get_bed_targets(chrom)
                         if len(tempbedcontent) > 0:
                             bedcontent += tempbedcontent + "\n"
 
                         tempbedcontent2 = (
-                            self.CNVchangedetector.get_bed_targets_breakpoints(chrom)
+                            CNVchangedetector.get_bed_targets_breakpoints(chrom)
                         )
                         if len(tempbedcontent2) > 0:
                             bedcontent2 += tempbedcontent2 + "\n"
@@ -1002,12 +864,19 @@ class CNVAnalysis(BaseAnalysis):
                             self.check_and_create_folder(self.output, self.sampleID),
                             "CNV_dict.npy",
                         ),
-                        self.cnv_dict,
+                        cnv_dict,
                     )
 
                 except Exception as e:
                     logger.error(f"Error saving CNV detector state: {e}")
                     raise
+
+            # Always save the update_cnv_dict since it may have been modified by iterate_bam
+            try:
+                self._save_update_cnv_dict(update_cnv_dict)
+            except Exception as e:
+                logger.error(f"Error saving update_cnv_dict: {e}")
+                raise
 
         finally:
             # Clean up temporary files but preserve CNV detector
@@ -1129,338 +998,6 @@ class CNVAnalysis(BaseAnalysis):
             if self.target_table:
                 self.target_table.rows = []
                 ui.update(self.target_table)
-
-    def analyze_cytoband_cnv(self, cnv_data: dict, chromosome: str) -> pd.DataFrame:
-        """
-        Analyze CNV values within each cytoband to detect duplications and deletions.
-        Uses dynamic thresholds based on data variation for more robust detection.
-
-        Args:
-            cnv_data (dict): Dictionary containing CNV values
-            chromosome (str): Chromosome to analyze
-
-        Returns:
-            pd.DataFrame: DataFrame containing merged cytoband CNV analysis results
-        """
-        logger.debug(f"\n{'='*50}")
-        logger.debug(f"Starting CNV analysis for {chromosome}")
-        logger.debug(f"CNV data keys: {list(cnv_data.keys())}")
-        logger.debug(f"Bin width: {self.cnv_dict['bin_width']}")
-
-        # Check if bin width is small enough for accurate CNV calling
-        if self.cnv_dict["bin_width"] > 10_000_000:
-            logger.debug("Resolution insufficient for CNV calling")
-            return pd.DataFrame()
-
-        bin_width = self.cnv_dict["bin_width"]
-        chromosome_cytobands = self.cytobands_bed[
-            self.cytobands_bed["chrom"] == chromosome
-        ].copy()
-        logger.debug(
-            f"Number of cytobands for {chromosome}: {len(chromosome_cytobands)}"
-        )
-
-        # Pre-allocate merged_cytobands with a reasonable size
-        max_expected_cytobands = len(chromosome_cytobands)
-        merged_cytobands = [None] * max_expected_cytobands
-        merged_idx = 0
-        whole_chr_event = False
-        whole_chr_state = "NORMAL"
-
-        # First, analyze the whole chromosome for potential aneuploidy
-        if chromosome in cnv_data:
-            logger.debug(
-                f"\nAnalyzing chromosome {chromosome} for whole chromosome events:"
-            )
-
-            # Use boolean mask instead of concatenation
-            mask = np.ones(len(cnv_data[chromosome]), dtype=bool)
-            centromere = self.centromere_bed[self.centromere_bed["chrom"] == chromosome]
-            if not centromere.empty:
-                cent_start_bin = int(centromere["start_pos"].iloc[0] / bin_width)
-                cent_end_bin = int(centromere["end_pos"].iloc[0] / bin_width)
-                mask[cent_start_bin:cent_end_bin] = False
-                logger.debug(
-                    f"Excluded centromere region: {cent_start_bin}-{cent_end_bin}"
-                )
-            chr_cnv = cnv_data[chromosome][mask]
-
-            # Calculate chromosome-wide statistics
-            chr_mean = np.mean(chr_cnv)
-            chr_std = np.std(chr_cnv)
-            logger.debug(f"Chromosome-wide mean: {chr_mean:.3f}, std: {chr_std:.3f}")
-
-            # Calculate SD of chromosome means for whole chromosome event detection
-            chromosome_means = []
-            for chrom in cnv_data:
-                if chrom.startswith("chr") and chrom[3:].isdigit():  # Only autosomes
-                    # Use mask for centromere exclusion
-                    mask = np.ones(len(cnv_data[chrom]), dtype=bool)
-                    cent = self.centromere_bed[self.centromere_bed["chrom"] == chrom]
-                    if not cent.empty:
-                        cent_start = int(cent["start_pos"].iloc[0] / bin_width)
-                        cent_end = int(cent["end_pos"].iloc[0] / bin_width)
-                        mask[cent_start:cent_end] = False
-                    chrom_data = cnv_data[chrom][mask]
-                    if len(chrom_data) > 0:
-                        chromosome_means.append(np.mean(chrom_data))
-
-            means_std = np.std(chromosome_means)
-            means_mean = np.mean(chromosome_means)
-            logger.debug(
-                f"Mean of chromosome means: {means_mean:.3f}, std of means: {means_std:.3f}"
-            )
-
-            # Base thresholds on standard deviations from the mean
-            if chromosome.startswith("chr") and chromosome[3:].isdigit():  # Autosomes
-                # For whole chromosome events, use SD of means with 70% confidence
-                gain_threshold = means_mean + (1.0 * means_std)  # ~70% confidence
-                loss_threshold = means_mean - (1.0 * means_std)
-                # For focal events, use chromosome-specific SD
-                cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
-                cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
-            elif chromosome == "chrX":
-                if self.sex_estimate in ["Male", "XY"]:  # Male
-                    gain_threshold = means_mean + (1.0 * means_std)
-                    loss_threshold = means_mean - (1.0 * means_std)
-                    cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
-                    cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
-                else:  # Female
-                    gain_threshold = means_mean + (1.0 * means_std)
-                    loss_threshold = means_mean - (1.0 * means_std)
-                    cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
-                    cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
-            elif chromosome == "chrY":
-                if self.sex_estimate in ["Male", "XY"]:  # Male
-                    gain_threshold = means_mean + (1.0 * means_std)
-                    loss_threshold = means_mean - (1.0 * means_std)
-                    cytoband_gain_threshold = chr_mean + (1.0 * chr_std)
-                    cytoband_loss_threshold = chr_mean - (1.0 * chr_std)
-                else:  # Female
-                    # For Y in females, use slightly more extreme thresholds
-                    gain_threshold = means_mean + (1.2 * means_std)
-                    loss_threshold = means_mean - (1.2 * means_std)
-                    cytoband_gain_threshold = chr_mean + (1.2 * chr_std)
-                    cytoband_loss_threshold = chr_mean - (1.2 * chr_std)
-
-            logger.debug(
-                f"Thresholds - Whole chr gain: {gain_threshold:.3f}, loss: {loss_threshold:.3f}"
-            )
-            logger.debug(
-                f"Thresholds - Cytoband gain: {cytoband_gain_threshold:.3f}, loss: {cytoband_loss_threshold:.3f}"
-            )
-
-            # Calculate proportion of bins supporting gain/loss using thresholds
-            bins_above_gain = np.sum(chr_cnv > gain_threshold) / len(chr_cnv)
-            bins_below_loss = np.sum(chr_cnv < loss_threshold) / len(chr_cnv)
-
-            logger.debug(
-                f"Proportion of bins - Above gain: {bins_above_gain:.3f}, Below loss: {bins_below_loss:.3f}"
-            )
-
-            # Detect whole chromosome events with proportion threshold
-            min_proportion = 0.7  # Require at least 50% of bins to support the event
-            if bins_above_gain > min_proportion:
-                whole_chr_event = True
-                whole_chr_state = "GAIN"
-                logger.debug(f"WHOLE CHROMOSOME EVENT DETECTED: {chromosome} GAIN")
-            elif bins_below_loss > min_proportion:
-                whole_chr_event = True
-                whole_chr_state = "LOSS"
-                logger.debug(f"WHOLE CHROMOSOME EVENT DETECTED: {chromosome} LOSS")
-
-            # If whole chromosome event detected, add it to results
-            if whole_chr_event:
-                genes_in_chr = self.gene_bed[self.gene_bed["chrom"] == chromosome][
-                    "gene"
-                ].tolist()
-
-                merged_cytobands[merged_idx] = {
-                    "chrom": chromosome,
-                    "start_pos": chromosome_cytobands["start_pos"].min(),
-                    "end_pos": chromosome_cytobands["end_pos"].max(),
-                    "name": f"{chromosome} WHOLE CHROMOSOME {whole_chr_state}",
-                    "mean_cnv": chr_mean,
-                    "cnv_state": whole_chr_state,
-                    "length": chromosome_cytobands["end_pos"].max()
-                    - chromosome_cytobands["start_pos"].min(),
-                    "genes": genes_in_chr,
-                }
-                merged_idx += 1
-
-            # Now analyze individual cytobands regardless of whole chromosome event
-            current_group = None
-
-            for _, cytoband in chromosome_cytobands.iterrows():
-                start_bin = int(cytoband["start_pos"] / bin_width)
-                end_bin = int(cytoband["end_pos"] / bin_width)
-
-                if start_bin < len(cnv_data[chromosome]):
-                    region_cnv = cnv_data[chromosome][start_bin : end_bin + 1]
-                    mean_cnv = np.mean(region_cnv) if len(region_cnv) > 0 else 0
-
-                    # Determine cytoband state relative to whole chromosome state
-                    if whole_chr_event:
-                        # For whole chromosome events, only report significant deviations in opposite direction
-                        if whole_chr_state == "GAIN":
-                            if mean_cnv < chr_mean - (
-                                2.0 * chr_std
-                            ):  # More stringent threshold for opposite changes
-                                state = "LOSS"  # Only report significant losses within gained chromosomes
-                            else:
-                                state = "NORMAL"  # Don't duplicate gains
-                        elif whole_chr_state == "LOSS":
-                            if mean_cnv > chr_mean + (
-                                2.0 * chr_std
-                            ):  # More stringent threshold for opposite changes
-                                state = "GAIN"  # Only report significant gains within lost chromosomes
-                            else:
-                                state = "NORMAL"  # Don't duplicate losses
-                    else:
-                        # Normal threshold-based state determination
-                        if mean_cnv > cytoband_gain_threshold:
-                            state = "GAIN"
-                        elif mean_cnv < cytoband_loss_threshold:
-                            state = "LOSS"
-                        else:
-                            state = "NORMAL"
-                else:
-                    mean_cnv = 0
-                    state = "NO_DATA"
-
-                # Group cytobands with same state
-                if current_group is None:
-                    current_group = {
-                        "chrom": cytoband["chrom"],
-                        "start_pos": cytoband["start_pos"],
-                        "end_pos": cytoband["end_pos"],
-                        "name": cytoband["name"],
-                        "mean_cnv": [mean_cnv],
-                        "cnv_state": state,
-                        "bands": [cytoband["name"]],
-                        "length": cytoband["end_pos"] - cytoband["start_pos"],
-                        "genes": [],
-                    }
-                elif state == current_group["cnv_state"]:
-                    current_group["end_pos"] = cytoband["end_pos"]
-                    current_group["mean_cnv"].append(mean_cnv)
-                    current_group["bands"].append(cytoband["name"])
-                else:
-                    # Process current group
-                    if current_group["cnv_state"] in [
-                        "GAIN",
-                        "LOSS",
-                        "HIGH_GAIN",
-                        "DEEP_LOSS",
-                    ]:
-                        genes_in_region = self.gene_bed[
-                            (self.gene_bed["chrom"] == current_group["chrom"])
-                            & (self.gene_bed["start_pos"] <= current_group["end_pos"])
-                            & (self.gene_bed["end_pos"] >= current_group["start_pos"])
-                        ]["gene"].tolist()
-                        current_group["genes"] = genes_in_region
-
-                    current_group["name"] = (
-                        f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
-                    )
-                    current_group["mean_cnv"] = np.mean(current_group["mean_cnv"])
-                    current_group["length"] = (
-                        current_group["end_pos"] - current_group["start_pos"]
-                    )
-
-                    # Only add significant changes relative to whole chromosome state
-                    if (not whole_chr_event) or (
-                        current_group["cnv_state"] != whole_chr_state
-                    ):
-                        merged_cytobands[merged_idx] = current_group
-                        merged_idx += 1
-
-                    # Start new group
-                    current_group = {
-                        "chrom": cytoband["chrom"],
-                        "start_pos": cytoband["start_pos"],
-                        "end_pos": cytoband["end_pos"],
-                        "name": cytoband["name"],
-                        "mean_cnv": [mean_cnv],
-                        "cnv_state": state,
-                        "bands": [cytoband["name"]],
-                        "length": cytoband["end_pos"] - cytoband["start_pos"],
-                        "genes": [],
-                    }
-
-            # Process the last group
-            if current_group is not None:
-                if current_group["cnv_state"] in [
-                    "GAIN",
-                    "LOSS",
-                    "HIGH_GAIN",
-                    "DEEP_LOSS",
-                ]:
-                    genes_in_region = self.gene_bed[
-                        (self.gene_bed["chrom"] == current_group["chrom"])
-                        & (self.gene_bed["start_pos"] <= current_group["end_pos"])
-                        & (self.gene_bed["end_pos"] >= current_group["start_pos"])
-                    ]["gene"].tolist()
-                    current_group["genes"] = genes_in_region
-
-                current_group["name"] = (
-                    f"{current_group['chrom']} {current_group['bands'][0]}-{current_group['bands'][-1]}"
-                )
-                current_group["mean_cnv"] = np.mean(current_group["mean_cnv"])
-                current_group["length"] = (
-                    current_group["end_pos"] - current_group["start_pos"]
-                )
-
-                # Only add significant changes relative to whole chromosome state
-                if (not whole_chr_event) or (
-                    current_group["cnv_state"] != whole_chr_state
-                ):
-                    merged_cytobands[merged_idx] = current_group
-                    merged_idx += 1
-
-        # Trim the pre-allocated list to actual size
-        merged_cytobands = merged_cytobands[:merged_idx]
-
-        # Convert to DataFrame and sort
-        merged_df = pd.DataFrame(merged_cytobands)
-        if not merged_df.empty:
-            merged_df = merged_df.sort_values("start_pos")
-
-        return merged_df
-
-    def get_cytoband_cnv_summary(self, chromosome: str) -> str:
-        """
-        Generate a summary of CNV states for cytobands in a chromosome.
-
-        Args:
-            chromosome (str): Chromosome to summarize
-
-        Returns:
-            str: Summary string of gains and losses
-        """
-        if not hasattr(self, "result3") or not self.result3.cnv:
-            return "No CNV data available"
-
-        cytoband_analysis = self.analyze_cytoband_cnv(self.result3.cnv, chromosome)
-
-        # Filter for gains and losses
-        gains = cytoband_analysis[cytoband_analysis["cnv_state"] == "GAIN"]
-        losses = cytoband_analysis[cytoband_analysis["cnv_state"] == "LOSS"]
-
-        summary = []
-        if not gains.empty:
-            gain_bands = [
-                f"{row['name']} ({row['mean_cnv']:.2f})" for _, row in gains.iterrows()
-            ]
-            summary.append(f"Gains: {', '.join(gain_bands)}")
-
-        if not losses.empty:
-            loss_bands = [
-                f"{row['name']} ({row['mean_cnv']:.2f})" for _, row in losses.iterrows()
-            ]
-            summary.append(f"Losses: {', '.join(loss_bands)}")
-
-        return "\n".join(summary) if summary else "No significant CNV changes detected"
 
     async def stop_analysis(self):
         """Stop the CNV analysis."""

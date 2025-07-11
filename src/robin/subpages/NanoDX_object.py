@@ -49,6 +49,7 @@ from robin.subpages.base_analysis import BaseAnalysis, BaseVis
 from nicegui import ui, app, run, background_tasks
 import time
 import os
+import gc
 import sys
 import click
 from pathlib import Path
@@ -183,15 +184,105 @@ def classification(
     Returns:
         Tuple[np.ndarray, np.ndarray, int]: Predictions, class labels, and number of features.
     """
+    import subprocess
+    import json
+    import tempfile
+    
     logger.debug(f"Running classification with model file: {modelfile}")
+    
+    # Save DataFrame as a temporary CSV file
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".csv") as tmp_input:
+        input_file = tmp_input.name
+        test_df.to_csv(input_file, sep=",", index=False, encoding="utf-8")
+        
+        # Create a temporary output file for the prediction results
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".json") as tmp_output:
+            output_file = tmp_output.name
+            
+            # Run classification in separate process
+            try:
+                # Get the path to this script
+                current_script = os.path.abspath(__file__)
+                
+                # Run the classification in a separate process
+                result = subprocess.run([
+                    sys.executable,  # Use the same Python interpreter
+                    current_script,
+                    "classify",  # Command to run classification
+                    "--model", modelfile,
+                    "--input", input_file,
+                    "--output", output_file
+                ], 
+                capture_output=True, 
+                text=True, 
+                timeout=300  # 5 minute timeout
+                )
+                
+                if result.returncode != 0:
+                    logger.error(f"Classification failed: {result.stderr}")
+                    # Fallback to direct classification if subprocess fails
+                    logger.info("Falling back to direct classification")
+                    return _direct_classification(modelfile, test_df)
+                
+                # Read the classification results
+                with open(output_file, 'r') as f:
+                    result_data = json.load(f)
+                
+                # Extract results
+                predictions = np.array(result_data['predictions'])
+                class_labels = np.array(result_data['class_labels'])
+                n_features = result_data['n_features']
+                
+                logger.debug("Classification executed successfully via subprocess.")
+                
+            except subprocess.TimeoutExpired:
+                logger.error("Classification timed out after 5 minutes")
+                # Fallback to direct classification
+                logger.info("Falling back to direct classification")
+                return _direct_classification(modelfile, test_df)
+            except Exception as e:
+                logger.error(f"Subprocess classification failed: {str(e)}")
+                # Fallback to direct classification
+                logger.info("Falling back to direct classification")
+                return _direct_classification(modelfile, test_df)
+
+    return predictions, class_labels, n_features
+
+
+def _direct_classification(
+    modelfile: str, test_df: pd.DataFrame
+) -> Tuple[np.ndarray, np.ndarray, int]:
+    """
+    Direct classification function as fallback when subprocess fails.
+    
+    Args:
+        modelfile (str): Path to the neural network model file.
+        test_df (pd.DataFrame): DataFrame containing the test data.
+
+    Returns:
+        Tuple[np.ndarray, np.ndarray, int]: Predictions, class labels, and number of features.
+    """
+    logger.debug(f"Running direct classification with model file: {modelfile}")
     NN = NN_classifier(modelfile)
     try:
         predictions, class_labels, n_features = NN.predict(test_df)
-        logger.debug("Classification executed successfully.")
+        logger.debug("Direct classification executed successfully.")
     except Exception:
-        logger.error("An error occurred during classification", exc_info=True)
+        logger.error("An error occurred during direct classification", exc_info=True)
         test_df.to_csv("errordf.csv", sep=",", index=False, encoding="utf-8")
-        # sys.exit(1)
+        # Return empty results on error
+        return np.array([]), np.array([]), 0
+    finally:
+        NN = None
+        del NN
+        gc.collect()
+    
+    # Convert lists to numpy arrays to match type hints
+    if isinstance(predictions, list):
+        predictions = np.array(predictions)
+    if isinstance(class_labels, list):
+        class_labels = np.array(class_labels)
+    
     return predictions, class_labels, n_features
 
 
@@ -293,6 +384,16 @@ class NanoDX_object(BaseAnalysis):
             )
 
             async def nanodx_bam_background_work(sampleID, parquet_path):
+                # Initialize variables to None for cleanup
+                merged_modkit_df = None
+                nanodx_df = None
+                test_df = None
+                predictions = None
+                class_labels = None
+                nanoDX_df = None
+                nanoDX_save = None
+                nanodx_df_store = None
+                
                 try:
                     if self.check_file_time(parquet_path):
                         tomerge_length_file = os.path.join(
@@ -340,17 +441,23 @@ class NanoDX_object(BaseAnalysis):
                         nanoDX_save = nanoDX_df.set_index("class").T
                         nanoDX_save["number_probes"] = n_features
                         nanoDX_save["timestamp"] = currenttime
+                        
+                        if self.check_file_time(os.path.join(self.output, sampleID, self.storefile)):
+                            nanodx_df_store = pd.read_csv(
+                                os.path.join(os.path.join(self.output, sampleID, self.storefile)),
+                                index_col=0,
+                            )
+                        else:
+                            nanodx_df_store = pd.DataFrame()
 
-                        if sampleID not in self.nanodx_df_store.keys():
-                            self.nanodx_df_store[sampleID] = pd.DataFrame()
-                        self.nanodx_df_store[sampleID] = pd.concat(
+                        nanodx_df_store = pd.concat(
                             [
-                                self.nanodx_df_store[sampleID],
+                                nanodx_df_store,
                                 nanoDX_save.set_index("timestamp"),
                             ]
                         )
 
-                        self.nanodx_df_store[sampleID].to_csv(
+                        nanodx_df_store.to_csv(
                             os.path.join(
                                 self.check_and_create_folder(self.output, sampleID),
                                 self.storefile,
@@ -361,6 +468,27 @@ class NanoDX_object(BaseAnalysis):
 
                 except Exception as e:
                     logger.error(f"Error in process_bam (nanodx): {e}")
+                finally:
+                    # Comprehensive cleanup of all large DataFrames and variables
+                    if merged_modkit_df is not None:
+                        del merged_modkit_df
+                    if nanodx_df is not None:
+                        del nanodx_df
+                    if test_df is not None:
+                        del test_df
+                    if predictions is not None:
+                        del predictions
+                    if class_labels is not None:
+                        del class_labels
+                    if nanoDX_df is not None:
+                        del nanoDX_df
+                    if nanoDX_save is not None:
+                        del nanoDX_save
+                    if nanodx_df_store is not None:
+                        del nanodx_df_store
+                    
+                    # Force garbage collection
+                    gc.collect()
 
             await background_tasks.create(
                 nanodx_bam_background_work(sampleID, parquet_path)
@@ -930,5 +1058,44 @@ def run_main(
 
 
 if __name__ in {"__main__", "__mp_main__"}:
-    print("GUI launched by auto-reload function.")
-    run_main()
+    import argparse
+    import json
+    
+    # Check if this is a classification subprocess call
+    if len(sys.argv) > 1 and sys.argv[1] == "classify":
+        # This is a subprocess call for classification
+        parser = argparse.ArgumentParser(description="NanoDX classification subprocess")
+        parser.add_argument("command", help="Command to run")
+        parser.add_argument("--model", required=True, help="Path to model file")
+        parser.add_argument("--input", required=True, help="Path to input CSV file")
+        parser.add_argument("--output", required=True, help="Path to output JSON file")
+        
+        args = parser.parse_args()
+        
+        if args.command == "classify":
+            try:
+                # Load the test data
+                test_df = pd.read_csv(args.input, sep=",", index_col=False, encoding="utf-8")
+                
+                # Run the classification using the direct method
+                predictions, class_labels, n_features = _direct_classification(args.model, test_df)
+                
+                # Convert results to JSON and save
+                # predictions and class_labels are already lists from NN_classifier.predict()
+                result_data = {
+                    'predictions': predictions if isinstance(predictions, list) else predictions.tolist(),
+                    'class_labels': class_labels if isinstance(class_labels, list) else class_labels.tolist(),
+                    'n_features': int(n_features)
+                }
+                
+                with open(args.output, 'w') as f:
+                    json.dump(result_data, f)
+                
+                sys.exit(0)
+            except Exception as e:
+                print(f"Classification error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+    else:
+        # This is the main GUI launch
+        print("GUI launched by auto-reload function.")
+        run_main()

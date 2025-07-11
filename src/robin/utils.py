@@ -476,6 +476,7 @@ def merge_modkit_files(
                 logging.error(f"Error removing cache file: {str(e)}")
         # Disable StringCache
         pl.disable_string_cache()
+        gc.collect()
 
 
 def reconstruct_full_bedmethyl_for_mnpflex(parquet_file_path: str) -> pd.DataFrame:
@@ -573,7 +574,7 @@ COLOR_VALUE = "255,0,0"
 CANONICAL_CODE = "C"
 
 
-def run_matkit(sortfile: str, temp: str, threads: int) -> None:
+def run_matkit(sortfile: str, temp: str) -> None:
     """
     Executes modkit2-style processing on a bam file and extracts the methylation data.
 
@@ -596,7 +597,11 @@ def run_matkit(sortfile: str, temp: str, threads: int) -> None:
 
     # Write output to BEDMethyl format
     write_bedmethyl_improved(temp, counts, debug_probs=False)
+    # Clear memory
+    del counts
+    del debug_data
     logging.info(f"Modkit2 processing complete. Output written to: {temp}")
+    gc.collect()
 
 
 def run_modkit(sortfile: str, temp: str, threads: int) -> None:

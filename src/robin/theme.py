@@ -54,7 +54,6 @@ from robin.core.state import state, ProcessState, ProcessType
 import os
 import psutil
 import platform
-from nicegui import binding
 
 
 def get_version_from_github():
@@ -605,7 +604,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
 
     # Create disclaimer dialog that appears on first visit
     async def show_disclaimer():
-        # await ui.context.client.connected()
+        #await ui.context.client.connected()
         if not app.storage.tab.get("disclaimer_acknowledged", False):
             with ui.dialog().props(
                 "persistent"
@@ -700,8 +699,6 @@ def frame(navtitle: str, batphone=False, smalltitle=None):
 
                     # Create a data model for system metrics
                     class SystemMetrics:
-                        cpu = binding.BindableProperty()
-                        ram = binding.BindableProperty()
                         def __init__(self):
                             self.cpu = 0
                             self.ram = 0
