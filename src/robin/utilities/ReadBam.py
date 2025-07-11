@@ -306,11 +306,14 @@ class ReadBam:
 
                         if read_length > 0:
                             self.yield_tracking += read_length
-
-                if not bam_read.last_start:
-                    bam_read.last_start = read.get_tag("st")
-                if read.get_tag("st") > bam_read.last_start:
-                    bam_read.last_start = read.get_tag("st")
+                try:
+                    if not bam_read.last_start:
+                        bam_read.last_start = read.get_tag("st")
+                    elif read.get_tag("st") > bam_read.last_start:
+                        bam_read.last_start = read.get_tag("st")
+                except KeyError:
+                    logger.warning("No start time tag found in read")
+                    bam_read.last_start = bam_read.time_of_run
 
             self.mapped_reads = len(mapped_readset)
             self.unmapped_reads = len(unmapped_readset)
