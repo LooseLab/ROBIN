@@ -229,10 +229,17 @@ class ReadBam:
                                       or None if processing fails.
         """
         for rg_tags in self.read_bam():
+            # Ensure sample_id is not None - use a fallback if needed
+            sample_id = (
+                rg_tags[4]
+                if rg_tags[4]
+                else f"unknown_sample_{os.path.basename(self.bam_file)}"
+            )
+
             bam_read = BamRead(
                 ID=rg_tags[0],
                 time_of_run=rg_tags[1],
-                sample_id=rg_tags[4],
+                sample_id=sample_id,
                 basecall_model=rg_tags[2],
                 runid=rg_tags[3],
                 platform=rg_tags[5],
@@ -299,11 +306,14 @@ class ReadBam:
 
                         if read_length > 0:
                             self.yield_tracking += read_length
-
-                if not bam_read.last_start:
-                    bam_read.last_start = read.get_tag("st")
-                if read.get_tag("st") > bam_read.last_start:
-                    bam_read.last_start = read.get_tag("st")
+                try:
+                    if not bam_read.last_start:
+                        bam_read.last_start = read.get_tag("st")
+                    elif read.get_tag("st") > bam_read.last_start:
+                        bam_read.last_start = read.get_tag("st")
+                except KeyError:
+                    logger.warning("No start time tag found in read")
+                    bam_read.last_start = bam_read.time_of_run
 
             self.mapped_reads = len(mapped_readset)
             self.unmapped_reads = len(unmapped_readset)
@@ -341,10 +351,17 @@ class ReadBam:
                 logger.warning("No reads found in the BAM file")
                 return None
 
+            # Ensure sample_id is not None - use a fallback if needed
+            sample_id = (
+                rg_tags[4]
+                if rg_tags[4]
+                else f"unknown_sample_{os.path.basename(self.bam_file)}"
+            )
+
             bam_read = BamRead(
                 ID=rg_tags[0],
                 time_of_run=rg_tags[1],
-                sample_id=rg_tags[4],
+                sample_id=sample_id,
                 basecall_model=rg_tags[2],
                 runid=rg_tags[3],
                 platform=rg_tags[5],
