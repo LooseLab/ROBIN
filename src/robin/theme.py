@@ -270,16 +270,41 @@ def debug_memory_measurement():
         new_method = get_robin_ram_usage()
         print(f"New method: {new_method:.2f} GB")
         
-        # Show child processes
+        # Show child processes with detailed info
         children = list(main_process.children(recursive=True))
         if children:
             print(f"\nChild processes ({len(children)}):")
+            total_child_rss = 0
+            total_child_uss = 0
+            
             for i, child in enumerate(children):
                 try:
                     child_rss = child.memory_info().rss / (1024 * 1024 * 1024)
-                    print(f"  {i+1}. {child.name()} (PID: {child.pid}): {child_rss:.2f} GB")
+                    total_child_rss += child_rss
+                    
+                    # Try to get USS for child
+                    try:
+                        child_mem_info = child.memory_full_info()
+                        if hasattr(child_mem_info, 'uss'):
+                            child_uss = child_mem_info.uss / (1024 * 1024 * 1024)
+                            total_child_uss += child_uss
+                            print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS={child_uss:.2f}GB")
+                        else:
+                            print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=unknown")
+                    except:
+                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=error")
+                        
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
                     print(f"  {i+1}. {child.name()} (PID: {child.pid}): <access denied>")
+            
+            print(f"\nChild process totals: RSS={total_child_rss:.2f}GB, USS={total_child_uss:.2f}GB")
+            print(f"Main + Children RSS: {rss_gb + total_child_rss:.2f}GB")
+            print(f"Main + Children USS: {uss_smaps_gb + total_child_uss:.2f}GB" if uss_smaps is not None else "Main + Children USS: unknown")
+        
+        # Compare with smem output
+        print(f"\nComparison with smem:")
+        print(f"smem RSS: 3023.1MB = {3023.1/1024:.2f}GB")
+        print(f"Our total RSS: {rss_gb + total_child_rss:.2f}GB" if children else f"Our RSS: {rss_gb:.2f}GB")
         
         print("=== End Debug ===")
         
@@ -311,6 +336,11 @@ def _get_uss_from_smaps(pid):
         return None
 
 
+def reset_peak_memory():
+    """Reset the peak memory tracking to current value."""
+    current_peak[0] = get_robin_ram_usage()
+
+
 def collect_ram_usage():
     robin_ram = get_robin_ram_usage()
     current_time = datetime.now().strftime("%H:%M:%S")
@@ -325,6 +355,12 @@ def collect_ram_usage():
     swap_used_gb = round(swap.used / (1024 * 1024 * 1024), 2)  # Convert to GB
     swap_total_gb = round(swap.total / (1024 * 1024 * 1024), 2)  # Convert to GB
 
+    # Debug logging for memory discrepancy investigation
+    if robin_ram > 10:  # Log if memory usage is suspiciously high
+        logging.warning(f"High memory usage detected: {robin_ram:.2f}GB at {current_time}")
+        # Run debug function to get detailed breakdown
+        debug_memory_measurement()
+
     ram_history["robin"].append(robin_ram)
     ram_history["available"].append(available_gb)
     ram_history["free"].append(free_gb)
@@ -332,10 +368,10 @@ def collect_ram_usage():
     ram_history["swap_total"].append(swap_total_gb)
     ram_history["timestamps"].append(current_time)
 
-    # Update peak
+    # Update peak - FIXED: Don't reset to 0, properly track the maximum
     current_peak[0] = max(current_peak[0], robin_ram)
     ram_history["peak"].append(current_peak[0])
-    current_peak[0] = 0  # Reset for next interval
+    # Remove the buggy line: current_peak[0] = 0  # Reset for next interval
 
     # Keep only the last N points
     max_points = ram_history["max_points"]
