@@ -185,7 +185,11 @@ def get_robin_ram_usage():
         # Method 1: Try to get USS using psutil's memory_full_info() (newer versions)
         try:
             total_uss = 0
-            processes_to_check = [main_process] + list(main_process.children(recursive=True))
+            total_rss = 0
+            
+            # Get actual child processes (not just all processes in the tree)
+            children = _get_real_children(main_process)
+            processes_to_check = [main_process] + children
             
             for proc in processes_to_check:
                 try:
@@ -201,6 +205,10 @@ def get_robin_ram_usage():
                         else:
                             # Final fallback to RSS
                             total_uss += proc.memory_info().rss
+                    
+                    # Also track RSS for comparison
+                    total_rss += proc.memory_info().rss
+                    
                 except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError):
                     continue
                 except AttributeError:
@@ -210,15 +218,21 @@ def get_robin_ram_usage():
                         total_uss += uss
                     else:
                         total_uss += proc.memory_info().rss
+                    total_rss += proc.memory_info().rss
+            
+            # Log for debugging
+            if total_uss / (1024 * 1024 * 1024) > 5:  # If more than 5GB
+                logging.debug(f"Memory usage: USS={total_uss/(1024**3):.2f}GB, RSS={total_rss/(1024**3):.2f}GB, Children={len(children)}")
             
             return round(total_uss / (1024 * 1024 * 1024), 2)  # Convert to GB
             
         except Exception as e:
             logging.debug(f"USS method failed, falling back to RSS: {e}")
             
-            # Method 2: Fallback to RSS method
+            # Method 2: Fallback to RSS method with better child filtering
             ram_gb = main_process.memory_info().rss / (1024 * 1024 * 1024)
-            for child in main_process.children(recursive=True):
+            children = _get_real_children(main_process)
+            for child in children:
                 try:
                     ram_gb += child.memory_info().rss / (1024 * 1024 * 1024)
                 except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -270,41 +284,71 @@ def debug_memory_measurement():
         new_method = get_robin_ram_usage()
         print(f"New method: {new_method:.2f} GB")
         
-        # Show child processes with detailed info
-        children = list(main_process.children(recursive=True))
-        if children:
-            print(f"\nChild processes ({len(children)}):")
-            total_child_rss = 0
-            total_child_uss = 0
-            
-            for i, child in enumerate(children):
+        # Show ALL child processes (unfiltered)
+        all_children = list(main_process.children(recursive=True))
+        print(f"\nALL child processes ({len(all_children)}):")
+        total_all_rss = 0
+        total_all_uss = 0
+        
+        for i, child in enumerate(all_children):
+            try:
+                child_rss = child.memory_info().rss / (1024 * 1024 * 1024)
+                total_all_rss += child_rss
+                
+                # Try to get USS for child
                 try:
-                    child_rss = child.memory_info().rss / (1024 * 1024 * 1024)
-                    total_child_rss += child_rss
+                    child_mem_info = child.memory_full_info()
+                    if hasattr(child_mem_info, 'uss'):
+                        child_uss = child_mem_info.uss / (1024 * 1024 * 1024)
+                        total_all_uss += child_uss
+                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS={child_uss:.2f}GB")
+                    else:
+                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=unknown")
+                except:
+                    print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=error")
                     
-                    # Try to get USS for child
-                    try:
-                        child_mem_info = child.memory_full_info()
-                        if hasattr(child_mem_info, 'uss'):
-                            child_uss = child_mem_info.uss / (1024 * 1024 * 1024)
-                            total_child_uss += child_uss
-                            print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS={child_uss:.2f}GB")
-                        else:
-                            print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=unknown")
-                    except:
-                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=error")
-                        
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    print(f"  {i+1}. {child.name()} (PID: {child.pid}): <access denied>")
-            
-            print(f"\nChild process totals: RSS={total_child_rss:.2f}GB, USS={total_child_uss:.2f}GB")
-            print(f"Main + Children RSS: {rss_gb + total_child_rss:.2f}GB")
-            print(f"Main + Children USS: {uss_smaps_gb + total_child_uss:.2f}GB" if uss_smaps is not None else "Main + Children USS: unknown")
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                print(f"  {i+1}. {child.name()} (PID: {child.pid}): <access denied>")
+        
+        print(f"\nALL child process totals: RSS={total_all_rss:.2f}GB, USS={total_all_uss:.2f}GB")
+        print(f"Main + ALL Children RSS: {rss_gb + total_all_rss:.2f}GB")
+        print(f"Main + ALL Children USS: {uss_smaps_gb + total_all_uss:.2f}GB" if uss_smaps is not None else "Main + ALL Children USS: unknown")
+        
+        # Show FILTERED child processes (only ROBIN-related)
+        filtered_children = _get_real_children(main_process)
+        print(f"\nFILTERED child processes ({len(filtered_children)}):")
+        total_filtered_rss = 0
+        total_filtered_uss = 0
+        
+        for i, child in enumerate(filtered_children):
+            try:
+                child_rss = child.memory_info().rss / (1024 * 1024 * 1024)
+                total_filtered_rss += child_rss
+                
+                # Try to get USS for child
+                try:
+                    child_mem_info = child.memory_full_info()
+                    if hasattr(child_mem_info, 'uss'):
+                        child_uss = child_mem_info.uss / (1024 * 1024 * 1024)
+                        total_filtered_uss += child_uss
+                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS={child_uss:.2f}GB")
+                    else:
+                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=unknown")
+                except:
+                    print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=error")
+                    
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                print(f"  {i+1}. {child.name()} (PID: {child.pid}): <access denied>")
+        
+        print(f"\nFILTERED child process totals: RSS={total_filtered_rss:.2f}GB, USS={total_filtered_uss:.2f}GB")
+        print(f"Main + FILTERED Children RSS: {rss_gb + total_filtered_rss:.2f}GB")
+        print(f"Main + FILTERED Children USS: {uss_smaps_gb + total_filtered_uss:.2f}GB" if uss_smaps is not None else "Main + FILTERED Children USS: unknown")
         
         # Compare with smem output
         print(f"\nComparison with smem:")
         print(f"smem RSS: 3023.1MB = {3023.1/1024:.2f}GB")
-        print(f"Our total RSS: {rss_gb + total_child_rss:.2f}GB" if children else f"Our RSS: {rss_gb:.2f}GB")
+        print(f"Our filtered total RSS: {rss_gb + total_filtered_rss:.2f}GB")
+        print(f"Our filtered total USS: {uss_smaps_gb + total_filtered_uss:.2f}GB" if uss_smaps is not None else "Our filtered total USS: unknown")
         
         print("=== End Debug ===")
         
@@ -334,6 +378,48 @@ def _get_uss_from_smaps(pid):
         return uss
     except (FileNotFoundError, PermissionError, ValueError):
         return None
+
+
+def _get_real_children(process):
+    """
+    Get only the actual child processes, filtering out shared libraries and unrelated processes.
+    """
+    try:
+        children = []
+        for child in process.children(recursive=True):
+            try:
+                # Only count processes that are actually related to ROBIN
+                if _is_robin_related_process(child):
+                    children.append(child)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return children
+    except Exception:
+        return []
+
+
+def _is_robin_related_process(process):
+    """
+    Check if a process is actually related to ROBIN.
+    """
+    try:
+        # Check if it's a Python process with ROBIN-related command line
+        if process.name() in ['python', 'python3', 'python3.9', 'robin']:
+            cmdline = process.cmdline()
+            if any('robin' in arg.lower() for arg in cmdline):
+                return True
+            
+        # Check if it's a direct child (not grandchild) of the main process
+        if process.ppid() == os.getpid():
+            return True
+            
+        # Check if it's a subprocess we spawned for analysis
+        if process.name() in ['modkit', 'matkit', 'sturgeon', 'R', 'Rscript']:
+            return True
+            
+        return False
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return False
 
 
 def reset_peak_memory():
@@ -1302,3 +1388,126 @@ def get_process_ram_usage():
 
 # Start the background timer ONCE at app startup
 ui.timer(10.0, collect_ram_usage)
+
+
+def debug_process_tree():
+    """
+    Debug function to understand why we're picking up incorrect child processes.
+    Shows the full process tree and explains why each process is being counted.
+    """
+    try:
+        main_process = psutil.Process(os.getpid())
+        
+        print("=== Process Tree Debug ===")
+        print(f"Main ROBIN process: {main_process.name()} (PID: {main_process.pid})")
+        print(f"Command line: {' '.join(main_process.cmdline())}")
+        print(f"Parent PID: {main_process.ppid()}")
+        
+        # Get all processes in the system
+        all_processes = []
+        for proc in psutil.process_iter(['pid', 'name', 'ppid', 'cmdline']):
+            try:
+                all_processes.append(proc.info)
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        
+        # Find all processes that could be considered "children"
+        potential_children = []
+        for proc_info in all_processes:
+            pid = proc_info['pid']
+            ppid = proc_info['ppid']
+            
+            # Check if this process is in our process tree
+            if _is_in_process_tree(pid, main_process.pid, all_processes):
+                potential_children.append(proc_info)
+        
+        print(f"\nFound {len(potential_children)} processes in ROBIN's process tree:")
+        
+        for i, proc_info in enumerate(potential_children):
+            pid = proc_info['pid']
+            name = proc_info['name']
+            ppid = proc_info['ppid']
+            cmdline = ' '.join(proc_info['cmdline']) if proc_info['cmdline'] else 'N/A'
+            
+            # Determine why this process is being counted
+            reason = _explain_process_inclusion(proc_info, main_process.pid)
+            
+            print(f"\n{i+1}. {name} (PID: {pid}, PPID: {ppid})")
+            print(f"   Command: {cmdline}")
+            print(f"   Reason: {reason}")
+            
+            # Show memory usage if available
+            try:
+                proc = psutil.Process(pid)
+                rss = proc.memory_info().rss / (1024 * 1024 * 1024)
+                print(f"   Memory: {rss:.2f}GB RSS")
+            except:
+                print(f"   Memory: <access denied>")
+        
+        print("\n=== End Process Tree Debug ===")
+        
+    except Exception as e:
+        print(f"Process tree debug failed: {e}")
+
+
+def _is_in_process_tree(target_pid, root_pid, all_processes):
+    """
+    Check if a process is in the process tree starting from root_pid.
+    """
+    if target_pid == root_pid:
+        return True
+    
+    # Find the process
+    target_proc = None
+    for proc_info in all_processes:
+        if proc_info['pid'] == target_pid:
+            target_proc = proc_info
+            break
+    
+    if not target_proc:
+        return False
+    
+    # Recursively check if parent is in the tree
+    return _is_in_process_tree(target_proc['ppid'], root_pid, all_processes)
+
+
+def _explain_process_inclusion(proc_info, main_pid):
+    """
+    Explain why a process is being included in our child process count.
+    """
+    pid = proc_info['pid']
+    ppid = proc_info['ppid']
+    name = proc_info['name']
+    cmdline = proc_info['cmdline']
+    
+    reasons = []
+    
+    # Direct child
+    if ppid == main_pid:
+        reasons.append("Direct child of main ROBIN process")
+    
+    # Python process with ROBIN in command line
+    if name in ['python', 'python3', 'python3.9', 'robin']:
+        if cmdline and any('robin' in arg.lower() for arg in cmdline):
+            reasons.append("Python process with ROBIN in command line")
+    
+    # Analysis tool
+    if name in ['modkit', 'matkit', 'sturgeon', 'R', 'Rscript', 'bedtools']:
+        reasons.append("Analysis tool spawned by ROBIN")
+    
+    # Process in tree but not direct child
+    if ppid != main_pid and ppid != 1:
+        reasons.append("Process in ROBIN's process tree (indirect child)")
+    
+    # Reparented process
+    if ppid == 1:
+        reasons.append("Reparented to init/systemd (orphaned process)")
+    
+    # Shared library or dependency
+    if name in ['libc', 'libpython', 'libssl', 'libcrypto']:
+        reasons.append("Shared library process")
+    
+    if not reasons:
+        reasons.append("Unknown reason - process in tree but unclear relationship")
+    
+    return "; ".join(reasons)
