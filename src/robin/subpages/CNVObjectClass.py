@@ -107,6 +107,10 @@ import pickle
 import ruptures as rpt
 from typing import Optional, Tuple, BinaryIO, List
 import re
+import subprocess
+import json
+import tempfile
+import gc
 
 from collections import Counter
 from scipy.ndimage import uniform_filter1d
@@ -326,6 +330,98 @@ def iterate_bam(
         result.genome_length,
         result2.cnv,
     )
+
+
+
+
+
+def iterate_bam_mem_free(
+    bamfile,
+    _threads: int,
+    mapq_filter: int,
+    copy_numbers: dict,
+    log_level: int,
+    ref_cnv_dict,
+) -> Tuple[dict, int, float, dict]:
+    """
+    Memory-efficient version of iterate_bam using subprocess.
+    
+    Args:
+        bamfile (BinaryIO): The BAM file to process.
+        _threads (int): Number of threads to use.
+        mapq_filter (int): MAPQ filter value.
+        copy_numbers (dict): Dictionary to store copy number data.
+        log_level (int): Logging level.
+        ref_cnv_dict (dict): Reference CNV dictionary.
+
+    Returns:
+        Tuple[dict, int, float, dict]: CNV data, bin width, variance, and updated copy numbers.
+    """
+    # Save copy numbers to temporary file
+    with tempfile.NamedTemporaryFile(delete=True, suffix=".pkl") as tmp_copy:
+        copy_numbers_path = tmp_copy.name
+        pickle.dump(copy_numbers, open(copy_numbers_path, 'wb'))
+        
+        # Save reference CNV dict to temporary file
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".pkl") as tmp_ref:
+            ref_cnv_dict_path = tmp_ref.name
+            pickle.dump(ref_cnv_dict, open(ref_cnv_dict_path, 'wb'))
+            
+            # Create a temporary output file for the results
+            with tempfile.NamedTemporaryFile(delete=True, suffix=".json") as tmp_output:
+                output_file = tmp_output.name
+                
+                # Run analysis in separate process
+                try:
+                    # Get the path to this script
+                    current_script = os.path.abspath(__file__)
+                    
+                    # Run the analysis in a separate process
+                    result = subprocess.run([
+                        sys.executable,  # Use the same Python interpreter
+                        current_script,
+                        "cnv_analyze",  # Command to run CNV analysis
+                        "--bamfile", bamfile,
+                        "--threads", str(_threads),
+                        "--mapq_filter", str(mapq_filter),
+                        "--copy_numbers", copy_numbers_path,
+                        "--log_level", str(log_level),
+                        "--ref_cnv_dict", ref_cnv_dict_path,
+                        "--output", output_file
+                    ], 
+                    capture_output=True, 
+                    text=True, 
+                    timeout=600  # 10 minute timeout
+                    )
+                    
+                    if result.returncode != 0:
+                        raise RuntimeError(f"CNV analysis failed: {result.stderr}")
+                    
+                    # Read the analysis results
+                    with open(output_file, 'r') as f:
+                        analysis_data = json.load(f)
+                    
+                    # Convert lists back to numpy arrays
+                    for chrom in analysis_data['cnv']:
+                        if isinstance(analysis_data['cnv'][chrom], list):
+                            analysis_data['cnv'][chrom] = np.array(analysis_data['cnv'][chrom])
+                    for chrom in analysis_data['cnv2']:
+                        if isinstance(analysis_data['cnv2'][chrom], list):
+                            analysis_data['cnv2'][chrom] = np.array(analysis_data['cnv2'][chrom])
+                    
+                except subprocess.TimeoutExpired:
+                    raise RuntimeError("CNV analysis timed out after 10 minutes")
+                except Exception as e:
+                    raise RuntimeError(f"CNV analysis failed: {str(e)}")
+
+        return (
+            analysis_data['cnv'],
+            analysis_data['bin_width'],
+            analysis_data['variance'],
+            analysis_data['copy_numbers'],
+            analysis_data['genome_length'],
+            analysis_data['cnv2'],
+        )
 
 
 class CNVAnalysis(BaseAnalysis):
@@ -685,7 +781,7 @@ class CNVAnalysis(BaseAnalysis):
                 genome_length,
                 r2_cnv,
             ) = await run.cpu_bound(
-                iterate_bam,
+                iterate_bam_mem_free,
                 bamfile,
                 self.threads,
                 60,
@@ -877,10 +973,24 @@ class CNVAnalysis(BaseAnalysis):
             except Exception as e:
                 logger.error(f"Error saving update_cnv_dict: {e}")
                 raise
+            
+            # Clean up large variables to free memory
+            if 'r_cnv' in locals():
+                del r_cnv
+            if 'r2_cnv' in locals():
+                del r2_cnv
+            if 'DATA_ARRAY' in locals():
+                del DATA_ARRAY
+            if 'bamdata' in locals():
+                del bamdata
 
         finally:
             # Clean up temporary files but preserve CNV detector
             self._cleanup_state()
+            
+            # Force garbage collection to free memory
+            gc.collect()
+            
             self.running = False
             state.set_process_state("CNV Analysis", ProcessState.WAITING_FOR_DATA)
 
@@ -1140,5 +1250,77 @@ def main(
 
 
 if __name__ in {"__main__", "__mp_main__"}:
-    print("GUI launched by auto-reload function.")
-    main()
+    import argparse
+    
+    # Check if this is a CNV analysis subprocess call
+    if len(sys.argv) > 1 and sys.argv[1] == "cnv_analyze":
+        # This is a subprocess call for CNV analysis
+        parser = argparse.ArgumentParser(description="CNV analysis subprocess")
+        parser.add_argument("command", help="Command to run")
+        parser.add_argument("--bamfile", required=True, help="Path to BAM file")
+        parser.add_argument("--threads", required=True, type=int, help="Number of threads")
+        parser.add_argument("--mapq_filter", required=True, type=int, help="MAPQ filter")
+        parser.add_argument("--copy_numbers", required=True, help="Path to copy numbers pickle file")
+        parser.add_argument("--log_level", required=True, type=int, help="Log level")
+        parser.add_argument("--ref_cnv_dict", required=True, help="Path to reference CNV dict pickle file")
+        parser.add_argument("--output", required=True, help="Path to output JSON file")
+        
+        args = parser.parse_args()
+        
+        if args.command == "cnv_analyze":
+            try:
+                # Load copy numbers
+                with open(args.copy_numbers, 'rb') as f:
+                    copy_numbers = pickle.load(f)
+                
+                # Load reference CNV dict
+                with open(args.ref_cnv_dict, 'rb') as f:
+                    ref_cnv_dict = pickle.load(f)
+                
+                # Run the analysis
+                result = iterate_bam_file(
+                    args.bamfile,
+                    _threads=args.threads,
+                    mapq_filter=args.mapq_filter,
+                    copy_numbers=copy_numbers,
+                    log_level=args.log_level,
+                )
+
+                result2 = iterate_bam_file(
+                    args.bamfile,
+                    _threads=args.threads,
+                    mapq_filter=args.mapq_filter,
+                    copy_numbers=ref_cnv_dict,
+                    log_level=args.log_level,
+                    bin_width=result.bin_width,
+                )
+
+                # Prepare results for JSON serialization
+                results = {
+                    'cnv': result.cnv,
+                    'bin_width': result.bin_width,
+                    'variance': result.variance,
+                    'copy_numbers': copy_numbers,
+                    'genome_length': result.genome_length,
+                    'cnv2': result2.cnv
+                }
+                
+                # Convert numpy arrays to lists for JSON serialization
+                for chrom in results['cnv']:
+                    if isinstance(results['cnv'][chrom], np.ndarray):
+                        results['cnv'][chrom] = results['cnv'][chrom].tolist()
+                for chrom in results['cnv2']:
+                    if isinstance(results['cnv2'][chrom], np.ndarray):
+                        results['cnv2'][chrom] = results['cnv2'][chrom].tolist()
+                
+                with open(args.output, 'w') as f:
+                    json.dump(results, f)
+                
+                sys.exit(0)
+            except Exception as e:
+                print(f"CNV analysis error: {str(e)}", file=sys.stderr)
+                sys.exit(1)
+    else:
+        # This is the main GUI launch
+        print("GUI launched by auto-reload function.")
+        main()
