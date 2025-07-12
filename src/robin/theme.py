@@ -173,14 +173,142 @@ current_peak = [0]
 
 
 def get_robin_ram_usage():
-    process = psutil.Process(os.getpid())
-    ram_gb = process.memory_info().rss / (1024 * 1024 * 1024)
-    for child in process.children(recursive=True):
+    """
+    Get accurate RAM usage for ROBIN process and its children on Linux.
+    Uses private memory (USS) to avoid double-counting shared memory.
+    Falls back to RSS if USS is not available.
+    """
+    try:
+        # Get the main ROBIN process
+        main_process = psutil.Process(os.getpid())
+        
+        # Method 1: Try to get USS using psutil's memory_full_info() (newer versions)
         try:
-            ram_gb += child.memory_info().rss / (1024 * 1024 * 1024)
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-    return round(ram_gb, 2)
+            total_uss = 0
+            processes_to_check = [main_process] + list(main_process.children(recursive=True))
+            
+            for proc in processes_to_check:
+                try:
+                    # Try memory_full_info() first (available in newer psutil versions)
+                    mem_info = proc.memory_full_info()
+                    if hasattr(mem_info, 'uss'):
+                        total_uss += mem_info.uss
+                    else:
+                        # Fallback to smaps parsing
+                        uss = _get_uss_from_smaps(proc.pid)
+                        if uss is not None:
+                            total_uss += uss
+                        else:
+                            # Final fallback to RSS
+                            total_uss += proc.memory_info().rss
+                except (psutil.NoSuchProcess, psutil.AccessDenied, FileNotFoundError):
+                    continue
+                except AttributeError:
+                    # memory_full_info() not available, try smaps
+                    uss = _get_uss_from_smaps(proc.pid)
+                    if uss is not None:
+                        total_uss += uss
+                    else:
+                        total_uss += proc.memory_info().rss
+            
+            return round(total_uss / (1024 * 1024 * 1024), 2)  # Convert to GB
+            
+        except Exception as e:
+            logging.debug(f"USS method failed, falling back to RSS: {e}")
+            
+            # Method 2: Fallback to RSS method
+            ram_gb = main_process.memory_info().rss / (1024 * 1024 * 1024)
+            for child in main_process.children(recursive=True):
+                try:
+                    ram_gb += child.memory_info().rss / (1024 * 1024 * 1024)
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    continue
+            return round(ram_gb, 2)
+            
+    except Exception as e:
+        logging.warning(f"Error getting RAM usage: {e}")
+        return 0.0
+
+
+def debug_memory_measurement():
+    """
+    Debug function to compare different memory measurement methods.
+    This helps verify the accuracy of our memory reporting.
+    """
+    try:
+        main_process = psutil.Process(os.getpid())
+        
+        print("=== Memory Measurement Debug ===")
+        print(f"Process: {main_process.name()} (PID: {main_process.pid})")
+        
+        # Method 1: RSS (old method)
+        rss_bytes = main_process.memory_info().rss
+        rss_gb = rss_bytes / (1024 * 1024 * 1024)
+        print(f"RSS: {rss_gb:.2f} GB ({rss_bytes:,} bytes)")
+        
+        # Method 2: USS via memory_full_info() if available
+        try:
+            mem_info = main_process.memory_full_info()
+            if hasattr(mem_info, 'uss'):
+                uss_bytes = mem_info.uss
+                uss_gb = uss_bytes / (1024 * 1024 * 1024)
+                print(f"USS (psutil): {uss_gb:.2f} GB ({uss_bytes:,} bytes)")
+            else:
+                print("USS not available in psutil")
+        except Exception as e:
+            print(f"USS (psutil) failed: {e}")
+        
+        # Method 3: USS via smaps
+        uss_smaps = _get_uss_from_smaps(main_process.pid)
+        if uss_smaps is not None:
+            uss_smaps_gb = uss_smaps / (1024 * 1024 * 1024)
+            print(f"USS (smaps): {uss_smaps_gb:.2f} GB ({uss_smaps:,} bytes)")
+        else:
+            print("USS (smaps) not available")
+        
+        # Method 4: Our new function
+        new_method = get_robin_ram_usage()
+        print(f"New method: {new_method:.2f} GB")
+        
+        # Show child processes
+        children = list(main_process.children(recursive=True))
+        if children:
+            print(f"\nChild processes ({len(children)}):")
+            for i, child in enumerate(children):
+                try:
+                    child_rss = child.memory_info().rss / (1024 * 1024 * 1024)
+                    print(f"  {i+1}. {child.name()} (PID: {child.pid}): {child_rss:.2f} GB")
+                except (psutil.NoSuchProcess, psutil.AccessDenied):
+                    print(f"  {i+1}. {child.name()} (PID: {child.pid}): <access denied>")
+        
+        print("=== End Debug ===")
+        
+    except Exception as e:
+        print(f"Debug failed: {e}")
+
+
+def _get_uss_from_smaps(pid):
+    """
+    Get USS (Unique Set Size) from /proc/[pid]/smaps on Linux.
+    This is the most accurate way to measure process memory usage.
+    """
+    try:
+        uss = 0
+        smaps_path = f"/proc/{pid}/smaps"
+        
+        if not os.path.exists(smaps_path):
+            return None
+            
+        with open(smaps_path, 'r') as f:
+            for line in f:
+                if line.startswith('Private_Clean:') or line.startswith('Private_Dirty:'):
+                    # Extract the size in KB and convert to bytes
+                    size_kb = int(line.split()[1])
+                    uss += size_kb * 1024
+                    
+        return uss
+    except (FileNotFoundError, PermissionError, ValueError):
+        return None
 
 
 def collect_ram_usage():
