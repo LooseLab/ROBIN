@@ -1,12 +1,12 @@
-name: robin
+name: robin_0_3
 channels:
   - bioconda
   - conda-forge
   - defaults
 dependencies:
   - git-lfs
-  - r-base
-  - bioconductor-genomicranges
+  - r-base=4.3
+  - bioconductor-genomicranges=1.54.1
   - bioconda::snpsift
   - bioconda::snpeff
   - bioconda::samtools
