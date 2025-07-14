@@ -37,9 +37,9 @@ from robin import theme
 
 from minknow_api.manager import Manager
 import minknow_api.manager_pb2 as manager_pb2
+from minknow_api.read_end_reason_pb2 import ReadEndReason
 from minknow_api.statistics_pb2 import (
     ReadLengthHistogramSplit,
-    ReadEndReason,
     DataSelection,
 )
 import logging
