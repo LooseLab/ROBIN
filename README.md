@@ -8,6 +8,7 @@
 **Table of Contents**
 
 - [Installation](#installation)
+- [Known Issues](#issues)
 - [Usage](#usage)
 - [About](#about)
 - [License](#license)
@@ -51,25 +52,30 @@ To activate the environment:
 conda activate robin
 ```
 
-If on OSX you will probably need to run:
+If on OSX you will need to run:
 
-### Note: On OSX you will most likely need to install the package genomicranges into R. To do so launch R and run:
 
 ```console
-if (!require("BiocManager", quietly = TRUE))
-    install.packages("BiocManager")
-
-BiocManager::install("GenomicRanges")
+Rscript install_r_packages.R
 ```
 
 Then finally run:
 
 ```console
-pip install .
+pip install -e .
 ```
 
+## Known Issues
+
+Due to microsoft azure genomics retiring support for hosting snpEff libraries, SNP calling is currently disabled as standard in ROBIN. We will be seeking to resolve this.
+
+On Apple Silicon Macs it is necessary to install specific R libraries by following the instructions above.
 
 ## Usage
+
+Important:
+
+ROBIN is designed to work with small BAM files generated every N reads or few minutes. If you provide it with a merged BAM file it may brun very slowly. We recommend writing a BAM file every 10,000 reads or one to two minutes.
 
 ```console
 ❯ robin --help
