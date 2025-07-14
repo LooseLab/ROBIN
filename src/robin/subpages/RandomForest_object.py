@@ -54,7 +54,6 @@ HVPATH = os.path.join(
     os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
 )
 
-
 def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
     """
     Run the Random Forest R script on the methylation data.

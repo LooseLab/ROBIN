@@ -1,3 +1,4 @@
+import warnings
 import uuid
 import click
 import os
@@ -8,6 +9,9 @@ import asyncio
 from time import sleep
 import queue
 from logging.handlers import QueueHandler, QueueListener
+
+# Suppress pkg_resources deprecation warnings from sorted_nearest
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
 
 from typing import Optional, List
 from pathlib import Path

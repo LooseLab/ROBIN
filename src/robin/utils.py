@@ -1,3 +1,4 @@
+import warnings
 from typing import List, Optional
 import gc
 import os
@@ -9,6 +10,10 @@ from datetime import datetime
 from pathlib import Path
 import pandas as pd
 import polars as pl
+
+# Suppress pkg_resources deprecation warnings from sorted_nearest
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
+
 import pyranges as pr
 import pysam
 from alive_progress import alive_bar
