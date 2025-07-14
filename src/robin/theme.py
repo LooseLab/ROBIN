@@ -1154,7 +1154,7 @@ def workflow_page():
         smalltitle="Workflow",
     ):
         # Get versions for the diagram
-        modkit_version = get_modkit_version()
+        #modkit_version = get_modkit_version()
         sturgeon_version = get_sturgeon_version()
         crossnn_version = get_crossnn_version()
         cnv_from_bam_version = get_cnv_from_bam_version()
@@ -1188,7 +1188,7 @@ flowchart TD
         runInfo["Extract Run Information"]
         groupRuns["Group by Run"]
         mergeBam["Merge BAM Files"]
-        methylation["Extract Methylation<br>(modkit v{modkit_version})"]
+        methylation["Extract Methylation<br>(modkit retired)"]
         individualBam["Process BAMs Individually"]
         cnv["CNV Analysis<br>(CNV from BAM v{cnv_from_bam_version})"]
         fusion["Fusion Analysis"]
