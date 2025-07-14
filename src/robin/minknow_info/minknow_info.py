@@ -51,6 +51,18 @@ UNIQUE_ID: str = str(uuid.uuid4())
 logger = logging.getLogger(__name__)
 
 
+def generate_sampleID():
+    """Placeholder function for sample ID generation from camera."""
+    # TODO: Implement sample ID generation from camera image
+    logger.info("Sample ID generation from camera not yet implemented")
+
+
+def generate_flowcellID():
+    """Placeholder function for flowcell ID generation from camera."""
+    # TODO: Implement flowcell ID generation from camera image
+    logger.info("Flowcell ID generation from camera not yet implemented")
+
+
 class ExperimentSpec(object):
     """
     A class to hold experiment specifications for a MinKNOW sequencing position.
@@ -594,11 +606,9 @@ class Minknow_Info:
         # Determine appropriate scale for bases
         max_bases = max(self.pass_bases) if self.pass_bases else 0
         if max_bases >= 1:  # Greater than 1 Gb
-            base_scale = 1
             base_unit = "Gb"
             formatted_bases = self.pass_bases
         else:
-            base_scale = 1000  # Convert to Mb
             base_unit = "Mb"
             formatted_bases = [b * 1000 for b in self.pass_bases]  # Convert Gb to Mb
 
@@ -754,11 +764,9 @@ class Minknow_Info:
                     # Determine appropriate scale
                     max_bases = max(self.pass_bases)
                     if max_bases >= 1:  # Greater than 1 Gb
-                        base_scale = 1
                         base_unit = "Gb"
                         formatted_bases = self.pass_bases
                     else:
-                        base_scale = 1000  # Convert to Mb
                         base_unit = "Mb"
                         formatted_bases = [
                             b * 1000 for b in self.pass_bases
@@ -1176,7 +1184,17 @@ def index_page() -> None:
         # my_connection.connect_to_minknow()
         positions = list(my_connection.flow_cell_positions())
         ui.label(f"{positions[0]}")
-        display_object = Minknow_Info(positions[0])
+        # Create Minknow_Info instance with required parameters
+        # Note: These are placeholder values - in a real application, these would come from configuration
+        _ = Minknow_Info(
+            position=positions[0],
+            centreID="DEFAULT_CENTRE",
+            kit="DEFAULT_KIT",
+            reference="DEFAULT_REFERENCE",
+            basecall_config="DEFAULT_BASECALL_CONFIG",
+            bed_file="DEFAULT_BED_FILE",
+            experiment_duration=24,  # 24 hours default
+        )
 
 
 def run_class(port: int, reload: bool):

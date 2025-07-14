@@ -56,7 +56,7 @@ import numpy as np
 import re
 import click
 from typing import Optional, Tuple, Dict, List, Set
-from nicegui import ui, run, app, background_tasks
+from nicegui import ui, run, app, background_tasks, binding
 from robin import theme, resources
 from dna_features_viewer import GraphicFeature, GraphicRecord
 from pathlib import Path
@@ -70,11 +70,38 @@ from robin.core.state import state, ProcessState
 from datetime import datetime
 from itertools import combinations
 
+
 matplotlib.use("agg")
 from matplotlib import pyplot as plt
 
 # Use the main logger configured in the main application
 logger = logging.getLogger(__name__)
+
+
+class FusionDisplayState:
+    """Optimized display state for fusion analysis using NiceGUI BindableProperty."""
+    
+    # Define bindable properties
+    candidates_formatted = binding.BindableProperty()
+    all_candidates_formatted = binding.BindableProperty()
+    sv_count_formatted = binding.BindableProperty()
+    candidates_with_label = binding.BindableProperty()
+    all_candidates_with_label = binding.BindableProperty()
+    
+    def __init__(self):
+        self.candidates_formatted = "0"
+        self.all_candidates_formatted = "0"
+        self.sv_count_formatted = "0"
+        self.candidates_with_label = "0 between target fusions"
+        self.all_candidates_with_label = "0 genome wide fusions"
+    
+    def update_from_data(self, candidates: int, all_candidates: int, sv_count: int):
+        """Update display state from fusion data."""
+        self.candidates_formatted = f"{candidates}"
+        self.all_candidates_formatted = f"{all_candidates}"
+        self.sv_count_formatted = f"{sv_count}"
+        self.candidates_with_label = f"{candidates} between target fusions"
+        self.all_candidates_with_label = f"{all_candidates} genome wide fusions"
 
 # Configure matplotlib font settings
 plt.rcParams["font.family"] = ["sans-serif"]
@@ -111,16 +138,16 @@ def get_aligned_read_coords(aln):
     ct = aln.cigartuples or []
     # 1) leading S/H
     rs = 0
-    for op, l in ct:
+    for op, length in ct:
         if op in (4, 5):  # S or H
-            rs += l
+            rs += length
         else:
             break
     # 2) trailing S/H
     te = 0
-    for op, l in reversed(ct):
+    for op, length in reversed(ct):
         if op in (4, 5):
-            te += l
+            te += length
         else:
             break
     re = aln.query_length - te
@@ -130,15 +157,14 @@ def get_aligned_read_coords(aln):
 def extract_split_read_alignments(bam_path):
     """
     Optimized version of split read alignment extraction with early filtering and memory efficiency.
-    
+
     Performance improvements:
     - Single pass through BAM file instead of two passes
     - Early filtering to reduce memory usage
     - Pre-allocated lists for better memory efficiency
     - Optimized CIGAR parsing
     """
-    # Pre-allocate lists with estimated capacity to avoid resizing
-    estimated_capacity = 10000  # Conservative estimate
+    # Pre-allocate lists for better memory efficiency
     qnames = []
     types = []
     rnames = []
@@ -154,38 +180,38 @@ def extract_split_read_alignments(bam_path):
     right_softs = []
     right_hards = []
     mqs = []
-    
+
     # Single pass through BAM file with early filtering
     with pysam.AlignmentFile(bam_path, "rb") as bam:
         for aln in bam.fetch(until_eof=True):
             # Early filtering: skip unmapped and secondary alignments
             if aln.is_unmapped or aln.is_secondary:
                 continue
-                
+
             # Early filtering: only process reads with supplementary alignments or SA tag
             if not (aln.is_supplementary or aln.has_tag("SA")):
                 continue
 
             # Optimized CIGAR parsing
             ct = aln.cigartuples or []
-            
+
             # Compute left-end clipping efficiently
             left_soft = left_hard = 0
-            for op, l in ct:
+            for op, length in ct:
                 if op == 4:  # soft clip
-                    left_soft += l
+                    left_soft += length
                 elif op == 5:  # hard clip
-                    left_hard += l
+                    left_hard += length
                 else:
                     break
 
             # Compute right-end clipping efficiently
             right_soft = right_hard = 0
-            for op, l in reversed(ct):
+            for op, length in reversed(ct):
                 if op == 4:
-                    right_soft += l
+                    right_soft += length
                 elif op == 5:
-                    right_hard += l
+                    right_hard += length
                 else:
                     break
 
@@ -217,29 +243,31 @@ def extract_split_read_alignments(bam_path):
             mqs.append(aln.mapping_quality)
 
     # Create DataFrame efficiently with pre-allocated lists
-    return pd.DataFrame({
-        "QNAME": qnames,
-        "TYPE": types,
-        "RNAME": rnames,
-        "STRAND": strands,
-        "REF_START": ref_starts,
-        "REF_END": ref_ends,
-        "REF_SPAN": ref_spans,
-        "READ_START": read_starts,
-        "READ_END": read_ends,
-        "READ_SPAN": read_spans,
-        "LEFT_SOFT": left_softs,
-        "LEFT_HARD": left_hards,
-        "RIGHT_SOFT": right_softs,
-        "RIGHT_HARD": right_hards,
-        "MQ": mqs,
-    })
+    return pd.DataFrame(
+        {
+            "QNAME": qnames,
+            "TYPE": types,
+            "RNAME": rnames,
+            "STRAND": strands,
+            "REF_START": ref_starts,
+            "REF_END": ref_ends,
+            "REF_SPAN": ref_spans,
+            "READ_START": read_starts,
+            "READ_END": read_ends,
+            "READ_SPAN": read_spans,
+            "LEFT_SOFT": left_softs,
+            "LEFT_HARD": left_hards,
+            "RIGHT_SOFT": right_softs,
+            "RIGHT_HARD": right_hards,
+            "MQ": mqs,
+        }
+    )
 
 
 def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
     """
     Optimized version of links DataFrame construction with improved performance.
-    
+
     From a DataFrame of split‐read pieces (with columns QNAME, RNAME, STRAND,
     REF_START, REF_END, READ_START, READ_END, piece_order, etc.), build a
     links table of consecutive piece‐pairs.  Classify each link as per your
@@ -251,20 +279,19 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
         coord_2 to RNAME.2 (the "head" for that piece).
     genomic_gap is set to –1 if the two pieces land on different chromosomes,
     else head2–tail1.
-    
+
     Performance improvements:
     - Pre-allocated lists for better memory efficiency
     - Optimized event classification logic
     - Reduced function calls in loops
     - Early exits for edge cases
     """
-    
+
     # Early exit if DataFrame is empty
     if df.empty:
         return pd.DataFrame()
-    
-    # Pre-allocate lists with estimated capacity
-    estimated_capacity = len(df) // 2  # Conservative estimate
+
+    # Pre-allocate lists for better memory efficiency
     qnames = []
     rname1s = []
     rname2s = []
@@ -272,7 +299,7 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
     coord2s = []
     genomic_gaps = []
     events = []
-    
+
     # Cache natural_key function to avoid repeated compilation
     def natural_key(s: str):
         # split digits vs letters, so e.g. "chr2" < "chr10"
@@ -284,16 +311,16 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
     for qname, grp in df.groupby("QNAME", sort=False, observed=True):
         # Sort by piece_order once
         seq = grp.sort_values("piece_order")
-        
+
         # Early exit if only one piece
         if len(seq) < 2:
             continue
-            
+
         # Process consecutive pairs efficiently
         for i in range(len(seq) - 1):
             p1 = seq.iloc[i]
             p2 = seq.iloc[i + 1]
-            
+
             # compute tail/head
             tail1 = p1.REF_END
             head2 = p2.REF_START
@@ -304,9 +331,17 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
                 same_strand = p1.STRAND == p2.STRAND
                 if same_strand:
                     if p1.STRAND == "+":
-                        ev = "deletion" if p1.REF_START < p2.REF_START else "intra_translocation"
+                        ev = (
+                            "deletion"
+                            if p1.REF_START < p2.REF_START
+                            else "intra_translocation"
+                        )
                     else:  # p1.STRAND == "-"
-                        ev = "deletion" if p1.REF_START < p2.REF_START else "intra_translocation"
+                        ev = (
+                            "deletion"
+                            if p1.REF_START < p2.REF_START
+                            else "intra_translocation"
+                        )
                 else:
                     ev = "inversion"
             else:
@@ -320,7 +355,7 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
             # Cache natural key comparisons
             nk1 = natural_key(p1.RNAME)
             nk2 = natural_key(p2.RNAME)
-            
+
             first_is_p1 = (nk1 < nk2) or (nk1 == nk2 and five1 <= five2)
 
             if first_is_p1:
@@ -343,21 +378,23 @@ def build_links_df(df: pd.DataFrame) -> pd.DataFrame:
             events.append(ev)
 
     # Create DataFrame efficiently with pre-allocated lists
-    return pd.DataFrame({
-        "QNAME": qnames,
-        "RNAME.1": rname1s,
-        "RNAME.2": rname2s,
-        "coord_1": coord1s,
-        "coord_2": coord2s,
-        "genomic_gap": genomic_gaps,
-        "event": events,
-    })
+    return pd.DataFrame(
+        {
+            "QNAME": qnames,
+            "RNAME.1": rname1s,
+            "RNAME.2": rname2s,
+            "coord_1": coord1s,
+            "coord_2": coord2s,
+            "genomic_gap": genomic_gaps,
+            "event": events,
+        }
+    )
 
 
 def annotate_df(df):
     """
     Optimized version of DataFrame annotation with improved performance.
-    
+
     Performance improvements:
     - Early filtering to reduce memory usage
     - Vectorized operations where possible
@@ -367,15 +404,15 @@ def annotate_df(df):
     # Early exit if DataFrame is empty
     if df.empty:
         return df
-    
+
     # Apply filters first to reduce memory usage (vectorized operations)
     mq_mask = df["MQ"].values >= 55
     chr_mask = df["RNAME"].values != "chrM"
     combined_mask = mq_mask & chr_mask
-    
+
     # Apply filter inplace to avoid copy
     df = df[combined_mask].reset_index(drop=True)
-    
+
     # Early exit if no data after filtering
     if df.empty:
         return df
@@ -383,7 +420,7 @@ def annotate_df(df):
     # Optimize dtypes using astype() with dictionary for memory efficiency
     dtype_optimizations = {
         "QNAME": "category",
-        "TYPE": "category", 
+        "TYPE": "category",
         "RNAME": "category",
         "REF_START": np.int32,
         "REF_END": np.int32,
@@ -404,23 +441,23 @@ def annotate_df(df):
     # Filter for primary alignments efficiently
     primary_mask = df["TYPE"] == "PRIMARY"
     primary_qnames = df.loc[primary_mask, "QNAME"].unique()
-    
+
     # Filter for reads that exist in primary set
     df = df[df["QNAME"].isin(primary_qnames)]
-    
+
     # Filter for duplicated reads (keep=False means mark all duplicates)
     duplicated_mask = df["QNAME"].duplicated(keep=False)
     df = df[duplicated_mask].reset_index(drop=True)
-    
+
     # Early exit if no duplicated reads
     if df.empty:
         return df
-    
+
     # Add piece_order efficiently using groupby with observed=True
     df["piece_order"] = df.groupby("QNAME", observed=True)["READ_START"].transform(
         lambda x: x.rank(method="first").astype(int)
     )
-    
+
     return df
 
 
@@ -461,6 +498,7 @@ def has_supplementary(bam_file_path):
             if read.is_supplementary:
                 return True
     return False
+
 
 def merge_overlapping_intervals(group: pd.DataFrame) -> pd.DataFrame:
     """
@@ -860,11 +898,11 @@ def _generate_random_color() -> str:
 def safe_read_csv(file_path, dtype=None):
     """
     Safely read a CSV file that might be compressed.
-    
+
     Args:
         file_path: Path to the CSV file
         dtype: Optional dtype specification for pandas
-        
+
     Returns:
         pd.DataFrame: The loaded DataFrame
     """
@@ -874,46 +912,208 @@ def safe_read_csv(file_path, dtype=None):
     except UnicodeDecodeError:
         # If that fails, try reading as gzip compressed
         try:
-            return pd.read_csv(file_path, compression='gzip', dtype=dtype)
+            return pd.read_csv(file_path, compression="gzip", dtype=dtype)
         except Exception as e:
-            logger.error(f"Failed to read CSV file {file_path} with both uncompressed and gzip methods: {str(e)}")
+            logger.error(
+                f"Failed to read CSV file {file_path} with both uncompressed and gzip methods: {str(e)}"
+            )
             raise
+
+
+def preprocess_fusion_data_standalone(
+    fusion_data: pd.DataFrame, output_file: str
+) -> None:
+    """
+    Standalone version of fusion data preprocessing for CPU-bound execution.
+
+    Args:
+        fusion_data: Raw fusion candidate data
+        output_file: Path to save processed data
+    """
+    try:
+        # Apply categorical data types for efficiency
+        fusion_data = fusion_data.astype(
+            {
+                "read_id": "category",
+                "col4": "category",  # Gene column
+                "reference_id": "category",  # Chromosome column
+                "strand": "category",
+            }
+        )
+
+        # Annotate results (this is the heavy lifting)
+        annotated_data, goodpairs = _annotate_results(fusion_data)
+
+        # Create processed data structure for FusionVis
+        processed_data = {
+            "annotated_data": annotated_data,
+            "goodpairs": goodpairs,
+            "gene_pairs": [],
+            "gene_groups": [],
+            "candidate_count": 0,
+        }
+
+        # Process gene pairs and groups if we have good pairs
+        if not annotated_data.empty and goodpairs.any():
+            gene_pairs = (
+                annotated_data[goodpairs]
+                .sort_values(by="reference_start")["tag"]
+                .unique()
+                .tolist()
+            )
+            gene_pairs = [tuple(pair.split(",")) for pair in gene_pairs]
+            gene_groups_test = get_gene_network(gene_pairs)
+            gene_groups = []
+
+            for gene_group in gene_groups_test:
+                reads = _get_reads(
+                    annotated_data[goodpairs][
+                        annotated_data[goodpairs]["col4"].isin(gene_group)
+                    ]
+                )
+                if len(reads) > 1:
+                    gene_groups.append(gene_group)
+
+            processed_data.update(
+                {
+                    "gene_pairs": gene_pairs,
+                    "gene_groups": gene_groups,
+                    "candidate_count": len(gene_groups),
+                }
+            )
+
+        # Save processed data as pickle for efficient loading
+        import pickle
+
+        with open(output_file, "wb") as f:
+            pickle.dump(processed_data, f)
+
+        logger.info(f"Pre-processed fusion data saved to {output_file}")
+
+    except Exception as e:
+        logger.error(f"Error pre-processing fusion data: {str(e)}")
+        logger.error("Exception details:", exc_info=True)
+
+
+def preprocess_structural_variants_standalone(output_dir: str) -> None:
+    """
+    Standalone version of structural variant preprocessing for CPU-bound execution.
+
+    Args:
+        output_dir: Output directory path
+    """
+    try:
+        sv_links_file = os.path.join(output_dir, "structural_variant_links.csv")
+
+        if os.path.exists(sv_links_file) and os.path.getsize(sv_links_file) > 0:
+            # Read the structural variant links CSV using safe reader
+            dtype_spec = {
+                "QNAME": str,
+                "RNAME.1": str,
+                "RNAME.2": str,
+                "coord_1": np.int64,
+                "coord_2": np.int64,
+                "genomic_gap": np.int64,
+                "event": str,
+            }
+            sv_links_df = safe_read_csv(sv_links_file, dtype=dtype_spec)
+
+            if not sv_links_df.empty:
+                # Process the links data to create a summary for display
+                sv_summary = get_summary(sv_links_df, min_support=2)
+
+                if not sv_summary.empty:
+                    # Convert the summary to the format expected by the UI
+                    sv_df = pd.DataFrame(
+                        {
+                            "Event Type": sv_summary["predominant_event"],
+                            "Primary Location": sv_summary.apply(
+                                lambda row: f"{row['RNAME.1']}:{row['coord_1']:,}",
+                                axis=1,
+                            ),
+                            "Partner Location": sv_summary.apply(
+                                lambda row: f"{row['RNAME.2']}:{row['coord_2']:,}",
+                                axis=1,
+                            ),
+                            "Size (bp)": sv_summary["median_genomic_gap"].apply(
+                                lambda x: f"{x:,}" if x >= 0 else "N/A"
+                            ),
+                            "Strand": "Unknown",  # Not available in links data
+                            "Full Location": sv_summary.apply(
+                                lambda row: (
+                                    f"{row['RNAME.1']}:{row['coord_1']:,}-{row['coord_2']:,}"
+                                    if row["RNAME.1"] == row["RNAME.2"]
+                                    else f"{row['RNAME.1']}:{row['coord_1']:,} ⟷ {row['RNAME.2']}:{row['coord_2']:,}"
+                                ),
+                                axis=1,
+                            ),
+                            "Support Count": sv_summary["support_count"],
+                            "Supporting Reads": sv_summary["supporting_reads"].apply(
+                                lambda x: ", ".join(x[:5])
+                                + ("..." if len(x) > 5 else "")
+                            ),
+                        }
+                    )
+
+                    # Save processed structural variant data
+                    sv_df.to_csv(
+                        os.path.join(output_dir, "structural_variants_processed.csv"),
+                        index=False,
+                    )
+
+                    # Save count for quick access
+                    with open(os.path.join(output_dir, "sv_count.txt"), "w") as f:
+                        f.write(str(len(sv_df)))
+
+                    logger.info(f"Pre-processed {len(sv_df)} structural variant events")
+                else:
+                    # Save empty count
+                    with open(os.path.join(output_dir, "sv_count.txt"), "w") as f:
+                        f.write("0")
+            else:
+                # Save empty count
+                with open(os.path.join(output_dir, "sv_count.txt"), "w") as f:
+                    f.write("0")
+
+    except Exception as e:
+        logger.error(f"Error pre-processing structural variants: {str(e)}")
+        logger.error("Exception details:", exc_info=True)
 
 
 def process_bam_pipeline(bamfile):
     """
     Complete pipeline for processing BAM files to extract structural variant links.
-    
+
     This function combines all steps in a single CPU-bound task to reduce async overhead:
     1. Extract split read alignments from BAM file
     2. Annotate the extracted data
     3. Build links from annotated data
-    
+
     Args:
         bamfile: Path to the BAM file to process
-        
+
     Returns:
         pd.DataFrame: DataFrame containing structural variant links
     """
+
     # Step 1: Extract split read alignments from BAM file
     split_reads_df = extract_split_read_alignments(bamfile)
-    
+
     # Early exit if no split reads found
     if split_reads_df.empty:
         logger.debug("No split reads found in BAM file")
         return pd.DataFrame()
-    
+
     # Step 2: Annotate the extracted data
     annotated_df = annotate_df(split_reads_df)
-    
+
     # Early exit if no annotated data
     if annotated_df.empty:
         logger.debug("No annotated data after filtering")
         return pd.DataFrame()
-    
+
     # Step 3: Build links from annotated data
     new_df = build_links_df(annotated_df)
-    
     return new_df
 
 
@@ -1023,6 +1223,7 @@ def fusion_work_pysam(
     Returns:
         Tuple of (fusion_candidates, fusion_candidates_all) DataFrames
     """
+
     fusion_candidates: Optional[pd.DataFrame] = None
     fusion_candidates_all: Optional[pd.DataFrame] = None
 
@@ -1042,6 +1243,7 @@ def fusion_work_pysam(
         fusion_candidates = process_reads_for_fusions(
             bamfile, reads_with_supp, gene_regions
         )
+
         fusion_candidates_all = process_reads_for_fusions(
             bamfile, reads_with_supp, all_gene_regions
         )
@@ -1202,6 +1404,62 @@ def process_reads_for_fusions(
     return df
 
 
+def important_function(combined_df):
+    bed_lines = []
+    if not combined_df.empty:
+        # Get summary of structural variants
+        sv_summary = get_summary(combined_df, min_support=2)
+
+        if not sv_summary.empty:
+            # Convert summary to BED format lines - only breakpoint boundaries
+            for _, row in sv_summary.iterrows():
+                # Create BED line for primary breakpoint boundary
+                chrom1 = row["RNAME.1"]
+                coord1 = row["coord_1"]
+
+                # Define breakpoint boundary window (e.g., 500bp on each side)
+                boundary_window = 500  # 500bp window around breakpoint
+                start1 = max(0, coord1 - boundary_window)
+                end1 = coord1 + boundary_window
+
+                # Create BED lines for primary breakpoint on both strands
+                bed_line1_plus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t+"
+                bed_line1_minus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t-"
+                bed_lines.append(bed_line1_plus)
+                bed_lines.append(bed_line1_minus)
+
+                # Handle different event types
+                if row["RNAME.1"] != row["RNAME.2"]:
+                    # Translocation: add partner breakpoint boundary on both strands
+                    chrom2 = row["RNAME.2"]
+                    coord2 = row["coord_2"]
+
+                    start2 = max(0, coord2 - boundary_window)
+                    end2 = coord2 + boundary_window
+
+                    bed_line2_plus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
+                    bed_line2_minus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
+                    bed_lines.append(bed_line2_plus)
+                    bed_lines.append(bed_line2_minus)
+
+                elif row["RNAME.1"] == row["RNAME.2"]:
+                    # Same chromosome event (deletion, inversion, etc.)
+                    coord2 = row["coord_2"]
+
+                    # Only add second breakpoint if it's different from the first
+                    # and the gap is significant (> 1kb to avoid very small events)
+                    if abs(coord2 - coord1) > 1000:
+                        start2 = max(0, coord2 - boundary_window)
+                        end2 = coord2 + boundary_window
+
+                        bed_line2_plus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
+                        bed_line2_minus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
+                        bed_lines.append(bed_line2_plus)
+                        bed_lines.append(bed_line2_minus)
+
+    return bed_lines
+
+
 class FusionVis(BaseVis):
     """
     FusionVis handles the visualization and UI components for gene fusion analysis.
@@ -1264,6 +1522,10 @@ class FusionVis(BaseVis):
         self.all_candidates = 0
         self.fstable_row_count = 0
         self.candidates = 0
+
+        # Initialize optimized display state after all relevant attributes are set
+        self.display_state = FusionDisplayState()
+        self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
 
         # Initialize UI elements
         self.sv_plot = None
@@ -1356,7 +1618,7 @@ class FusionVis(BaseVis):
         """
         Sets up the user interface for the Fusion Panel and Structural Variant Analysis.
         """
-        #app.config.request_timeout = 10  # Increase timeout to 10 seconds
+        # app.config.request_timeout = 10  # Increase timeout to 10 seconds
 
         if self.summary:
             with self.summary:
@@ -1372,18 +1634,16 @@ class FusionVis(BaseVis):
                                     "text-gray-600 font-medium"
                                 )
                                 ui.label("0").bind_text_from(
-                                    self,
-                                    "candidates",
-                                    backward=lambda n: f"{n} between target fusions",
+                                    self.display_state,
+                                    "candidates_with_label",
                                 ).classes("px-2 py-1 rounded bg-blue-100 text-blue-600")
 
                         # Right side - Additional metrics
                         with ui.column().classes("gap-2 text-right"):
                             ui.label("Analysis Details").classes("font-medium")
                             ui.label("0").bind_text_from(
-                                self,
-                                "all_candidates",
-                                backward=lambda n: f"{n} genome wide fusions",
+                                self.display_state,
+                                "all_candidates_with_label",
                             ).classes("text-gray-600")
 
                     # Bottom row - Information
@@ -1414,7 +1674,7 @@ class FusionVis(BaseVis):
                 with one:
                     self.badge_one = (
                         ui.badge("0", color="red")
-                        .bind_text_from(self, "candidates", backward=lambda n: f"{n}")
+                        .bind_text_from(self.display_state, "candidates_formatted")
                         .props("floating rounded outline")
                     )
                 two = ui.tab("Genome Wide Fusions").style(
@@ -1424,7 +1684,7 @@ class FusionVis(BaseVis):
                     self.badge_two = (
                         ui.badge("0", color="red")
                         .bind_text_from(
-                            self, "all_candidates", backward=lambda n: f"{n}"
+                            self.display_state, "all_candidates_formatted"
                         )
                         .props("floating rounded outline")
                     )
@@ -1434,7 +1694,7 @@ class FusionVis(BaseVis):
                 with three:
                     self.badge_three = (
                         ui.badge("0", color="red")
-                        .bind_text_from(self, "sv_count", backward=lambda n: f"{n}")
+                        .bind_text_from(self.display_state, "sv_count_formatted")
                         .props("floating rounded outline")
                     )
 
@@ -1599,7 +1859,7 @@ class FusionVis(BaseVis):
 
                         # self.sv_plot = ui.row().classes("w-full")
                         self.sv_table_container = ui.row().classes("w-full")
-        #await ui.context.client.connected()
+        # await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:
@@ -1735,6 +1995,7 @@ class FusionVis(BaseVis):
                         if len(reads) > 1:
                             gene_groups.append(gene_group)
                     self.all_candidates = len(gene_groups)
+                    self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
                     with ui.row().classes("w-full"):
                         ui.select(
                             options=gene_groups,
@@ -1910,6 +2171,7 @@ class FusionVis(BaseVis):
                         if len(reads) > 1:
                             gene_groups.append(gene_group)
                     self.candidates = len(gene_groups)
+                    self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
                     with ui.row().classes("w-full"):
                         ui.select(
                             options=gene_groups,
@@ -2198,7 +2460,7 @@ class FusionVis(BaseVis):
     def show_previous_data(self) -> None:
         """
         Loads and displays previously analyzed data.
-        
+
         This method now only loads pre-processed data from FusionObject,
         eliminating all heavy computational work from the display layer.
         """
@@ -2213,7 +2475,7 @@ class FusionVis(BaseVis):
 
         # Load pre-processed fusion data (lightweight operation)
         self._load_preprocessed_fusion_data(output)
-        
+
         # Load pre-processed structural variant data (lightweight operation)
         self._load_preprocessed_structural_variants(output)
 
@@ -2221,25 +2483,35 @@ class FusionVis(BaseVis):
         """Load pre-processed fusion data for display."""
         try:
             # Load target panel fusion data
-            master_processed_file = os.path.join(output, "fusion_candidates_master_processed.csv")
+            master_processed_file = os.path.join(
+                output, "fusion_candidates_master_processed.csv"
+            )
             if os.path.exists(master_processed_file):
                 import pickle
-                with open(master_processed_file, 'rb') as f:
+
+                with open(master_processed_file, "rb") as f:
                     processed_data = pickle.load(f)
-                
+
                 # Update UI with pre-processed data
-                self._update_fusion_ui_from_processed_data(processed_data, is_target_panel=True)
-            
+                self._update_fusion_ui_from_processed_data(
+                    processed_data, is_target_panel=True
+                )
+
             # Load genome-wide fusion data
-            all_processed_file = os.path.join(output, "fusion_candidates_all_processed.csv")
+            all_processed_file = os.path.join(
+                output, "fusion_candidates_all_processed.csv"
+            )
             if os.path.exists(all_processed_file):
                 import pickle
-                with open(all_processed_file, 'rb') as f:
+
+                with open(all_processed_file, "rb") as f:
                     processed_data = pickle.load(f)
-                
+
                 # Update UI with pre-processed data
-                self._update_fusion_ui_from_processed_data(processed_data, is_target_panel=False)
-                
+                self._update_fusion_ui_from_processed_data(
+                    processed_data, is_target_panel=False
+                )
+
         except Exception as e:
             logger.error(f"Error loading pre-processed fusion data: {str(e)}")
 
@@ -2249,14 +2521,17 @@ class FusionVis(BaseVis):
             # Load structural variant count
             sv_count_file = os.path.join(output, "sv_count.txt")
             if os.path.exists(sv_count_file):
-                with open(sv_count_file, 'r') as f:
+                with open(sv_count_file, "r") as f:
                     self.sv_count = int(f.read().strip())
-            
+                self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
+
             # Load processed structural variant data
-            sv_processed_file = os.path.join(output, "structural_variants_processed.csv")
+            sv_processed_file = os.path.join(
+                output, "structural_variants_processed.csv"
+            )
             if os.path.exists(sv_processed_file):
                 sv_df = pd.read_csv(sv_processed_file)
-                
+
                 # Update UI elements if they exist
                 if hasattr(self, "sv_plot") and self.sv_plot is not None:
                     self.sv_plot.clear()
@@ -2267,34 +2542,48 @@ class FusionVis(BaseVis):
                     and self.sv_table_container is not None
                 ):
                     self.update_sv_table(sv_df)
-                    
-                logger.info(f"Loaded {len(sv_df)} pre-processed structural variant events")
+
+                logger.info(
+                    f"Loaded {len(sv_df)} pre-processed structural variant events"
+                )
             else:
                 self.sv_count = 0
-                
+
         except Exception as e:
             logger.error(f"Error loading pre-processed structural variants: {str(e)}")
             self.sv_count = 0
 
-    def _update_fusion_ui_from_processed_data(self, processed_data: dict, is_target_panel: bool) -> None:
+    def _update_fusion_ui_from_processed_data(
+        self, processed_data: dict, is_target_panel: bool
+    ) -> None:
         """Update UI with pre-processed fusion data."""
         try:
             annotated_data = processed_data["annotated_data"]
             goodpairs = processed_data["goodpairs"]
             gene_groups = processed_data["gene_groups"]
             candidate_count = processed_data["candidate_count"]
-            
+
             if is_target_panel:
                 # Update target panel fusion table and UI
-                self._update_fusion_table_from_processed(annotated_data, goodpairs, gene_groups, candidate_count)
+                self._update_fusion_table_from_processed(
+                    annotated_data, goodpairs, gene_groups, candidate_count
+                )
             else:
                 # Update genome-wide fusion table and UI
-                self._update_fusion_table_all_from_processed(annotated_data, goodpairs, gene_groups, candidate_count)
-                
+                self._update_fusion_table_all_from_processed(
+                    annotated_data, goodpairs, gene_groups, candidate_count
+                )
+
         except Exception as e:
             logger.error(f"Error updating fusion UI from processed data: {str(e)}")
 
-    def _update_fusion_table_from_processed(self, annotated_data: pd.DataFrame, goodpairs: pd.Series, gene_groups: list, candidate_count: int) -> None:
+    def _update_fusion_table_from_processed(
+        self,
+        annotated_data: pd.DataFrame,
+        goodpairs: pd.Series,
+        gene_groups: list,
+        candidate_count: int,
+    ) -> None:
         """Update target panel fusion table with pre-processed data."""
         if annotated_data.shape[0] > self.fstable_row_count:
             self.fstable_row_count = annotated_data.shape[0]
@@ -2385,7 +2674,13 @@ class FusionVis(BaseVis):
                                 "drop-shadow", "font-bold"
                             )
 
-    def _update_fusion_table_all_from_processed(self, annotated_data: pd.DataFrame, goodpairs: pd.Series, gene_groups: list, candidate_count: int) -> None:
+    def _update_fusion_table_all_from_processed(
+        self,
+        annotated_data: pd.DataFrame,
+        goodpairs: pd.Series,
+        gene_groups: list,
+        candidate_count: int,
+    ) -> None:
         """Update genome-wide fusion table with pre-processed data."""
         if annotated_data.shape[0] > self.fstable_all_row_count:
             self.fstable_all_row_count = annotated_data.shape[0]
@@ -2466,7 +2761,10 @@ class FusionVis(BaseVis):
                             options=gene_groups,
                             with_input=True,
                             on_change=lambda e: self._show_gene_pair_from_processed(
-                                e.value, annotated_data, goodpairs, is_target_panel=False
+                                e.value,
+                                annotated_data,
+                                goodpairs,
+                                is_target_panel=False,
                             ),
                         ).classes("w-40")
                     with ui.row().classes("w-full"):
@@ -2476,10 +2774,16 @@ class FusionVis(BaseVis):
                                 "drop-shadow", "font-bold"
                             )
 
-    def _show_gene_pair_from_processed(self, gene_group: str, annotated_data: pd.DataFrame, goodpairs: pd.Series, is_target_panel: bool) -> None:
+    def _show_gene_pair_from_processed(
+        self,
+        gene_group: str,
+        annotated_data: pd.DataFrame,
+        goodpairs: pd.Series,
+        is_target_panel: bool,
+    ) -> None:
         """Show gene pair plot from pre-processed data."""
         ui.notify(gene_group)
-        
+
         if is_target_panel:
             self.card.clear()
             with self.card:
@@ -2668,6 +2972,10 @@ class FusionObject(BaseAnalysis):
         self.fstable_row_count = 0
         self.candidates = 0
 
+        # Initialize optimized display state after all relevant attributes are set
+        self.display_state = FusionDisplayState()
+        self.display_state.update_from_data(self.candidates, self.all_candidates, self.sv_count)
+
         # Initialize UI elements
         self.sv_plot = None
         self.sv_table_container = None
@@ -2832,28 +3140,29 @@ class FusionObject(BaseAnalysis):
             try:
                 logger.info(f"Starting BAM processing for file: {bamfile}")
 
-                if has_supplementary(bamfile):
+                async def has_supp_background_work():
+                    return await run.cpu_bound(has_supplementary, bamfile)
+
+                has_supp = background_tasks.create(has_supp_background_work())
+                # Check for supplementary alignments using run.cpu_bound
+
+                if has_supp:
                     try:
                         # Process fusion candidates
                         logger.info(f"Processing BAM file for fusions: {bamfile}")
 
-                        async def fusion_background_work(bamfile):
-                            fusion_candidates, fusion_candidates_all = (
-                                await run.cpu_bound(
-                                    fusion_work_pysam,
-                                    bamfile,
-                                    self.gene_bed,
-                                    self.all_gene_bed,
-                                )
+                        async def fusion_background_work():
+                            return await run.cpu_bound(
+                                fusion_work_pysam,
+                                bamfile,
+                                self.gene_bed,
+                                self.all_gene_bed,
                             )
-                            return fusion_candidates, fusion_candidates_all
 
                         fusion_candidates, fusion_candidates_all = (
-                            await background_tasks.create(
-                                fusion_background_work(bamfile)
-                            )
+                            await background_tasks.create(fusion_background_work())
                         )
-                        
+
                         # Store fusion candidates in the class dictionaries
                         if (
                             fusion_candidates is not None
@@ -2872,11 +3181,11 @@ class FusionObject(BaseAnalysis):
                                     ],
                                     ignore_index=True,
                                 )
-                                
+
                             logger.info(
                                 f"Added {len(fusion_candidates)} fusion candidates for sample {self.sampleID}"
                             )
-                        
+
                         if (
                             fusion_candidates_all is not None
                             and not fusion_candidates_all.empty
@@ -2900,30 +3209,26 @@ class FusionObject(BaseAnalysis):
 
                         # Save fusion results with pre-processing for display
                         await self._save_fusion_results()
-                        
+
                         # Process genome-wide structural variants with performance monitoring
-                        start_time = datetime.now()
                         logger.info(
                             f"Processing BAM file for structural variants: {bamfile}"
                         )
 
-                        # Fixed: Proper pipeline for structural variant processing with reduced async overhead
-                        async def build_links_background_work(bamfile):
-                            # Single CPU-bound task instead of multiple async calls
-                            new_df = await run.cpu_bound(process_bam_pipeline, bamfile)
-                            
-                            return new_df
-
-                        # Execute the background work with proper error handling
+                        # Execute structural variant processing using run.cpu_bound
                         try:
-                            new_df = await build_links_background_work(bamfile)
-                            processing_time = (datetime.now() - start_time).total_seconds()
-                            logger.info(f"Structural variant processing completed in {processing_time:.2f} seconds")
+
+                            async def sv_background_work():
+                                return await run.cpu_bound(
+                                    process_bam_pipeline, bamfile
+                                )
+
+                            new_df = await background_tasks.create(sv_background_work())
                         except Exception as e:
-                            logger.error(f"Error in structural variant processing: {str(e)}")
-                            new_df = pd.DataFrame()
-                        
-                        
+                            logger.error(
+                                f"Error in structural variant processing: {str(e)}"
+                            )
+
                         # Save the new_df to a file, appending to existing data with optimized I/O
                         if not new_df.empty:
                             # Construct the output file path
@@ -2943,21 +3248,25 @@ class FusionObject(BaseAnalysis):
                                     # Read existing data with optimized dtypes using safe reader
                                     dtype_spec = {
                                         "QNAME": "category",
-                                        "RNAME.1": "category", 
+                                        "RNAME.1": "category",
                                         "RNAME.2": "category",
                                         "coord_1": np.int64,
                                         "coord_2": np.int64,
                                         "genomic_gap": np.int64,
                                         "event": "category",
                                     }
-                                    existing_df = safe_read_csv(sv_links_file, dtype=dtype_spec)
+                                    existing_df = safe_read_csv(
+                                        sv_links_file, dtype=dtype_spec
+                                    )
                                     logger.debug(
                                         f"Read existing SV links data with {len(existing_df)} rows"
                                     )
 
                                     # Append new data efficiently
                                     combined_df = pd.concat(
-                                        [existing_df, new_df], ignore_index=True, copy=False
+                                        [existing_df, new_df],
+                                        ignore_index=True,
+                                        copy=False,
                                     )
                                     logger.debug(
                                         f"Combined DataFrame size: {len(combined_df)} rows"
@@ -2970,79 +3279,30 @@ class FusionObject(BaseAnalysis):
                                     )
 
                                 # Save combined data without compression for compatibility
-                                combined_df.to_csv(sv_links_file, index=False)
+                                async def save_csv_work():
+                                    return await run.io_bound(
+                                        combined_df.to_csv, sv_links_file, index=False
+                                    )
+
+                                background_tasks.create(save_csv_work())
 
                                 # Generate bed_lines from combined_df for BedTree - focus on breakpoint boundaries only
-                                bed_lines = []
-                                if not combined_df.empty:
-                                    # Get summary of structural variants
-                                    sv_summary = get_summary(combined_df, min_support=2)
 
-                                    if not sv_summary.empty:
-                                        # Convert summary to BED format lines - only breakpoint boundaries
-                                        for _, row in sv_summary.iterrows():
-                                            # Create BED line for primary breakpoint boundary
-                                            chrom1 = row["RNAME.1"]
-                                            coord1 = row["coord_1"]
+                                async def bed_lines_background_work():
+                                    return await run.cpu_bound(
+                                        important_function, combined_df
+                                    )
 
-                                            # Define breakpoint boundary window (e.g., 500bp on each side)
-                                            boundary_window = (
-                                                500  # 500bp window around breakpoint
-                                            )
-                                            start1 = max(0, coord1 - boundary_window)
-                                            end1 = coord1 + boundary_window
-
-                                            # Create BED lines for primary breakpoint on both strands
-                                            bed_line1_plus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t+"
-                                            bed_line1_minus = f"{chrom1}\t{start1}\t{end1}\t{row['predominant_event']}_breakpoint1\t{row['support_count']}\t-"
-                                            bed_lines.append(bed_line1_plus)
-                                            bed_lines.append(bed_line1_minus)
-
-                                            # Handle different event types
-                                            if row["RNAME.1"] != row["RNAME.2"]:
-                                                # Translocation: add partner breakpoint boundary on both strands
-                                                chrom2 = row["RNAME.2"]
-                                                coord2 = row["coord_2"]
-
-                                                start2 = max(
-                                                    0, coord2 - boundary_window
-                                                )
-                                                end2 = coord2 + boundary_window
-
-                                                bed_line2_plus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
-                                                bed_line2_minus = f"{chrom2}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
-                                                bed_lines.append(bed_line2_plus)
-                                                bed_lines.append(bed_line2_minus)
-
-                                            elif row["RNAME.1"] == row["RNAME.2"]:
-                                                # Same chromosome event (deletion, inversion, etc.)
-                                                coord2 = row["coord_2"]
-
-                                                # Only add second breakpoint if it's different from the first
-                                                # and the gap is significant (> 1kb to avoid very small events)
-                                                if abs(coord2 - coord1) > 1000:
-                                                    start2 = max(
-                                                        0, coord2 - boundary_window
-                                                    )
-                                                    end2 = coord2 + boundary_window
-
-                                                    bed_line2_plus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t+"
-                                                    bed_line2_minus = f"{chrom1}\t{start2}\t{end2}\t{row['predominant_event']}_breakpoint2\t{row['support_count']}\t-"
-                                                    bed_lines.append(bed_line2_plus)
-                                                    bed_lines.append(bed_line2_minus)
+                                bed_lines = await background_tasks.create(
+                                    bed_lines_background_work()
+                                )
 
                                 logger.info(
                                     f"Saved {len(combined_df)} SV links to {sv_links_file}"
                                 )
-                                logger.info(
-                                    f"Generated {len(bed_lines)} breakpoint boundary BED lines for BedTree"
-                                )
 
                                 # Add to BedTree if needed
-                                if (
-                                    bed_lines
-                                    and self.master_bed_tree[self.sampleID] is None
-                                ):
+                                if self.master_bed_tree[self.sampleID] is None:
                                     self.master_bed_tree.add_bed_tree(
                                         sample_id=self.sampleID,
                                         preserve_original_tree=True,
@@ -3086,7 +3346,6 @@ class FusionObject(BaseAnalysis):
                                 "No structural variant links found in this BAM file"
                             )
 
-                        
                     except Exception as e:
                         logger.error(f"Error processing BAM file: {str(e)}")
                         logger.error("Exception details:", exc_info=True)
@@ -3101,6 +3360,7 @@ class FusionObject(BaseAnalysis):
                 logger.error(f"Error in process_bam: {e}")
                 raise
         finally:
+            # Counter updated automatically by BaseAnalysis._worker()
             state.set_process_state("Fusion Analysis", ProcessState.WAITING_FOR_DATA)
 
     def _should_run_breakpoint_processing(self) -> bool:
@@ -3305,17 +3565,11 @@ class FusionObject(BaseAnalysis):
             try:
                 combined_sv_reads = pd.concat(self.pending_sv_reads, ignore_index=True)
 
-                async def final_bed_background_work(combined_sv_reads):
-                    bed_lines = await run.cpu_bound(
-                        build_breakpoint_graph,
-                        combined_sv_reads,
-                        max_proximity=50000,
-                        group_by_sv=True,
-                    )
-                    return bed_lines
-
-                bed_lines = await background_tasks.create(
-                    final_bed_background_work(combined_sv_reads)
+                bed_lines = await run.cpu_bound(
+                    build_breakpoint_graph,
+                    combined_sv_reads,
+                    50000,  # max_proximity
+                    True,  # group_by_sv
                 )
 
                 if len(bed_lines) > 0:
@@ -3333,13 +3587,14 @@ class FusionObject(BaseAnalysis):
         """
         Save fusion candidates to CSV files and update UI.
         This should be called periodically or when processing is complete.
-        
+
         Enhanced to pre-process all data needed by FusionVis to eliminate
         heavy lifting from the display layer.
         """
+
         try:
             output_dir = self.check_and_create_folder(self.output, self.sampleID)
-            
+
             # Save fusion candidates within target regions
             if (
                 self.sampleID in self.fusion_candidates
@@ -3358,13 +3613,16 @@ class FusionObject(BaseAnalysis):
                             os.path.join(output_dir, "fusion_candidates_master.csv"),
                             index=False,
                         )
-                        
-                        # Pre-process data for FusionVis (heavy lifting moved here)
-                        await self._preprocess_fusion_data_for_display(
-                            result, 
-                            os.path.join(output_dir, "fusion_candidates_master_processed.csv")
+
+                        # Pre-process data for FusionVis using run.cpu_bound
+                        await run.cpu_bound(
+                            preprocess_fusion_data_standalone,
+                            result,
+                            os.path.join(
+                                output_dir, "fusion_candidates_master_processed.csv"
+                            ),
                         )
-                        
+
                         logger.info(
                             f"Saved {len(result)} fusion candidates within target regions"
                         )
@@ -3389,32 +3647,33 @@ class FusionObject(BaseAnalysis):
                             os.path.join(output_dir, "fusion_candidates_all.csv"),
                             index=False,
                         )
-                        
-                        # Pre-process data for FusionVis (heavy lifting moved here)
-                        await self._preprocess_fusion_data_for_display(
-                            result_all, 
-                            os.path.join(output_dir, "fusion_candidates_all_processed.csv")
+
+                        # Pre-process data for FusionVis using run.cpu_bound
+                        await run.cpu_bound(
+                            preprocess_fusion_data_standalone,
+                            result_all,
+                            os.path.join(
+                                output_dir, "fusion_candidates_all_processed.csv"
+                            ),
                         )
-                        
+
                         logger.info(
                             f"Saved {len(result_all)} genome-wide fusion candidates"
                         )
 
-            # Pre-process structural variant summary data
-            await self._preprocess_structural_variants_for_display(output_dir)
+            # Pre-process structural variant summary data using run.cpu_bound
+            await run.cpu_bound(preprocess_structural_variants_standalone, output_dir)
 
         except Exception as e:
             logger.error(f"Error saving fusion results: {str(e)}")
             logger.error("Exception details:", exc_info=True)
 
-    async def _preprocess_fusion_data_for_display(
-        self, 
-        fusion_data: pd.DataFrame, 
-        output_file: str
+    def _preprocess_fusion_data_sync(
+        self, fusion_data: pd.DataFrame, output_file: str
     ) -> None:
         """
-        Pre-process fusion data for display, moving heavy lifting from FusionVis.
-        
+        Synchronous version of fusion data preprocessing for CPU-bound execution.
+
         Args:
             fusion_data: Raw fusion candidate data
             output_file: Path to save processed data
@@ -3432,16 +3691,16 @@ class FusionObject(BaseAnalysis):
 
             # Annotate results (this is the heavy lifting)
             annotated_data, goodpairs = _annotate_results(fusion_data)
-            
+
             # Create processed data structure for FusionVis
             processed_data = {
                 "annotated_data": annotated_data,
                 "goodpairs": goodpairs,
                 "gene_pairs": [],
                 "gene_groups": [],
-                "candidate_count": 0
+                "candidate_count": 0,
             }
-            
+
             # Process gene pairs and groups if we have good pairs
             if not annotated_data.empty and goodpairs.any():
                 gene_pairs = (
@@ -3453,7 +3712,7 @@ class FusionObject(BaseAnalysis):
                 gene_pairs = [tuple(pair.split(",")) for pair in gene_pairs]
                 gene_groups_test = get_gene_network(gene_pairs)
                 gene_groups = []
-                
+
                 for gene_group in gene_groups_test:
                     reads = _get_reads(
                         annotated_data[goodpairs][
@@ -3462,34 +3721,111 @@ class FusionObject(BaseAnalysis):
                     )
                     if len(reads) > 1:
                         gene_groups.append(gene_group)
-                
-                processed_data.update({
-                    "gene_pairs": gene_pairs,
-                    "gene_groups": gene_groups,
-                    "candidate_count": len(gene_groups)
-                })
-            
+
+                processed_data.update(
+                    {
+                        "gene_pairs": gene_pairs,
+                        "gene_groups": gene_groups,
+                        "candidate_count": len(gene_groups),
+                    }
+                )
+
             # Save processed data as pickle for efficient loading
             import pickle
-            with open(output_file, 'wb') as f:
+
+            with open(output_file, "wb") as f:
                 pickle.dump(processed_data, f)
-                
+
             logger.info(f"Pre-processed fusion data saved to {output_file}")
-            
+
         except Exception as e:
             logger.error(f"Error pre-processing fusion data: {str(e)}")
             logger.error("Exception details:", exc_info=True)
 
-    async def _preprocess_structural_variants_for_display(self, output_dir: str) -> None:
+    async def _preprocess_fusion_data_for_display(
+        self, fusion_data: pd.DataFrame, output_file: str
+    ) -> None:
         """
-        Pre-process structural variant data for display, moving heavy lifting from FusionVis.
-        
+        Pre-process fusion data for display, moving heavy lifting from FusionVis.
+
+        Args:
+            fusion_data: Raw fusion candidate data
+            output_file: Path to save processed data
+        """
+        try:
+            # Apply categorical data types for efficiency
+            fusion_data = fusion_data.astype(
+                {
+                    "read_id": "category",
+                    "col4": "category",  # Gene column
+                    "reference_id": "category",  # Chromosome column
+                    "strand": "category",
+                }
+            )
+
+            # Annotate results (this is the heavy lifting)
+            annotated_data, goodpairs = _annotate_results(fusion_data)
+
+            # Create processed data structure for FusionVis
+            processed_data = {
+                "annotated_data": annotated_data,
+                "goodpairs": goodpairs,
+                "gene_pairs": [],
+                "gene_groups": [],
+                "candidate_count": 0,
+            }
+
+            # Process gene pairs and groups if we have good pairs
+            if not annotated_data.empty and goodpairs.any():
+                gene_pairs = (
+                    annotated_data[goodpairs]
+                    .sort_values(by="reference_start")["tag"]
+                    .unique()
+                    .tolist()
+                )
+                gene_pairs = [tuple(pair.split(",")) for pair in gene_pairs]
+                gene_groups_test = get_gene_network(gene_pairs)
+                gene_groups = []
+
+                for gene_group in gene_groups_test:
+                    reads = _get_reads(
+                        annotated_data[goodpairs][
+                            annotated_data[goodpairs]["col4"].isin(gene_group)
+                        ]
+                    )
+                    if len(reads) > 1:
+                        gene_groups.append(gene_group)
+
+                processed_data.update(
+                    {
+                        "gene_pairs": gene_pairs,
+                        "gene_groups": gene_groups,
+                        "candidate_count": len(gene_groups),
+                    }
+                )
+
+            # Save processed data as pickle for efficient loading
+            import pickle
+
+            with open(output_file, "wb") as f:
+                pickle.dump(processed_data, f)
+
+            logger.info(f"Pre-processed fusion data saved to {output_file}")
+
+        except Exception as e:
+            logger.error(f"Error pre-processing fusion data: {str(e)}")
+            logger.error("Exception details:", exc_info=True)
+
+    def _preprocess_structural_variants_sync(self, output_dir: str) -> None:
+        """
+        Synchronous version of structural variant preprocessing for CPU-bound execution.
+
         Args:
             output_dir: Output directory path
         """
         try:
             sv_links_file = os.path.join(output_dir, "structural_variant_links.csv")
-            
+
             if os.path.exists(sv_links_file) and os.path.getsize(sv_links_file) > 0:
                 # Read the structural variant links CSV using safe reader
                 dtype_spec = {
@@ -3544,26 +3880,120 @@ class FusionObject(BaseAnalysis):
 
                         # Save processed structural variant data
                         sv_df.to_csv(
-                            os.path.join(output_dir, "structural_variants_processed.csv"),
-                            index=False
+                            os.path.join(
+                                output_dir, "structural_variants_processed.csv"
+                            ),
+                            index=False,
                         )
-                        
+
                         # Save count for quick access
-                        with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                        with open(os.path.join(output_dir, "sv_count.txt"), "w") as f:
                             f.write(str(len(sv_df)))
-                        
+
                         logger.info(
                             f"Pre-processed {len(sv_df)} structural variant events"
                         )
                     else:
                         # Save empty count
-                        with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                        with open(os.path.join(output_dir, "sv_count.txt"), "w") as f:
                             f.write("0")
                 else:
                     # Save empty count
-                    with open(os.path.join(output_dir, "sv_count.txt"), 'w') as f:
+                    with open(os.path.join(output_dir, "sv_count.txt"), "w") as f:
                         f.write("0")
-                        
+
+        except Exception as e:
+            logger.error(f"Error pre-processing structural variants: {str(e)}")
+            logger.error("Exception details:", exc_info=True)
+
+    async def _preprocess_structural_variants_for_display(
+        self, output_dir: str
+    ) -> None:
+        """
+        Pre-process structural variant data for display, moving heavy lifting from FusionVis.
+
+        Args:
+            output_dir: Output directory path
+        """
+        try:
+            sv_links_file = os.path.join(output_dir, "structural_variant_links.csv")
+
+            if os.path.exists(sv_links_file) and os.path.getsize(sv_links_file) > 0:
+                # Read the structural variant links CSV using safe reader
+                dtype_spec = {
+                    "QNAME": str,
+                    "RNAME.1": str,
+                    "RNAME.2": str,
+                    "coord_1": np.int64,
+                    "coord_2": np.int64,
+                    "genomic_gap": np.int64,
+                    "event": str,
+                }
+                sv_links_df = safe_read_csv(sv_links_file, dtype=dtype_spec)
+
+                if not sv_links_df.empty:
+                    # Process the links data to create a summary for display
+                    sv_summary = get_summary(sv_links_df, min_support=2)
+
+                    if not sv_summary.empty:
+                        # Convert the summary to the format expected by the UI
+                        sv_df = pd.DataFrame(
+                            {
+                                "Event Type": sv_summary["predominant_event"],
+                                "Primary Location": sv_summary.apply(
+                                    lambda row: f"{row['RNAME.1']}:{row['coord_1']:,}",
+                                    axis=1,
+                                ),
+                                "Partner Location": sv_summary.apply(
+                                    lambda row: f"{row['RNAME.2']}:{row['coord_2']:,}",
+                                    axis=1,
+                                ),
+                                "Size (bp)": sv_summary["median_genomic_gap"].apply(
+                                    lambda x: f"{x:,}" if x >= 0 else "N/A"
+                                ),
+                                "Strand": "Unknown",  # Not available in links data
+                                "Full Location": sv_summary.apply(
+                                    lambda row: (
+                                        f"{row['RNAME.1']}:{row['coord_1']:,}-{row['coord_2']:,}"
+                                        if row["RNAME.1"] == row["RNAME.2"]
+                                        else f"{row['RNAME.1']}:{row['coord_1']:,} ⟷ {row['RNAME.2']}:{row['coord_2']:,}"
+                                    ),
+                                    axis=1,
+                                ),
+                                "Support Count": sv_summary["support_count"],
+                                "Supporting Reads": sv_summary[
+                                    "supporting_reads"
+                                ].apply(
+                                    lambda x: ", ".join(x[:5])
+                                    + ("..." if len(x) > 5 else "")
+                                ),
+                            }
+                        )
+
+                        # Save processed structural variant data
+                        sv_df.to_csv(
+                            os.path.join(
+                                output_dir, "structural_variants_processed.csv"
+                            ),
+                            index=False,
+                        )
+
+                        # Save count for quick access
+                        with open(os.path.join(output_dir, "sv_count.txt"), "w") as f:
+                            f.write(str(len(sv_df)))
+
+                        logger.info(
+                            f"Pre-processed {len(sv_df)} structural variant events"
+                        )
+                    else:
+                        # Save empty count
+                        with open(os.path.join(output_dir, "sv_count.txt"), "w") as f:
+                            f.write("0")
+                else:
+                    # Save empty count
+                    with open(os.path.join(output_dir, "sv_count.txt"), "w") as f:
+                        f.write("0")
+
         except Exception as e:
             logger.error(f"Error pre-processing structural variants: {str(e)}")
             logger.error("Exception details:", exc_info=True)

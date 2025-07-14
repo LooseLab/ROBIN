@@ -16,7 +16,7 @@ from reportlab.platypus import PageBreak, Paragraph, Image, Spacer, Table, Table
 from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
 from ..plotting import create_CNV_plot, create_CNV_plot_per_chromosome
-from robin.subpages.CNV_object import (
+from robin.subpages.CNVObjectClass import (
     Result,
     CNVAnalysis,
     CNV_Difference,
@@ -119,16 +119,6 @@ class CNVSection(ReportSection):
             cnv_analyzer.gene_bed = gene_bed
             cnv_analyzer.cytobands_bed = cytobands_bed
             cnv_analyzer.cnv_dict = cnv_dict
-
-            # Load reference CNV data
-            ref_file = os.path.join(
-                os.path.dirname(os.path.abspath(resources.__file__)),
-                "HG01280_control_new.pkl",
-            )
-            logger.debug("Loading reference CNV data from %s", ref_file)
-            with open(ref_file, "rb") as f:
-                ref_cnv_dict = pickle.load(f)
-            logger.debug("Reference CNV data loaded")
 
             # Get reference CNV data with matching bin width
             logger.debug(

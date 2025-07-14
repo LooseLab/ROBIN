@@ -77,9 +77,11 @@ from dateutil import parser
 import os
 import psutil
 import tempfile
-from nicegui import ui, app, run, background_tasks, binding
+from nicegui import ui, app, run, background_tasks
 import concurrent.futures
 import time
+import weakref
+import atexit
 
 from robin import resources
 
@@ -95,9 +97,11 @@ from robin.subpages.RandomForest_object import (
     RandomForest_object,
     RandomForestVis,
 )
-from robin.subpages.CNV_object import CNVAnalysis, CNVVis
+from robin.subpages.CNVObjectClass import CNVAnalysis
+from robin.subpages.CNV_object import CNVVis
 from robin.subpages.TargetCoverage_object import TargetCoverage, TargetCoverageVis
-from robin.subpages.Fusion_object import FusionObject, FusionVis
+from robin.subpages.Fusion_object import FusionVis
+from robin.subpages.FusionObjectClass import FusionObject
 from robin.subpages.MNPFlex_object import MNPFlex_Object
 from robin.utilities.local_file_picker import LocalFilePicker
 from robin.utilities.bed_file import MasterBedTree
@@ -114,7 +118,7 @@ import json
 
 from robin.utils import (
     merge_modkit_files,
-    run_modkit,
+    run_matkit,
     run_samtools_sort,
     check_bam,
     sort_bams,
@@ -122,6 +126,83 @@ from robin.utils import (
 
 # Configure logging
 logger = logging.getLogger(__name__)
+
+
+class FileHandleManager:
+    """
+    Manages file handles to prevent leaks and ensure proper cleanup.
+    """
+    
+    def __init__(self):
+        self._file_handles = weakref.WeakSet()
+        self._temp_files = weakref.WeakSet()
+        self._temp_directories = weakref.WeakSet()
+        atexit.register(self.cleanup_all)
+    
+    def register_file_handle(self, file_handle):
+        """Register a file handle for tracking and cleanup."""
+        self._file_handles.add(file_handle)
+        return file_handle
+    
+    def register_temp_file(self, temp_file):
+        """Register a temporary file for tracking and cleanup."""
+        self._temp_files.add(temp_file)
+        return temp_file
+    
+    def register_temp_directory(self, temp_directory):
+        """Register a temporary directory for tracking and cleanup."""
+        self._temp_directories.add(temp_directory)
+        return temp_directory
+    
+    def cleanup_file_handles(self):
+        """Clean up all registered file handles."""
+        for file_handle in list(self._file_handles):
+            try:
+                if not file_handle.closed:
+                    file_handle.close()
+                    logging.debug(f"Closed file handle: {file_handle}")
+            except Exception as e:
+                logging.error(f"Error closing file handle: {str(e)}", exc_info=True)
+        self._file_handles.clear()
+    
+    def cleanup_temp_files(self):
+        """Clean up all registered temporary files."""
+        for temp_file in list(self._temp_files):
+            try:
+                if hasattr(temp_file, 'cleanup'):
+                    temp_file.cleanup()
+                elif hasattr(temp_file, 'close'):
+                    temp_file.close()
+                logging.debug(f"Cleaned up temporary file: {temp_file}")
+            except Exception as e:
+                logging.error(f"Error cleaning up temporary file: {str(e)}", exc_info=True)
+        self._temp_files.clear()
+    
+    def cleanup_temp_directories(self):
+        """Clean up all registered temporary directories."""
+        for temp_dir in list(self._temp_directories):
+            try:
+                if hasattr(temp_dir, 'cleanup'):
+                    temp_dir.cleanup()
+                logging.debug(f"Cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                logging.error(f"Error cleaning up temporary directory: {str(e)}", exc_info=True)
+        self._temp_directories.clear()
+    
+    def cleanup_all(self):
+        """Clean up all registered resources."""
+        logging.info("Cleaning up all file handles and temporary resources")
+        self.cleanup_file_handles()
+        self.cleanup_temp_files()
+        self.cleanup_temp_directories()
+    
+    def get_stats(self):
+        """Get statistics about managed resources."""
+        return {
+            'file_handles': len(self._file_handles),
+            'temp_files': len(self._temp_files),
+            'temp_directories': len(self._temp_directories)
+        }
 
 
 class BrainMeth:
@@ -195,6 +276,7 @@ class BrainMeth:
         self.first_run = {}
         self.terminate = False
         self.finished = False
+        self.file_handle_manager = FileHandleManager()
         self.cpgs_master_file = os.path.join(
             os.path.dirname(os.path.abspath(resources.__file__)),
             "sturg_nanodx_cpgs_0125.bed.gz",
@@ -374,6 +456,33 @@ class BrainMeth:
             self.background_process_bams_timer.cancel()
         print("background_process_bams_timer stopped")
 
+        # Stop additional timers that may have been created
+        print("Stop app_state_timer")
+        if hasattr(self, "app_state_timer"):
+            self.app_state_timer.cancel()
+        print("app_state_timer stopped")
+
+        print("Stop process_bams_tracker")
+        if hasattr(self, "process_bams_tracker"):
+            self.process_bams_tracker.cancel()
+        print("process_bams_tracker stopped")
+
+        print("Stop process_bigbadmerge_tracker")
+        if hasattr(self, "process_bigbadmerge_tracker"):
+            self.process_bigbadmerge_tracker.cancel()
+        print("process_bigbadmerge_tracker stopped")
+
+        print("Stop check_and_log_memory")
+        if hasattr(self, "check_and_log_memory"):
+            self.check_and_log_memory.cancel()
+        print("check_and_log_memory stopped")
+
+        # Clean up all temporary directories and file handles
+        print("Cleaning up temporary directories and file handles")
+        self.cleanup_all_temp_directories()
+        self.file_handle_manager.cleanup_all()
+        print("Temporary directories and file handles cleaned up")
+
         # Wait for any pending tasks to complete
         while not self.finished:
             print("Waiting for finished")
@@ -415,15 +524,13 @@ class BrainMeth:
             logging.info("Initializing processing queues")
             self.bam_tracking = Queue()
             self.bamforcns = Queue()
-            self.bamforsturgeon = Queue()
-            self.bamfornanodx = Queue()
-            self.bamforpannanodx = Queue()
+
             self.bamforcnv = Queue()
             self.bamfortargetcoverage = Queue()
             self.bamformgmt = Queue()
             self.bamforfusions = Queue()
             self.bamforbigbadmerge = Queue()
-            self.mergecounter = 0
+            #self.mergecounter = 0
 
             if self.watchfolder:
                 logging.info(f"Adding watchfolder: {self.watchfolder}")
@@ -441,10 +548,13 @@ class BrainMeth:
             # Initialize analysis objects with batch processing
             if "sturgeon" not in self.exclude:
                 logging.info("Initializing Sturgeon analysis with batch processing")
+                self.parquetqueuesturgeon = Queue()
+                self.bamforsturgeon = Queue()
                 self.Sturgeon = Sturgeon_object(
                     analysis_name="STURGEON",
                     batch=True,
                     bamqueue=self.bamforsturgeon,
+                    parquetqueue=self.parquetqueuesturgeon,
                     **common_args,
                 )
 
@@ -452,32 +562,41 @@ class BrainMeth:
 
             if "nanodx" not in self.exclude:
                 logging.info("Initializing NanoDX analysis with batch processing")
+                self.bamfornanodx = Queue()
+                self.parquetqueuenanodx = Queue()
                 self.NanoDX = NanoDX_object(
                     analysis_name="NANODX",
                     batch=True,
                     bamqueue=self.bamfornanodx,
+                    parquetqueue=self.parquetqueuenanodx,
                     **common_args,
                 )
                 await self.NanoDX.process_data()
 
             if "pannanodx" not in self.exclude:
                 logging.info("Initializing PanNanoDX analysis with batch processing")
+                self.bamforpannanodx = Queue()
+                self.parquetqueuepannanodx = Queue()
                 self.panNanoDX = NanoDX_object(
                     analysis_name="PANNANODX",
                     batch=True,
                     bamqueue=self.bamforpannanodx,
                     model="pancan_devel_v5i_NN.pkl",
+                    parquetqueue=self.parquetqueuepannanodx,
                     **common_args,
                 )
                 await self.panNanoDX.process_data()
 
             if "forest" not in self.exclude:
                 logging.info("Initializing RandomForest analysis with batch processing")
+                self.bamforcns = Queue()
+                self.parquetqueuecns = Queue()
                 self.RandomForest = RandomForest_object(
                     analysis_name="FOREST",
                     batch=True,
                     showerrors=self.showerrors,
                     bamqueue=self.bamforcns,
+                    parquetqueue=self.parquetqueuecns,
                     **common_args,
                 )
                 await self.RandomForest.process_data()
@@ -955,7 +1074,7 @@ class BrainMeth:
                 logging.warning(f"No data file found at {json_path}")
                 return
 
-            with open(json_path, "r") as f:
+            with self.safe_open(json_path, "r") as f:
                 data = json.load(f)
 
             if not data:
@@ -2282,7 +2401,9 @@ class BrainMeth:
                 # Detailed Analysis Tabs
                 if sample_id:
                     selectedtab = None
-                    with ui.tabs().classes("w-full") as tabs: #.on('click', lambda: ui.notify('You clicked a tab.'))
+                    with ui.tabs().classes(
+                        "w-full"
+                    ) as tabs:  # .on('click', lambda: ui.notify('You clicked a tab.'))
                         if not (
                             set(["sturgeon", "pannanodx", "nanodx", "forest"]).issubset(
                                 set(self.exclude)
@@ -2312,7 +2433,9 @@ class BrainMeth:
                             if not selectedtab:
                                 selectedtab = mnpflextab
 
-                    with ui.tab_panels(tabs, value=selectedtab).classes("w-full"):# , on_change=lambda e: print(e))
+                    with ui.tab_panels(tabs, value=selectedtab).classes(
+                        "w-full"
+                    ):  # , on_change=lambda e: print(e))
                         display_args = {
                             "threads": self.threads,
                             "output": self.output,
@@ -2637,6 +2760,17 @@ class BrainMeth:
                 )
             self.finished = True
             self.shutdown_background()
+        else:
+            # Periodic cleanup of old temporary directories (every 10 checks = 100 seconds)
+            if not hasattr(self, '_cleanup_counter'):
+                self._cleanup_counter = 0
+            self._cleanup_counter += 1
+            
+            if self._cleanup_counter >= 10:
+                logging.info("Performing periodic cleanup of old temporary directories")
+                self.cleanup_old_temp_directories()
+                self.log_file_handle_stats()  # Log file handle statistics
+                self._cleanup_counter = 0
 
     def check_and_create_folder(self, path, folder_name=None):
         """Check if a folder exists and create it if it doesn't."""
@@ -2667,9 +2801,9 @@ class BrainMeth:
         """
         try:
             # Get the current process
-            #print('a. links:', len(binding.active_links))
-            #print(binding.active_links)
-            
+            # print('a. links:', len(binding.active_links))
+            # print(binding.active_links)
+
             current_process = psutil.Process(os.getpid())
             memory = psutil.virtual_memory()
             available_memory_gb = memory.available / (1024**3)
@@ -2765,7 +2899,7 @@ class BrainMeth:
                             ]
                         )
 
-                with open(memory_log_file, "w") as f:
+                with self.safe_open(memory_log_file, "w") as f:
                     f.write(",".join(header) + "\n")
 
             # Prepare log entry
@@ -2802,7 +2936,7 @@ class BrainMeth:
                         log_data.extend(["NA", "0.00", "0.00", "0.0"])
 
             # Append memory data with timestamp
-            with open(memory_log_file, "a") as f:
+            with self.safe_open(memory_log_file, "a") as f:
                 f.write(",".join(log_data) + "\n")
 
             return memory_data
@@ -2821,42 +2955,59 @@ class BrainMeth:
         latest_files = {}  # Track latest file time per sample
         state.start_process("Merge Bam Analysis", ProcessType.BACKGROUND)
         state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
-
+        
+        # Stopping Analysis to check for memory
+        
+        analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
         # Process queue and organize files by sample ID
         while self.bamforbigbadmerge.qsize() > 0:
             state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
             file, filetime, sampleID = self.bamforbigbadmerge.get()
 
+            # Validate sampleID - if None, use a fallback
+            if sampleID is None:
+                sampleID = f"unknown_sample_{os.path.basename(file)}"
+                logging.warning(
+                    f"BAM file {file} has no sampleID in queue, using fallback: {sampleID}"
+                )
+
             # Initialize containers for new sample IDs
             if sampleID not in files_by_sample:
                 files_by_sample[sampleID] = []
                 latest_files[sampleID] = 0
-
                 # Create temporary directories if needed
                 if sampleID not in self.dataDir:
-                    self.dataDir[sampleID] = tempfile.TemporaryDirectory(
+                    logging.info(f"Creating temporary directories for sample {sampleID}")
+                    data_temp_dir = tempfile.TemporaryDirectory(
                         dir=self.check_and_create_folder(self.output, sampleID)
                     )
-                    self.bedDir[sampleID] = tempfile.TemporaryDirectory(
+                    bed_temp_dir = tempfile.TemporaryDirectory(
                         dir=self.check_and_create_folder(self.output, sampleID)
                     )
+                    
+                    # Register with file handle manager
+                    self.file_handle_manager.register_temp_directory(data_temp_dir)
+                    self.file_handle_manager.register_temp_directory(bed_temp_dir)
+                    
+                    self.dataDir[sampleID] = data_temp_dir
+                    self.bedDir[sampleID] = bed_temp_dir
+                    logging.info(f"Created temporary directories for sample {sampleID}: data={self.dataDir[sampleID].name}, bed={self.bedDir[sampleID].name}")
 
                 # Initialize storage for this sample if it doesn't exist
                 if sampleID not in app.storage.general[self.mainuuid]:
                     app.storage.general[self.mainuuid][sampleID] = {}
 
                 # Initialize counters for this sample if they don't exist
-                analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
+
                 for analysis in analyses:
                     if analysis.lower() not in self.exclude:
                         if analysis not in app.storage.general[self.mainuuid][sampleID]:
-                            app.storage.general[self.mainuuid][sampleID][analysis] = {
-                                "counters": {
-                                    "bams_in_processing": 0,
-                                    "bam_processed": 0,
-                                    "bams_failed": 0,
-                                }
-                            }
+                            app.storage.general[self.mainuuid][sampleID][analysis] = {}
+                            app.storage.general[self.mainuuid][sampleID][analysis][
+                                "counters"
+                            ] = Counter(
+                                bam_count=0, bam_processed=0, bams_in_processing=0
+                            )
                         elif (
                             "counters"
                             not in app.storage.general[self.mainuuid][sampleID][
@@ -2865,12 +3016,16 @@ class BrainMeth:
                         ):
                             app.storage.general[self.mainuuid][sampleID][analysis][
                                 "counters"
-                            ] = {
-                                "bams_in_processing": 0,
-                                "bam_processed": 0,
-                                "bams_failed": 0,
-                            }
+                            ] = Counter(
+                                bam_count=0, bam_processed=0, bams_in_processing=0
+                            )
 
+            for analysis in analyses:
+                if analysis.lower() not in self.exclude:
+                    app.storage.general[self.mainuuid][sampleID][analysis]["counters"][
+                        "bam_count"
+                    ] += 1
+            
             # Add file to the list for this sample
             files_by_sample[sampleID].append(file)
             latest_files[sampleID] = max(latest_files[sampleID], filetime or 0)
@@ -2879,46 +3034,17 @@ class BrainMeth:
             for sample_id in list(files_by_sample.keys()):
                 # The length of bams we allow to be processed at once will influence memory usage.
                 if (
-                    len(files_by_sample[sample_id]) >= 5
+                    len(files_by_sample[sample_id]) >= 1
                 ):  # This can be changed at any time
                     files_to_process = len(files_by_sample[sample_id])
                     logging.info(
                         f"Processing batch of {files_to_process} files for sample {sample_id}"
                     )
 
-                    # Update counters for each non-excluded analysis
-                    analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
                     for analysis in analyses:
                         if analysis.lower() not in self.exclude:
                             try:
                                 # Ensure the counter structure exists
-                                if (
-                                    analysis
-                                    not in app.storage.general[self.mainuuid][sample_id]
-                                ):
-                                    app.storage.general[self.mainuuid][sample_id][
-                                        analysis
-                                    ] = {
-                                        "counters": {
-                                            "bams_in_processing": 0,
-                                            "bam_processed": 0,
-                                            "bams_failed": 0,
-                                        }
-                                    }
-                                elif (
-                                    "counters"
-                                    not in app.storage.general[self.mainuuid][
-                                        sample_id
-                                    ][analysis]
-                                ):
-                                    app.storage.general[self.mainuuid][sample_id][
-                                        analysis
-                                    ]["counters"] = {
-                                        "bams_in_processing": 0,
-                                        "bam_processed": 0,
-                                        "bams_failed": 0,
-                                    }
-
                                 app.storage.general[self.mainuuid][sample_id][analysis][
                                     "counters"
                                 ]["bams_in_processing"] += files_to_process
@@ -2929,7 +3055,7 @@ class BrainMeth:
                                 logging.error(
                                     f"Failed to update counter for {analysis}: {str(e)}"
                                 )
-
+            
                     await self.process_sample_files(
                         sample_id, files_by_sample[sample_id], latest_files[sample_id]
                     )
@@ -2937,7 +3063,8 @@ class BrainMeth:
                     # Clear processed files
                     files_by_sample[sample_id] = []
                     latest_files[sample_id] = 0
-
+            
+        """
         # Process remaining files for each sample
         for sample_id, files in files_by_sample.items():
             if files:  # Only process if there are files
@@ -2994,7 +3121,7 @@ class BrainMeth:
                     await self.process_sample_files(
                         sample_id, files, latest_files[sample_id]
                     )
-
+        """
         if not state.shutdown_event:
             self.process_bigbadmerge_tracker.active = True
             state.set_process_state("Merge Bam Analysis", ProcessState.WAITING_FOR_DATA)
@@ -3049,7 +3176,7 @@ class BrainMeth:
 
             # Initialize the count
             if os.path.exists(tomerge_length_file):
-                with open(tomerge_length_file, "r") as f:
+                with self.safe_open(tomerge_length_file, "r") as f:
                     current_count = int(
                         f.readline().strip().split(": ")[1]
                     )  # Read the current count
@@ -3060,82 +3187,128 @@ class BrainMeth:
             new_count = current_count + len(tomerge)
 
             # Write the updated length of the tomerge list to the output file
-            with open(tomerge_length_file, "w") as f:
+            with self.safe_open(tomerge_length_file, "w") as f:
                 f.write(f"Length of tomerge list: {new_count}\n")
-
-            tempbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bam",
-            )
-            sorttempbam = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID),
-                suffix=".bam",
-            )
-            file = tempbam.name
-            temp = tempfile.NamedTemporaryFile(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            )
-            sortfile = sorttempbam.name
-
-            # Set process state to running
-            state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
-
-            # Sort and merge BAM files
-            try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
-                await run.cpu_bound(
-                    run_samtools_sort, file, tomerge, sortfile, self.threads
+            
+            if len(tomerge) > 1:
+                # Create temporary files with proper registration
+                tempbam = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, sampleID),
+                    suffix=".bam",
+                    delete=False
                 )
-            except concurrent.futures.process.BrokenProcessPool:
-                logger.warning(
-                    "Process pool was terminated. This is normal during shutdown."
+                sorttempbam = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, sampleID),
+                    suffix=".bam",
+                    delete=False
                 )
-                state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
-                return
+                temp = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, sampleID),
+                    delete=False
+                )
+                
+                # Register with file handle manager
+                self.file_handle_manager.register_temp_file(tempbam)
+                self.file_handle_manager.register_temp_file(sorttempbam)
+                self.file_handle_manager.register_temp_file(temp)
+                
+                file = tempbam.name
+                sortfile = sorttempbam.name
+                temp_name = temp.name
 
-            with tempfile.TemporaryDirectory(
-                dir=self.check_and_create_folder(self.output, sampleID)
-            ):
+                # Set process state to running
+                state.set_process_state("Merge Bam Analysis", ProcessState.RUNNING)
+
+                # Sort and merge BAM files
                 try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
-                    await run.cpu_bound(run_modkit, sortfile, temp.name, self.threads)
-                    # run_modkit(sortfile, temp.name, self.threads)
+                    await run.cpu_bound(
+                        run_samtools_sort, file, tomerge, sortfile, self.threads
+                    )
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(
                         "Process pool was terminated. This is normal during shutdown."
                     )
                     state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
                     return
+            else:
+                sortfile = tomerge[0]
+                temp = tempfile.NamedTemporaryFile(
+                    dir=self.check_and_create_folder(self.output, sampleID),
+                    delete=False
+                )
+                
+                # Register with file handle manager
+                self.file_handle_manager.register_temp_file(temp)
+                
+                temp_name = temp.name
+            
 
+            with tempfile.TemporaryDirectory(
+                dir=self.check_and_create_folder(self.output, sampleID)
+            ):
+                try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
+                    # await run.cpu_bound(run_modkit, sortfile, temp_name, self.threads)
+                    await run.cpu_bound(run_matkit, sortfile, temp_name)
+                    # print("Modkit run complete")
+                    # run_modkit(sortfile, temp_name, self.threads)
+                except concurrent.futures.process.BrokenProcessPool:
+                    logger.warning(
+                        "Process pool was terminated. This is normal during shutdown."
+                    )
+                    state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
+                    return
+                
                 # Create output path specific to this sample
                 parquet_path = os.path.join(
                     self.check_and_create_folder(self.output, sampleID),
                     f"{sampleID}.parquet",  # Use sampleID for the output filename
                 )
-
+                
                 # Merge modkit files for this sample
                 try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
                     await run.cpu_bound(
                         merge_modkit_files,
-                        [temp.name],
+                        [temp_name],
                         parquet_path,  # Use the parquet_path for the existing file
                         parquet_path,
                         self.cpgs_master_file,  # Use the parquet_path for the output file
                         sampleID,
                         self.output,
                         dict(self.mnpflex_config),
+                        num_bam_files_seen,  # Pass the number of BAM files that contributed
                     )
+                    
+                    for analysis in analyses:
+                        if analysis.lower() not in self.exclude:
+                            if analysis == "STURGEON":
+                                self.parquetqueuesturgeon.put(
+                                    (parquet_path, sampleID, num_bam_files_seen)
+                                )
+                            elif analysis == "NANODX":
+                                self.parquetqueuenanodx.put(
+                                    (parquet_path, sampleID, num_bam_files_seen)
+                                )
+                            elif analysis == "PANNANODX":
+                                self.parquetqueuepannanodx.put(
+                                    (parquet_path, sampleID, num_bam_files_seen)
+                                )
+                            elif analysis == "FOREST":
+                                self.parquetqueuecns.put(
+                                    (parquet_path, sampleID, num_bam_files_seen)
+                                )
                 except concurrent.futures.process.BrokenProcessPool:
                     logger.warning(
                         "Process pool was terminated. This is normal during shutdown."
                     )
                     state.set_process_state("Merge Bam Analysis", ProcessState.STOPPED)
                     return
-
+                
                 # Log the number of BAM files processed
                 logging.info(
                     f"Merged {num_bam_files_seen} BAM files into {parquet_path} for sample ID: {sampleID}"
                 )
-                self.mergecounter += len(tomerge)
-
+                #self.mergecounter += len(tomerge)
+                
                 # Update the processed counters for each analysis type
                 analyses = ["STURGEON", "NANODX", "PANNANODX", "FOREST"]
                 for analysis in analyses:
@@ -3167,7 +3340,6 @@ class BrainMeth:
                             counters["bams_in_processing"] = max(
                                 0, counters["bams_in_processing"] - num_bam_files_seen
                             )
-                            counters["bam_processed"] += num_bam_files_seen
 
                             logging.debug(
                                 f"Updated {analysis} processed counter for {sampleID} by {num_bam_files_seen}"
@@ -3181,6 +3353,31 @@ class BrainMeth:
                                 "Merge Bam Analysis", ProcessState.STOPPED
                             )
                             return
+                
+                # Clean up temporary directories for this sample after processing is complete
+                logging.info(f"Cleaning up temporary directories for sample {sampleID}")
+                self.cleanup_temp_directories_for_sample(sampleID)
+                
+                # Clean up temporary files using file handle manager
+                logging.info(f"Cleaning up temporary files for sample {sampleID}")
+                self.cleanup_temp_files_for_sample(sampleID)
+                
+                # Also clean up the file paths manually for safety
+                try:
+                    if len(tomerge) > 1:
+                        # Clean up temporary BAM files
+                        if os.path.exists(file):
+                            os.unlink(file)
+                            logging.debug(f"Cleaned up temporary BAM file: {file}")
+                        if os.path.exists(sortfile):
+                            os.unlink(sortfile)
+                            logging.debug(f"Cleaned up temporary sorted BAM file: {sortfile}")
+                    if os.path.exists(temp_name):
+                        os.unlink(temp_name)
+                        logging.debug(f"Cleaned up temporary modkit file: {temp_name}")
+                except Exception as e:
+                    logging.error(f"Error cleaning up temporary files for sample {sampleID}: {str(e)}", exc_info=True)
+            
 
         except concurrent.futures.process.BrokenProcessPool:
             logger.warning(
@@ -3242,6 +3439,21 @@ class BrainMeth:
                     if not self.force_sampleid
                     else self.force_sampleid
                 )
+
+                # Validate sample_id - if None, use a fallback or skip
+                if sample_id is None:
+                    if self.force_sampleid:
+                        sample_id = self.force_sampleid
+                        logging.warning(
+                            f"BAM file {filename} has no sample_id, using force_sampleid: {sample_id}"
+                        )
+                    else:
+                        # Generate a fallback sample ID based on filename
+                        sample_id = f"unknown_sample_{os.path.basename(filename)}"
+                        logging.warning(
+                            f"BAM file {filename} has no sample_id, using fallback: {sample_id}"
+                        )
+
                 logging.info(f"BAM file {filename} belongs to sample: {sample_id}")
 
                 # Initialize sample-specific counters if they don't exist
@@ -3378,6 +3590,21 @@ class BrainMeth:
                     if not self.force_sampleid
                     else self.force_sampleid
                 )
+
+                # Validate sample_id - if None, use a fallback or skip
+                if sample_id is None:
+                    if self.force_sampleid:
+                        sample_id = self.force_sampleid
+                        logging.warning(
+                            f"BAM file {file[0]} has no sample_id, using force_sampleid: {sample_id}"
+                        )
+                    else:
+                        # Generate a fallback sample ID based on filename
+                        sample_id = f"unknown_sample_{os.path.basename(file[0])}"
+                        logging.warning(
+                            f"BAM file {file[0]} has no sample_id, using fallback: {sample_id}"
+                        )
+
                 logging.info(f"BAM file {file[0]} belongs to sample: {sample_id}")
 
                 # Remove from sample-specific tracking as well
@@ -3641,7 +3868,7 @@ class BrainMeth:
                         f"Routing {file[0]} to bigbadmerge queue for batch processing"
                     )
                     self.bamforbigbadmerge.put([file[0], file[1], sample_id])
-
+                """
                 # Individual analysis queue routing
                 if "forest" not in self.exclude:
                     logging.info(f"Routing {file[0]} to forest analysis queue")
@@ -3655,6 +3882,7 @@ class BrainMeth:
                 if "pannanodx" not in self.exclude:
                     logging.info(f"Routing {file[0]} to pannanodx analysis queue")
                     self.bamforpannanodx.put([file[0], file[1], sample_id])
+                """
                 if "cnv" not in self.exclude:
                     logging.info(f"Routing {file[0]} to cnv analysis queue")
                     self.bamforcnv.put([file[0], file[1], sample_id])
@@ -3726,3 +3954,212 @@ class BrainMeth:
                 await asyncio.sleep(0.1)
             else:
                 await asyncio.sleep(0.1)
+
+    def cleanup_temp_directories_for_sample(self, sample_id):
+        """
+        Clean up temporary directories for a specific sample.
+        
+        :param sample_id: The sample ID to clean up temporary directories for.
+        """
+        try:
+            if sample_id in self.dataDir:
+                logging.info(f"Cleaning up data temporary directory for sample {sample_id}")
+                temp_dir = self.dataDir[sample_id]
+                temp_dir.cleanup()
+                del self.dataDir[sample_id]
+                logging.info(f"Cleaned up data temporary directory for sample {sample_id}")
+            
+            if sample_id in self.bedDir:
+                logging.info(f"Cleaning up bed temporary directory for sample {sample_id}")
+                temp_dir = self.bedDir[sample_id]
+                temp_dir.cleanup()
+                del self.bedDir[sample_id]
+                logging.info(f"Cleaned up bed temporary directory for sample {sample_id}")
+                
+        except Exception as e:
+            logging.error(f"Error cleaning up temporary directories for sample {sample_id}: {str(e)}", exc_info=True)
+    
+    def cleanup_temp_files_for_sample(self, sample_id):
+        """
+        Clean up temporary files for a specific sample.
+        
+        :param sample_id: The sample ID to clean up temporary files for.
+        """
+        try:
+            # This will be handled by the file handle manager
+            logging.info(f"Cleaning up temporary files for sample {sample_id}")
+            # The file handle manager will handle the cleanup automatically
+        except Exception as e:
+            logging.error(f"Error cleaning up temporary files for sample {sample_id}: {str(e)}", exc_info=True)
+
+    def cleanup_all_temp_directories(self):
+        """
+        Clean up all temporary directories for all samples.
+        """
+        try:
+            logging.info("Cleaning up all temporary directories")
+            
+            # Clean up data directories
+            for sample_id in list(self.dataDir.keys()):
+                try:
+                    logging.info(f"Cleaning up data temporary directory for sample {sample_id}")
+                    temp_dir = self.dataDir[sample_id]
+                    temp_dir.cleanup()
+                    del self.dataDir[sample_id]
+                except Exception as e:
+                    logging.error(f"Error cleaning up data temporary directory for sample {sample_id}: {str(e)}", exc_info=True)
+            
+            # Clean up bed directories
+            for sample_id in list(self.bedDir.keys()):
+                try:
+                    logging.info(f"Cleaning up bed temporary directory for sample {sample_id}")
+                    temp_dir = self.bedDir[sample_id]
+                    temp_dir.cleanup()
+                    del self.bedDir[sample_id]
+                except Exception as e:
+                    logging.error(f"Error cleaning up bed temporary directory for sample {sample_id}: {str(e)}", exc_info=True)
+            
+            logging.info("Completed cleanup of all temporary directories")
+            
+        except Exception as e:
+            logging.error(f"Error in cleanup_all_temp_directories: {str(e)}", exc_info=True)
+
+    def cleanup_old_temp_directories(self, active_samples=None):
+        """
+        Clean up temporary directories for samples that are no longer active.
+        
+        :param active_samples: List of sample IDs that are currently active. If None, assumes all samples in storage are active.
+        """
+        try:
+            if active_samples is None:
+                # If no active samples provided, use all samples in storage
+                if self.mainuuid in app.storage.general:
+                    active_samples = list(app.storage.general[self.mainuuid]["samples"].keys())
+                else:
+                    active_samples = []
+            
+            logging.info(f"Cleaning up old temporary directories. Active samples: {active_samples}")
+            
+            # Clean up data directories for inactive samples
+            for sample_id in list(self.dataDir.keys()):
+                if sample_id not in active_samples:
+                    try:
+                        logging.info(f"Cleaning up old data temporary directory for inactive sample {sample_id}")
+                        temp_dir = self.dataDir[sample_id]
+                        temp_dir.cleanup()
+                        del self.dataDir[sample_id]
+                    except Exception as e:
+                        logging.error(f"Error cleaning up old data temporary directory for sample {sample_id}: {str(e)}", exc_info=True)
+            
+            # Clean up bed directories for inactive samples
+            for sample_id in list(self.bedDir.keys()):
+                if sample_id not in active_samples:
+                    try:
+                        logging.info(f"Cleaning up old bed temporary directory for inactive sample {sample_id}")
+                        temp_dir = self.bedDir[sample_id]
+                        temp_dir.cleanup()
+                        del self.bedDir[sample_id]
+                    except Exception as e:
+                        logging.error(f"Error cleaning up old bed temporary directory for sample {sample_id}: {str(e)}", exc_info=True)
+            
+            logging.info("Completed cleanup of old temporary directories")
+            
+        except Exception as e:
+            logging.error(f"Error in cleanup_old_temp_directories: {str(e)}", exc_info=True)
+
+    def get_temp_directory_info(self):
+        """
+        Get information about current temporary directory usage for debugging.
+        
+        :return: Dictionary with information about temporary directories
+        """
+        info = {
+            'data_directories': {},
+            'bed_directories': {},
+            'total_data_dirs': len(self.dataDir),
+            'total_bed_dirs': len(self.bedDir)
+        }
+        
+        for sample_id, temp_dir in self.dataDir.items():
+            info['data_directories'][sample_id] = {
+                'path': temp_dir.name,
+                'exists': os.path.exists(temp_dir.name)
+            }
+        
+        for sample_id, temp_dir in self.bedDir.items():
+            info['bed_directories'][sample_id] = {
+                'path': temp_dir.name,
+                'exists': os.path.exists(temp_dir.name)
+            }
+        
+        return info
+    
+    def get_file_handle_stats(self):
+        """
+        Get statistics about file handle usage for debugging.
+        
+        :return: Dictionary with file handle statistics
+        """
+        return self.file_handle_manager.get_stats()
+    
+    def log_file_handle_stats(self):
+        """
+        Log current file handle statistics for debugging.
+        """
+        stats = self.get_file_handle_stats()
+        logging.info(f"File handle statistics: {stats}")
+        
+        temp_dir_info = self.get_temp_directory_info()
+        logging.info(f"Temporary directory statistics: {temp_dir_info}")
+    
+    def safe_open(self, file_path, mode='r', **kwargs):
+        """
+        Safely open a file with automatic registration in the file handle manager.
+        
+        :param file_path: Path to the file to open
+        :param mode: File open mode
+        :param kwargs: Additional arguments to pass to open()
+        :return: File handle registered with the file handle manager
+        """
+        file_handle = open(file_path, mode, **kwargs)
+        return self.file_handle_manager.register_file_handle(file_handle)
+    
+    def safe_temp_file(self, **kwargs):
+        """
+        Safely create a temporary file with automatic registration.
+        
+        :param kwargs: Arguments to pass to tempfile.NamedTemporaryFile
+        :return: Temporary file registered with the file handle manager
+        """
+        temp_file = tempfile.NamedTemporaryFile(**kwargs)
+        return self.file_handle_manager.register_temp_file(temp_file)
+    
+    def safe_temp_directory(self, **kwargs):
+        """
+        Safely create a temporary directory with automatic registration.
+        
+        :param kwargs: Arguments to pass to tempfile.TemporaryDirectory
+        :return: Temporary directory registered with the file handle manager
+        """
+        temp_dir = tempfile.TemporaryDirectory(**kwargs)
+        return self.file_handle_manager.register_temp_directory(temp_dir)
+    
+    def force_cleanup_all_resources(self):
+        """
+        Force cleanup of all file handles and temporary resources.
+        This should be called when memory issues are detected.
+        """
+        logging.warning("Forcing cleanup of all file handles and temporary resources")
+        try:
+            # Clean up all temporary directories
+            self.cleanup_all_temp_directories()
+            
+            # Clean up all file handles and temporary files
+            self.file_handle_manager.cleanup_all()
+            
+            # Log statistics after cleanup
+            self.log_file_handle_stats()
+            
+            logging.info("Forced cleanup completed")
+        except Exception as e:
+            logging.error(f"Error during forced cleanup: {str(e)}", exc_info=True)

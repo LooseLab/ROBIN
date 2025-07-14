@@ -49,7 +49,7 @@ import click
 import time
 import subprocess
 from pathlib import Path
-from nicegui import ui, run, app, background_tasks
+from nicegui import ui, run, app
 from io import StringIO
 import pysam
 import tempfile
@@ -69,6 +69,22 @@ logger = logging.getLogger(__name__)
 decompress_gzip_file(
     os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), "clinvar.vcf.gz")
 )
+
+# Global variable to store the TargetCoverage instance
+_target_coverage_instance = None
+
+def set_target_coverage_instance(instance):
+    """Set the global TargetCoverage instance."""
+    global _target_coverage_instance
+    _target_coverage_instance = instance
+
+def start_snp_timer_global():
+    """Start the SNP timer from the global TargetCoverage instance."""
+    global _target_coverage_instance
+    if _target_coverage_instance:
+        _target_coverage_instance.start_snp_timer_from_ui()
+    else:
+        logger.warning("No TargetCoverage instance available")
 
 
 def process_annotations(record: dict) -> dict:
@@ -188,64 +204,120 @@ def parse_vcf(vcf_file):
     The function handles duplicate entries and aggregates certain fields.
     The resulting DataFrame is saved as a CSV file alongside the original VCF.
     """
-    header = "CHROM POS ID REF ALT QUAL FILTER INFO FORMAT GT".split()
-    vcf = pd.read_csv(vcf_file, delimiter="\t", comment="#", names=header)
-    result = None
-    if len(vcf) > 0:
-        explodedvcf = []
-        for record in vcf.to_dict("records"):
-            result, result2 = process_annotations(record)
-            if len(result) > 1:
-                for res in result:
-                    dat = {**record, **result[res], **result2}
-                    explodedvcf.append(dat)
-
-        vcf = pd.DataFrame.from_records(explodedvcf)
-        if "INFO" in vcf.columns:
-            vcf = vcf.drop(columns=["INFO"]).drop_duplicates()
-        else:
-            vcf = vcf.drop_duplicates()
-
-        def set_unique_values(series):
-            set_series = set(series)
-            if len(set_series) > 0:
-                return "{}".format(", ".join(map(str, set_series)))
-            return None
-
+    logger.info(f"parse_vcf called with file: {vcf_file}")
+    
+    if not os.path.exists(vcf_file):
+        logger.error(f"VCF file not found: {vcf_file}")
+        return
+    
+    try:
+        header = "CHROM POS ID REF ALT QUAL FILTER INFO FORMAT GT".split()
+        vcf = pd.read_csv(vcf_file, delimiter="\t", comment="#", names=header)
+        logger.info(f"Loaded VCF with {len(vcf)} records")
+        
+        if len(vcf) == 0:
+            logger.warning("VCF file is empty")
+            return
+        
+        # Check if this is a snpEff annotated VCF (has ANN field in INFO)
+        has_annotations = False
         if len(vcf) > 0:
-            shared_columns = [
-                "CHROM",
-                "POS",
-                "ID",
-                "REF",
-                "ALT",
-                "QUAL",
-                "FILTER",
-                "FORMAT",
-                "GT",
-                "Allele",
-            ]
+            sample_info = vcf.iloc[0]["INFO"]
+            if "ANN=" in sample_info:
+                has_annotations = True
+                logger.info("VCF has snpEff annotations")
+            else:
+                logger.info("VCF does not have snpEff annotations (Clair3 raw output)")
+        
+        if has_annotations:
+            # Process snpEff annotated VCF
+            explodedvcf = []
+            for record in vcf.to_dict("records"):
+                result, result2 = process_annotations(record)
+                if len(result) > 1:
+                    for res in result:
+                        dat = {**record, **result[res], **result2}
+                        explodedvcf.append(dat)
 
-            # Define columns to be aggregated
-            non_shared_columns = [
-                col for col in vcf.columns if col not in shared_columns
-            ]
+            vcf = pd.DataFrame.from_records(explodedvcf)
+            if "INFO" in vcf.columns:
+                vcf = vcf.drop(columns=["INFO"]).drop_duplicates()
+            else:
+                vcf = vcf.drop_duplicates()
 
-            vcf = vcf.replace({np.nan: "Missing"})
-            result = (
-                vcf.groupby(shared_columns)[non_shared_columns]
-                .agg(set_unique_values)
-                .reset_index()
-            )
+            def set_unique_values(series):
+                set_series = set(series)
+                if len(set_series) > 0:
+                    return "{}".format(", ".join(map(str, set_series)))
+                return None
 
-            vcf = result.replace({"Missing": None})
+            if len(vcf) > 0:
+                shared_columns = [
+                    "CHROM",
+                    "POS",
+                    "ID",
+                    "REF",
+                    "ALT",
+                    "QUAL",
+                    "FILTER",
+                    "FORMAT",
+                    "GT",
+                    "Allele",
+                ]
 
+                # Define columns to be aggregated
+                non_shared_columns = [
+                    col for col in vcf.columns if col not in shared_columns
+                ]
+
+                vcf = vcf.replace({np.nan: "Missing"})
+                result = (
+                    vcf.groupby(shared_columns)[non_shared_columns]
+                    .agg(set_unique_values)
+                    .reset_index()
+                )
+
+                vcf = result.replace({"Missing": None})
+        else:
+            # Process Clair3 raw output - just clean up the data
+            logger.info("Processing Clair3 raw output")
+            
+            # Extract some useful fields from INFO
+            def extract_info_fields(info_str):
+                fields = {}
+                for field in info_str.split(';'):
+                    if '=' in field:
+                        key, value = field.split('=', 1)
+                        fields[key] = value
+                return fields
+            
+            # Add extracted INFO fields as columns
+            info_fields = vcf['INFO'].apply(extract_info_fields)
+            for field in ['FAU', 'FCU', 'FGU', 'FTU', 'RAU', 'RCU', 'RGU', 'RTU']:
+                vcf[field] = info_fields.apply(lambda x: x.get(field, '0'))
+            
+            # Extract GT from FORMAT/GT field
+            if len(vcf) > 0 and 'GT' in vcf.columns:
+                vcf['Genotype'] = vcf['GT'].apply(lambda x: x.split(':')[0] if ':' in str(x) else x)
+            
+            # Drop the original INFO column to avoid confusion
+            vcf = vcf.drop(columns=['INFO'])
+
+        # Save the processed data
+        if len(vcf) > 0:
             try:
-                vcf.to_csv(f"{vcf_file}.csv", index=False)
-                print(f"VCF file saved as {vcf_file}.csv")
+                csv_file = f"{vcf_file}.csv"
+                vcf.to_csv(csv_file, index=False)
+                logger.info(f"VCF file saved as {csv_file} with {len(vcf)} records")
             except Exception as e:
-                print(e)
-                sys.exit(1)
+                logger.error(f"Error saving CSV file: {e}")
+        else:
+            logger.warning("No data to save after processing")
+            
+    except Exception as e:
+        logger.error(f"Error in parse_vcf: {e}")
+        import traceback
+        traceback.print_exc()
 
 
 def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, showerrors):
@@ -278,6 +350,9 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
     -------
     None
     """
+    # DEBUG: Always log entry to run_clair3
+    logger.info(f"run_clair3 called with BAM: {bamfile}, BED: {bedfile}, REF: {reference}")
+    
     # Debug: Log input file paths for verification.
     if showerrors:
         logger.info(f"Input BAM file: {bamfile}")
@@ -363,12 +438,12 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
                 f"--tumor_bam_fn {container_bamfile} "
                 f"--ref_fn {container_reference} "
                 # f"--threads {threads} "
-                f"--threads 1 "
+                f"--threads 4 "
                 f"--remove_intermediate_dir "
                 f"--platform ont_r10_guppy_hac_5khz "
                 f"--output_dir {container_output} "
                 f"-b {container_bedfile} "
-                f"--chunk_size 20000000 "
+                f"--chunk_size 500000 "
                 f" --disable_intermediate_phasing "
             )
             if showerrors:
@@ -405,16 +480,88 @@ def run_clair3(bamfile, bedfile, workdir, workdirout, threads, reference, shower
             shutil.copy2(
                 f"{workdirout}/indel.vcf.gz", f"{workdirout}/output_indel_done.vcf.gz"
             )
-            command = f"snpEff -q hg38 {workdirout}/output_done.vcf.gz > {workdirout}/snpeff_output.vcf"
-            os.system(command)
-            command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)),'clinvar.vcf')} {workdirout}/snpeff_output.vcf > {workdirout}/snpsift_output.vcf"
-            os.system(command)
-            command = f"snpEff -q hg38 {workdirout}/output_indel_done.vcf.gz > {workdirout}/snpeff_indel_output.vcf"
-            os.system(command)
-            command = f"SnpSift annotate {os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), 'clinvar.vcf')} {workdirout}/snpeff_indel_output.vcf > {workdirout}/snpsift_indel_output.vcf"
-            os.system(command)
 
-            # Parse the annotated VCF files.
+            # SNP annotation - try snpEff first, fallback to raw VCF if it fails
+            snpeff_cmd = ["snpEff", "-q", "hg38", f"{workdirout}/output_done.vcf.gz"]
+            snpeff_out = f"{workdirout}/snpeff_output.vcf"
+            logger.info(f"Running snpEff: {' '.join(snpeff_cmd)} > {snpeff_out}")
+            
+            snpeff_success = False
+            with open(snpeff_out, "w") as fout:
+                result = subprocess.run(snpeff_cmd, stdout=fout, stderr=subprocess.PIPE, text=True)
+            if result.returncode != 0:
+                logger.warning(f"snpEff failed (likely network issue): {result.stderr}")
+                logger.info("Using raw Clair3 output for SNP annotation")
+                # Copy raw Clair3 output as fallback
+                shutil.copy2(f"{workdirout}/output_done.vcf.gz", snpeff_out)
+            else:
+                logger.info("snpEff completed successfully.")
+                snpeff_success = True
+
+            # SnpSift annotation - only if snpEff succeeded
+            if snpeff_success:
+                snpsift_cmd = [
+                    "SnpSift", "annotate",
+                    os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), "clinvar.vcf"),
+                    snpeff_out
+                ]
+                snpsift_out = f"{workdirout}/snpsift_output.vcf"
+                logger.info(f"Running SnpSift: {' '.join(snpsift_cmd)} > {snpsift_out}")
+                with open(snpsift_out, "w") as fout:
+                    result = subprocess.run(snpsift_cmd, stdout=fout, stderr=subprocess.PIPE, text=True)
+                if result.returncode != 0:
+                    logger.warning(f"SnpSift failed: {result.stderr}")
+                    # Use snpEff output as fallback
+                    shutil.copy2(snpeff_out, snpsift_out)
+                else:
+                    logger.info("SnpSift completed successfully.")
+            else:
+                # If snpEff failed, use raw Clair3 output directly
+                snpsift_out = f"{workdirout}/snpsift_output.vcf"
+                shutil.copy2(snpeff_out, snpsift_out)
+                logger.info("Using raw Clair3 output for SNP annotation (snpEff failed)")
+
+            # INDEL annotation - try snpEff first, fallback to raw VCF if it fails
+            snpeff_indel_cmd = ["snpEff", "-q", "hg38", f"{workdirout}/output_indel_done.vcf.gz"]
+            snpeff_indel_out = f"{workdirout}/snpeff_indel_output.vcf"
+            logger.info(f"Running snpEff (INDEL): {' '.join(snpeff_indel_cmd)} > {snpeff_indel_out}")
+            
+            snpeff_indel_success = False
+            with open(snpeff_indel_out, "w") as fout:
+                result = subprocess.run(snpeff_indel_cmd, stdout=fout, stderr=subprocess.PIPE, text=True)
+            if result.returncode != 0:
+                logger.warning(f"snpEff (INDEL) failed (likely network issue): {result.stderr}")
+                logger.info("Using raw Clair3 output for INDEL annotation")
+                # Copy raw Clair3 output as fallback
+                shutil.copy2(f"{workdirout}/output_indel_done.vcf.gz", snpeff_indel_out)
+            else:
+                logger.info("snpEff (INDEL) completed successfully.")
+                snpeff_indel_success = True
+
+            # SnpSift annotation for INDELs - only if snpEff succeeded
+            if snpeff_indel_success:
+                snpsift_indel_cmd = [
+                    "SnpSift", "annotate",
+                    os.path.join(os.path.dirname(os.path.abspath(resources.__file__)), "clinvar.vcf"),
+                    snpeff_indel_out
+                ]
+                snpsift_indel_out = f"{workdirout}/snpsift_indel_output.vcf"
+                logger.info(f"Running SnpSift (INDEL): {' '.join(snpsift_indel_cmd)} > {snpsift_indel_out}")
+                with open(snpsift_indel_out, "w") as fout:
+                    result = subprocess.run(snpsift_indel_cmd, stdout=fout, stderr=subprocess.PIPE, text=True)
+                if result.returncode != 0:
+                    logger.warning(f"SnpSift (INDEL) failed: {result.stderr}")
+                    # Use snpEff output as fallback
+                    shutil.copy2(snpeff_indel_out, snpsift_indel_out)
+                else:
+                    logger.info("SnpSift (INDEL) completed successfully.")
+            else:
+                # If snpEff failed, use raw Clair3 output directly
+                snpsift_indel_out = f"{workdirout}/snpsift_indel_output.vcf"
+                shutil.copy2(snpeff_indel_out, snpsift_indel_out)
+                logger.info("Using raw Clair3 output for INDEL annotation (snpEff failed)")
+
+            # Parse the VCF files (will work with both annotated and raw Clair3 output)
             parse_vcf(os.path.join(workdirout, "snpsift_output.vcf"))
             parse_vcf(os.path.join(workdirout, "snpsift_indel_output.vcf"))
         except Exception as e:
@@ -797,8 +944,15 @@ class TargetCoverageVis(BaseVis):
                 # self.INDELview = SNPview(self.INDELplaceholder)
                 # ui.timer(0.1,lambda: self.INDELview.renderme(), once=True)
 
-        #await ui.context.client.connected()
+        # await ui.context.client.connected()
         self.mybutton = None
+        
+        # Start SNP timer if SNP calling is enabled (now we have UI context)
+        if self.snp_calling:
+            logger.info("Starting SNP timer from TargetCoverageVis setup_ui")
+            # Start the SNP timer after a short delay to ensure UI is ready
+            ui.timer(1, start_snp_timer_global, once=True)
+        
         if self.browse:
             self.page_timer = ui.timer(0.1, callback=self.show_previous_data, once=True)
         else:
@@ -1666,14 +1820,14 @@ class TargetCoverageVis(BaseVis):
 
                     # Define the async functions that will be used by the buttons
                     async def clear_and_reload():
-                        #await ui.context.client.connected()
+                        # await ui.context.client.connected()
                         ui.run_javascript(js_code, timeout=30.0)
                         self.mybutton.disable()
                         dataload.enable()
 
                     async def data_load():
                         ui.notify("Data Loading")
-                        #await ui.context.client.connected()
+                        # await ui.context.client.connected()
                         ui.run_javascript(js_clear_track, timeout=30)
                         ui.run_javascript(js_code_track, timeout=100)
                         ui.notify("Data Loaded")
@@ -2072,6 +2226,10 @@ class TargetCoverage(BaseAnalysis):
         # self.clair3_status_label = ui.label("Clair3 Idle")  # UI label for status
         if self.reference and self.enable_snp_calling:
             self.snp_calling = True
+            logger.info(f"SNP calling enabled - Reference: {self.reference}, Enable SNP: {self.enable_snp_calling}")
+        else:
+            logger.info(f"SNP calling disabled - Reference: {self.reference}, Enable SNP: {self.enable_snp_calling}")
+            
         self.target_panel = target_panel
         if self.target_panel == "rCNS2":
             self.bedfile = os.path.join(
@@ -2089,6 +2247,14 @@ class TargetCoverage(BaseAnalysis):
             )
         self.check_docker_image()
         super().__init__(*args, **kwargs)
+        
+        # Register this instance as the global TargetCoverage instance
+        set_target_coverage_instance(self)
+        
+        # Don't start SNP timer during initialization - will be started later
+        if self.snp_calling:
+            logger.info("SNP calling enabled, will start timer later")
+        
         # Add a timer to refresh the Clair3 status label
         # ui.timer(1, self.update_clair3_status_label)
 
@@ -2130,48 +2296,90 @@ class TargetCoverage(BaseAnalysis):
             logger.info("Docker image pulled.")
 
     def SNP_timer_run(self):
-        self.snp_timer = ui.timer(10, self._snp_worker)
+        logger.info("Starting SNP timer")
+        try:
+            self.snp_timer = ui.timer(10, self._snp_worker)
+            logger.info("SNP timer created successfully")
+        except Exception as e:
+            logger.error(f"Error creating SNP timer: {e}")
+    
+    def start_snp_timer(self):
+        """Start the SNP timer if SNP calling is enabled and timer hasn't been started yet."""
+        if self.snp_calling and not hasattr(self, 'snp_timer'):
+            logger.info("Starting SNP timer via start_snp_timer")
+            self.SNP_timer_run()
+    
+    def start_snp_timer_from_ui(self):
+        """Start the SNP timer from UI context."""
+        if self.snp_calling and not hasattr(self, 'snp_timer'):
+            logger.info("Starting SNP timer from UI context")
+            try:
+                self.SNP_timer_run()
+                logger.info("SNP timer started successfully from UI")
+            except Exception as e:
+                logger.error(f"Error starting SNP timer from UI: {e}")
+        else:
+            logger.info("SNP timer already started or SNP calling disabled")
 
     async def _snp_worker(self):
         """
         This function takes reads from the queue and adds them to the background thread for processing.
         """
+        # DEBUG: Log entry into SNP worker
+        logger.info(f"_snp_worker called - Queue size: {self.SNPqueue.qsize()}")
+        
         # If Clair3 is already running, don't start another process
         if state.get_process_state("clair3") == ProcessState.RUNNING:
+            logger.info("Clair3 already running, skipping")
             self.snp_timer.active = True
             return
         self.snp_timer.active = False
         try:
             if not self.SNPqueue.empty():
+                logger.info("Processing SNP queue")
+                
                 while not self.SNPqueue.empty():
                     gene_list, bamfile, bedfile = self.SNPqueue.get()
                     self.pending_snp_jobs -= (
                         1  # Decrement counter when processing a job
                     )
+                    logger.info(f"Got job from queue - BAM: {bamfile}, BED: {bedfile}")
+                
                 workdirout = os.path.join(
                     self.check_and_create_folder(self.output, self.sampleID), "clair3"
                 )
                 if not os.path.exists(workdirout):
                     os.mkdir(workdirout)
+                    logger.info(f"Created workdir: {workdirout}")
+                
                 # Wait for BAM file to exist with timeout
                 timeout = 300  # 5 minutes timeout
                 start_time = time.time()
+                logger.info(f"Waiting for BAM file: {bamfile}")
+                
                 while not os.path.exists(f"{bamfile}"):
                     await asyncio.sleep(1)
                     if time.time() - start_time > timeout:
                         logger.error(f"Timeout waiting for BAM file: {bamfile}")
                         return
+                
                 if os.path.exists(f"{bamfile}"):
+                    logger.info(f"BAM file found, starting Clair3 pipeline")
+                    
                     shutil.copy2(bamfile, f"{bamfile}2.bam")
                     # Set state to running before starting background job
                     state.start_process("clair3", ProcessType.BATCH)
                     state.set_process_state("clair3", ProcessState.RUNNING)
+                    
+                    logger.info("Starting BAM sorting")
                     await run.cpu_bound(
                         sort_bam,
                         f"{bamfile}2.bam",
                         os.path.join(workdirout, "sorted_targets_exceeding.bam"),
                         self.threads,
                     )
+                    logger.info("BAM sorting completed, starting Clair3")
+                    
                     await run.cpu_bound(
                         run_clair3,
                         os.path.join(workdirout, "sorted_targets_exceeding.bam"),
@@ -2182,10 +2390,16 @@ class TargetCoverage(BaseAnalysis):
                         self.reference,
                         self.showerrors,
                     )
+                    logger.info("Clair3 pipeline completed")
+                    
                     # Set state to waiting (or stopped) after job completes
                     state.set_process_state("clair3", ProcessState.WAITING_FOR_DATA)
                     state.stop_process("clair3")
                     os.remove(f"{bamfile}2.bam")
+            else:
+                logger.info("SNP queue is empty")
+        except Exception as e:
+            logger.error(f"Error in _snp_worker: {str(e)}")
         finally:
             self.snp_timer.active = True
 
@@ -2211,10 +2425,9 @@ class TargetCoverage(BaseAnalysis):
         # await loop.run_in_executor(
         #    None, run_bedtools, bamfile, self.bedfile, tempbamfile.name
         # )
-        #run_bedtools(bamfile, self.bedfile, tempbamfile.name)
+        # run_bedtools(bamfile, self.bedfile, tempbamfile.name)
         await run.cpu_bound(run_bedtools, bamfile, self.bedfile, tempbamfile.name)
-        
-        
+
         '''
         async def run_bedtools(bamfile, bedfile, tempbamfile):
             """
@@ -2253,7 +2466,7 @@ class TargetCoverage(BaseAnalysis):
             run_bedtools(bamfile, self.bedfile, tempbamfile.name)
         )
         '''
-        
+
         if pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True) > 0:
             if self.sampleID not in self.targetbamfile.keys():
                 self.targetbamfile[self.sampleID] = os.path.join(
@@ -2366,7 +2579,11 @@ class TargetCoverage(BaseAnalysis):
         if self.sampleID not in self.targets_exceeding_threshold.keys():
             self.targets_exceeding_threshold[self.sampleID] = 0
         if self.reference:
+            logger.info(f"Reference genome found: {self.reference}")
+            
             if len(run_list) > 0:
+                logger.info(f"Found {len(run_list)} regions exceeding threshold")
+                
                 self.targets_exceeding_threshold[self.sampleID] = len(run_list)
                 run_list[["chrom", "startpos", "endpos"]].to_csv(
                     os.path.join(
@@ -2384,6 +2601,15 @@ class TargetCoverage(BaseAnalysis):
                     os.mkdir(clair3workdir)
 
                 if self.snp_calling:
+                    logger.info("SNP calling enabled, adding job to queue")
+                    
+                    # Instead of always adding to queue:
+                    if not self.SNPqueue.empty():
+                        # Queue already has a job, skip adding this one
+                        logger.info("Queue already has job, skipping")
+                        return
+
+                    # Only add if queue is empty
                     self.SNPqueue.put(
                         [
                             run_list,
@@ -2397,20 +2623,25 @@ class TargetCoverage(BaseAnalysis):
                         ]
                     )
                     self.pending_snp_jobs += 1  # Increment counter when adding a job
+                    logger.info(f"Job added to queue. Queue size: {self.SNPqueue.qsize()}, Pending jobs: {self.pending_snp_jobs}")
+                else:
+                    logger.info("SNP calling disabled")
+            else:
+                logger.info("No regions exceed coverage threshold")
+        else:
+            logger.info("No reference genome provided")
 
         self.running = False
 
-        # At the end of the method, after all processing and before the method returns:
-        if hasattr(self, 'mainuuid') and hasattr(self, 'sampleID') and hasattr(self, 'name'):
-            try:
-                app.storage.general[self.mainuuid][self.sampleID][self.name]["counters"]["bam_processed"] += 1
-            except Exception as e:
-                logger.warning(f"Could not update bam_processed counter: {e}")
+        # Counter updated automatically by BaseAnalysis._worker()
 
     async def rerun_snp_analysis(self):
         """
         Rerun the SNP calling analysis for the current sample.
         """
+        logger.info("rerun_snp_analysis called")
+        ui.notify("DEBUG: rerun_snp_analysis called", type="info")
+        
         if not self.reference:
             ui.notify(
                 "Reference genome not provided. SNP calling is disabled.",

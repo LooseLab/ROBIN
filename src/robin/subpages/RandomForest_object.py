@@ -31,7 +31,7 @@ import os
 import tempfile
 import time
 import pandas as pd
-from nicegui import ui, app, run
+from nicegui import ui, app, run, background_tasks
 from robin import resources
 import logging
 from robin import models
@@ -40,6 +40,8 @@ from robin import submodules
 
 from robin.utilities.merge_bedmethyl import (
     collapse_bedmethyl,
+    load_minimal_modkit_data,
+    reconstruct_full_bedmethyl_data,
 )
 
 from typing import List, Tuple
@@ -51,7 +53,6 @@ logger = logging.getLogger(__name__)
 HVPATH = os.path.join(
     os.path.dirname(os.path.abspath(submodules.__file__)), "hv_rapidCNS2"
 )
-
 
 def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
     """
@@ -114,16 +115,16 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
             )
             logger.info("R script executed successfully")
             logger.debug(f"R script stdout: {result.stdout}")
-            #print(f"R script stdout: {result.stdout}")
-            if result.stderr:
-                pass
-                # logger.warning(f"R script stderr: {result.stderr}")
+            if result.stderr and showerrors:
+                logger.warning(f"R script stderr: {result.stderr}")
         except subprocess.CalledProcessError as e:
             logger.error(f"R script failed with return code {e.returncode}")
             logger.error(f"stdout: {e.stdout}")
             logger.error(f"stderr: {e.stderr}")
+            # Always log stderr on failure, regardless of showerrors setting
+            if e.stderr:
+                logger.error(f"R script error output: {e.stderr}")
             raise
-            pass
 
         # Check if output file was created
         expected_output = f"{rcns2folder}/live_{batch}_votes.tsv"
@@ -141,42 +142,23 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
 
 
 def load_modkit_data(parquet_path):
-    for attempt in range(5):  # Retry up to 5 times
-        try:
-            merged_modkit_df = pd.read_parquet(parquet_path)
-            logger.debug("Successfully read the Parquet file.")
-            break
-        except Exception as e:
-            logger.debug(f"Attempt {attempt+1}: File not ready ({e}). Retrying...")
-            time.sleep(10)
-    else:
-        logger.debug("Failed to read Parquet file after multiple attempts.")
-        return None
+    """
+    Load minimal bedmethyl data for RandomForest analysis.
 
-    column_names = [
-        "chrom",
-        "chromStart",
-        "chromEnd",
-        "mod_code",
-        "score_bed",
-        "strand",
-        "thickStart",
-        "thickEnd",
-        "color",
-        "valid_cov",
-        "percent_modified",
-        "n_mod",
-        "n_canonical",
-        "n_othermod",
-        "n_delete",
-        "n_fail",
-        "n_diff",
-        "n_nocall",
-    ]
+    This function loads only the essential columns needed for RandomForest classification:
+    - chrom: Chromosome name
+    - chromStart: Start position
+    - percent_modified: Primary methylation data
+    - mod_code: Modification code
+    - strand: Strand information
 
-    # Keep only the original 18 columns and sort by chrom and chromStart
-    df = merged_modkit_df[column_names]
-    return df.sort_values(by=["chrom", "chromStart"])
+    Args:
+        parquet_path (str): Path to the parquet file containing bedmethyl data
+
+    Returns:
+        pd.DataFrame: DataFrame with minimal columns, sorted by chrom and chromStart
+    """
+    return load_minimal_modkit_data(parquet_path)
 
 
 class RandomForest_object(BaseAnalysis):
@@ -268,37 +250,23 @@ class RandomForest_object(BaseAnalysis):
             Optional timestamp override for the current processing batch
         """
         state.set_process_state("Random Forest Analysis", ProcessState.RUNNING)
-        try:
-            sampleID = self.sampleID
-            # Initialize directories for each sampleID if not already present
-            if sampleID not in self.dataDir.keys():
-                self.dataDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
-                self.bedDir[sampleID] = tempfile.TemporaryDirectory(
-                    dir=self.check_and_create_folder(self.output, sampleID)
-                )
+        if not self.parquetqueue.empty():
+            num_bam_files_seen = 0
+            while not self.parquetqueue.empty():
+                parquet_path, sampleID, file_count = self.parquetqueue.get_nowait()
+                num_bam_files_seen += file_count
 
-            # Get latest timestamp from input files or use provided timestamp
-            if timestamp is not None:
+            if timestamp:
                 currenttime = timestamp * 1000
             else:
-                latest_file = (
-                    max(timestamp for _, timestamp in bamfile) if bamfile else 0
-                )
-                currenttime = latest_file * 1000 if latest_file else time.time() * 1000
+                currenttime = timestamp * 1000 if timestamp else time.time() * 1000
 
-            if (
-                app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
-                    "bam_count"
-                ]
-                > 0
-            ):
-                parquet_path = os.path.join(
-                    self.check_and_create_folder(self.output, sampleID),
-                    f"{sampleID}.parquet",
-                )
+            parquet_path = os.path.join(
+                self.check_and_create_folder(self.output, sampleID),
+                f"{sampleID}.parquet",
+            )
 
+            async def forest_bam_background_work(sampleID, parquet_path):
                 try:
                     if self.check_file_time(parquet_path):
                         logger.debug("Parquet file exists and is ready for processing")
@@ -326,35 +294,17 @@ class RandomForest_object(BaseAnalysis):
                             load_modkit_data, parquet_path
                         )
 
-                        merged_modkit_df.rename(
-                            columns={
-                                "chromStart": "start_pos",
-                                "chromEnd": "end_pos",
-                                "mod_code": "mod",
-                                "thickStart": "start_pos2",
-                                "thickEnd": "end_pos2",
-                                "color": "colour",
-                            },
-                            inplace=True,
-                        )
-                        merged_modkit_df.rename(
-                            columns={
-                                "n_canonical": "Ncanon",
-                                "n_delete": "Ndel",
-                                "n_diff": "Ndiff",
-                                "n_fail": "Nfail",
-                                "n_mod": "Nmod",
-                                "n_nocall": "Nnocall",
-                                "n_othermod": "Nother",
-                                "valid_cov": "Nvalid",
-                                "percent_modified": "score",
-                            },
-                            inplace=True,
+                        # For RandomForest, we need to reconstruct the full data structure
+                        # since the R script expects all columns. We'll use the minimal data
+                        # but need to add the missing columns for compatibility
+                        full_modkit_df = await run.cpu_bound(
+                            reconstruct_full_bedmethyl_data, merged_modkit_df
                         )
 
                         forest_dx = await run.cpu_bound(
-                            collapse_bedmethyl, merged_modkit_df
+                            collapse_bedmethyl, full_modkit_df
                         )
+
                         merged_modkit_df = forest_dx
                         if merged_modkit_df is None:
                             logger.error("Failed to load modkit data from parquet file")
@@ -378,9 +328,76 @@ class RandomForest_object(BaseAnalysis):
                         )
                         logger.info(f"Writing BED file to: {randomforest_bed_output}")
 
-                        merged_modkit_df.to_csv(
-                            randomforest_bed_output, sep="\t", index=False, header=False
+                        # Create BED file format expected by the R script
+                        # The R script expects columns 1:3, 6, 10:11 to be:
+                        # Column 1: chr, Column 2: start, Column 3: end, Column 6: strand, Column 10: cov, Column 11: methylation_percent
+                        # We need to create a BED file with at least 11 columns
+                        bed_df = merged_modkit_df.copy()
+                        
+                        # Create a BED file with the correct number of columns
+                        # We'll add dummy columns to ensure the R script can access columns 10-11
+                        bed_df = bed_df.rename(columns={
+                            'chrom': 'chr',
+                            'start_pos': 'start', 
+                            'end_pos': 'end',
+                            'Nvalid': 'cov',
+                            'score': 'methylation_percent'  # The reconstructed data has 'score' not 'fraction'
+                        })
+                        
+                        # Create a BED file with at least 11 columns
+                        # The R script reads: columns 1:3 (chr, start, end), column 6 (strand), columns 10:11 (cov, methylation_percent)
+                        # We need to ensure these specific column positions exist
+                        
+                        # Start with the required columns in the correct positions
+                        final_bed_df = pd.DataFrame()
+                        final_bed_df['chr'] = bed_df['chr']  # Column 1
+                        final_bed_df['start'] = bed_df['start']  # Column 2  
+                        final_bed_df['end'] = bed_df['end']  # Column 3
+                        final_bed_df['dummy1'] = '.'  # Column 4 (dummy)
+                        final_bed_df['dummy2'] = 0  # Column 5 (dummy)
+                        final_bed_df['strand'] = bed_df['strand']  # Column 6
+                        final_bed_df['dummy3'] = '.'  # Column 7 (dummy)
+                        final_bed_df['dummy4'] = 0  # Column 8 (dummy)
+                        final_bed_df['dummy5'] = '.'  # Column 9 (dummy)
+                        final_bed_df['cov'] = bed_df['cov']  # Column 10
+                        final_bed_df['methylation_percent'] = bed_df['methylation_percent']  # Column 11
+                        
+                        # Write with header as expected by the R script
+                        final_bed_df.to_csv(
+                            randomforest_bed_output, sep="\t", index=False, header=True
                         )
+                        
+                        # Validate BED file format
+                        logger.info(f"BED file created with shape: {final_bed_df.shape}")
+                        logger.info(f"BED file columns: {final_bed_df.columns.tolist()}")
+                        logger.debug(f"First few rows of BED file:")
+                        logger.debug(f"{final_bed_df.head().to_string()}")
+                        
+                        # Check if we have the required columns for R script
+                        required_columns = ['chr', 'start', 'end', 'strand', 'cov', 'methylation_percent']
+                        missing_required = [col for col in required_columns if col not in final_bed_df.columns]
+                        if missing_required:
+                            logger.error(f"Missing required columns for R script: {missing_required}")
+                            logger.error(f"Available columns: {final_bed_df.columns.tolist()}")
+                            return
+
+                        # Check if BED file is not empty
+                        if final_bed_df.empty:
+                            logger.error("BED file is empty - no methylation data to process")
+                            return
+                            
+                        # Debug: Check the final BED file format
+                        logger.info(f"Final BED file columns: {final_bed_df.columns.tolist()}")
+                        logger.debug(f"First few rows of final BED file:")
+                        logger.debug(f"{final_bed_df.head().to_string()}")
+                        
+                        # Verify the file was written correctly
+                        if os.path.exists(randomforest_bed_output):
+                            file_size = os.path.getsize(randomforest_bed_output)
+                            logger.info(f"BED file written successfully, size: {file_size} bytes")
+                        else:
+                            logger.error("BED file was not created")
+                            return
 
                         # Initialize batch number if not exists
                         if sampleID not in self.bambatch:
@@ -410,7 +427,7 @@ class RandomForest_object(BaseAnalysis):
                         )
                         if os.path.isfile(votes_file):
                             logger.info(f"Found votes file: {votes_file}")
-                            scores = pd.read_table(votes_file, sep="\s+")
+                            scores = pd.read_table(votes_file, sep=r"\s+")
                             scores_to_save = scores.drop(columns=["Freq"]).T
                             scores_to_save["timestamp"] = currenttime
 
@@ -434,18 +451,23 @@ class RandomForest_object(BaseAnalysis):
                         else:
                             logger.error(f"Votes file not found: {votes_file}")
 
-                        app.storage.general[self.mainuuid][sampleID][self.name][
-                            "counters"
-                        ]["bam_processed"] = tomerge_length
+                            # Counter updated automatically by BaseAnalysis._batch_worker()
 
                 except Exception as e:
                     logger.error(f"Error in process_bam: {str(e)}", exc_info=True)
 
-            self.running = False
-        finally:
-            state.set_process_state(
-                "Random Forest Analysis", ProcessState.WAITING_FOR_DATA
+            await background_tasks.create(
+                forest_bam_background_work(sampleID, parquet_path)
             )
+            self.running = False
+            # Ensure counters are initialized before accessing them
+            self._initialize_counters(sampleID)
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bams_in_processing"
+            ] -= num_bam_files_seen
+            app.storage.general[self.mainuuid][sampleID][self.name]["counters"][
+                "bam_processed"
+            ] += num_bam_files_seen
 
     async def stop_analysis(self):
         """Stop the Random Forest analysis."""
@@ -543,7 +565,7 @@ class RandomForestVis(BaseVis):
         if self.summary:
             with self.summary:
                 ui.label("Forest classification: Unknown")
-        #await ui.context.client.connected()
+        # await ui.context.client.connected()
         if self.browse:
             self.show_previous_data()
         else:

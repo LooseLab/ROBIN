@@ -1,3 +1,4 @@
+import warnings
 import uuid
 import click
 import os
@@ -8,6 +9,9 @@ import asyncio
 from time import sleep
 import queue
 from logging.handlers import QueueHandler, QueueListener
+
+# Suppress pkg_resources deprecation warnings from sorted_nearest
+warnings.filterwarnings("ignore", message="pkg_resources is deprecated", category=UserWarning)
 
 from typing import Optional, List
 from pathlib import Path
@@ -27,7 +31,7 @@ from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 from .core.state import state, ProcessType, ProcessState
 
 
-DEV_TESTING: bool = False
+DEV_TESTING: bool = True
 
 DEFAULT_CFG: str = "config.ini"
 UNIQUE_ID: str = str(uuid.uuid4())
@@ -622,7 +626,7 @@ class Methnice:
                         logging.warning(
                             "No telemetry instance available for map display"
                         )
-        #await ui.context.client.connected()
+        # await ui.context.client.connected()
 
     async def index_page(self) -> None:
         """
@@ -648,7 +652,7 @@ class Methnice:
                 smalltitle=self.smalltitle,
                 batphone=self.batphone,
             ):
-                #await ui.context.client.connected()
+                # await ui.context.client.connected()
                 with ui.column().classes("w-full"):
                     # Set up MinKNOW connection if necessary
                     if self.watchfolder is None and not self.browse:
