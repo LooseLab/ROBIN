@@ -252,13 +252,13 @@ def debug_memory_measurement():
     try:
         main_process = psutil.Process(os.getpid())
         
-        print("=== Memory Measurement Debug ===")
-        print(f"Process: {main_process.name()} (PID: {main_process.pid})")
+        logging.debug("=== Memory Measurement Debug ===")
+        logging.debug(f"Process: {main_process.name()} (PID: {main_process.pid})")
         
         # Method 1: RSS (old method)
         rss_bytes = main_process.memory_info().rss
         rss_gb = rss_bytes / (1024 * 1024 * 1024)
-        print(f"RSS: {rss_gb:.2f} GB ({rss_bytes:,} bytes)")
+        logging.debug(f"RSS: {rss_gb:.2f} GB ({rss_bytes:,} bytes)")
         
         # Method 2: USS via memory_full_info() if available
         try:
@@ -266,27 +266,27 @@ def debug_memory_measurement():
             if hasattr(mem_info, 'uss'):
                 uss_bytes = mem_info.uss
                 uss_gb = uss_bytes / (1024 * 1024 * 1024)
-                print(f"USS (psutil): {uss_gb:.2f} GB ({uss_bytes:,} bytes)")
+                logging.debug(f"USS (psutil): {uss_gb:.2f} GB ({uss_bytes:,} bytes)")
             else:
-                print("USS not available in psutil")
+                logging.debug("USS not available in psutil")
         except Exception as e:
-            print(f"USS (psutil) failed: {e}")
+            logging.debug(f"USS (psutil) failed: {e}")
         
         # Method 3: USS via smaps
         uss_smaps = _get_uss_from_smaps(main_process.pid)
         if uss_smaps is not None:
             uss_smaps_gb = uss_smaps / (1024 * 1024 * 1024)
-            print(f"USS (smaps): {uss_smaps_gb:.2f} GB ({uss_smaps:,} bytes)")
+            logging.debug(f"USS (smaps): {uss_smaps_gb:.2f} GB ({uss_smaps:,} bytes)")
         else:
-            print("USS (smaps) not available")
+            logging.debug("USS (smaps) not available")
         
         # Method 4: Our new function
         new_method = get_robin_ram_usage()
-        print(f"New method: {new_method:.2f} GB")
+        logging.debug(f"New method: {new_method:.2f} GB")
         
         # Show ALL child processes (unfiltered)
         all_children = list(main_process.children(recursive=True))
-        print(f"\nALL child processes ({len(all_children)}):")
+        logging.debug(f"\nALL child processes ({len(all_children)}):")
         total_all_rss = 0
         total_all_uss = 0
         
@@ -301,22 +301,22 @@ def debug_memory_measurement():
                     if hasattr(child_mem_info, 'uss'):
                         child_uss = child_mem_info.uss / (1024 * 1024 * 1024)
                         total_all_uss += child_uss
-                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS={child_uss:.2f}GB")
+                        logging.debug(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS={child_uss:.2f}GB")
                     else:
-                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=unknown")
+                        logging.debug(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=unknown")
                 except:
-                    print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=error")
+                    logging.debug(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=error")
                     
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                print(f"  {i+1}. {child.name()} (PID: {child.pid}): <access denied>")
+                logging.debug(f"  {i+1}. {child.name()} (PID: {child.pid}): <access denied>")
         
-        print(f"\nALL child process totals: RSS={total_all_rss:.2f}GB, USS={total_all_uss:.2f}GB")
-        print(f"Main + ALL Children RSS: {rss_gb + total_all_rss:.2f}GB")
-        print(f"Main + ALL Children USS: {uss_smaps_gb + total_all_uss:.2f}GB" if uss_smaps is not None else "Main + ALL Children USS: unknown")
+        logging.debug(f"\nALL child process totals: RSS={total_all_rss:.2f}GB, USS={total_all_uss:.2f}GB")
+        logging.debug(f"Main + ALL Children RSS: {rss_gb + total_all_rss:.2f}GB")
+        logging.debug(f"Main + ALL Children USS: {uss_smaps_gb + total_all_uss:.2f}GB" if uss_smaps is not None else "Main + ALL Children USS: unknown")
         
         # Show FILTERED child processes (only ROBIN-related)
         filtered_children = _get_real_children(main_process)
-        print(f"\nFILTERED child processes ({len(filtered_children)}):")
+        logging.debug(f"\nFILTERED child processes ({len(filtered_children)}):")
         total_filtered_rss = 0
         total_filtered_uss = 0
         
@@ -331,29 +331,29 @@ def debug_memory_measurement():
                     if hasattr(child_mem_info, 'uss'):
                         child_uss = child_mem_info.uss / (1024 * 1024 * 1024)
                         total_filtered_uss += child_uss
-                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS={child_uss:.2f}GB")
+                        logging.debug(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS={child_uss:.2f}GB")
                     else:
-                        print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=unknown")
+                        logging.debug(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=unknown")
                 except:
-                    print(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=error")
+                    logging.debug(f"  {i+1}. {child.name()} (PID: {child.pid}): RSS={child_rss:.2f}GB, USS=error")
                     
             except (psutil.NoSuchProcess, psutil.AccessDenied):
-                print(f"  {i+1}. {child.name()} (PID: {child.pid}): <access denied>")
+                logging.debug(f"  {i+1}. {child.name()} (PID: {child.pid}): <access denied>")
         
-        print(f"\nFILTERED child process totals: RSS={total_filtered_rss:.2f}GB, USS={total_filtered_uss:.2f}GB")
-        print(f"Main + FILTERED Children RSS: {rss_gb + total_filtered_rss:.2f}GB")
-        print(f"Main + FILTERED Children USS: {uss_smaps_gb + total_filtered_uss:.2f}GB" if uss_smaps is not None else "Main + FILTERED Children USS: unknown")
+        logging.debug(f"\nFILTERED child process totals: RSS={total_filtered_rss:.2f}GB, USS={total_filtered_uss:.2f}GB")
+        logging.debug(f"Main + FILTERED Children RSS: {rss_gb + total_filtered_rss:.2f}GB")
+        logging.debug(f"Main + FILTERED Children USS: {uss_smaps_gb + total_filtered_uss:.2f}GB" if uss_smaps is not None else "Main + FILTERED Children USS: unknown")
         
         # Compare with smem output
-        print(f"\nComparison with smem:")
-        print(f"smem RSS: 3023.1MB = {3023.1/1024:.2f}GB")
-        print(f"Our filtered total RSS: {rss_gb + total_filtered_rss:.2f}GB")
-        print(f"Our filtered total USS: {uss_smaps_gb + total_filtered_uss:.2f}GB" if uss_smaps is not None else "Our filtered total USS: unknown")
+        logging.debug(f"\nComparison with smem:")
+        logging.debug(f"smem RSS: 3023.1MB = {3023.1/1024:.2f}GB")
+        logging.debug(f"Our filtered total RSS: {rss_gb + total_filtered_rss:.2f}GB")
+        logging.debug(f"Our filtered total USS: {uss_smaps_gb + total_filtered_uss:.2f}GB" if uss_smaps is not None else "Our filtered total USS: unknown")
         
-        print("=== End Debug ===")
+        logging.debug("=== End Debug ===")
         
     except Exception as e:
-        print(f"Debug failed: {e}")
+        logging.debug(f"Debug failed: {e}")
 
 
 def _get_uss_from_smaps(pid):
@@ -444,8 +444,9 @@ def collect_ram_usage():
     # Debug logging for memory discrepancy investigation
     if robin_ram > 10:  # Log if memory usage is suspiciously high
         logging.warning(f"High memory usage detected: {robin_ram:.2f}GB at {current_time}")
-        # Run debug function to get detailed breakdown
-        debug_memory_measurement()
+        # Run debug function to get detailed breakdown only if in debug mode
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            debug_memory_measurement()
 
     ram_history["robin"].append(robin_ram)
     ram_history["available"].append(available_gb)
@@ -1094,8 +1095,8 @@ async def cleanup_and_exit():
 
     # Perform cleanup
     logging.info("Performing cleanup operations...")
-    print("Shutting down ROBIN... from theme.py")
-    print(
+    logging.info("Shutting down ROBIN... from theme.py")
+    logging.info(
         "Here we need to do some very graceful shutdown to make sure we don't leave any threads running and we don't leave any files open."
     )
 
@@ -1398,10 +1399,10 @@ def debug_process_tree():
     try:
         main_process = psutil.Process(os.getpid())
         
-        print("=== Process Tree Debug ===")
-        print(f"Main ROBIN process: {main_process.name()} (PID: {main_process.pid})")
-        print(f"Command line: {' '.join(main_process.cmdline())}")
-        print(f"Parent PID: {main_process.ppid()}")
+        logging.debug("=== Process Tree Debug ===")
+        logging.debug(f"Main ROBIN process: {main_process.name()} (PID: {main_process.pid})")
+        logging.debug(f"Command line: {' '.join(main_process.cmdline())}")
+        logging.debug(f"Parent PID: {main_process.ppid()}")
         
         # Get all processes in the system
         all_processes = []
@@ -1421,7 +1422,7 @@ def debug_process_tree():
             if _is_in_process_tree(pid, main_process.pid, all_processes):
                 potential_children.append(proc_info)
         
-        print(f"\nFound {len(potential_children)} processes in ROBIN's process tree:")
+        logging.debug(f"\nFound {len(potential_children)} processes in ROBIN's process tree:")
         
         for i, proc_info in enumerate(potential_children):
             pid = proc_info['pid']
@@ -1432,22 +1433,22 @@ def debug_process_tree():
             # Determine why this process is being counted
             reason = _explain_process_inclusion(proc_info, main_process.pid)
             
-            print(f"\n{i+1}. {name} (PID: {pid}, PPID: {ppid})")
-            print(f"   Command: {cmdline}")
-            print(f"   Reason: {reason}")
+            logging.debug(f"\n{i+1}. {name} (PID: {pid}, PPID: {ppid})")
+            logging.debug(f"   Command: {cmdline}")
+            logging.debug(f"   Reason: {reason}")
             
             # Show memory usage if available
             try:
                 proc = psutil.Process(pid)
                 rss = proc.memory_info().rss / (1024 * 1024 * 1024)
-                print(f"   Memory: {rss:.2f}GB RSS")
+                logging.debug(f"   Memory: {rss:.2f}GB RSS")
             except:
-                print(f"   Memory: <access denied>")
+                logging.debug(f"   Memory: <access denied>")
         
-        print("\n=== End Process Tree Debug ===")
+        logging.debug("\n=== End Process Tree Debug ===")
         
     except Exception as e:
-        print(f"Process tree debug failed: {e}")
+        logging.debug(f"Process tree debug failed: {e}")
 
 
 def _is_in_process_tree(target_pid, root_pid, all_processes):
