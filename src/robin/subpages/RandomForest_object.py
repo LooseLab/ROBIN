@@ -330,12 +330,13 @@ class RandomForest_object(BaseAnalysis):
                         logger.info(f"Writing BED file to: {randomforest_bed_output}")
 
                         # Create BED file format expected by the R script
-                        # The R script expects: chr, start, end, strand, cov, methylation_percent
-                        # with a header line
+                        # The R script expects columns 1:3, 6, 10:11 to be:
+                        # Column 1: chr, Column 2: start, Column 3: end, Column 6: strand, Column 10: cov, Column 11: methylation_percent
+                        # We need to create a BED file with at least 11 columns
                         bed_df = merged_modkit_df.copy()
                         
-                        # Ensure we have the required columns in the correct order
-                        # Map our columns to what the R script expects
+                        # Create a BED file with the correct number of columns
+                        # We'll add dummy columns to ensure the R script can access columns 10-11
                         bed_df = bed_df.rename(columns={
                             'chrom': 'chr',
                             'start_pos': 'start', 
@@ -344,49 +345,52 @@ class RandomForest_object(BaseAnalysis):
                             'score': 'methylation_percent'  # The reconstructed data has 'score' not 'fraction'
                         })
                         
-                        # Select and reorder columns to match R script expectations
-                        # The R script reads columns 1:3, 6, 10:11
-                        # So we need: chr, start, end, strand, cov, methylation_percent
-                        bed_columns = ['chr', 'start', 'end', 'strand', 'cov', 'methylation_percent']
+                        # Create a BED file with at least 11 columns
+                        # The R script reads: columns 1:3 (chr, start, end), column 6 (strand), columns 10:11 (cov, methylation_percent)
+                        # We need to ensure these specific column positions exist
                         
-                        # Check if all required columns exist
-                        missing_columns = [col for col in bed_columns if col not in bed_df.columns]
-                        if missing_columns:
-                            logger.error(f"Missing required columns for R script: {missing_columns}")
-                            logger.error(f"Available columns: {bed_df.columns.tolist()}")
-                            return
-                        
-                        # Select only the required columns in the correct order
-                        bed_df = bed_df[bed_columns]
+                        # Start with the required columns in the correct positions
+                        final_bed_df = pd.DataFrame()
+                        final_bed_df['chr'] = bed_df['chr']  # Column 1
+                        final_bed_df['start'] = bed_df['start']  # Column 2  
+                        final_bed_df['end'] = bed_df['end']  # Column 3
+                        final_bed_df['dummy1'] = '.'  # Column 4 (dummy)
+                        final_bed_df['dummy2'] = 0  # Column 5 (dummy)
+                        final_bed_df['strand'] = bed_df['strand']  # Column 6
+                        final_bed_df['dummy3'] = '.'  # Column 7 (dummy)
+                        final_bed_df['dummy4'] = 0  # Column 8 (dummy)
+                        final_bed_df['dummy5'] = '.'  # Column 9 (dummy)
+                        final_bed_df['cov'] = bed_df['cov']  # Column 10
+                        final_bed_df['methylation_percent'] = bed_df['methylation_percent']  # Column 11
                         
                         # Write with header as expected by the R script
-                        bed_df.to_csv(
+                        final_bed_df.to_csv(
                             randomforest_bed_output, sep="\t", index=False, header=True
                         )
                         
                         # Validate BED file format
-                        logger.info(f"BED file created with shape: {merged_modkit_df.shape}")
-                        logger.info(f"BED file columns: {merged_modkit_df.columns.tolist()}")
+                        logger.info(f"BED file created with shape: {final_bed_df.shape}")
+                        logger.info(f"BED file columns: {final_bed_df.columns.tolist()}")
                         logger.debug(f"First few rows of BED file:")
-                        logger.debug(f"{merged_modkit_df.head().to_string()}")
+                        logger.debug(f"{final_bed_df.head().to_string()}")
                         
                         # Check if we have the required columns for R script
-                        required_columns = ['chrom', 'start_pos', 'end_pos', 'strand', 'Nvalid', 'score']
-                        missing_required = [col for col in required_columns if col not in merged_modkit_df.columns]
+                        required_columns = ['chr', 'start', 'end', 'strand', 'cov', 'methylation_percent']
+                        missing_required = [col for col in required_columns if col not in final_bed_df.columns]
                         if missing_required:
-                            logger.error(f"Missing required columns after reconstruction: {missing_required}")
-                            logger.error(f"Available columns: {merged_modkit_df.columns.tolist()}")
+                            logger.error(f"Missing required columns for R script: {missing_required}")
+                            logger.error(f"Available columns: {final_bed_df.columns.tolist()}")
                             return
 
                         # Check if BED file is not empty
-                        if merged_modkit_df.empty:
+                        if final_bed_df.empty:
                             logger.error("BED file is empty - no methylation data to process")
                             return
                             
                         # Debug: Check the final BED file format
-                        logger.info(f"Final BED file columns: {bed_df.columns.tolist()}")
+                        logger.info(f"Final BED file columns: {final_bed_df.columns.tolist()}")
                         logger.debug(f"First few rows of final BED file:")
-                        logger.debug(f"{bed_df.head().to_string()}")
+                        logger.debug(f"{final_bed_df.head().to_string()}")
                         
                         # Verify the file was written correctly
                         if os.path.exists(randomforest_bed_output):
@@ -424,7 +428,7 @@ class RandomForest_object(BaseAnalysis):
                         )
                         if os.path.isfile(votes_file):
                             logger.info(f"Found votes file: {votes_file}")
-                            scores = pd.read_table(votes_file, sep="\s+")
+                            scores = pd.read_table(votes_file, sep=r"\s+")
                             scores_to_save = scores.drop(columns=["Freq"]).T
                             scores_to_save["timestamp"] = currenttime
 
