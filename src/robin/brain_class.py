@@ -3247,7 +3247,6 @@ class BrainMeth:
                 dir=self.check_and_create_folder(self.output, sampleID)
             ):
                 try:  # Here we shouldn't need to use cpu_bound as we should be in the background.
-                    print(f"Running modkit on {sortfile}")
                     # await run.cpu_bound(run_modkit, sortfile, temp_name, self.threads)
                     await run.cpu_bound(run_matkit, sortfile, temp_name)
                     # print("Modkit run complete")
