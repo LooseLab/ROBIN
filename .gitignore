@@ -136,3 +136,5 @@ dmypy.json
 # Files after decompression
 src/robin/resources/clinvar.vcf
 src/robin/resources/gencode.v45.basic.annotation.gff3
+
+tests/
