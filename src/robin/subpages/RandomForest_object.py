@@ -116,16 +116,16 @@ def run_rcns2(rcns2folder, batch, bed, threads, showerrors):
             )
             logger.info("R script executed successfully")
             logger.debug(f"R script stdout: {result.stdout}")
-            # print(f"R script stdout: {result.stdout}")
-            if result.stderr:
-                pass
-                # logger.warning(f"R script stderr: {result.stderr}")
+            if result.stderr and showerrors:
+                logger.warning(f"R script stderr: {result.stderr}")
         except subprocess.CalledProcessError as e:
             logger.error(f"R script failed with return code {e.returncode}")
             logger.error(f"stdout: {e.stdout}")
             logger.error(f"stderr: {e.stderr}")
+            # Always log stderr on failure, regardless of showerrors setting
+            if e.stderr:
+                logger.error(f"R script error output: {e.stderr}")
             raise
-            pass
 
         # Check if output file was created
         expected_output = f"{rcns2folder}/live_{batch}_votes.tsv"
@@ -329,9 +329,72 @@ class RandomForest_object(BaseAnalysis):
                         )
                         logger.info(f"Writing BED file to: {randomforest_bed_output}")
 
-                        merged_modkit_df.to_csv(
-                            randomforest_bed_output, sep="\t", index=False, header=False
+                        # Create BED file format expected by the R script
+                        # The R script expects: chr, start, end, strand, cov, methylation_percent
+                        # with a header line
+                        bed_df = merged_modkit_df.copy()
+                        
+                        # Ensure we have the required columns in the correct order
+                        # Map our columns to what the R script expects
+                        bed_df = bed_df.rename(columns={
+                            'chrom': 'chr',
+                            'start_pos': 'start', 
+                            'end_pos': 'end',
+                            'Nvalid': 'cov',
+                            'score': 'methylation_percent'  # The reconstructed data has 'score' not 'fraction'
+                        })
+                        
+                        # Select and reorder columns to match R script expectations
+                        # The R script reads columns 1:3, 6, 10:11
+                        # So we need: chr, start, end, strand, cov, methylation_percent
+                        bed_columns = ['chr', 'start', 'end', 'strand', 'cov', 'methylation_percent']
+                        
+                        # Check if all required columns exist
+                        missing_columns = [col for col in bed_columns if col not in bed_df.columns]
+                        if missing_columns:
+                            logger.error(f"Missing required columns for R script: {missing_columns}")
+                            logger.error(f"Available columns: {bed_df.columns.tolist()}")
+                            return
+                        
+                        # Select only the required columns in the correct order
+                        bed_df = bed_df[bed_columns]
+                        
+                        # Write with header as expected by the R script
+                        bed_df.to_csv(
+                            randomforest_bed_output, sep="\t", index=False, header=True
                         )
+                        
+                        # Validate BED file format
+                        logger.info(f"BED file created with shape: {merged_modkit_df.shape}")
+                        logger.info(f"BED file columns: {merged_modkit_df.columns.tolist()}")
+                        logger.debug(f"First few rows of BED file:")
+                        logger.debug(f"{merged_modkit_df.head().to_string()}")
+                        
+                        # Check if we have the required columns for R script
+                        required_columns = ['chrom', 'start_pos', 'end_pos', 'strand', 'Nvalid', 'score']
+                        missing_required = [col for col in required_columns if col not in merged_modkit_df.columns]
+                        if missing_required:
+                            logger.error(f"Missing required columns after reconstruction: {missing_required}")
+                            logger.error(f"Available columns: {merged_modkit_df.columns.tolist()}")
+                            return
+
+                        # Check if BED file is not empty
+                        if merged_modkit_df.empty:
+                            logger.error("BED file is empty - no methylation data to process")
+                            return
+                            
+                        # Debug: Check the final BED file format
+                        logger.info(f"Final BED file columns: {bed_df.columns.tolist()}")
+                        logger.debug(f"First few rows of final BED file:")
+                        logger.debug(f"{bed_df.head().to_string()}")
+                        
+                        # Verify the file was written correctly
+                        if os.path.exists(randomforest_bed_output):
+                            file_size = os.path.getsize(randomforest_bed_output)
+                            logger.info(f"BED file written successfully, size: {file_size} bytes")
+                        else:
+                            logger.error("BED file was not created")
+                            return
 
                         # Initialize batch number if not exists
                         if sampleID not in self.bambatch:

@@ -359,7 +359,8 @@ class FusionDataManager:
         candidates["tag"] = candidates["read_id"].map(gene_lookup)
 
         # Generate colors efficiently
-        color_lookup = candidates.groupby("read_id", observed=True).apply(
+        # Use include_groups=False to avoid the deprecation warning
+        color_lookup = candidates.groupby("read_id", observed=True, include_groups=False).apply(
             lambda x: self._generate_random_color()
         )
         candidates["Color"] = candidates["read_id"].map(color_lookup)
@@ -2775,7 +2776,8 @@ def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
     result["tag"] = result["read_id"].map(lookup)
 
     # Generate colors for each read_id group efficiently
-    colors = result.groupby("read_id", observed=True).apply(
+    # Use include_groups=False to avoid the deprecation warning
+    colors = result.groupby("read_id", observed=True, include_groups=False).apply(
         lambda x: _generate_random_color()
     )
     result["Color"] = result["read_id"].map(colors)
