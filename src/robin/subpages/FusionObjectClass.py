@@ -2984,11 +2984,18 @@ def _get_reads(reads: pd.DataFrame) -> pd.DataFrame:
     df = df.drop_duplicates(subset=["start2", "end2", "id"])
 
     # Group by chromosome and collapse ranges within each group
-    result = (
-        df.groupby("chromosome", observed=True)
-        .apply(lambda x: collapse_ranges(x, 10000))
-        .reset_index(drop=True)
-    )
+    # Use a more explicit approach to avoid the FutureWarning
+    result_list = []
+    for chromosome, group in df.groupby("chromosome", observed=True):
+        collapsed_group = collapse_ranges(group, 10000)
+        if not collapsed_group.empty:
+            collapsed_group['chromosome'] = chromosome
+            result_list.append(collapsed_group)
+    
+    if result_list:
+        result = pd.concat(result_list, ignore_index=True)
+    else:
+        result = pd.DataFrame()
 
     # Free the intermediate DataFrame
     del df

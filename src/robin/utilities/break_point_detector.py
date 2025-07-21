@@ -419,8 +419,8 @@ class CNVChangeDetectorTracker:
                 for start, end in zip(data["start_positions"], data["end_positions"])
             ]
             bed_lines = [
-                f"{chrom}\t{start - self.bin_width}\t{end}\.\t.\t+"
-                f"\n{chrom}\t{start}\t{end + self.bin_width}\.\t.\t-"
+                f"{chrom}\t{start - self.bin_width}\t{end}.\t.\t+"
+                f"\n{chrom}\t{start}\t{end + self.bin_width}.\t.\t-"
                 for chrom, start, end in bedlist
             ]
             return "\n".join(bed_lines)

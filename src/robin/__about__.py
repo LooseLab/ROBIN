@@ -2,4 +2,4 @@
 #
 # SPDX-License-Identifier: MIT
 # Version for performance testing.
-__version__ = "0.3"
+__version__ = "0.3.1"
