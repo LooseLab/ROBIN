@@ -481,9 +481,9 @@ class Methnice:
                     self.telemetry.send_run_telemetry(self)
 
                 app.timer(
-                    120.0, send_telemetry_update, active=True
-                )  # Send update every minute
-                logging.info("Telemetry update timer initialized (1-minute interval)")
+                    300.0, send_telemetry_update, active=True
+                )  # Send update every 5 minutes
+                logging.info("Telemetry update timer initialized (5-minute interval)")
 
         except Exception as e:
             logging.error(f"Error initializing BrainMeth: {str(e)}")
