@@ -1,3 +1,12 @@
+## New version notice:
+
+We will be switching ROBIN to a new work flow manager in the near future. This manager enables ROBIN to run on a P2i with two flowcells running at high throughput.
+
+It also removes the issue with downloading large files using GIT LFS.
+
+We encourage users to test the new version - currently available at [ROBIN - now with added Little John](https://github.com/LooseLab/littlejohn). Documentation will be updated in the coming days.
+
+
 # ![ROBIN_logo_small.png](src/robin/images/ROBIN_logo_small.png)ROBIN
 
 [![PyPI - Version](https://img.shields.io/pypi/v/methnicegui.svg)](https://pypi.org/project/methnicegui)
