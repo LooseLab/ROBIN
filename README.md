@@ -4,7 +4,7 @@ We will be switching ROBIN to a new work flow manager in the near future. This m
 
 It also removes the issue with downloading large files using GIT LFS.
 
-We encourage users to test the new version - currently available at [ROBIN - now with added Little John](https://github.com/LooseLab/littlejohn). Documentation will be updated in the coming days.
+We encourage users to test the new version - currently available at [ROBIN - now with added Little John](https://github.com/LooseLab/littlejohn). Documentation will be updated in the coming days. However - please check the README on the new version as the command for running has changed.
 
 
 # ![ROBIN_logo_small.png](src/robin/images/ROBIN_logo_small.png)ROBIN
