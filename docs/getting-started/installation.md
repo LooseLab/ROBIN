@@ -2,6 +2,88 @@
 
 This guide will help you install ROBIN and its dependencies from source.
 
+For original robin (currently at https://github.com/LooseLab/robin) - please jump to [Original Robin](#original-robin).
+
+For ROBIN with added Little John (currently at https://github.com/LooseLab/littlejohn) - please jump to [Robin & Little John](#robin--little-john).
+
+# Robin & Little John
+
+## Prerequisites
+
+- Conda (recommended for environment management)
+- Git
+- Git LFS
+- Python 3.9+
+- Docker (optional; used by some third-party tools)
+
+## Step 1: Clone the Repository
+
+Clone the repository with submodules:
+
+```bash
+git clone --recursive https://github.com/LooseLab/littlejohn.git
+cd littlejohn
+```
+
+If you already cloned without submodules, run:
+
+```bash
+git submodule update --init --recursive
+```
+
+## Step 2: Set Up the Environment
+
+Create and activate the conda environment:
+
+- For Linux/Windows:
+  ```bash
+  conda env create -f robin.yml
+  conda activate robin_0_5
+  ```
+- For macOS:
+  ```bash
+  conda env create -f robin_osx.yml
+  conda activate robin_0_5
+  ```
+
+## Step 3: Install ROBIN
+
+Install in development mode:
+
+```bash
+pip install -e .
+```
+
+## Step 4: Download Required Model Assets
+
+Use the helper scripts to fetch models:
+
+```bash
+# Download all models automatically
+python setup_models.py
+
+# Or download individual models
+python scripts/fetch_asset.py general_model src/robin/models/general.zip
+python scripts/fetch_asset.py capper_model src/robin/models/Capper_et_al_NN.pkl
+python scripts/fetch_asset.py pancan_model src/robin/models/pancan_devel_v5i_NN.pkl
+```
+
+### Authentication (if required)
+
+For private repositories, set your GitHub token:
+
+```bash
+export GITHUB_TOKEN=your_personal_access_token
+python setup_models.py
+```
+
+### Asset Verification
+
+All assets are automatically verified using SHA256 checksums. If verification fails, the download will be retried or the corrupted file will be removed.
+
+
+# Original Robin
+
 ## Prerequisites
 
 - Docker (required for running third-party tools in containers)
