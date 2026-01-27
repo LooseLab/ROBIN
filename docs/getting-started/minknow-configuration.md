@@ -48,7 +48,7 @@ ROBIN requires BAM files to be aligned to a reference.
 
 Configure the following output settings:
 
-- Ensure BAM file output and set to either 8000 reads per file or one file per minute.
+- Ensure BAM file output and set to a number less than 50000 reads per file. We recommend using 20,000. Note: Note we used to recommend one file per minute but this is not guaranteed to keep the files small enough.
 
 - Optional - disable pod5 output. 
 
