@@ -17,7 +17,7 @@ def get_release_assets(github_token):
     
     try:
         request = urllib.request.Request(
-            "https://api.github.com/repos/LooseLab/littlejohn/releases/tags/v0.5",
+            "https://api.github.com/repos/LooseLab/ROBIN/releases/tags/v0.5",
             headers=headers
         )
         with urllib.request.urlopen(request) as response:

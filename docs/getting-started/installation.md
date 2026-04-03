@@ -1,8 +1,8 @@
 # Installation
 
-This guide covers installing ROBIN and its dependencies from source for **this repository** ([littlejohn](https://github.com/LooseLab/littlejohn)).
+This guide covers installing ROBIN and its dependencies from source for **this repository** ([ROBIN](https://github.com/LooseLab/ROBIN)).
 
-For **running** workflows (MinKNOW settings, BAM read limits, alignment, and CLI usage), see the repository **[README](https://github.com/LooseLab/littlejohn/blob/main/README.md)**—especially *BAM read limit and MinKNOW settings* and *Usage*. This page focuses on **installation**.
+For **running** workflows (MinKNOW settings, BAM read limits, alignment, and CLI usage), see the repository **[README](https://github.com/LooseLab/ROBIN/blob/main/README.md)**—especially *BAM read limit and MinKNOW settings* and *Usage*. This page focuses on **installation**.
 
 ---
 
@@ -26,8 +26,8 @@ Docker is optional (some third-party or containerized toolchains may use it).
 Clone including submodules:
 
 ```bash
-git clone --recursive https://github.com/LooseLab/littlejohn.git
-cd littlejohn
+git clone --recursive https://github.com/LooseLab/ROBIN.git
+cd ROBIN
 ```
 
 If you already cloned without submodules:
@@ -140,4 +140,4 @@ robin list-job-types
 ### Next steps
 
 - [Quickstart](quickstart.md)
-- [README — Usage](https://github.com/LooseLab/littlejohn/blob/main/README.md#usage)
+- [README — Usage](https://github.com/LooseLab/ROBIN/blob/main/README.md#usage)

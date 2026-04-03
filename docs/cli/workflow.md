@@ -100,7 +100,7 @@ preprocessing:preprocessing,bed_conversion:bed_conversion,mgmt:mgmt,classificati
 
 ## Inputs and sequencing assumptions
 
-ROBIN expects **real-time** BAMs with **≤ 50,000 reads per file** and **read-count–based** rollover in MinKNOW. See the [README](https://github.com/LooseLab/littlejohn/blob/main/README.md#bam-read-limit-and-minknow-settings).
+ROBIN expects **real-time** BAMs with **≤ 50,000 reads per file** and **read-count–based** rollover in MinKNOW. See the [README](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings).
 
 ## Exit
 

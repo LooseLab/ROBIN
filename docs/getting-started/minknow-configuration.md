@@ -34,7 +34,7 @@ Produce **aligned BAMs** against the **same** reference genome files used in ROB
 ## BAM output
 
 - Prefer **read-count** rollover, not **time-only** hourly chunks (unsupported for real-time ROBIN processing).
-- Keep each BAM **under the supported read count** (see [README](https://github.com/LooseLab/littlejohn/blob/main/README.md#bam-read-limit-and-minknow-settings)); a common target is **~20,000–50,000 reads per file** depending on workflow.
+- Keep each BAM **under the supported read count** (see [README](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings)); a common target is **~20,000–50,000 reads per file** depending on workflow.
 - You may disable **POD5** and **FASTQ** if you only need BAM.
 
 ## Sample and experiment IDs

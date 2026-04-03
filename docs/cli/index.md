@@ -24,7 +24,7 @@ Many commands that change state or start processing show a **disclaimer** and re
 |----------|--------|
 | `GITHUB_TOKEN` | Used by `robin utils update-models` when assets are fetched from private GitHub. |
 | `ROBIN_PROCESS_LARGE_BAMS` | If enabled, warns that large-BAM mode must not be used alongside live runs. |
-| `LJ_BAM_THREADS` | Optional tuning for multi-threaded BAM handling (see [README — Performance](https://github.com/LooseLab/littlejohn/blob/main/README.md#performance)). |
+| `LJ_BAM_THREADS` | Optional tuning for multi-threaded BAM handling (see [README — Performance](https://github.com/LooseLab/ROBIN/blob/main/README.md#performance)). |
 
 ## First-time startup experience
 
@@ -36,4 +36,4 @@ For a **browser user guide** (navigation, each screen, reading results), see **[
 
 ## See also
 
-- [README — Command reference](https://github.com/LooseLab/littlejohn/blob/main/README.md#command-reference) (repo mirror of common invocations)
+- [README — Command reference](https://github.com/LooseLab/ROBIN/blob/main/README.md#command-reference) (repo mirror of common invocations)

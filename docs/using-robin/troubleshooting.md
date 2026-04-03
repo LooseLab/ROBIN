@@ -57,5 +57,5 @@ Use **Activity Monitor** instead. That’s the **workflow monitor** screen in th
 
 ## Still stuck
 
-- [README — Common issues](https://github.com/LooseLab/littlejohn/blob/main/README.md#common-issues)  
+- [README — Common issues](https://github.com/LooseLab/ROBIN/blob/main/README.md#common-issues)  
 - [Command-line reference](../cli/index.md) (for staff who run ROBIN)  

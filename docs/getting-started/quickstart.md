@@ -4,7 +4,7 @@ How to run ROBIN from this repository after [installation](installation.md): liv
 
 For **disclaimer, GUI password, and startup order**, see **[What happens at startup](startup.md)**. For a **step-by-step guide to the web interface**, see **[Using ROBIN](../using-robin/index.md)**.
 
-For deeper detail (CLI flags, MinKNOW, troubleshooting), use the **[README](https://github.com/LooseLab/littlejohn/blob/main/README.md)** and the **[command-line reference](../cli/index.md)**.
+For deeper detail (CLI flags, MinKNOW, troubleshooting), use the **[README](https://github.com/LooseLab/ROBIN/blob/main/README.md)** and the **[command-line reference](../cli/index.md)**.
 
 ---
 
@@ -17,7 +17,7 @@ ROBIN consumes **aligned BAMs** from Oxford Nanopore sequencing (typically writt
 | Basecalling | **HAC** is sufficient; SUP not required. |
 | Methylation | **5hmC / 5mC** calling enabled in MinKNOW if your analyses need methylation. |
 | Alignment | Done **in MinKNOW** — ROBIN does not realign reads. |
-| BAM rollover | **Read-count–based** chunks. **Each BAM must be ≤ 50,000 reads**; we recommend **~50,000 reads per file**. Do **not** rely on **time-only** (e.g. hourly) rollover — see [README — BAM read limit](https://github.com/LooseLab/littlejohn/blob/main/README.md#bam-read-limit-and-minknow-settings). |
+| BAM rollover | **Read-count–based** chunks. **Each BAM must be ≤ 50,000 reads**; we recommend **~50,000 reads per file**. Do **not** rely on **time-only** (e.g. hourly) rollover — see [README — BAM read limit](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings). |
 | POD5 / FASTQ | Not required; you can turn them off if you only need BAM. |
 
 ### Memory (≤ 64 GB RAM)
@@ -162,7 +162,7 @@ You cannot reuse reserved names: `rCNS2`, `AML`, `PanCan`.
 
 - **CNV** — Heuristic calls; **review visually** before any clinical interpretation.  
 - **Stop with Ctrl+C** — Graceful shutdown is attempted but not guaranteed.  
-- **Bugs / questions** — [Open an issue](https://github.com/LooseLab/littlejohn/issues).  
+- **Bugs / questions** — [Open an issue](https://github.com/LooseLab/ROBIN/issues).  
 
 ### Performance
 
@@ -180,4 +180,4 @@ Research use only; see **LICENSE** in the repository. ROBIN integrates tools suc
 
 - [Library preparation](library-preparation.md)  
 - [MinKNOW configuration](minknow-configuration.md)  
-- [README — Usage](https://github.com/LooseLab/littlejohn/blob/main/README.md#usage)  
+- [README — Usage](https://github.com/LooseLab/ROBIN/blob/main/README.md#usage)  

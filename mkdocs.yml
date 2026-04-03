@@ -2,10 +2,10 @@ site_name: ROBIN
 site_description: Rapid nanopore brain intraoperative classification
 site_author: Matt Loose
 # GitHub Pages project URL = https://<org>.github.io/<repository-name>/
-# Must match the repo that runs Actions (here: LittleJohn test docs, not production ROBIN).
-site_url: https://looselab.github.io/LittleJohn/
-repo_url: https://github.com/looselab/LittleJohn
-repo_name: looselab/LittleJohn
+# Must match the repository used for GitHub Pages deployment.
+site_url: https://looselab.github.io/ROBIN/
+repo_url: https://github.com/LooseLab/ROBIN
+repo_name: LooseLab/ROBIN
 
 theme:
   name: material

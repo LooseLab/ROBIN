@@ -64,8 +64,8 @@ For a step-by-step walkthrough, see [`docs/getting-started/installation.md`](doc
 
 1. **Clone with submodules**
    ```bash
-   git clone --recursive https://github.com/LooseLab/littlejohn.git
-   cd littlejohn
+   git clone --recursive https://github.com/LooseLab/ROBIN.git
+   cd ROBIN
    ```
 
 2. **Ensure submodules are current** (e.g. nanoDX, hv_rapidCNS2)
@@ -325,7 +325,7 @@ robin workflow /path/to/bam_files \
 2. **Ctrl+C** attempts graceful shutdown but may not always complete cleanly.
 3. CSV export is in development and not yet reliable.
 4. To **reanalyse** a dataset, remove the existing results under the ROBIN output folder first.
-5. Other issues may exist — please [open an issue](https://github.com/LooseLab/littlejohn/issues) where possible.
+5. Other issues may exist — please [open an issue](https://github.com/LooseLab/ROBIN/issues) where possible.
 
 ---
 

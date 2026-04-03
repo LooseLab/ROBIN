@@ -4,12 +4,27 @@ main.py
 This module is the entry point for generating the PDF report.
 """
 
-import os
+import argparse
+
 from robin.reporting.report import create_pdf
 
 if __name__ == "__main__":
-    output_dir = "/Users/mattloose/GIT/little_john/test_out_priority_ray4/Sample_103"
-    fonts_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
-    images_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "images")
-
-    create_pdf("sample_report.pdf", output_dir)
+    parser = argparse.ArgumentParser(
+        description="Generate a PDF report from a ROBIN analysis output directory."
+    )
+    parser.add_argument(
+        "output_dir",
+        help="Directory containing ROBIN analysis outputs for one sample/run.",
+    )
+    parser.add_argument(
+        "--center",
+        default="dev",
+        help="Centre ID recorded in the report (default: dev).",
+    )
+    parser.add_argument(
+        "--pdf",
+        default="sample_report.pdf",
+        help="Output PDF filename (default: sample_report.pdf).",
+    )
+    args = parser.parse_args()
+    create_pdf(args.pdf, args.output_dir, args.center)
