@@ -3,8 +3,8 @@
   "assets": {
     "general_model": {
       "name": "general.zip",
-      "version": "0.0.1",
-      "url": "https://github.com/LooseLab/ROBIN/releases/download/v0.0.1/general.zip",
+      "version": "0.5",
+      "url": "https://github.com/LooseLab/ROBIN/releases/download/v0.5/general.zip",
       "sha256": "706e043f3b9f248e51e9e57b0a01085efb93ae01d8a52fcff53418c7b39bbe26",
       "size_bytes": 1777245358,
       "description": "General machine learning model archive"
