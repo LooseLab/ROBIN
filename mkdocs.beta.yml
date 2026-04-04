@@ -1,0 +1,3 @@
+# Used by CI for the /beta/ docs build (release_candidate). Overrides site_url only.
+INHERIT: mkdocs.yml
+site_url: https://looselab.github.io/ROBIN/beta/
