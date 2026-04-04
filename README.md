@@ -1,12 +1,8 @@
 # ![ROBIN_logo_small.png](src/robin/gui/images/ROBIN_logo_small.png) R.O.B.I.N
 
-<!-- [![PyPI - Version](https://img.shields.io/pypi/v/methnicegui.svg)](https://pypi.org/project/methnicegui)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/methnicegui.svg)](https://pypi.org/project/methnicegui)
--->
-
 # ***This software is provided as is for research use only.***
 
-**IMPORTANT: use a fresh conda environment from `robin.yml` (`conda activate robin`). Do not reuse older ROBIN/little_john environment names from previous releases.**
+**IMPORTANT: use a fresh conda environment from `robin.yml` (`conda activate robin`). Do not reuse conda environments created for older ROBIN releases or for other projects.**
 
 **IMPORTANT (input BAMs): each file must contain 50,000 reads or fewer.** In MinKNOW, configure **read-count–based** BAM output—**we recommend one BAM every 50,000 reads**. **Do not** use **time-based** BAM rollover (MinKNOW’s typical default, e.g. hourly); it is unsupported and usually violates the read limit. Details: [BAM read limit and MinKNOW](#bam-read-limit-and-minknow-settings).
 
@@ -36,7 +32,7 @@ ROBIN provides automated preprocessing, multiple analysis pipelines, and real-ti
 
 **Capabilities** include methylation analysis, copy-number variation, fusion detection, classification workflows, a multi-threaded execution model, and a web-based GUI for monitoring, progress, and visualisation.
 
-This repository will replace the code at [LooseLab/ROBIN](https://github.com/LooseLab/ROBIN/) in the near future.
+This repository is the canonical home for ROBIN—development, source code, and releases: [LooseLab/ROBIN](https://github.com/LooseLab/ROBIN).
 
 ## Requirements
 
@@ -90,11 +86,7 @@ For a step-by-step walkthrough, see [`docs/getting-started/installation.md`](doc
    robin utils update-models
    robin utils update-clinvar
    ```
-   For **private** GitHub-hosted assets, set a token before `update-models`:
-   ```bash
-   export GITHUB_TOKEN=your_personal_access_token
-   robin utils update-models
-   ```
+  
    To **re-download** models (e.g. after a failed partial run), use `robin utils update-models --overwrite`. Advanced: `python scripts/fetch_asset.py` and [`src/robin/resources/assets.json`](src/robin/resources/assets.json).
 
 ### If the `robin` conda environment already exists
@@ -333,7 +325,6 @@ robin workflow /path/to/bam_files \
 
 - **Batched processing** across analysis workflows
 - **Memory-aware** behaviour for large or long runs
-- **Multi-threaded BAM handling** — tune with `LJ_BAM_THREADS`
 - **Non-blocking GUI** updates during analysis
 - **Progress tracking** with live status
 
