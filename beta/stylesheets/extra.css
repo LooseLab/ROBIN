@@ -1,0 +1,403 @@
+/*
+  MkDocs Material overrides — aligned with design.md (Editorial Bioinformatics).
+  Typography: Inter (body), Manrope (headlines), JetBrains Mono (code — set in mkdocs.yml).
+  Brand: Emerald shell gradients; content on white / slate-zinc gradients; semantic accents.
+*/
+
+/* Manrope for headlines; Inter is loaded by Material (mkdocs.yml font.text) */
+@import url("https://fonts.googleapis.com/css2?family=Manrope:wght@700;800&display=swap");
+
+/* ----- Design tokens (design.md §4, §6) ----- */
+:root {
+  --robin-emerald-400: #34d399;
+  --robin-emerald-500: #10b981;
+  --robin-emerald-600: #16a34a;
+  --robin-emerald-700: #15803d;
+  --robin-emerald-800: #065f46;
+  --robin-emerald-900: #064e3b;
+  --robin-slate-50: #f8fafc;
+  --robin-slate-200: #e2e8f0;
+  --robin-slate-500: #64748b;
+  --robin-slate-600: #475569;
+  --robin-slate-900: #0f172a;
+  --robin-zinc-950: #09090b;
+  --robin-amber-500: #f59e0b;
+  --robin-red-600: #dc2626;
+  --robin-rose-400: #fb7185;
+}
+
+/* Light scheme — professional lab surfaces */
+[data-md-color-scheme="default"] {
+  --md-primary-fg-color: var(--robin-emerald-700);
+  --md-primary-fg-color--light: var(--robin-emerald-600);
+  --md-primary-fg-color--dark: var(--robin-emerald-800);
+  --md-accent-fg-color: var(--robin-emerald-600);
+  --md-typeset-a-color: var(--robin-emerald-700);
+  --md-default-bg-color: #ffffff;
+  --robin-content-fg: var(--robin-slate-900);
+  --robin-content-fg-muted: var(--robin-slate-600);
+}
+
+/* Dark scheme — midnight analysis */
+[data-md-color-scheme="slate"] {
+  --md-primary-fg-color: var(--robin-emerald-800);
+  --md-primary-fg-color--light: var(--robin-emerald-600);
+  --md-primary-fg-color--dark: var(--robin-emerald-900);
+  --md-accent-fg-color: var(--robin-emerald-400);
+  --md-typeset-a-color: var(--robin-emerald-400);
+  --md-default-bg-color: var(--robin-zinc-950);
+  --robin-content-fg: #f8fafc;
+  --robin-content-fg-muted: #94a3b8;
+}
+
+/* ----- App shell: header (design.md §4.1) ----- */
+.md-header {
+  background: linear-gradient(
+    90deg,
+    var(--robin-emerald-700) 0%,
+    var(--robin-emerald-600) 100%
+  );
+  border-bottom: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.06);
+}
+
+[data-md-color-scheme="slate"] .md-header {
+  background: linear-gradient(
+    90deg,
+    var(--robin-emerald-800) 0%,
+    var(--robin-emerald-700) 100%
+  );
+  border-bottom-color: rgba(255, 255, 255, 0.12);
+}
+
+.md-header__title,
+.md-header__topic,
+.md-header__button {
+  color: #ffffff !important;
+}
+
+.md-header__button svg,
+.md-header__button .md-ellipsis {
+  color: inherit;
+}
+
+.md-search__input {
+  background-color: rgba(255, 255, 255, 0.12);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: #ffffff;
+}
+
+.md-search__input::placeholder {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+/* Tabs under header — translucent strip */
+.md-tabs {
+  background: linear-gradient(
+    90deg,
+    rgba(21, 128, 61, 0.92) 0%,
+    rgba(22, 163, 74, 0.92) 100%
+  );
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+[data-md-color-scheme="slate"] .md-tabs {
+  background: linear-gradient(
+    90deg,
+    rgba(6, 95, 70, 0.95) 0%,
+    rgba(4, 120, 87, 0.95) 100%
+  );
+}
+
+.md-tabs__link {
+  color: rgba(255, 255, 255, 0.92) !important;
+  font-weight: 500;
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+.md-tabs__link--active {
+  color: #ffffff !important;
+  border-bottom-color: rgba(255, 255, 255, 0.85) !important;
+}
+
+/* ----- App shell: footer (design.md §4.2) — mirrored gradient ----- */
+.md-footer {
+  background: linear-gradient(
+    90deg,
+    var(--robin-emerald-600) 0%,
+    var(--robin-emerald-700) 100%
+  );
+  color: #ffffff;
+  border-top: 1px solid rgba(255, 255, 255, 0.18);
+}
+
+[data-md-color-scheme="slate"] .md-footer {
+  background: linear-gradient(
+    90deg,
+    var(--robin-emerald-700) 0%,
+    var(--robin-emerald-800) 100%
+  );
+}
+
+.md-footer-meta {
+  background: transparent;
+}
+
+.md-footer a {
+  color: rgba(255, 255, 255, 0.95) !important;
+  border-bottom: none;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.md-footer a:hover {
+  color: #ffffff !important;
+}
+
+/* ----- Main content: subtle editorial depth (design.md §3, §6) ----- */
+.md-main__inner {
+  background: linear-gradient(
+    180deg,
+    var(--robin-slate-50) 0%,
+    #ffffff 28rem
+  );
+}
+
+[data-md-color-scheme="slate"] .md-main__inner {
+  background: linear-gradient(
+    180deg,
+    #0c0c0f 0%,
+    var(--robin-zinc-950) 32rem
+  );
+}
+
+.md-content {
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+.md-typeset {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  color: var(--robin-content-fg);
+}
+
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3 {
+  font-family: "Manrope", "Inter", system-ui, sans-serif;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: var(--robin-slate-900);
+}
+
+[data-md-color-scheme="slate"] .md-typeset h1,
+[data-md-color-scheme="slate"] .md-typeset h2,
+[data-md-color-scheme="slate"] .md-typeset h3 {
+  color: var(--robin-content-fg);
+}
+
+.md-typeset h2 {
+  font-weight: 700;
+  margin-top: 2.25rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px solid var(--robin-slate-200);
+}
+
+[data-md-color-scheme="slate"] .md-typeset h2 {
+  border-bottom-color: rgba(51, 65, 85, 0.6);
+}
+
+/* Sidebar nav — Inter, clear hierarchy */
+.md-nav {
+  font-family: "Inter", system-ui, sans-serif;
+}
+
+.md-nav__link--active {
+  font-weight: 600;
+  color: var(--robin-emerald-700) !important;
+}
+
+[data-md-color-scheme="slate"] .md-nav__link--active {
+  color: var(--robin-emerald-400) !important;
+}
+
+/* ----- Links (semantic emerald, not default Material green) ----- */
+.md-typeset a {
+  color: var(--md-typeset-a-color);
+  text-decoration: none;
+  border-bottom: 1px dotted currentColor;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.md-typeset a:hover {
+  color: var(--robin-emerald-600);
+  border-bottom-style: solid;
+}
+
+[data-md-color-scheme="slate"] .md-typeset a:hover {
+  color: var(--robin-emerald-400);
+}
+
+/* ----- Code: JetBrains Mono from theme; tighten chrome ----- */
+.md-typeset code,
+.md-typeset pre > code {
+  font-feature-settings: "liga" 0;
+}
+
+.md-typeset pre {
+  border: 1px solid var(--robin-slate-200);
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+[data-md-color-scheme="slate"] .md-typeset pre {
+  border-color: rgba(51, 65, 85, 0.8);
+  box-shadow: none;
+}
+
+/* ----- Tables (clinical density) ----- */
+.md-typeset table:not([class]) {
+  border: 1px solid var(--robin-slate-200);
+  border-radius: 0.5rem;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) {
+  border-color: rgba(51, 65, 85, 0.7);
+}
+
+.md-typeset table:not([class]) th {
+  background: var(--robin-slate-50);
+  font-weight: 600;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--robin-slate-600);
+}
+
+[data-md-color-scheme="slate"] .md-typeset table:not([class]) th {
+  background: rgba(30, 41, 59, 0.5);
+  color: #94a3b8;
+}
+
+/* ----- Admonitions — semantic colours (design.md §5.1) ----- */
+.md-typeset .admonition.note,
+.md-typeset details.note {
+  border-color: var(--robin-slate-200);
+  border-left-width: 4px;
+  border-left-color: var(--robin-emerald-600);
+}
+
+.md-typeset .admonition.warning,
+.md-typeset details.warning {
+  border-color: rgba(245, 158, 11, 0.45);
+  border-left-width: 4px;
+  border-left-color: var(--robin-amber-500);
+}
+
+.md-typeset .warning > .admonition-title,
+.md-typeset .warning > summary {
+  background-color: rgba(245, 158, 11, 0.1);
+}
+
+.md-typeset .admonition.danger,
+.md-typeset details.danger {
+  border-left-color: var(--robin-red-600);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .admonition.danger {
+  border-color: rgba(251, 113, 133, 0.4);
+}
+
+/* ----- Home page grid cards (design.md §6.1 cards) ----- */
+.md-typeset .grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 1rem;
+  margin: 1.25rem 0;
+  max-width: 100%;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+@media (max-width: 900px) {
+  .md-typeset .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.md-typeset .grid-item {
+  background: #ffffff;
+  padding: 1.5rem;
+  border-radius: 0.5rem;
+  text-align: center;
+  border: 1px solid var(--robin-slate-200);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.06);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid-item {
+  background: rgba(30, 41, 59, 0.45);
+  border-color: rgba(51, 65, 85, 0.65);
+  box-shadow: none;
+}
+
+.md-typeset .grid-item:hover {
+  box-shadow: 0 4px 12px rgba(21, 128, 61, 0.12);
+  transform: translateY(-1px);
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid-item:hover {
+  border-color: rgba(52, 211, 153, 0.25);
+  box-shadow: 0 0 0 1px rgba(52, 211, 153, 0.12);
+}
+
+.md-typeset .grid-item h3 {
+  font-family: "Manrope", "Inter", sans-serif;
+  font-size: 1.15rem;
+  font-weight: 800;
+  color: var(--robin-emerald-700);
+  margin-bottom: 0.5rem;
+  line-height: 1.25;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .grid-item h3 {
+  color: var(--robin-emerald-400);
+}
+
+.md-typeset .stat-number {
+  display: block;
+  font-family: "Manrope", "Inter", sans-serif;
+  font-size: 2.35rem;
+  font-weight: 800;
+  color: var(--robin-emerald-700);
+  margin-bottom: 0.5rem;
+  letter-spacing: -0.03em;
+}
+
+[data-md-color-scheme="slate"] .md-typeset .stat-number {
+  color: var(--robin-emerald-400);
+  text-shadow: 0 0 24px rgba(52, 211, 153, 0.15);
+}
+
+/* ----- Logo ----- */
+.md-header__button.md-logo img {
+  height: 2rem;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.15));
+}
+
+/* ----- Secondary / attribution text ----- */
+.md-typeset em {
+  color: var(--robin-slate-600);
+  font-style: normal;
+  font-size: 0.88rem;
+}
+
+[data-md-color-scheme="slate"] .md-typeset em {
+  color: var(--robin-content-fg-muted);
+}
+
+.md-typeset ul li {
+  margin-bottom: 0.5rem;
+}
