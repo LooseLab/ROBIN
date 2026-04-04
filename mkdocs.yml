@@ -67,8 +67,12 @@ plugins:
   - minify:
       minify_html: true
 
+# With navigation.tabs, the sidebar only lists pages under the *active* tab. The same
+# release page is linked from each tab so release notes stay reachable without switching tabs.
 nav:
-  - Home: index.md
+  - Home:
+    - Home: index.md
+    - "Release notes — v0.5": releases/v0.5.md
   - Releases:
     - "v0.5 (from v0.1.7)": releases/v0.5.md
   - Getting Started:
@@ -77,6 +81,7 @@ nav:
     - At startup (disclaimer, GUI, password): getting-started/startup.md
     - Library Preparation: getting-started/library-preparation.md
     - MinKNOW Configuration: getting-started/minknow-configuration.md
+    - "Release notes — v0.5": releases/v0.5.md
   - Command-line reference:
     - Overview: cli/index.md
     - workflow command: cli/workflow.md
@@ -84,9 +89,11 @@ nav:
     - Panel commands: cli/panels.md
     - Utilities (utils): cli/utils.md
     - GUI password: cli/password.md
+    - "Release notes — v0.5": releases/v0.5.md
   - Using ROBIN:
     - Overview: using-robin/index.md
     - First steps and navigation: using-robin/authentication-and-layout.md
     - Tour of the screens: using-robin/pages-and-routes.md
     - Reading your results: using-robin/sample-results.md
     - Troubleshooting: using-robin/troubleshooting.md
+    - "Release notes — v0.5": releases/v0.5.md
