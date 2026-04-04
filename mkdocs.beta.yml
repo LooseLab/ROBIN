@@ -1,3 +1,8 @@
-# Used by CI for the /beta/ docs build (release_candidate). Overrides site_url only.
+# Used by CI for the /beta/ docs build (release_candidate).
 INHERIT: mkdocs.yml
 site_url: https://looselab.github.io/ROBIN/beta/
+# Visible in header and browser tab; beta.css adds a full-width banner strip.
+site_name: ROBIN (beta)
+extra_css:
+  - stylesheets/extra.css
+  - stylesheets/beta.css
