@@ -3,10 +3,16 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
+
+# https://github.com/{owner}/{repo}/releases/download/{tag}/{filename}
+_GITHUB_RELEASE_DOWNLOAD_RE = re.compile(
+    r"^https://github\.com/(?P<owner>[^/]+)/(?P<repo>[^/]+)/releases/download/(?P<tag>[^/]+)/(?P<name>[^/?#]+)$"
+)
 
 
 def _default_repo_root_guess() -> Optional[Path]:
@@ -89,43 +95,34 @@ def _sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
-def _download(url: str, target_path: Path, github_token: Optional[str], *, label: str = "Downloading") -> None:
-    headers: Dict[str, str] = {}
-    if github_token:
-        headers["Authorization"] = f"Bearer {github_token}"
-    req = urllib.request.Request(url, headers=headers)
-    with urllib.request.urlopen(req) as resp:
-        target_path.parent.mkdir(parents=True, exist_ok=True)
-        total: Optional[int] = None
-        try:
-            cl = resp.headers.get("Content-Length")
-            if cl:
-                total = int(cl)
-        except Exception:
-            total = None
+def _parse_github_release_download_url(url: str) -> Optional[Tuple[str, str, str, str]]:
+    m = _GITHUB_RELEASE_DOWNLOAD_RE.match(url.strip())
+    if not m:
+        return None
+    g = m.groupdict()
+    return (g["owner"], g["repo"], g["tag"], g["name"])
 
-        # Import click lazily (keeps module usable outside CLI contexts).
-        try:
-            import click  # type: ignore
-        except Exception:
-            click = None  # type: ignore
 
-        chunk_size = 1024 * 1024  # 1 MiB
-        downloaded = 0
+def _stream_http_response(resp, target_path: Path, *, label: str) -> None:
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    total: Optional[int] = None
+    try:
+        cl = resp.headers.get("Content-Length")
+        if cl:
+            total = int(cl)
+    except Exception:
+        total = None
 
-        if click is not None and total and total > 0:
-            with click.progressbar(length=total, label=label, show_eta=True, show_percent=True) as bar:
-                with target_path.open("wb") as f:
-                    while True:
-                        chunk = resp.read(chunk_size)
-                        if not chunk:
-                            break
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        bar.update(len(chunk))
-        else:
-            # Fallback: still stream to avoid loading into memory; optionally emit sparse progress.
-            last_reported_mb = -1
+    try:
+        import click  # type: ignore
+    except Exception:
+        click = None  # type: ignore
+
+    chunk_size = 1024 * 1024  # 1 MiB
+    downloaded = 0
+
+    if click is not None and total and total > 0:
+        with click.progressbar(length=total, label=label, show_eta=True, show_percent=True) as bar:
             with target_path.open("wb") as f:
                 while True:
                     chunk = resp.read(chunk_size)
@@ -133,12 +130,109 @@ def _download(url: str, target_path: Path, github_token: Optional[str], *, label
                         break
                     f.write(chunk)
                     downloaded += len(chunk)
-                    # Report every ~16 MiB if click is available (keeps output minimal).
-                    if click is not None:
-                        mb = downloaded // (1024 * 1024)
-                        if mb // 16 != last_reported_mb // 16:
-                            last_reported_mb = mb
-                            click.echo(f"{label}: {mb} MiB downloaded...")
+                    bar.update(len(chunk))
+    else:
+        last_reported_mb = -1
+        with target_path.open("wb") as f:
+            while True:
+                chunk = resp.read(chunk_size)
+                if not chunk:
+                    break
+                f.write(chunk)
+                downloaded += len(chunk)
+                if click is not None:
+                    mb = downloaded // (1024 * 1024)
+                    if mb // 16 != last_reported_mb // 16:
+                        last_reported_mb = mb
+                        click.echo(f"{label}: {mb} MiB downloaded...")
+
+
+def _download_github_release_via_api(
+    owner: str,
+    repo: str,
+    tag: str,
+    filename: str,
+    target_path: Path,
+    token: str,
+    *,
+    label: str,
+) -> None:
+    """Download a release asset using the GitHub API (required for private repositories)."""
+    from urllib.parse import quote
+
+    # Keep dots etc. in tags like v0.5 (quote(..., safe="") would produce v0%2E5).
+    safe_tag = quote(tag, safe="/:@+-.~_|")
+    meta_url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{safe_tag}"
+    meta_req = urllib.request.Request(
+        meta_url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "ROBIN-model-updater",
+        },
+    )
+    with urllib.request.urlopen(meta_req) as meta_resp:
+        release = json.loads(meta_resp.read().decode())
+
+    asset = None
+    for a in release.get("assets") or []:
+        if a.get("name") == filename:
+            asset = a
+            break
+    if not asset:
+        raise FileNotFoundError(
+            f"No release asset named {filename!r} on {owner}/{repo} tag {tag!r}."
+        )
+
+    api_asset_url = str(asset["url"])
+    dl_req = urllib.request.Request(
+        api_asset_url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/octet-stream",
+            "User-Agent": "ROBIN-model-updater",
+        },
+    )
+    with urllib.request.urlopen(dl_req) as resp:
+        _stream_http_response(resp, target_path, label=label)
+
+
+def _download_manifest_asset(
+    url: str,
+    target_path: Path,
+    github_token: Optional[str],
+    *,
+    label: str,
+) -> None:
+    """
+    Download using the manifest URL. For github.com release assets with a token,
+    prefer the GitHub API so private repositories work (anonymous release URLs 404).
+    """
+    parsed = _parse_github_release_download_url(url)
+    if github_token and parsed:
+        owner, repo, tag, name = parsed
+        try:
+            _download_github_release_via_api(
+                owner, repo, tag, name, target_path, github_token, label=label
+            )
+            return
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise
+        except FileNotFoundError:
+            raise
+
+    headers: Dict[str, str] = {}
+    if github_token:
+        headers["Authorization"] = f"Bearer {github_token}"
+    req = urllib.request.Request(url, headers=headers)
+    with urllib.request.urlopen(req) as resp:
+        _stream_http_response(resp, target_path, label=label)
+
+
+def _download(url: str, target_path: Path, github_token: Optional[str], *, label: str = "Downloading") -> None:
+    _download_manifest_asset(url, target_path, github_token, label=label)
 
 
 def update_models(
@@ -172,6 +266,11 @@ def update_models(
             "Pass --manifest /path/to/assets.json or set ROBIN_ASSETS_MANIFEST=/path/to/assets.json.",
         ]
 
+    if mp:
+        messages.append(f"Using assets manifest: {mp}")
+    else:
+        messages.append("Using bundled package assets manifest (robin.resources/assets.json).")
+
     models_dir = Path(models_dir).expanduser().resolve()
     models_dir.mkdir(parents=True, exist_ok=True)
 
@@ -204,7 +303,16 @@ def update_models(
                 return False, messages
             messages.append(f"Downloaded {filename}.")
         except Exception as e:
-            messages.append(f"Failed to download {filename}: {e}")
+            messages.append(f"Failed to download {filename} from {url!r}: {e}")
+            err_s = str(e).lower()
+            if "404" in err_s:
+                messages.append(
+                    "HTTP 404 usually means the URL in your assets.json does not match a published release "
+                    "(e.g. an older ROBIN install still points at v0.0.1 or another repo). "
+                    "Reinstall from current source (`pip install -e .`) or run "
+                    "`robin utils update-models --manifest /path/to/ROBIN/assets.json`. "
+                    "For private repos, also set GITHUB_TOKEN."
+                )
             return False, messages
 
     return True, messages

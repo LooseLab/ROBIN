@@ -1,0 +1,48 @@
+# Build MkDocs from release_candidate and publish to /beta/ on the gh-pages branch.
+# Public URL: https://looselab.github.io/ROBIN/beta/
+#
+# Shares concurrency with mkdocs.yml so root and beta deploys never run concurrently.
+
+name: Publish docs (beta)
+
+on:
+  push:
+    branches:
+      - release_candidate
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: gh-pages-deploy
+  cancel-in-progress: false
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-docs.txt
+
+      - name: Install MkDocs
+        run: pip install -r requirements-docs.txt
+
+      - name: Build site (beta site_url)
+        run: mkdocs build --strict -f mkdocs.beta.yml
+
+      - name: Add .nojekyll
+        run: touch site/.nojekyll
+
+      - name: Deploy to GitHub Pages (beta)
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: site
+          branch: gh-pages
+          target-folder: beta
+          clean: true

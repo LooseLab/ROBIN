@@ -1,9 +1,11 @@
-# Build MkDocs and publish to GitHub Pages.
-# Repo Settings → Pages → Build and deployment: Source = "GitHub Actions".
+# Build MkDocs and publish production docs to the gh-pages branch (site root).
 #
-# You can list any branch(es) below. A push to any of them deploys to the same
-# site URL for this repo (the latest successful run wins). For docs-only testing,
-# use e.g. only `mkdocs`; for production after merge, use only `main` or both.
+# Beta docs from `release_candidate` deploy to /beta/ via mkdocs-beta.yml. Both workflows
+# share concurrency `gh-pages-deploy` so they do not clobber each other.
+#
+# Repo Settings → Pages → Build and deployment: Source = "Deploy from a branch",
+# Branch = gh-pages, folder = / (root). (If you still use "GitHub Actions" here, switch
+# to branch deploy once this workflow is on the default branch.)
 
 name: Publish docs
 
@@ -15,16 +17,14 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: pages
+  group: gh-pages-deploy
   cancel-in-progress: false
 
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -41,16 +41,15 @@ jobs:
       - name: Build site
         run: mkdocs build --strict
 
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
+      # Branch-based GitHub Pages may run Jekyll unless this file is present.
+      - name: Add .nojekyll
+        run: touch site/.nojekyll
 
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Deploy to GitHub Pages (production)
+        uses: JamesIves/github-pages-deploy-action@v4
+        with:
+          folder: site
+          branch: gh-pages
+          clean: true
+          clean-exclude: |
+            beta
