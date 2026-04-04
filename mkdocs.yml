@@ -69,6 +69,8 @@ plugins:
 
 nav:
   - Home: index.md
+  - Releases:
+    - "v0.5 (from v0.1.7)": releases/v0.5.md
   - Getting Started:
     - Installation: getting-started/installation.md
     - ROBIN Quickstart: getting-started/quickstart.md
