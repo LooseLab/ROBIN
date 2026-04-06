@@ -1,6 +1,11 @@
 # Reading your results
 
-This page explains **what each part of a sample page means** when you open a library from **All tracked samples** (use **View** on that row). The exact charts and numbers depend on which analyses your team enabled and how far the run has progressed. For a screenshot of the tracking table (with anonymised quality-control examples), see [All samples](pages-and-routes.md#all-samples-sample-list) in the tour.
+!!! abstract "What this page covers"
+    How to read the **sample** page after you click **View** on a row in **All tracked samples**: **Run summary**, **Classification**, **Analysis**, detailed sections, optional **Sample details** / **MNP-Flex**, and **reports**. Content depends on which steps your team enabled.
+
+**Jump to:** [Run summary](#run-summary) · [Classification](#classification-details) · [Analysis](#analysis-details) · [Deep sections](#detailed-results) · [Sample details page](#sample-details-extra) · [MNP-Flex](#mnp-flex) · [Reports](#reports-and-downloads)
+
+For the sample list screenshot, see [All samples](pages-and-routes.md#all-samples) in the tour.
 
 ![Sample page: library header and actions, Run summary tiles, Classification details, Analysis details](../images/RunSummary.png)
 
@@ -8,7 +13,7 @@ This page explains **what each part of a sample page means** when you open a lib
 
 ---
 
-## What you’ll see first: Run summary
+## What you’ll see first: Run summary {#run-summary}
 
 **Run summary** is a block of **tiles** at the top—think of it as a **run card** for the sequencer:
 
@@ -22,7 +27,7 @@ Long values (e.g. a full basecall model name) may wrap across the full width so 
 
 ---
 
-## Classification details
+## Classification details {#classification-details}
 
 **Classification details** shows how different **classifiers** (for example Sturgeon, NanoDX, PanNanoDX, Random Forest) rank possible tumour classes or methylation-based groups.
 
@@ -37,7 +42,7 @@ Not every classifier appears for every run; it depends on your pipeline settings
 
 ---
 
-## Analysis details
+## Analysis details {#analysis-details}
 
 **Analysis details** summarises **coverage**, **copy number (CNV)**, **MGMT methylation**, and **fusion** candidates in a **row of cards**.
 
@@ -52,7 +57,7 @@ Not every classifier appears for every run; it depends on your pipeline settings
 
 ---
 
-## Detailed results (full sections)
+## Detailed results (full sections) {#detailed-results}
 
 Below the **Classification details** and **Analysis details** cards, the sample page continues with larger blocks—each tied to the **same topic** as the card above. Your workflow may hide some blocks entirely.
 
@@ -154,9 +159,9 @@ Use the tables to inspect **gene pairs**, support, and grouping; follow your lab
 
 ---
 
-## Sample details page (extra tools)
+## Sample details page (extra tools) {#sample-details-extra}
 
-This is a **separate URL** from the main sample dashboard: `/live_data/<library-id>/details`. Open it from **More details** on the main sample page (when shown) or via the [tour → Sample details](pages-and-routes.md#sample-details-extra-tools). The page focuses on **disk paths**, **IGV**, **identifiers**, and **tabular** SNP / fusion / target-gene views—not the large classification and analysis storyboards on `/live_data/<id>`.
+This is a **separate URL** from the main sample dashboard: `/live_data/<library-id>/details`. Open it from **More details** on the main sample page (when shown) or via the [tour → Sample details](pages-and-routes.md#sample-details-tools). The page focuses on **disk paths**, **IGV**, **identifiers**, and **tabular** SNP / fusion / target-gene views—not the large classification and analysis storyboards on `/live_data/<id>`.
 
 ### Page header
 
@@ -214,7 +219,7 @@ Sections appear **only when** the underlying files exist and your **workflow** e
 
 ---
 
-## MNP-Flex (if your site uses it)
+## MNP-Flex (if your site uses it) {#mnp-flex}
 
 **MNP-Flex** is provided commercially by **[Heidelberg Epignostix GmbH](https://epignostix.com/)**. You can only use it under an **agreement with Epignostix**; they supply the **account credentials** ROBIN needs to call their service.
 
@@ -243,7 +248,7 @@ Your administrator may also tune optional settings (for example **`MNPFLEX_BASE_
 
 ---
 
-## Reports and downloads
+## Reports and downloads {#reports-and-downloads}
 
 When analysis is far enough along, you can usually **generate a PDF report** for the sample. The file name is typically based on the **sample ID** and is saved under that sample’s output folder.
 

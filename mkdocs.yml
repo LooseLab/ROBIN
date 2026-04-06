@@ -10,9 +10,11 @@ repo_name: LooseLab/ROBIN
 theme:
   name: material
   features:
+    - navigation.path
     - navigation.tabs
     - navigation.sections
     - navigation.expand
+    - toc.follow
     - search.highlight
     - search.share
     - content.code.copy

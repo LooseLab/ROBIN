@@ -1,34 +1,31 @@
 # ROBIN Quickstart
 
-How to run ROBIN from this repository after [installation](installation.md): live BAM analysis with `robin workflow`, optional NiceGUI monitoring, and target panels.
-
-For **disclaimer, GUI password, and startup order**, see **[What happens at startup](startup.md)**. For a **step-by-step guide to the web interface**, see **[Using ROBIN](../using-robin/index.md)**.
-
-For deeper detail (CLI flags, MinKNOW, troubleshooting), use the **[README](https://github.com/LooseLab/ROBIN/blob/main/README.md)** and the **[command-line reference](../cli/index.md)**.
+!!! abstract "What this page covers"
+    Run **`robin workflow`** after [installation](installation.md): what ROBIN expects from **MinKNOW/BAMs**, how to stage **reference + panel BEDs**, example commands, and **panels**.  
+    For **disclaimer, GUI password, and startup order**, see **[What happens at startup](startup.md)**. For the **web UI**, see **[Using ROBIN](../using-robin/index.md)**. For every flag, see **[CLI reference](../cli/index.md)** and the **[README](https://github.com/LooseLab/ROBIN/blob/main/README.md)**.
 
 ---
 
-## What ROBIN expects
+## What ROBIN expects from sequencing
 
-ROBIN consumes **aligned BAMs** from Oxford Nanopore sequencing (typically written in real time by MinKNOW):
+ROBIN consumes **aligned BAMs** from Oxford Nanopore (usually written in real time by MinKNOW):
 
 | Expectation | Notes |
 |-------------|--------|
-| Basecalling | **HAC** is sufficient; SUP not required. |
-| Methylation | **5hmC / 5mC** calling enabled in MinKNOW if your analyses need methylation. |
-| Alignment | Done **in MinKNOW** — ROBIN does not realign reads. |
-| BAM rollover | **Read-count–based** chunks. **Each BAM must be ≤ 50,000 reads**; we recommend **~50,000 reads per file**. Do **not** rely on **time-only** (e.g. hourly) rollover — see [README — BAM read limit](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings). |
-| POD5 / FASTQ | Not required; you can turn them off if you only need BAM. |
+| **Basecalling** | **HAC** is enough; SUP not required. |
+| **Methylation** | Enable **5hmC / 5mC** in MinKNOW if your analyses need it. |
+| **Alignment** | Done **in MinKNOW** — ROBIN does not realign. |
+| **BAM chunks** | **Read-count–based** rollover. Each BAM **≤ 50,000 reads**; **~50k per file** is a good target. **Do not** use **time-only** (e.g. hourly) rollover — see [README — BAM read limit](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings). |
+| **POD5 / FASTQ** | Optional; you can disable if BAM alone is enough. |
 
-### Memory (≤ 64 GB RAM)
-
-On smaller machines, restart between long runs or after switching flow-cell positions. Dorado can hold GPU/host memory; restarting Dorado or the instrument after a run reduces out-of-memory risk.
+!!! tip "Memory on smaller machines"
+    On **≤ 64 GB RAM**, restart between long runs or after moving the flow cell. Dorado can retain GPU/host memory; restarting Dorado or the instrument after a run reduces OOM risk.
 
 ---
 
-## Reference and panel BEDs
+## Reference and panel BEDs (one command) {#reference-and-panel-beds-one-command}
 
-Use **`robin utils sequencing-files`** to gather the **processed panel BED** (and optional **source BED** when packaged) plus a **GRCh38 reference FASTA** in one place for MinKNOW (adaptive sampling, alignment) and for **`robin workflow --reference`**. Run this after [installation](installation.md) when you need a consistent reference path.
+Use **`robin utils sequencing-files`** to gather **panel BED** + **GRCh38 reference** in one folder for MinKNOW and for **`robin workflow --reference`**. Run after [installation](installation.md) when you need a single consistent reference path.
 
 ```bash
 robin utils sequencing-files --panel rCNS2 --output-dir ~/references/robin_ref
@@ -36,20 +33,20 @@ robin utils sequencing-files --panel rCNS2 --output-dir ~/references/robin_ref
 
 | Option | Purpose |
 |--------|---------|
-| `-p` / `--panel` | **Required.** Same names as `--target-panel` (built-in panels such as `rCNS2`, `AML`, `PanCan`; run `robin utils sequencing-files --help` for the list on your install). |
-| `-r` / `--reference` | **Reference FASTA:** either an **HTTPS URL** to download, or a **local path** to `.fa` / `.fa.gz`. If omitted, ROBIN uses the default **NCBI GRCh38 no-alt analysis set** (UCSC-style contig names) — a **large** download; use `-r` to point at an existing file if you already have GRCh38. |
-| `-o` / `--output-dir` | Output folder (default: **`./reference_files`** in the current directory). |
-| `-y` / `--yes` | Skip the confirmation prompt (for scripts). |
+| `-p` / `--panel` | **Required.** Same names as `--target-panel` (`rCNS2`, `AML`, `PanCan`, … — run `robin utils sequencing-files --help` on your install). |
+| `-r` / `--reference` | **Reference FASTA:** HTTPS URL or local `.fa` / `.fa.gz`. If omitted, ROBIN may download the default **GRCh38 no-alt** set (large). |
+| `-o` / `--output-dir` | Output folder (default: `./reference_files`). |
+| `-y` / `--yes` | Skip confirmation (for scripts). |
 
-The command copies the panel BED(s) from ROBIN resources and **materializes** the reference at the chosen location. Use the **same** reference file for **MinKNOW alignment** and for **`robin workflow --reference`**.
+Use the **same** reference file for **MinKNOW alignment** and **`robin workflow --reference`**.
 
 ### Other `robin utils` commands
 
 | Command | Purpose |
 |---------|---------|
-| `robin utils update-models` | Download or refresh **classification / model** assets (see [Installation](installation.md)). |
-| `robin utils update-clinvar` | Download or refresh **ClinVar** under ROBIN resources for annotation paths. |
-| `robin utils mgmt` | Summarise **MGMT** CpG methylation from existing `mgmt_sorted.bam` outputs (post-run inspection). |
+| `robin utils update-models` | Models / classification assets ([Installation](installation.md)). |
+| `robin utils update-clinvar` | ClinVar resources for annotation. |
+| `robin utils mgmt` | Summarise **MGMT** CpG methylation from existing `mgmt_sorted.bam` outputs. |
 
 Run **`robin utils --help`** for the full list.
 
@@ -57,7 +54,7 @@ Run **`robin utils --help`** for the full list.
 
 ## Run a workflow
 
-Typical command:
+Typical invocation:
 
 ```bash
 robin workflow <data_folder> --work-dir <output_folder> \
@@ -69,7 +66,7 @@ robin workflow <data_folder> --work-dir <output_folder> \
 | Argument | Meaning |
 |----------|---------|
 | `<data_folder>` | Directory watched for incoming BAMs |
-| `--work-dir` | Root directory for outputs |
+| `--work-dir` | Root for outputs |
 | `-w` | Comma-separated analysis types |
 | `--reference` | Reference FASTA (needed for most steps) |
 | `--center` | Site label (e.g. `Sherwood`, `Auckland`) |
@@ -105,11 +102,11 @@ robin workflow ~/data/bam_files \
   --log-level INFO
 ```
 
-Point `--reference` at the same **GRCh38** FASTA you use for MinKNOW — for example the file produced under your [`sequencing-files`](#reference-and-panel-beds) output directory — not a different assembly or naming scheme.
+Point `--reference` at the **same GRCh38** file you use in MinKNOW—for example from your [`sequencing-files`](#reference-and-panel-beds-one-command) output.
 
 ---
 
-## Commands
+## Commands you’ll use often
 
 ### `list-job-types`
 
@@ -117,7 +114,7 @@ Point `--reference` at the same **GRCh38** FASTA you use for MinKNOW — for exa
 robin list-job-types
 ```
 
-Examples: preprocessing, bed_conversion, mgmt, cnv, target, fusion, sturgeon, nanodx, pannanodx, random_forest (see live output for your version).
+Examples include preprocessing, bed_conversion, mgmt, cnv, target, fusion, sturgeon, nanodx, pannanodx, random_forest (see live output for your version).
 
 ### `workflow`
 
@@ -125,26 +122,15 @@ Examples: preprocessing, bed_conversion, mgmt, cnv, target, fusion, sturgeon, na
 robin workflow /path/to/directory -w "<workflow_plan>" [OPTIONS]
 ```
 
-Required:
+**Required:** `-w` / `--workflow`, and `--center`.
 
-- `-w` / `--workflow` — e.g. `mgmt,sturgeon`, or queue-qualified plans (`robin workflow --help`).
-- `--center` — site ID.
-
-Useful options (full list: `robin workflow --help`):
-
-- `--work-dir` — output directory  
-- `--reference` — reference FASTA  
-- `--verbose`, `--log-level`, `--job-log-level`  
-- `--no-process-existing` — only new files after start  
-- `--deduplicate-jobs` — dedupe selected job types by sample  
-- `--use-ray` / `--no-use-ray` — Ray execution  
-- `--with-gui` / `--no-gui` — NiceGUI workflow monitor  
+**Useful:** `--work-dir`, `--reference`, `--verbose`, `--log-level`, `--no-process-existing`, `--deduplicate-jobs`, `--use-ray` / `--no-use-ray`, `--with-gui` / `--no-gui` — full list: **`robin workflow --help`**.
 
 ---
 
 ## Panel management
 
-Built-in panels include **rCNS2**, **AML**, **PanCan**. Custom panels are registered from BED (at least four columns: chr, start, end, gene name(s)).
+Built-in panels include **rCNS2**, **AML**, **PanCan**. Custom panels are registered from BED (≥ four columns: chr, start, end, gene name(s)).
 
 ```bash
 robin list-panels
@@ -154,30 +140,43 @@ robin remove-panel MyCustomPanel
 robin remove-panel MyCustomPanel --force
 ```
 
-You cannot reuse reserved names: `rCNS2`, `AML`, `PanCan`.
+Reserved names: **`rCNS2`**, **`AML`**, **`PanCan`**.
 
 ---
 
-## Behaviour and limitations
+## Behaviour and limits
 
-- **CNV** — Heuristic calls; **review visually** before any clinical interpretation.  
+- **CNV** — Heuristic; **review visually** before clinical use.  
 - **Stop with Ctrl+C** — Graceful shutdown is attempted but not guaranteed.  
-- **Bugs / questions** — [Open an issue](https://github.com/LooseLab/ROBIN/issues).  
+- **Issues** — [GitHub issues](https://github.com/LooseLab/ROBIN/issues).  
 
-### Performance
+### Performance (brief)
 
-- Batched processing on heavy paths  
-- Optional `LJ_BAM_THREADS` for BAM threading where supported  
-- Non-blocking GUI updates when the NiceGUI monitor is enabled  
+Batched processing on heavy paths; optional **`LJ_BAM_THREADS`**; non-blocking GUI when NiceGUI is enabled.
 
-### License and credits
+### License
 
-Research use only; see **LICENSE** in the repository. ROBIN integrates tools such as Sturgeon, Rapid-CNS2, Readfish, cnv_from_bam, methylartist — see the repo and papers for full attribution.
+Research use; see **LICENSE** in the repository. ROBIN integrates tools such as Sturgeon, Rapid-CNS2, Readfish, and others—see the repo for attribution.
 
 ---
 
 ## Next steps
 
-- [Library preparation](library-preparation.md)  
-- [MinKNOW configuration](minknow-configuration.md)  
-- [README — Usage](https://github.com/LooseLab/ROBIN/blob/main/README.md#usage)  
+<div class="grid" markdown>
+
+<div class="grid-item" markdown>
+### Wet lab
+[Library preparation](library-preparation.md)
+</div>
+
+<div class="grid-item" markdown>
+### Instrument
+[MinKNOW configuration](minknow-configuration.md)
+</div>
+
+<div class="grid-item" markdown>
+### Deep dive
+[README — Usage](https://github.com/LooseLab/ROBIN/blob/main/README.md#usage)
+</div>
+
+</div>

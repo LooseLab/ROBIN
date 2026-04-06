@@ -67,7 +67,7 @@ robin utils sequencing-files --panel rCNS2 --output-dir ~/references/robin_ref
 
 The command copies packaged **`{panel}_panel_name_uniq.bed`** and, when present, **`{panel}_panel_source.bed`**, then materializes the reference.
 
-See also: [Quickstart — Reference and panel BEDs](../getting-started/quickstart.md#reference-and-panel-beds).
+See also: [Quickstart — Reference and panel BEDs](../getting-started/quickstart.md#reference-and-panel-beds-one-command).
 
 ---
 

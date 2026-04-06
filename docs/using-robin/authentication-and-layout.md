@@ -1,64 +1,84 @@
 # First steps and navigation
 
+!!! abstract "What this page covers"
+    Open the **URL**, **sign in** if asked, and use the **menu** (☰), **Dark mode**, **Links**, and **Log out**. Explains the **top bar** (CPU/RAM) and **Quit** vs closing the tab.
+
+---
+
 ## Opening ROBIN
 
-Paste the address you were given into your browser’s address bar. It usually looks like `http://127.0.0.1:8081` or `http://localhost:8081`. If ROBIN runs on another machine, use the address your administrator provided (it may use a **host name** and **port**).
+Paste the address into your browser. Common forms:
 
-If nothing loads, see [Troubleshooting — I can’t open the page](troubleshooting.md#i-cant-open-the-page).
+- `http://127.0.0.1:8081` or `http://localhost:8081`  
+- On another machine: use the **host** and **port** your administrator gave you  
+
+If nothing loads: [Troubleshooting — I can’t open the page](troubleshooting.md#i-cant-open-the-page).
+
+---
 
 ## Signing in
 
-If your team enabled password protection, you’ll see a **Sign in** page with the ROBIN name and a short message: **Enter password to continue.** The screen includes the green header (**R.O.B.I.N**, menu, logo), the **Sign in** card with a lock icon, the **Password** field, the green **Log in** button, and the footer (**Links**, info, copyright).
+If password protection is on, you’ll see **Sign in** with **Enter password to continue.** The layout includes the green header (**R.O.B.I.N**, menu, logo), the password card, and the footer (**Links**, copyright).
 
 ![ROBIN web sign-in: header, Sign in card with password field and Log in button, footer](../images/login.png)
 
-- Type the password your team uses for the web interface (often the same one set when ROBIN first asked for a **GUI password** in the terminal).  
-- Press **Log in** or Enter.
+- Enter the password your team uses (often the one set with the **GUI password** in the terminal).  
+- Press **Log in** or **Enter**.  
 
-After a successful sign-in, ROBIN takes you to the page you originally tried to open, or to the **Welcome** home page.
+After sign-in, ROBIN opens the page you wanted or **Welcome**.
 
-## What’s at the top of every screen
+---
 
-- **Menu (☰)** on the left — opens the main navigation (see below).  
-- **Title** — the full ROBIN name on large screens, or **R.O.B.I.N** on a phone.  
-- **Viewing:** … — shows which computer the browser is talking to.  
-- **CPU** and **RAM** — small gauges for a quick sense of load (they are **not** a full system monitor).  
-- **Logo** — ROBIN branding on the right.
+## Top bar (every screen)
+
+| Element | Purpose |
+|---------|---------|
+| **Menu (☰)** | Opens main navigation (see below). |
+| **Title** | Full ROBIN name on large screens; **R.O.B.I.N** on small screens. |
+| **Viewing:** … | Which machine the browser is talking to. |
+| **CPU** / **RAM** | Quick load indicators — **not** a full system monitor. |
+| **Logo** | ROBIN branding. |
+
+---
 
 ## Main menu (☰)
 
-Use these entries to jump around the app:
+| Goal | Menu item |
+|------|-----------|
+| Home | **Home** |
+| Table of all samples | **View Samples** |
+| Create a library ID from test ID + optional fields | **Generate Sample ID** |
+| Add/remove BAM watch folders | **Watched Folders** *(may need a specific pipeline mode)* |
+| Pipeline status | **Activity Monitor** |
+| Published docs (new tab) | **Documentation** |
+| Dark theme | **Dark Mode** |
+| Remote access (advanced) | **Allow Remote Access** |
+| End web session | **LOG OUT** |
+| Stop ROBIN on this machine *(some setups)* | **Quit** — read the warning; closing the **tab** often leaves analysis running. |
 
-| What you want to do | Choose |
-|----------------------|--------|
-| Go back to the home page | **Home** |
-| See all samples in a table | **View Samples** |
-| Build a new library ID from a test ID and optional details | **Generate Sample ID** |
-| Add or remove folders that ROBIN should watch for new BAM files | **Watched Folders** *(may require your pipeline to be running in a specific mode—see the tour page)* |
-| See whether the workflow is running and how jobs are progressing | **Activity Monitor** |
-| Open published documentation in a new tab | **Documentation** |
-| Make the whole app easier on the eyes at night | **Dark Mode** (toggle) |
-| Allow remote access (advanced; your admin may use this) | **Allow Remote Access** |
-| Leave the web session | **LOG OUT** |
-| Fully quit ROBIN on this machine *(only on some setups)* | **Quit** — read the warning first; closing the **browser tab** often leaves analysis running, while **Quit** can stop it. |
+!!! tip "“Workflow” in the menu"
+    Some builds list **Workflow** separately. In the usual **`robin workflow`** setup, use **Activity Monitor** for pipeline status. If **Workflow** errors or does nothing, prefer **Activity Monitor**.
 
-!!! tip "Which “workflow” button?"
-    Some menus list **Workflow** as a separate item. In the standard setup started from `robin workflow`, use **Activity Monitor** to see pipeline status and progress. If **Workflow** does nothing or shows an error, stick with **Activity Monitor**.
+**Close** dismisses the menu.
 
-**Close** simply closes the menu.
+---
 
-## Footer: Links and info
+## Footer
 
-At the bottom you’ll find **Links** — a panel with shortcuts to GitHub, key papers, the lab protocol, Oxford Nanopore, and related sites. Use **Info** if your build shows extra footer help.
+**Links** — shortcuts to GitHub, papers, lab protocol, Oxford Nanopore, and related sites. **Info** may show extra help on some builds.
+
+---
 
 ## Quit vs closing the browser
 
-If you see **Quit R.O.B.I.N?**, read the text carefully:
+If you see **Quit R.O.B.I.N?**:
 
-- **Cancel** — closes the dialog; analysis may continue.  
+- **Cancel** — dialog closes; analysis may continue.  
 - **Really quit** — can stop analysis on that machine.  
-- You can often **close the browser tab** and leave ROBIN running in the background—when in doubt, ask whoever operates the sequencer or server.
+- Often you can **close the tab** and leave ROBIN running — ask your operator if unsure.  
+
+---
 
 ## Next
 
-[Tour of the screens](pages-and-routes.md) walks through each page and what the buttons do.
+[Tour of the screens](pages-and-routes.md) — each page and what to click.

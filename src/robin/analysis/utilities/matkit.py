@@ -89,6 +89,22 @@ def _primary_meets_min_qs(read) -> bool:
         return True
 
 
+def _binary_parquet_cell_to_str(cell) -> Optional[str]:
+    """Decode one cell from a binary parquet column to str (bytes or PyArrow binary scalars)."""
+    if cell is None:
+        return None
+    if isinstance(cell, (bytes, bytearray)):
+        return cell.decode("utf-8", errors="replace")
+    if hasattr(cell, "as_py"):
+        py = cell.as_py()
+        if py is None:
+            return None
+        if isinstance(py, (bytes, bytearray)):
+            return py.decode("utf-8", errors="replace")
+        return str(py)
+    return str(cell)
+
+
 def _decode_binary_columns(table: pa.Table) -> pa.Table:
     """Decode binary columns (chrom, mod_code, strand) to UTF-8 string with errors='replace'."""
     arrays = []
@@ -98,10 +114,7 @@ def _decode_binary_columns(table: pa.Table) -> pa.Table:
         if name in _PARQUET_STR_COLS and (
             pa.types.is_binary(col.type) or pa.types.is_large_binary(col.type)
         ):
-            str_vals = [
-                (b.decode("utf-8", errors="replace") if b is not None else None)
-                for b in col
-            ]
+            str_vals = [_binary_parquet_cell_to_str(b) for b in col]
             arrays.append(pa.array(str_vals, type=pa.string()))
             schema_fields.append(pa.field(name, pa.string()))
         else:

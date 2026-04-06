@@ -1,5 +1,8 @@
 # `robin workflow`
 
+!!! abstract "What this page covers"
+    Flags and behaviour for **`robin workflow`**: synopsis, workflow string formats, Ray vs threading, GUI, logging, file handling, and links to **job types** and **quickstart**. Startup order (disclaimer, password, when the GUI appears): **[What happens at startup](../getting-started/startup.md)**.
+
 Run the **Little John** orchestrated pipeline on BAM files under a watched directory: preprocessing, optional BED conversion, analyses (MGMT, CNV, target, fusion), classifiers (Sturgeon, NanoDX, PanNanoDX, random forest), and optional **NiceGUI** monitoring.
 
 !!! info "Startup sequence"

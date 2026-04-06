@@ -1,10 +1,13 @@
 # Tour of the screens
 
-This page walks through **what you see** and **where to click**, in the order most people use during a run. Technical paths (for bookmarks or IT) are noted in *italics* at the end of each section.
+!!! abstract "How to use this page"
+    Follow sections **in order** for a first run, or jump to a screen below. *Italic* lines are **URL paths** for bookmarks or IT.
+
+**Jump to:** [Welcome](#welcome) · [All samples](#all-samples) · [Activity Monitor](#activity-monitor) · [One sample](#one-sample) · [Sample details](#sample-details-tools) · [Watched folders](#watched-folders) · [Sample ID generator](#sample-id-generator)
 
 ---
 
-## Welcome (home)
+## Welcome (home) {#welcome}
 
 **What it is:** The landing page after you sign in. It introduces ROBIN in plain language and explains that it analyses nanopore BAM data in real time.
 
@@ -24,7 +27,7 @@ You may also see a **News** area with updates from the team.
 
 ---
 
-## All samples (sample list)
+## All samples (sample list) {#all-samples}
 
 **What it is:** A searchable table of **every sample** ROBIN is tracking—your main hub for finding a run. The browser title may read **Sample Tracking Overview**.
 
@@ -45,7 +48,7 @@ If a sample never appears, check that MinKNOW is writing BAMs where ROBIN expect
 
 ---
 
-## Activity Monitor (workflow monitor)
+## Activity Monitor (workflow monitor) {#activity-monitor}
 
 **What it is:** A dashboard for **overall pipeline health**: whether work is running, how long it has been up, and counts of completed or failed jobs. The browser title may read **Workflow Monitor**.
 
@@ -66,11 +69,11 @@ Use this when you want a quick “is ROBIN still working?” answer without open
 
 ---
 
-## One sample (detail page)
+## One sample (detail page) {#one-sample}
 
-**What it is:** The page for a **single library ID**—this is where **Run summary**, **Classification details**, **Analysis details**, optional **MNP-Flex** results, and **reports** appear. Deeper tools on a follow-on screen (`/details`) are shown in [Sample details (extra tools)](#sample-details-extra-tools) below.
+**What it is:** The page for a **single library ID**—this is where **Run summary**, **Classification details**, **Analysis details**, optional **MNP-Flex** results, and **reports** appear. Deeper tools on a follow-on screen (`/details`) are shown in [Sample details (extra tools)](#sample-details-tools) below.
 
-Open it from **All tracked samples** by clicking **View** on the row you want. That opens this **sample** page (`/live_data/<your-sample-id>`), not the **Workflow Monitor** (`/robin`); the monitor is described in [Activity Monitor](#activity-monitor-workflow-monitor) above.
+Open it from **All tracked samples** by clicking **View** on the row you want. That opens this **sample** page (`/live_data/<your-sample-id>`), not the **Workflow Monitor** (`/robin`); the monitor is described in [Activity Monitor](#activity-monitor) above.
 
 **`OneSample.png`:** this repo image is another capture of the **Workflow Monitor** (`/robin`)—the same layout as `Activity.png`—not the `/live_data/<id>` page after **View**. The main sample screen is covered in [Reading your results](sample-results.md).
 
@@ -84,7 +87,7 @@ If ROBIN doesn’t recognise an ID yet, you may see **Unknown sample** and a sho
 
 ---
 
-## Sample details (extra tools)
+## Sample details (extra tools) {#sample-details-tools}
 
 **What it is:** A secondary page with **deeper tools** for that sample: where files live on disk, links into **IGV**, **sample identifiers**, **SNP** tables, **fusion** pairs, and **target genes**, depending on your configuration.
 
@@ -94,13 +97,13 @@ If ROBIN doesn’t recognise an ID yet, you may see **Unknown sample** and a sho
 
 Use **Back to sample** to return to the main sample page.
 
-**What’s on the page:** step-by-step description of each block (paths, IGV, SNP, fusion pairs, target genes) is in [Reading your results → Sample details page](sample-results.md#sample-details-page-extra-tools).
+**What’s on the page:** step-by-step description of each block (paths, IGV, SNP, fusion pairs, target genes) is in [Reading your results → Sample details page](sample-results.md#sample-details-extra).
 
 *Bookmark pattern: `/live_data/<your-sample-id>/details`.*
 
 ---
 
-## Watched folders
+## Watched folders {#watched-folders}
 
 **What it is:** Lets you **add or remove directories** that contain BAM files so ROBIN can watch them for new data. The browser title may read **Watched Folders**.
 
@@ -120,7 +123,7 @@ Use **Back to sample** to return to the main sample page.
 
 ---
 
-## Sample ID generator
+## Sample ID generator {#sample-id-generator}
 
 **What it is:** A form to build a **sample identifier** from:
 

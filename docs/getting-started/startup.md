@@ -1,72 +1,88 @@
 # What happens when you start ROBIN
 
-This page describes the **typical experience** when you run **`robin workflow`** from a terminal: checks, prompts, the **research disclaimer**, **GUI password**, and where the **NiceGUI** monitor appears. Behaviour matches the current codebase; always check **`robin workflow --help`** for your installed version.
+!!! abstract "What this page covers"
+    The usual order of checks and prompts when you run **`robin workflow`**: models, reference, **research disclaimer** (`I agree`), optional **large-BAM** warning, **Ray vs threads**, **NiceGUI** URL, **GUI password**, then **watching BAMs**.  
+    Install: [Installation](installation.md). Flags: [`robin workflow`](../cli/workflow.md). Always confirm behaviour with **`robin workflow --help`** on your install.
 
-For install steps, see [Installation](installation.md). For command-line flags, see the [command-line reference](../cli/workflow.md).
+---
+
+## At a glance (startup order)
+
+| Step | What happens |
+|------|----------------|
+| 1 | **Model assets** checked — exit with instructions if missing (`robin utils update-models`). |
+| 2 | **Reference** validated if you pass `--reference` / `-r`. |
+| 3 | **Disclaimer** — you must type **`I agree`** exactly (case-sensitive). |
+| 4 | **Large BAMs** — optional warning if `ROBIN_PROCESS_LARGE_BAMS` is set (not for live runs). |
+| 5 | **Configuration summary** printed (paths, `--center`, steps, logging, Ray, etc.). |
+| 6 | **Execution engine** — Ray (default) or `--no-use-ray` (threaded). |
+| 7 | **NiceGUI** — if `--with-gui` (default); on **Ray**, GUI usually needs **`--work-dir`** — see [NiceGUI](#nicegui-workflow-monitor-default-on). |
+| 8 | **GUI password** — set or verify (terminal prompts). |
+| 9 | **Watch** input directory for `*.bam` and schedule jobs. |
 
 ---
 
 ## 1. Model assets
 
-Before anything else, ROBIN verifies that **required model files** are present (same manifest as `robin utils update-models`). If files are missing, the process exits with a message telling you to run **`robin utils update-models`** (and set **`GITHUB_TOKEN`** if your assets are on private GitHub).
+ROBIN checks **required model files** (same manifest as `robin utils update-models`). If anything is missing, the process exits and tells you to run **`robin utils update-models`** (and **`GITHUB_TOKEN`** if assets are on private GitHub).
 
 ---
 
-## 2. Reference genome (if you pass `--reference` / `-r`)
+## 2. Reference genome (`--reference` / `-r`)
 
-If you supply a reference **FASTA**, ROBIN validates it and ensures an index (e.g. `.fai`) can be created or found. On failure, it exits with an error — fix the path or omit `--reference` only if your workflow truly does not need it.
+If you pass a reference **FASTA**, ROBIN validates it and ensures an index (e.g. `.fai`) exists or can be created. On failure, fix the path or omit `--reference` only if your workflow truly does not need it.
 
 ---
 
 ## 3. Research disclaimer (`I agree`)
 
-ROBIN prints the **research-use disclaimer** and waits for you to type **`I agree`** exactly (case-sensitive). This is required before the workflow starts.
+ROBIN prints the **research-use** text and waits for **`I agree`** exactly (case-sensitive) before the workflow starts.
 
 ---
 
 ## 4. Optional warning: large BAMs
 
-If **`ROBIN_PROCESS_LARGE_BAMS`** is enabled, ROBIN prints a **warning** that this mode must **not** be used together with live sequencing runs.
+If **`ROBIN_PROCESS_LARGE_BAMS`** is enabled, ROBIN warns that this mode must **not** be used with **live** sequencing runs.
 
 ---
 
 ## 5. Configuration summary
 
-The terminal prints a summary of your run: paths, **`--center`**, workflow steps (including automatic **`preprocessing`** / **`bed_conversion`** insertion), logging, Ray/threading mode, etc.
+The terminal prints paths, **`--center`**, workflow steps (including automatic **`preprocessing`** / **`bed_conversion`** insertion), logging, Ray/threading mode, and related options.
 
 ---
 
 ## 6. Execution engine (Ray vs threading)
 
-- **Default (`--use-ray`)** — Ray is initialised (with optional dashboard, CPU limits, presets). The **Ray Core** workflow driver runs asynchronously.
-- **`--no-use-ray`** — Falls back to threaded workers instead of Ray.
+| Mode | Flag | Notes |
+|------|------|--------|
+| **Ray** (default) | `--use-ray` | Ray Core driver; optional dashboard and CPU limits. |
+| **Threading** | `--no-use-ray` | Threaded workers instead of Ray. |
 
 ---
 
-## 7. NiceGUI workflow monitor (default: on)
+## 7. NiceGUI workflow monitor (default: on) {#nicegui-workflow-monitor-default-on}
 
-With **`--with-gui`** (the default), ROBIN starts a **web-based** workflow monitor (NiceGUI) so you can follow progress in a browser.
+With **`--with-gui`** (default), ROBIN starts a **browser** workflow monitor.
 
-### When the GUI actually starts
+### When the GUI starts
 
-| Mode | GUI behaviour |
-|------|----------------|
-| **Ray workflow (default)** | The GUI is started **inside** the Ray workflow driver **only if** you pass **`--work-dir`** (`-d`). If `--work-dir` is omitted, the driver may skip launching the GUI and print that **`--work-dir` was not provided**. |
-| **`--no-use-ray`** | The CLI launches the GUI when **`--with-gui`** is set, using **`--work-dir`** if provided, otherwise the **watched BAM directory** as the monitored path. |
+| Mode | Behaviour |
+|------|------------|
+| **Ray (default)** | GUI starts **inside** the Ray driver **only if** you pass **`--work-dir`** (`-d`). Without `--work-dir`, the driver may skip the GUI and report that **`--work-dir` was not provided**. |
+| **`--no-use-ray`** | GUI starts when **`--with-gui`**, using **`--work-dir`** if set, else the **watched BAM directory** as context. |
 
-So for the **default Ray** path, plan to pass **both** a data directory (positional `PATH`) **and** **`--work-dir`** if you want the browser UI.
+**Practical takeaway:** on the default **Ray** path, pass **both** the data directory (positional `PATH`) **and** **`--work-dir`** if you want the browser UI.
 
 ### URLs
 
-When the GUI starts, the terminal prints a base URL such as **`http://<gui-host>:<gui-port>`** (defaults: host **`0.0.0.0`**, port **`8081`**). Typical entry points include:
+The terminal prints a base URL such as **`http://<gui-host>:<gui-port>`** (defaults: **`0.0.0.0`**, **`8081`**). Common routes include:
 
-- Welcome / root: `/`
-- Workflow monitor: `/robin`
-- Sample-oriented views: paths under `/live_data` (exact routes are printed at startup)
+- Welcome: `/`  
+- Workflow monitor: `/robin`  
+- Sample views: under `/live_data` (exact routes are printed at startup)
 
-Use **`--gui-host`** and **`--gui-port`** to change bind address and port; use **`--no-gui`** to disable the web UI entirely.
-
-### Disable the GUI
+Use **`--gui-host`** / **`--gui-port`** to change bind address and port; **`--no-gui`** disables the web UI.
 
 ```bash
 robin workflow ... --no-gui
@@ -74,64 +90,60 @@ robin workflow ... --no-gui
 
 ---
 
-## 8. GUI password (terminal prompts)
+## 8. GUI password (terminal)
 
-Access to the web UI is protected by a **password** (requires **`argon2-cffi`** for secure handling). ROBIN prompts in the terminal; passwords are **not** echoed.
+Access to the web UI is password-protected (**`argon2-cffi`**). Passwords are **not** echoed.
 
-### First run (password not set yet)
+### First run (no password yet)
 
-If no password has been set and **stdin is a TTY** (interactive terminal), ROBIN prompts:
+If stdin is a **TTY**, you are prompted:
 
 ```text
 Set GUI password:
 Confirm GUI password:
 ```
 
-You must enter the same password twice. The password is stored for future logins.
+Enter the same password twice. If **no TTY** (some automation), startup **fails** with a message to run from an interactive terminal first.
 
-If **no password has been set yet** and **stdin is not a TTY** (e.g. some automated contexts), startup **fails** with a message to run ROBIN from a terminal so the password can be set interactively.
+### Later runs
 
-### Later runs (password already set)
-
-If stdin is a **TTY**, you are prompted once:
+If stdin is a **TTY**:
 
 ```text
 GUI password:
 ```
 
-Enter the same password you set earlier. Wrong password → **Invalid password.** and the GUI does not start.
+Wrong password → **Invalid password.** and the GUI does not start.
 
-### Setting or changing the password without a full workflow
-
-Use the dedicated command (see [GUI password](../cli/password.md)):
+### Change password without a full workflow
 
 ```bash
 robin password set
 ```
 
-This can **replace** an existing password after confirmation. It uses the same mechanism as the first-run prompts.
+See [GUI password](../cli/password.md).
 
 ---
 
-## 9. Workflow hooks (optional message)
+## 9. Workflow hooks (optional)
 
-If the GUI starts successfully, ROBIN may install **workflow hooks** for live updates. If hook installation fails, you may see a message that the GUI will show **static** information only.
-
----
-
-## 10. Watching BAMs and shutting down
-
-After the above, the runner **watches** the input directory for **`*.bam`** files (subject to `--no-process-existing`, `--no-watch`, etc.) and schedules jobs. Use **Ctrl+C** to stop; ROBIN attempts a **graceful shutdown** (workflow manager, Ray, GUI), though complex runs may take a moment to exit.
+If the GUI starts, ROBIN may install **workflow hooks** for live updates. If hook installation fails, you may see a message that the GUI will show **static** information only.
 
 ---
 
-## Quick reference — order of prompts
+## 10. Watching BAMs and shutdown
 
-1. (Automatic) Model check  
+The runner **watches** the input directory for **`*.bam`** files (subject to `--no-process-existing`, `--no-watch`, etc.) and schedules jobs. **Ctrl+C** stops the run; ROBIN attempts **graceful shutdown** (workflow manager, Ray, GUI), though exit may take a moment.
+
+---
+
+## Quick reference — prompts
+
+1. Model check  
 2. (If `-r`) Reference validation  
-3. **Type `I agree`** — research disclaimer  
-4. (If GUI enabled) **GUI password** — set twice first time, or single verify later  
-5. Browser → open printed URL to monitor  
+3. Type **`I agree`**  
+4. (If GUI) **GUI password** — set twice first time, or single verify later  
+5. Open the printed URL in a browser  
 
 ---
 
@@ -139,5 +151,5 @@ After the above, the runner **watches** the input directory for **`*.bam`** file
 
 - [Quickstart](quickstart.md)  
 - [`robin workflow`](../cli/workflow.md)  
-- [GUI password command](../cli/password.md)  
+- [GUI password](../cli/password.md)  
 - [CLI overview](../cli/index.md)  

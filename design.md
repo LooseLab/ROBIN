@@ -400,14 +400,75 @@ The **≥30× / ≥20× / ≥10× / below 10×** legend uses **`analysis-insight
 - **Interaction:** **Crosshair** (`axisPointer: cross`) and axis tooltip. Data source: **`coverage_time_chart.npy`** (`[timestamp_ms, coverage]`); tooltip shows **estimated coverage (×)** at the crosshair (total reads are not stored in this file).
 - **Implementation:** **`echart_time`**, **`_update_time()`** in **`coverage.py`**; **`_cov_line_primary()`**, **`_cov_area_fill_primary()`**.
 
-### C. Individual target coverage (outlier analysis)
+### C. Individual target coverage (outlier analysis) — signal-first trend
 
-- **Background:** Horizontal **±2 SD band** around the **mean coverage time series** (mean of per-timepoint means), shown as a **subtle slate** `markArea`.
-- **Mean line:** **Thick dashed** line — **`#f8fafc`** (dark UI) or **`#1e293b`** (light UI).
-- **Gene lines:** **Outlier** targets (per existing SD logic) use a **fixed accent palette** (cyan / magenta / gold / …). **Non-outlier** targets (up to **25**) are drawn **dimmed** (slate, ~40% opacity, thin dashed). **Legend hover / emphasis** uses ECharts **`emphasis` / `blur`** so a series can “pop” when focused.
-- **Implementation:** **`_plot_target_coverage_over_time()`** in **`coverage.py`** (`target_coverage_time.csv`); helpers **`_cov_mean_line_color()`**, **`_cov_gene_line_color()`**, **`_COV_DIM_LINE`**, **`_COV_MAX_DIM_GENES`**.
-- **Legend layout:** **`type: 'scroll'`**, **`orient: 'horizontal'`**, **`bottom`** — legend sits **under** the grid so it does not cover the Y-axis or series (taller chart container reserved for the strip). **Series names** are **truncated in Python** (`_cov_legend_label`) so long gene lists do not blow the key width; in-range suffix is **`· in-range`**.
-- **Tooltip:** Use ECharts **default** axis tooltip only — do **not** pass a **`formatter` function string** in options (NiceGUI serialises options as JSON; JS functions are not preserved and the source can appear as tooltip body — same pitfall as classification charts; use template strings or defaults).
+Full visual and interaction spec: **Outlier Coverage & High-Density Trend Analysis** (see table at end of this subsection).
+
+#### Design Specification: Outlier Coverage & High-Density Trend Analysis
+
+##### 1. Plot archetype: the “signal-first” trend
+
+In bioinformatics, outlier analysis often involves tracking multiple targets over time. To prevent visual “spaghetti,” the plot prioritises the **population mean** and **statistically significant deviations** while minimising background noise.
+
+##### 2. Layering & signal-to-noise ratio (SNR)
+
+**2.1 Background architecture**
+
+- **The normal range (the “envelope”):** A shaded background band represents normal variance (**±2 standard deviations** from the **mean coverage time series** — mean of per-timepoint means).
+  - *Light mode:* Slate 100 (`#F1F5F9`) at **50%** opacity.
+  - *Dark mode:* Slate 800 (`#1E293B`) at **30%** opacity.
+- **Grid lines:** Horizontal and vertical grids stay **minimal** and **semi-transparent** so they give scale without competing with data lines.
+
+**2.2 The reference mean**
+
+- **Style:** Thick **dashed** line for the population / run average.
+- **Light mode:** Slate 800 (`#1E293B`) dashed stroke.
+- **Dark mode:** Slate 200 (`#E2E8F0`) dashed stroke with a subtle **~1px glow** (`shadowBlur` on the line).
+
+**2.3 Data line hierarchy**
+
+- **Inactive / normal targets:** Non-outlier lines at **~15–20%** opacity (“ghost” population trend).
+- **Active / outlier targets:** Genes crossing the threshold use **high-saturation** brand colours (**Emerald, Cyan, Rose, Amber** family — theme-tuned for light vs luminous dark). **Solid 2px** stroke.
+
+##### 3. Visual encoding & semantic markers
+
+**3.1 Point markers (anomalies)**
+
+- **Gains / positive deviations:** Triangle-up (or circle) — **Emerald 400** (dark) / **Emerald 600** (light).
+- **Losses / negative deviations:** Triangle-down — **Red 400** (dark) / **Red 600** (light).
+- **Interaction:** Marker **emphasis** uses **shadow / glow** on hover (ECharts `emphasis.itemStyle`) so points read as interactive.
+
+**3.2 Time-series smoothing**
+
+- **Spline-style curves:** `smooth` + moderate tension (Bezier-style) on line series so raw sequencing jitter is softened without hiding breakpoints.
+
+##### 4. Legend & interactivity
+
+**4.1 Dynamic legend**
+
+- **Placement:** **Right**, vertical **scroll** on wide viewports; **narrow viewports** fall back to **horizontal scroll** under the grid (media `option` in `coverage.py`, same idea as classification charts).
+- **Focus behaviour:** **Legend hover** + ECharts **`emphasis.focus: 'series'`** / **`blur`** so one series is emphasised and others **dim** (~10% opacity). Native legend **click** still toggles series visibility (JSON-safe options; no custom JS formatters).
+
+**4.2 Crosshair & scrubbing**
+
+- **Vertical scrubber:** Axis pointer **`type: 'line'`** on **`x`** — thin full-height line following the pointer.
+- **Tooltip:** **Axis** trigger (default) — shows values at the scrubbed time for visible series, including **Mean (population)** for context. Do **not** use JS **`formatter` functions** in options (NiceGUI serialises to JSON; use defaults / string templates only).
+
+##### 5. Thematic implementation summary
+
+| Element | Light mode (clinical) | Dark mode (midnight) |
+| :--- | :--- | :--- |
+| **Normal band** | Slate-100 envelope | Slate-800 envelope |
+| **Mean line** | Dark slate, dashed | Slate-200 dashed + glow |
+| **Outlier lines** | Solid high-contrast brand palette | Luminous emerald / cyan / rose / amber |
+| **Anomalies** | Semantic red / green markers | Same hues, brighter + emphasis glow |
+
+*Design spec version 1.0 | October 2026*
+
+---
+
+- **Implementation:** **`_plot_target_coverage_over_time()`** in **`coverage.py`** (`target_coverage_time.csv`); helpers **`_cov_band_fill_rgba()`**, **`_cov_mean_line_color()`**, **`_cov_outlier_line_color()`**, **`_cov_anomaly_*_color()`**, **`_cov_target_time_split()`**, **`_echart_target_cov_time_media()`**, **`_COV_MAX_DIM_GENES`**, **`_cov_legend_label`**. In-range suffix **`· in-range`**.
+- **Tooltip:** Axis tooltip only — **no** JS `formatter` functions in options.
 
 **Reference implementation:** **`coverage.py`** — module-level **`_cov_*`** theme helpers; charts updated when **`_refresh_coverage_sync`** runs (and bar colours follow storage **`dark_mode`** on refresh).
 
@@ -459,4 +520,4 @@ The **MNP-Flex results** block on the sample detail page follows the same **insi
 - **`styles.css`:** **`mnpflex-*`** and **`classification-insight-grid--2`** (two-column grid for QC/MGMT).
 
 
-Version 1.15 | March 2026
+Version 1.16 | April 2026

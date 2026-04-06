@@ -175,4 +175,8 @@ Desktop.ini
 # Large model files - now hosted as release assets
 src/robin/models/general.zip
 src/robin/models/Capper_et_al_NN.pkl
-src/robin/models/pancan_devel_v5i_NN.pkl 
+src/robin/models/pancan_devel_v5i_NN.pkl
+src/robin/models/Capper_et_al_NN_v2.pkl
+src/robin/models/pancan_devel_v5i_NN_v2.pkl
+src/robin/resources/clinvar.vcf.gz
+src/robin/resources/clinvar.vcf.gz.tbi 

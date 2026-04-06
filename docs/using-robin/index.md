@@ -1,30 +1,58 @@
 # Using ROBIN
 
-Welcome. This guide is for **anyone using the ROBIN web app in a browser**—whether you are new to the tool or only need a reminder of where things live.
+!!! abstract "Who this is for"
+    Anyone using the **ROBIN web app** in a browser—no command line required for this section. You’ll learn where to **sign in**, open **samples**, read **classification and analysis** results, and fix **common issues**.
 
-ROBIN’s interface shows how your sequencing run is progressing and surfaces **classification**, **coverage**, **CNV**, **MGMT**, **fusion**, and other results as they become available. You do **not** need to read code or command-line manuals to follow this guide; we link to technical docs only where it helps.
+ROBIN shows run progress and surfaces **classification**, **coverage**, **CNV**, **MGMT**, **fusion**, and other outputs as they appear. Technical links are only where they help.
 
-## Before you start
+---
 
-1. **ROBIN must already be running** on your computer or server (someone usually starts it with `robin workflow` from a terminal). When it starts, it prints a **web address**—for example `http://127.0.0.1:8081`. Open that address in **Chrome, Edge, Firefox, or Safari**.
-2. You may be asked for a **password** in the browser or in the terminal first—see [First steps and navigation](authentication-and-layout.md).
-3. The window title will show **ROBIN** so you can find the tab easily.
+## Before you open the app
 
-## What you’ll learn here
+1. **ROBIN must be running** — usually someone starts **`robin workflow`** in a terminal. The startup message includes a URL such as **`http://127.0.0.1:8081`**. Use **Chrome, Edge, Firefox, or Safari**.  
+2. You may need a **password** — see [First steps and navigation](authentication-and-layout.md).  
+3. The browser tab title shows **ROBIN** so you can find it quickly.  
 
-| Guide | You’ll learn how to… |
-|-------|----------------------|
-| [First steps and navigation](authentication-and-layout.md) | Sign in, use the menu, turn on **Dark mode**, find **Links** and **Log out**, and understand the top bar (CPU/RAM). |
-| [Tour of the screens](pages-and-routes.md) | Move from the **Welcome** page to **samples**, the **workflow monitor**, **watched folders**, and the **sample ID** helper. |
-| [Reading your results](sample-results.md) | Read the **Run summary**, **Classification**, **Analysis**, and **reports** on a sample page. |
-| [Troubleshooting](troubleshooting.md) | Fix common problems (can’t connect, wrong sample, dark mode, reports). |
+---
 
-## A simple workflow
+## Guides
 
-1. Open the link you were given → land on **Welcome** (or sign in first).  
-2. Open **View Samples** (or **View All Samples**) → click **View** on the row for your **library / sample** to open it.  
-3. Scroll through **Run summary**, then **Classification details**, then **Analysis details** as numbers appear.  
-4. Use **Generate report** when you need a **PDF** (and optional data export if your team enabled it).  
-5. To see overall pipeline health, open **Activity Monitor** from the menu.
+<div class="grid" markdown>
 
-When you’re ready for installation, startup prompts, or command-line options, see [Quickstart](../getting-started/quickstart.md) and [What happens at startup](../getting-started/startup.md).
+<div class="robin-feature-card" markdown>
+### [First steps and navigation](authentication-and-layout.md)
+Sign in, use the **menu**, **Dark mode**, **Links**, **Log out**, and read the top bar (CPU/RAM).
+</div>
+
+<div class="robin-feature-card" markdown>
+### [Tour of the screens](pages-and-routes.md)
+**Welcome**, **samples**, **workflow monitor**, **watched folders**, **Sample ID** helper.
+</div>
+
+<div class="robin-feature-card" markdown>
+### [Reading your results](sample-results.md)
+**Run summary**, **Classification**, **Analysis**, reports, and optional **Sample details**.
+</div>
+
+<div class="robin-feature-card" markdown>
+### [Troubleshooting](troubleshooting.md)
+Connection, sign-in, unknown sample, dark mode, reports.
+</div>
+
+</div>
+
+---
+
+## Typical workflow
+
+1. Open the URL you were given → **Welcome** (or sign in).  
+2. **View Samples** → **View** on your library row.  
+3. Read **Run summary**, then **Classification** and **Analysis** as numbers appear.  
+4. Use **Generate report** for a **PDF** when ready.  
+5. Use **Activity Monitor** for overall pipeline health.  
+
+---
+
+## Operators and bioinformatics
+
+Installation, startup prompts, and CLI flags: [Quickstart](../getting-started/quickstart.md), [What happens at startup](../getting-started/startup.md), [CLI reference](../cli/index.md).
