@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 import json
@@ -19,15 +20,22 @@ except ImportError:  # pragma: no cover
 
 from robin.gui.theme import styled_table, register_theme_sync_callback
 
-# --- Coverage charts (design.md §9.5): on/off colours, mean line, gene palette ---
-_COV_GENE_LINE_PALETTE = [
-    "#06b6d4",  # cyan
-    "#c026d3",  # magenta / fuchsia
-    "#ca8a04",  # gold / amber
-    "#2563eb",  # blue
-    "#db2777",  # rose
+# --- Coverage charts (design.md §9.5): on/off colours, mean line, outlier palette ---
+_COV_OUTLIER_LINE_PALETTE_LIGHT = [
+    "#059669",  # emerald-600
+    "#0891b2",  # cyan-600
+    "#e11d48",  # rose-600
+    "#d97706",  # amber-600
+]
+_COV_OUTLIER_LINE_PALETTE_DARK = [
+    "#34d399",  # emerald-400 (luminous)
+    "#22d3ee",  # cyan-400
+    "#fb7185",  # rose-400
+    "#fbbf24",  # amber-400
 ]
 _COV_MAX_DIM_GENES = 25
+# Ghost in-range traces (design: ~15–20% perceived weight via opacity × muted stroke)
+_COV_GHOST_LINE_OPACITY = 0.18
 
 
 def _cov_dim_muted_line() -> str:
@@ -38,10 +46,78 @@ def _cov_dim_muted_line() -> str:
 
 
 def _cov_band_fill_rgba() -> str:
-    """Mean ±2σ band fill behind target coverage over time."""
+    """Mean ±2σ envelope — design.md §9.5.C (slate-100 / slate-800 opacities)."""
     if _cov_ui_dark():
-        return "rgba(148,163,184,0.18)"
-    return "rgba(148,163,184,0.12)"
+        return "rgba(30,41,59,0.30)"  # #1E293B @ 30%
+    return "rgba(241,245,249,0.50)"  # #F1F5F9 @ 50%
+
+
+def _cov_target_time_split() -> str:
+    """Minimal grid for target coverage over time (does not compete with series)."""
+    if _cov_ui_dark():
+        return "rgba(148, 163, 184, 0.12)"
+    return "rgba(51, 65, 85, 0.12)"
+
+
+def _cov_anomaly_pos_color() -> str:
+    """Gain / high outlier markers: emerald-400 dark, emerald-600 light."""
+    return "#34d399" if _cov_ui_dark() else "#059669"
+
+
+def _cov_anomaly_neg_color() -> str:
+    """Loss / low outlier markers: red-400 dark, red-600 light."""
+    return "#f87171" if _cov_ui_dark() else "#dc2626"
+
+
+def _cov_outlier_line_color(idx: int) -> str:
+    """High-saturation outlier traces (emerald / cyan / rose / amber families)."""
+    pal = (
+        _COV_OUTLIER_LINE_PALETTE_DARK
+        if _cov_ui_dark()
+        else _COV_OUTLIER_LINE_PALETTE_LIGHT
+    )
+    return pal[idx % len(pal)]
+
+
+def _echart_target_cov_time_media(palette_axis: str) -> List[Dict[str, Any]]:
+    """Narrow viewports: legend under chart; wide uses right-hand legend (design.md §9.5.C)."""
+    return [
+        {
+            "query": {"maxWidth": 920},
+            "option": {
+                "legend": {
+                    "type": "scroll",
+                    "orient": "horizontal",
+                    "left": "center",
+                    "right": "auto",
+                    "top": "auto",
+                    "bottom": 4,
+                    "width": "94%",
+                    "itemGap": 8,
+                    "itemWidth": 10,
+                    "itemHeight": 10,
+                    "textStyle": {"fontSize": 10, "color": palette_axis},
+                },
+                "grid": {
+                    "left": "10%",
+                    "right": "6%",
+                    "top": "18%",
+                    "bottom": "30%",
+                    "containLabel": True,
+                },
+            },
+        },
+        {
+            "query": {"maxWidth": 480},
+            "option": {
+                "legend": {
+                    "bottom": 2,
+                    "textStyle": {"fontSize": 9, "color": palette_axis},
+                },
+                "grid": {"bottom": "34%", "left": "12%"},
+            },
+        },
+    ]
 
 
 def _cov_tooltip_option() -> Dict[str, Any]:
@@ -93,8 +169,8 @@ def _cov_on_off_colors() -> Tuple[str, str]:
 
 
 def _cov_mean_line_color() -> str:
-    """Thick dashed mean line: high contrast on plot surface."""
-    return "#f8fafc" if _cov_ui_dark() else "#1e293b"
+    """Reference mean: slate-800 (light) or slate-200 (dark); dark uses line shadow for glow."""
+    return "#e2e8f0" if _cov_ui_dark() else "#1e293b"
 
 
 def _cov_chrome_palette() -> Dict[str, str]:
@@ -139,10 +215,6 @@ def _short_chr_label(name: str) -> str:
     if t.lower().startswith("chr"):
         t = t[3:]
     return t
-
-
-def _cov_gene_line_color(idx: int) -> str:
-    return _COV_GENE_LINE_PALETTE[idx % len(_COV_GENE_LINE_PALETTE)]
 
 
 def _cov_legend_label(text: str, max_len: int = 44) -> str:
@@ -286,6 +358,10 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
         mean_c = _cov_mean_line_color()
         band_fill = _cov_band_fill_rgba()
         dim_c = _cov_dim_muted_line()
+        split_t = _cov_target_time_split()
+        ghost = _COV_GHOST_LINE_OPACITY
+        hi_mk = _cov_anomaly_pos_color()
+        lo_mk = _cov_anomaly_neg_color()
         o = ec.options
         o["textStyle"] = {"color": p["axis"]}
         o.setdefault("title", {})
@@ -294,9 +370,15 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
         o["tooltip"] = {
             "trigger": "axis",
             "axisPointer": {
-                "type": "cross",
-                "lineStyle": {"color": p["axis"], "width": 1},
-                "crossStyle": {"color": p["axis"]},
+                "type": "line",
+                "axis": "x",
+                "snap": True,
+                "lineStyle": {
+                    "color": p["axis"],
+                    "width": 1,
+                    "type": "solid",
+                    "opacity": 0.55,
+                },
             },
             "confine": True,
             "appendToBody": True,
@@ -305,16 +387,18 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
         o.setdefault("legend", {})
         o["legend"]["pageIconColor"] = p["title"]
         o["legend"]["pageTextStyle"] = {"color": p["axis"]}
-        o["legend"]["textStyle"] = {"fontSize": 11, "color": p["legend"]}
+        leg_ts = o["legend"].get("textStyle") or {}
+        leg_ts["color"] = p["legend"]
+        o["legend"]["textStyle"] = leg_ts
         o.setdefault("xAxis", {})
         o["xAxis"]["axisLabel"] = {"color": p["axis"]}
         o["xAxis"]["axisLine"] = {"lineStyle": {"color": p["axis"]}}
-        o["xAxis"]["splitLine"] = {"lineStyle": {"color": p["split"]}}
+        o["xAxis"]["splitLine"] = {"lineStyle": {"color": split_t}}
         o.setdefault("yAxis", {})
         o["yAxis"]["axisLabel"] = {"color": p["axis"]}
         o["yAxis"]["axisLine"] = {"lineStyle": {"color": p["axis"]}}
         o["yAxis"]["splitLine"] = {
-            "lineStyle": {"color": p["split"], "type": "dashed"},
+            "lineStyle": {"color": split_t, "type": "dashed"},
         }
         o["yAxis"]["nameTextStyle"] = {"color": p["axis"]}
         for s in o.get("series") or []:
@@ -326,26 +410,68 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
                 ma["itemStyle"] = ist
                 s["markArea"] = ma
             elif name == "Mean (population)":
-                s["lineStyle"] = {
-                    **(s.get("lineStyle") or {}),
+                mls = {
                     "width": 4,
                     "type": "dashed",
                     "color": mean_c,
                 }
+                if _cov_ui_dark():
+                    mls["shadowBlur"] = 6
+                    mls["shadowColor"] = "rgba(255,255,255,0.22)"
+                s["lineStyle"] = {**(s.get("lineStyle") or {}), **mls}
                 s["itemStyle"] = {**(s.get("itemStyle") or {}), "color": mean_c}
             elif "in-range" in name:
                 s["itemStyle"] = {
                     **(s.get("itemStyle") or {}),
                     "color": dim_c,
-                    "opacity": 0.42,
+                    "opacity": ghost,
                 }
                 s["lineStyle"] = {
                     **(s.get("lineStyle") or {}),
                     "width": 1.5,
                     "type": "dashed",
                     "color": dim_c,
-                    "opacity": 0.42,
+                    "opacity": ghost,
                 }
+            elif s.get("type") == "line" and name not in ("_band", "Mean (population)"):
+                # Outlier target lines: solid brand colours + luminous hint (dark)
+                lc = (s.get("lineStyle") or {}).get("color") or (
+                    (s.get("itemStyle") or {}).get("color"))
+                ols = {
+                    "width": 2,
+                    "type": "solid",
+                    "color": lc,
+                }
+                if _cov_ui_dark() and lc:
+                    ols["shadowBlur"] = 10
+                    ols["shadowColor"] = "rgba(255,255,255,0.14)"
+                s["lineStyle"] = {**(s.get("lineStyle") or {}), **ols}
+                s["itemStyle"] = {**(s.get("itemStyle") or {}), "color": lc}
+                s["emphasis"] = {
+                    **(s.get("emphasis") or {}),
+                    "focus": "series",
+                    "lineStyle": {"width": 3},
+                }
+                s["blur"] = {"lineStyle": {"opacity": 0.1}}
+                mp = s.get("markPoint") or {}
+                for pt in mp.get("data") or []:
+                    if not isinstance(pt, dict):
+                        continue
+                    rot = int(pt.get("symbolRotate") or 0)
+                    ist = dict(pt.get("itemStyle") or {})
+                    ist["color"] = hi_mk if rot == 0 else lo_mk
+                    pt["itemStyle"] = ist
+                    em = dict(pt.get("emphasis") or {})
+                    eist = dict(em.get("itemStyle") or {})
+                    eist["shadowBlur"] = 14
+                    eist["shadowColor"] = (
+                        "rgba(52, 211, 153, 0.55)"
+                        if rot == 0
+                        else "rgba(248, 113, 113, 0.55)"
+                    )
+                    em["itemStyle"] = eist
+                    pt["emphasis"] = em
+                s["markPoint"] = mp
     except Exception:
         pass
 
@@ -1739,6 +1865,467 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     pass
 
 
+def _echarts_option_to_json(obj: Any) -> Any:
+    """Convert ECharts option fragments to JSON-serializable form (numpy types, NaN)."""
+    if isinstance(obj, dict):
+        return {k: _echarts_option_to_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_echarts_option_to_json(x) for x in obj]
+    if isinstance(obj, (np.floating, np.integer)):
+        v = float(obj) if isinstance(obj, np.floating) else int(obj)
+        return None if (isinstance(obj, np.floating) and np.isnan(obj)) else v
+    if isinstance(obj, float) and np.isnan(obj):
+        return None
+    return obj
+
+
+def _compute_target_cov_series_data(
+    cov_df: pd.DataFrame, bed_df: pd.DataFrame
+) -> Dict[str, Any]:
+    """Pandas work for on/off target bar chart (no UI). Safe for asyncio.to_thread."""
+
+    def chr_key(label: str) -> int:
+        s = str(label)
+        if s.startswith("chr"):
+            s = s[3:]
+        mapping = {"X": 23, "Y": 24}
+        try:
+            return int(s)
+        except Exception:
+            return mapping.get(s, 1000)
+
+    try:
+        bed_df = bed_df.copy()
+        bed_df["length"] = (bed_df["endpos"] - bed_df["startpos"] + 1).astype(float)
+        grouped = (
+            bed_df.groupby("chrom")
+            .agg({"bases": "sum", "length": "sum"})
+            .reset_index()
+        )
+        grouped["meandepth"] = grouped["bases"] / grouped["length"]
+        pattern = r"^chr([0-9]+|X|Y)$"
+        name_col = "#rname" if "#rname" in cov_df.columns else "rname"
+        temp_df = cov_df[cov_df[name_col].astype(str).str.match(pattern)]
+        temp_df = temp_df[temp_df[name_col] != "chrM"]
+        names = sorted(temp_df[name_col].astype(str).unique(), key=chr_key)
+
+        if not names:
+            return {
+                "ok": False,
+                "error": "No valid chromosome data found for target coverage chart",
+            }
+
+        names_short = [_short_chr_label(n) for n in names]
+        grouped = grouped.set_index("chrom").reindex(names).reset_index()
+
+        temp_df_grouped = temp_df.groupby(name_col)["meandepth"].mean()
+        off_target_data = [
+            float(temp_df_grouped.get(chrom, 0.0))
+            if pd.notna(temp_df_grouped.get(chrom, 0.0))
+            else 0.0
+            for chrom in names
+        ]
+
+        on_target_data = [
+            float(v) if pd.notna(v) else 0.0
+            for v in grouped["meandepth"].fillna(0).tolist()
+        ]
+
+        return {
+            "ok": True,
+            "names_short": names_short,
+            "on_target": on_target_data,
+            "off_target": off_target_data,
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _compute_boxplot_chart_data(
+    bed_df: pd.DataFrame, panel_display_name: str
+) -> Dict[str, Any]:
+    """Pandas work for target coverage boxplot (no UI). Safe for asyncio.to_thread."""
+    try:
+        df = bed_df.copy()
+        if "coverage" not in df.columns:
+            df["length"] = (df["endpos"] - df["startpos"] + 1).astype(float)
+            df["coverage"] = df["bases"] / df["length"]
+        chrom_str = df["chrom"].astype(str).str.strip()
+        df["chrom"] = chrom_str.where(chrom_str.str.startswith("chr"), "chr" + chrom_str)
+        chroms = natsort.natsorted(df["chrom"].unique())
+        chrom_lookup = {chrom: idx for idx, chrom in enumerate(chroms)}
+        df["chrom_index"] = df["chrom"].map(chrom_lookup)
+        agg = (
+            df.groupby("chrom")
+            .agg(
+                min=("coverage", "min"),
+                Q1=("coverage", lambda x: float(np.percentile(x, 25))),
+                median=("coverage", "median"),
+                Q3=("coverage", lambda x: float(np.percentile(x, 75))),
+                max=("coverage", "max"),
+                chrom_index=("chrom_index", "first"),
+            )
+            .reset_index()
+        )
+        agg["chrom"] = pd.Categorical(agg["chrom"], categories=chroms, ordered=True)
+        agg = agg.sort_values("chrom").reset_index(drop=True)
+        result = (
+            [["chrom", "min", "Q1", "median", "Q3", "max", "chrom_index"]]
+            + agg.values.tolist()
+        )
+
+        def iqr_bounds(sub: pd.DataFrame) -> Tuple[float, float]:
+            q1 = np.percentile(sub["coverage"], 25)
+            q3 = np.percentile(sub["coverage"], 75)
+            iqr = q3 - q1
+            return q1 - 1.5 * iqr, q3 + 1.5 * iqr
+
+        out_rows: List[Any] = []
+        for c in chroms:
+            sub = df[df["chrom"].astype(str) == c]
+            lb, ub = iqr_bounds(sub)
+            out = sub[(sub["coverage"] < lb) | (sub["coverage"] > ub)]
+            out_rows += out[["chrom", "coverage", "name"]].values.tolist()
+        lb_g, ub_g = iqr_bounds(df)
+        glob = df[(df["coverage"] < lb_g) | (df["coverage"] > ub_g)]
+        glob_rows = glob[["chrom", "coverage", "name"]].values.tolist()
+
+        return {
+            "ok": True,
+            "panel_display_name": panel_display_name,
+            "result": _echarts_option_to_json(result),
+            "raw_source": _echarts_option_to_json(
+                df[["chrom", "coverage", "name"]].values.tolist()
+            ),
+            "out_rows": _echarts_option_to_json(out_rows),
+            "glob_rows": _echarts_option_to_json(glob_rows),
+            "chroms": [str(c) for c in chroms],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _compute_target_cov_table_rows(df: pd.DataFrame) -> Dict[str, Any]:
+    """Pandas work for target coverage table (no UI). Safe for asyncio.to_thread."""
+    try:
+        dfx = df.copy()
+        if "coverage" not in dfx.columns:
+            dfx["length"] = (dfx["endpos"] - dfx["startpos"] + 1).astype(float)
+            dfx["coverage"] = dfx["bases"] / dfx["length"]
+        dfx["coverage"] = dfx["coverage"].astype(float).round(2)
+
+        outlier_status: List[str] = []
+        if len(dfx) >= 3:
+            mean_cov = dfx["coverage"].mean()
+            std_cov = dfx["coverage"].std()
+            if std_cov > 0:
+                lower = mean_cov - 2.0 * std_cov
+                upper = mean_cov + 2.0 * std_cov
+                for cov in dfx["coverage"]:
+                    if cov > upper:
+                        outlier_status.append("High")
+                    elif cov < lower:
+                        outlier_status.append("Low")
+                    else:
+                        outlier_status.append("")
+            else:
+                outlier_status = [""] * len(dfx)
+        else:
+            outlier_status = [""] * len(dfx)
+
+        dfx["outlier_status"] = outlier_status
+        rows = dfx[
+            ["chrom", "startpos", "endpos", "name", "coverage", "outlier_status"]
+        ].to_dict(orient="records")
+        return {"ok": True, "rows": _echarts_option_to_json(rows)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _load_coverage_time_series_points(npy_path: Path) -> Dict[str, Any]:
+    """Load coverage-over-time numpy array (no UI). Safe for asyncio.to_thread."""
+    try:
+        arr = np.load(npy_path)
+        raw = arr.tolist()
+        return {"ok": True, "points": _echarts_option_to_json(raw)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+
+
+def _coverage_load_refresh_data(
+    sample_dir: Path, prev_meta: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Load coverage CSVs/npy and compute summary metrics. No UI calls.
+
+    Intended for ``asyncio.to_thread`` so file I/O and pandas do not block the
+    NiceGUI event loop. Callers merge ``state_updates`` and apply UI on the main
+    thread only.
+    """
+    errors: List[Dict[str, Any]] = []
+    state_updates: Dict[str, Any] = {}
+
+    is_fresh_visit = not prev_meta.get("has_last_visit", False)
+
+    cov_main = sample_dir / "coverage_main.csv"
+    bed_cov = sample_dir / "bed_coverage_main.csv"
+    target_cov = sample_dir / "target_coverage.csv"
+    cov_time = sample_dir / "coverage_time_chart.npy"
+    target_cov_time_csv = sample_dir / "target_coverage_time.csv"
+
+    cov_main_mtime = cov_main.stat().st_mtime if cov_main.exists() else 0
+    bed_cov_mtime = bed_cov.stat().st_mtime if bed_cov.exists() else 0
+    target_cov_mtime = target_cov.stat().st_mtime if target_cov.exists() else 0
+    cov_time_mtime = cov_time.stat().st_mtime if cov_time.exists() else 0
+    target_cov_time_csv_mtime = (
+        target_cov_time_csv.stat().st_mtime if target_cov_time_csv.exists() else 0
+    )
+
+    prev_cov_main_mtime = prev_meta.get("cov_main_mtime", 0)
+    prev_bed_cov_mtime = prev_meta.get("bed_cov_mtime", 0)
+    prev_target_cov_mtime = prev_meta.get("target_cov_mtime", 0)
+    prev_cov_time_mtime = prev_meta.get("cov_time_mtime", 0)
+    prev_target_cov_time_csv_mtime = prev_meta.get("target_cov_time_csv_mtime", 0)
+
+    cov_main_changed = prev_cov_main_mtime != cov_main_mtime
+    bed_cov_changed = prev_bed_cov_mtime != bed_cov_mtime
+    target_cov_changed = prev_target_cov_mtime != target_cov_mtime
+    cov_time_changed = prev_cov_time_mtime != cov_time_mtime
+    target_cov_time_csv_changed = (
+        prev_target_cov_time_csv_mtime != target_cov_time_csv_mtime
+    )
+
+    data_missing = (cov_main.exists() and not prev_meta.get("has_cov_df", False)) or (
+        bed_cov.exists() and not prev_meta.get("has_bed_df", False)
+    )
+
+    needs_update = (
+        is_fresh_visit
+        or cov_main_changed
+        or bed_cov_changed
+        or target_cov_changed
+        or cov_time_changed
+        or target_cov_time_csv_changed
+        or data_missing
+    )
+
+    mtimes = {
+        "cov_main": cov_main_mtime,
+        "bed_cov": bed_cov_mtime,
+        "target_cov": target_cov_mtime,
+        "cov_time": cov_time_mtime,
+        "target_cov_time_csv": target_cov_time_csv_mtime,
+    }
+
+    if not needs_update:
+        return {
+            "needs_update": False,
+            "is_fresh_visit": is_fresh_visit,
+            "state_updates": {},
+            "loaded_cov_df": False,
+            "loaded_bed_df": False,
+            "loaded_target_df": False,
+            "cov_time_refresh": False,
+            "cov_time_path": None,
+            "target_cov_time_analysis_refresh": False,
+            "target_df": None,
+            "mtimes": mtimes,
+            "errors": [],
+            "summary": None,
+        }
+
+    loaded_cov_df = False
+    loaded_bed_df = False
+    loaded_target_df = False
+    cov_time_refresh = False
+    target_df: Any = None
+    cov_time_path: Path | None = None
+
+    cov_df: Any = None
+    bed_df: Any = None
+
+    if cov_main.exists():
+        if is_fresh_visit or cov_main_changed or not prev_meta.get("has_cov_df", False):
+            try:
+                cov_df = pd.read_csv(cov_main)
+                if "meandepth" not in cov_df.columns and {
+                    "covbases",
+                    "endpos",
+                }.issubset(set(cov_df.columns)):
+                    cov_df = cov_df.copy()
+                    with np.errstate(divide="ignore", invalid="ignore"):
+                        cov_df["meandepth"] = (
+                            cov_df["covbases"]
+                            / cov_df["endpos"].replace(0, np.nan)
+                        ).fillna(0)
+                state_updates["cov_df"] = cov_df
+                loaded_cov_df = True
+            except Exception as e:
+                errors.append(
+                    {
+                        "message": f"Failed to read coverage_main.csv: {e}",
+                        "level": "error",
+                        "notify": True,
+                    }
+                )
+    else:
+        errors.append(
+            {
+                "message": "coverage_main.csv not found",
+                "level": "debug",
+                "notify": False,
+            }
+        )
+
+    if bed_cov.exists():
+        if is_fresh_visit or bed_cov_changed or not prev_meta.get("has_bed_df", False):
+            try:
+                bed_df = pd.read_csv(bed_cov)
+                state_updates["bed_df"] = bed_df
+                loaded_bed_df = True
+            except Exception as e:
+                errors.append(
+                    {
+                        "message": f"Failed to read bed_coverage_main.csv: {e}",
+                        "level": "error",
+                        "notify": True,
+                    }
+                )
+    else:
+        errors.append(
+            {
+                "message": "bed_coverage_main.csv not found",
+                "level": "debug",
+                "notify": False,
+            }
+        )
+
+    if target_cov.exists():
+        if is_fresh_visit or target_cov_changed:
+            try:
+                target_df = pd.read_csv(target_cov)
+                loaded_target_df = True
+            except Exception as e:
+                errors.append(
+                    {
+                        "message": f"Failed to read target_coverage.csv: {e}",
+                        "level": "error",
+                        "notify": True,
+                    }
+                )
+    else:
+        errors.append(
+            {
+                "message": "target_coverage.csv not found",
+                "level": "debug",
+                "notify": False,
+            }
+        )
+
+    if cov_time.exists():
+        if is_fresh_visit or cov_time_changed:
+            cov_time_refresh = True
+            cov_time_path = cov_time
+    else:
+        errors.append(
+            {
+                "message": "coverage_time_chart.npy not found",
+                "level": "debug",
+                "notify": False,
+            }
+        )
+
+    # Target Coverage Over Time Analysis (target_coverage_time.csv): replot from the
+    # periodic refresh when the file changes. Initial paint is handled by
+    # _plot_target_coverage_over_time() on section load; exclude is_fresh_visit here
+    # so we do not double-plot on the first _refresh_coverage_async tick.
+    target_cov_time_analysis_refresh = bool(
+        target_cov_time_csv.exists()
+        and target_cov_time_csv_changed
+        and not is_fresh_visit
+    )
+
+    summary: Dict[str, Any] | None = None
+    try:
+        global_cov = None
+        target_cov_v = None
+        enrich_v = None
+        eff_cov_df = state_updates.get("cov_df") or prev_meta.get("cov_df_ref")
+        eff_bed_df = state_updates.get("bed_df") or prev_meta.get("bed_df_ref")
+
+        if eff_cov_df is not None:
+            cdf = eff_cov_df
+            if (
+                "covbases" in cdf.columns
+                and "endpos" in cdf.columns
+                and cdf["endpos"].sum() > 0
+            ):
+                global_cov = float(cdf["covbases"].sum()) / float(cdf["endpos"].sum())
+        if eff_bed_df is not None:
+            bdf = eff_bed_df.copy()
+            if "length" not in bdf.columns:
+                bdf["length"] = (bdf["endpos"] - bdf["startpos"] + 1).astype(float)
+            if bdf["length"].sum() > 0:
+                target_cov_v = float(bdf["bases"].sum()) / float(bdf["length"].sum())
+        if (
+            global_cov is not None
+            and target_cov_v is not None
+            and global_cov > 0
+        ):
+            enrich_v = target_cov_v / global_cov
+
+        quality: Dict[str, Any] | None = None
+        if target_cov_v is not None:
+            if target_cov_v >= 30:
+                q_text, q_cls, q_bg = (
+                    "Sufficient",
+                    "text-emerald-700",
+                    "bg-emerald-100",
+                )
+            elif target_cov_v >= 15:
+                q_text, q_cls, q_bg = (
+                    "Moderate",
+                    "text-amber-700",
+                    "bg-amber-100",
+                )
+            else:
+                q_text, q_cls, q_bg = (
+                    "Low",
+                    "text-rose-700",
+                    "bg-rose-100",
+                )
+            quality = {
+                "q_text": q_text,
+                "q_cls": q_cls,
+                "q_bg": q_bg,
+                "badge_text": f"{target_cov_v:.2f}x",
+            }
+
+        summary = {
+            "global_cov": global_cov,
+            "target_cov_v": target_cov_v,
+            "enrich_v": enrich_v,
+            "quality": quality,
+        }
+    except Exception:
+        summary = None
+
+    return {
+        "needs_update": True,
+        "is_fresh_visit": is_fresh_visit,
+        "state_updates": state_updates,
+        "loaded_cov_df": loaded_cov_df,
+        "loaded_bed_df": loaded_bed_df,
+        "loaded_target_df": loaded_target_df,
+        "cov_time_refresh": cov_time_refresh,
+        "cov_time_path": cov_time_path,
+        "target_cov_time_analysis_refresh": target_cov_time_analysis_refresh,
+        "target_df": target_df,
+        "mtimes": mtimes,
+        "errors": errors,
+        "summary": summary,
+    }
+
+
 def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
     """Build the Coverage UI section and attach refresh timers.
 
@@ -1894,8 +2481,9 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         with ui.card().classes("w-full mt-4"):
             ui.label("Target Coverage Over Time Analysis").classes("text-lg font-semibold mb-2")
             ui.label(
-                "Analyze mean target coverage over time and identify significant outliers. "
-                "Outliers are detected using standard deviation method: values more than 2 SD above or below the mean for each gene."
+                "Signal-first view of target coverage over time: a population mean and ±2σ envelope, "
+                "ghosted in-range targets, and highlighted outliers. Outliers are points where a target’s "
+                "coverage is more than 2 SD from the cross-gene mean at that timestamp."
             ).classes("text-sm text-gray-600 mb-4")
             
             def _get_coverage_state():
@@ -2085,14 +2673,22 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     }
 
                     mean_c = _cov_mean_line_color()
+                    mean_ls: Dict[str, Any] = {
+                        "width": 4,
+                        "type": "dashed",
+                        "color": mean_c,
+                    }
+                    if _cov_ui_dark():
+                        mean_ls["shadowBlur"] = 6
+                        mean_ls["shadowColor"] = "rgba(255,255,255,0.22)"
                     mean_series = {
                         "name": "Mean (population)",
                         "type": "line",
-                        "smooth": True,
+                        "smooth": 0.42,
                         "data": mean_coverage_data,
                         "symbol": "none",
                         "z": 80,
-                        "lineStyle": {"width": 4, "type": "dashed", "color": mean_c},
+                        "lineStyle": mean_ls,
                         "itemStyle": {"color": mean_c},
                     }
 
@@ -2145,34 +2741,68 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     == key
                                 )
                             ]
-                            is_high = (
-                                out_sub["type"].value_counts().get("high", 0)
-                                > out_sub["type"].value_counts().get("low", 0)
-                            )
-                            gc = _cov_gene_line_color(idx)
-                            outlier_gene_series.append(
-                                {
-                                    "name": _cov_legend_label(target_label),
-                                    "type": "line",
-                                    "smooth": True,
-                                    "data": series_data,
-                                    "symbol": "none",
-                                    "z": 12,
-                                    "itemStyle": {"color": gc},
-                                    "lineStyle": {
-                                        "width": 2.5,
-                                        "type": "dashed" if not is_high else "solid",
-                                        "color": gc,
-                                    },
-                                    "label": {"show": False},
-                                    "labelLayout": {"hideOverlap": True},
-                                    "emphasis": {
-                                        "focus": "series",
-                                        "lineStyle": {"width": 4},
-                                    },
-                                    "blur": {"lineStyle": {"opacity": 0.15}},
+                            gc = _cov_outlier_line_color(idx)
+                            ols: Dict[str, Any] = {
+                                "width": 2,
+                                "type": "solid",
+                                "color": gc,
+                            }
+                            if _cov_ui_dark():
+                                ols["shadowBlur"] = 10
+                                ols["shadowColor"] = "rgba(255,255,255,0.14)"
+                            hi_c = _cov_anomaly_pos_color()
+                            lo_c = _cov_anomaly_neg_color()
+                            mp_data: List[Dict[str, Any]] = []
+                            for _, r in out_sub.iterrows():
+                                is_gain = str(r.get("type") or "") == "high"
+                                mp_data.append(
+                                    {
+                                        "coord": [
+                                            int(r["timestamp"]),
+                                            float(r["coverage"]),
+                                        ],
+                                        "symbol": "triangle",
+                                        "symbolRotate": 0 if is_gain else 180,
+                                        "symbolSize": 9,
+                                        "itemStyle": {
+                                            "color": hi_c if is_gain else lo_c,
+                                        },
+                                        "emphasis": {
+                                            "itemStyle": {
+                                                "shadowBlur": 14,
+                                                "shadowColor": (
+                                                    "rgba(52, 211, 153, 0.55)"
+                                                    if is_gain
+                                                    else "rgba(248, 113, 113, 0.55)"
+                                                ),
+                                            }
+                                        },
+                                    }
+                                )
+                            ospec: Dict[str, Any] = {
+                                "name": _cov_legend_label(target_label),
+                                "type": "line",
+                                "smooth": 0.42,
+                                "data": series_data,
+                                "symbol": "none",
+                                "z": 12,
+                                "itemStyle": {"color": gc},
+                                "lineStyle": ols,
+                                "label": {"show": False},
+                                "labelLayout": {"hideOverlap": True},
+                                "emphasis": {
+                                    "focus": "series",
+                                    "lineStyle": {"width": 3},
+                                },
+                                "blur": {"lineStyle": {"opacity": 0.1}},
+                            }
+                            if mp_data:
+                                ospec["markPoint"] = {
+                                    "symbol": "triangle",
+                                    "animation": False,
+                                    "data": mp_data,
                                 }
-                            )
+                            outlier_gene_series.append(ospec)
 
                     dim_gene_series: List[Dict[str, Any]] = []
                     for tkey, group in df.groupby("target_key", sort=False):
@@ -2200,26 +2830,26 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     f"{target_label} · in-range"
                                 ),
                                 "type": "line",
-                                "smooth": True,
+                                "smooth": 0.42,
                                 "data": series_data,
                                 "symbol": "none",
                                 "z": 4,
                                 "itemStyle": {
                                     "color": _cov_dim_muted_line(),
-                                    "opacity": 0.42,
+                                    "opacity": _COV_GHOST_LINE_OPACITY,
                                 },
                                 "lineStyle": {
                                     "width": 1.5,
                                     "type": "dashed",
                                     "color": _cov_dim_muted_line(),
-                                    "opacity": 0.42,
+                                    "opacity": _COV_GHOST_LINE_OPACITY,
                                 },
                                 "label": {"show": False},
                                 "emphasis": {
                                     "focus": "series",
-                                    "lineStyle": {"width": 3, "opacity": 1},
+                                    "lineStyle": {"width": 2.5, "opacity": 0.55},
                                 },
-                                "blur": {"lineStyle": {"opacity": 0.08}},
+                                "blur": {"lineStyle": {"opacity": 0.06}},
                             }
                         )
 
@@ -2237,14 +2867,15 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             ui.label(f"Total targets: {len(df['target_key'].unique())}").classes("text-sm")
                             ui.label(f"Outliers detected: {len(outliers_df)}").classes("text-sm")
                         
-                        # Chart
+                        # Chart (design.md §9.5.C — signal-first trend, vertical scrubber, right legend)
                         _cp_t = _cov_chrome_palette()
+                        _split_tt = _cov_target_time_split()
                         chart_config = {
                             "backgroundColor": "transparent",
                             "textStyle": {"color": _cp_t["axis"]},
                             "title": {
-                                "text": "Individual target coverage (outlier analysis)",
-                                "subtext": "Mean ±2σ band; in-range targets dimmed; outliers in colour",
+                                "text": "Target coverage over time (outlier trend)",
+                                "subtext": "Mean ±2σ envelope; ghosted in-range targets; triangle markers = anomalies",
                                 "left": "center",
                                 "top": 6,
                                 "textStyle": {
@@ -2256,30 +2887,36 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     "color": _cp_t["axis"],
                                 },
                             },
-                            # No JS formatter here — options are JSON-serialied; functions
+                            # No JS formatter here — options are JSON-serialised; functions
                             # become strings and break the tooltip (see classification charts).
                             "tooltip": {
                                 "trigger": "axis",
                                 "axisPointer": {
-                                    "type": "cross",
-                                    "lineStyle": {"color": _cp_t["axis"], "width": 1},
-                                    "crossStyle": {"color": _cp_t["axis"]},
+                                    "type": "line",
+                                    "axis": "x",
+                                    "snap": True,
+                                    "lineStyle": {
+                                        "color": _cp_t["axis"],
+                                        "width": 1,
+                                        "type": "solid",
+                                        "opacity": 0.55,
+                                    },
                                 },
                                 "confine": True,
                                 "appendToBody": True,
                                 **_cov_tooltip_option(),
                             },
                             "legendHoverLink": True,
-                            # Legend below plot (horizontal scroll) — avoids overlapping Y-axis / grid.
                             "legend": {
                                 "type": "scroll",
-                                "orient": "horizontal",
-                                "left": "center",
-                                "bottom": 2,
-                                "itemGap": 10,
+                                "orient": "vertical",
+                                "right": 6,
+                                "top": "middle",
+                                "width": 168,
+                                "height": "72%",
+                                "itemGap": 8,
                                 "itemWidth": 10,
                                 "itemHeight": 10,
-                                "width": "96%",
                                 "pageIconColor": _cp_t["title"],
                                 "pageTextStyle": {"color": _cp_t["axis"]},
                                 "textStyle": {
@@ -2289,18 +2926,19 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             },
                             "grid": {
                                 "left": "10%",
-                                "right": "6%",
-                                "top": "18%",
-                                "bottom": "32%",
+                                "right": "20%",
+                                "top": "16%",
+                                "bottom": "10%",
                                 "containLabel": True,
                             },
+                            "media": _echart_target_cov_time_media(_cp_t["axis"]),
                             "xAxis": {
                                 "type": "time",
                                 "name": "Time",
                                 "nameGap": 30,
                                 "axisLabel": {"color": _cp_t["axis"]},
                                 "axisLine": {"lineStyle": {"color": _cp_t["axis"]}},
-                                "splitLine": {"lineStyle": {"color": _cp_t["split"]}},
+                                "splitLine": {"lineStyle": {"color": _split_tt}},
                             },
                             "yAxis": {
                                 "type": "value",
@@ -2309,7 +2947,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 "axisLabel": {"color": _cp_t["axis"]},
                                 "axisLine": {"lineStyle": {"color": _cp_t["axis"]}},
                                 "splitLine": {
-                                    "lineStyle": {"color": _cp_t["split"], "type": "dashed"},
+                                    "lineStyle": {
+                                        "color": _split_tt,
+                                        "type": "dashed",
+                                    },
                                 },
                             },
                             "series": [band_series]
@@ -2340,9 +2981,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         with target_coverage_time_chart_state["container"]:
                             ui.label(f"Error: {str(e)}").classes("text-red-600")
             
-            # Auto-plot on load
+            # Immediate paint; ongoing updates when target_coverage_time.csv changes
+            # (see _coverage_load_refresh_data + _refresh_coverage_apply).
             _plot_target_coverage_over_time()
-            
+
             def _set_outlier_limit(e) -> None:
                 try:
                     outlier_limit_state["value"] = int(e.value)
@@ -2352,7 +2994,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 coverage_state["target_cov_outlier_limit"] = outlier_limit_state["value"]
                 _plot_target_coverage_over_time()
             
-            # Refresh button + outlier limit control
+            # Outlier limit (plot updates automatically when target_coverage_time.csv changes)
             with ui.row().classes("w-full mt-4 items-center gap-3"):
                 ui.label("Outliers to show").classes("text-sm text-gray-600")
                 ui.number(
@@ -2363,10 +3005,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     format="%.0f",
                     on_change=_set_outlier_limit,
                 ).props("dense").classes("w-24")
-                ui.button(
-                    "Refresh Analysis",
-                    on_click=_plot_target_coverage_over_time
-                ).classes("ml-2")
 
         with ui.column().classes("w-full target-coverage-panel").props(
             "id=analysis-detail-target-coverage"
@@ -2613,28 +3251,58 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 except Exception as e:
                     _log_notify(f"Failed to show chromosome scatter: {e}", level="error", notify=True)
             
-            def _show_target_coverage_overview() -> None:
-                """Return to the original box plot overview"""
+            async def _show_target_coverage_overview_async() -> None:
+                """Return to the original box plot overview (CSV + chart off event loop)."""
                 try:
-                    # Reload the original box plot data by calling _update_boxplot
                     bed_cov = sample_dir / "bed_coverage_main.csv"
-                    if bed_cov.exists():
-                        df = pd.read_csv(bed_cov)
-                        _update_boxplot(df, panel_display_name)
-                    else:
+                    if not bed_cov.exists():
                         ui.notify("No coverage data available", type="warning")
                         return
-                    
-                    # Hide back button
+                    df = await asyncio.to_thread(pd.read_csv, bed_cov)
+                    await _apply_boxplot_async(df, panel_display_name)
                     try:
                         target_coverage_back_button.classes("hidden")
                     except Exception:
                         target_coverage_back_button.set_visibility(False)
-                    
-                    _log_notify("Returned to target coverage overview", level="info", notify=False)
-                    
+                    _log_notify(
+                        "Returned to target coverage overview",
+                        level="info",
+                        notify=False,
+                    )
                 except Exception as e:
-                    _log_notify(f"Failed to show overview: {e}", level="error", notify=True)
+                    _log_notify(
+                        f"Failed to show overview: {e}", level="error", notify=True
+                    )
+
+            def _show_target_coverage_overview() -> None:
+                """Return to the original box plot overview"""
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    try:
+                        bed_cov = sample_dir / "bed_coverage_main.csv"
+                        if bed_cov.exists():
+                            df = pd.read_csv(bed_cov)
+                            _apply_boxplot_payload(
+                                _compute_boxplot_chart_data(df, panel_display_name)
+                            )
+                            try:
+                                target_coverage_back_button.classes("hidden")
+                            except Exception:
+                                target_coverage_back_button.set_visibility(False)
+                            _log_notify(
+                                "Returned to target coverage overview",
+                                level="info",
+                                notify=False,
+                            )
+                        else:
+                            ui.notify("No coverage data available", type="warning")
+                    except Exception as e:
+                        _log_notify(
+                            f"Failed to show overview: {e}", level="error", notify=True
+                        )
+                    return
+                asyncio.create_task(_show_target_coverage_overview_async())
             
             # Define click handler function before chart creation
             def handle_boxplot_click(params):
@@ -6181,307 +6849,238 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             # Never let logging itself break the UI
             pass
 
+    def _apply_target_cov_payload(result: Dict[str, Any]) -> None:
+        """Apply precomputed bar-series data to the chart (main thread only)."""
+        if not result.get("ok"):
+            err = result.get("error")
+            if err:
+                _log_notify(str(err), level="warning", notify=False)
+            return
+        echart_target_cov.options["xAxis"]["data"] = result["names_short"]
+        _on, _off = _cov_on_off_colors()
+        echart_target_cov.options["series"] = [
+            {
+                "type": "bar",
+                "name": "On Target",
+                "barWidth": "32%",
+                "barGap": "15%",
+                "data": result["on_target"],
+                "itemStyle": {"color": _on},
+            },
+            {
+                "type": "bar",
+                "name": "Off Target",
+                "barWidth": "32%",
+                "data": result["off_target"],
+                "itemStyle": {"color": _off},
+            },
+        ]
+        _apply_coverage_target_cov_chrome(echart_target_cov)
+        echart_target_cov.update()
+
+    async def _apply_target_cov_async(
+        cov_df: pd.DataFrame, bed_df: pd.DataFrame
+    ) -> None:
+        r = await asyncio.to_thread(
+            _compute_target_cov_series_data, cov_df.copy(), bed_df.copy()
+        )
+        _apply_target_cov_payload(r)
+
     def _update_target_cov(cov_df: pd.DataFrame, bed_df: pd.DataFrame) -> None:
         try:
-
-            def chr_key(label: str) -> int:
-                s = str(label)
-                if s.startswith("chr"):
-                    s = s[3:]
-                mapping = {"X": 23, "Y": 24}
-                try:
-                    return int(s)
-                except Exception:
-                    return mapping.get(s, 1000)
-
-            bed_df = bed_df.copy()
-            bed_df["length"] = (bed_df["endpos"] - bed_df["startpos"] + 1).astype(float)
-            grouped = (
-                bed_df.groupby("chrom")
-                .agg({"bases": "sum", "length": "sum"})
-                .reset_index()
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _apply_target_cov_payload(
+                _compute_target_cov_series_data(cov_df, bed_df)
             )
-            grouped["meandepth"] = grouped["bases"] / grouped["length"]
-            pattern = r"^chr([0-9]+|X|Y)$"
-            name_col = "#rname" if "#rname" in cov_df.columns else "rname"
-            temp_df = cov_df[cov_df[name_col].astype(str).str.match(pattern)]
-            temp_df = temp_df[temp_df[name_col] != "chrM"]
-            names = sorted(temp_df[name_col].astype(str).unique(), key=chr_key)
-            
-            if not names:
+            return
+        asyncio.create_task(_apply_target_cov_async(cov_df, bed_df))
+
+    def _apply_boxplot_payload(result: Dict[str, Any]) -> None:
+        """Apply precomputed boxplot datasets to the chart (main thread only)."""
+        if not result.get("ok"):
+            err = result.get("error")
+            if err:
+                _log_notify(str(err), level="warning", notify=False)
+            return
+        panel_display_name = result["panel_display_name"]
+        target_boxplot.options["dataset"][0]["source"] = result["result"]
+        target_boxplot.options["dataset"][1]["source"] = result["raw_source"]
+        target_boxplot.options["dataset"][2]["source"] = result["out_rows"]
+        target_boxplot.options["dataset"][3]["source"] = result["glob_rows"]
+        target_boxplot.options["xAxis"]["data"] = result["chroms"]
+        target_boxplot.options["xAxis"]["name"] = "Chromosome"
+        target_boxplot.options["xAxis"]["nameLocation"] = "middle"
+        target_boxplot.options["xAxis"]["nameGap"] = 40
+        target_boxplot.options["series"] = [
+            {
+                "id": "target_box_series",
+                "name": "box plot",
+                "type": "boxplot",
+                "itemStyle": _cov_boxplot_item_style(),
+                "datasetId": "raw",
+                "universalTransition": True,
+                "animationDurationUpdate": 1000,
+                "encode": {
+                    "x": "chrom",
+                    "y": ["min", "Q1", "median", "Q3", "max"],
+                    "itemName": ["chrom"],
+                    "tooltip": ["min", "Q1", "median", "Q3", "max"],
+                },
+            },
+            {
+                "id": "target_outliers_series",
+                "name": "outliers",
+                "type": "scatter",
+                "datasetId": "outliers",
+                "symbolSize": 6,
+                "itemStyle": _cov_scatter_outlier_style(),
+                "label": {
+                    "show": True,
+                    "position": "right",
+                    "formatter": "{@name}",
+                },
+                "encode": {
+                    "x": "chrom",
+                    "y": "coverage",
+                    "label": ["name"],
+                    "tooltip": ["name", "coverage"],
+                },
+            },
+            {
+                "id": "target_global_outliers_series",
+                "name": "global outliers",
+                "type": "scatter",
+                "datasetId": "globaloutliers",
+                "symbolSize": 6,
+                "itemStyle": _cov_scatter_outlier_style(),
+                "label": {
+                    "show": True,
+                    "position": "right",
+                    "formatter": "{@name}",
+                },
+                "encode": {
+                    "x": "chrom",
+                    "y": "coverage",
+                    "label": ["name"],
+                    "tooltip": ["name", "coverage"],
+                },
+            },
+        ]
+        target_boxplot.options["title"]["text"] = (
+            f"Target Coverage ({panel_display_name})"
+        )
+        target_boxplot.options["title"]["subtext"] = ""
+        target_boxplot.options["legend"]["show"] = True
+        _apply_coverage_boxplot_chrome(target_boxplot)
+        target_boxplot.update()
+        try:
+            options_clean = _echarts_option_to_json(target_boxplot.options)
+            options_json = json.dumps(options_clean)
+            options_escaped = json.dumps(options_json)
+            ui.run_javascript(
+                f"""
+                (function() {{
+                  var el = document.querySelector('.target-coverage-boxplot');
+                  if (!el) return;
+                  var chart = echarts.getInstanceByDom(el);
+                  if (!chart) {{
+                    var child = el.querySelector('div');
+                    if (child) chart = echarts.getInstanceByDom(child);
+                  }}
+                  if (!chart) return;
+                  try {{
+                    var options = JSON.parse({options_escaped});
+                    chart.setOption(options, {{ replaceMerge: ['series', 'dataset'] }});
+                  }} catch (e) {{ console.warn('Target coverage replaceMerge:', e); }}
+                }})();
+                """
+            )
+        except Exception as js_err:
+            logging.debug("Target coverage replaceMerge JS skip: %s", js_err)
+
+    async def _apply_boxplot_async(
+        bed_df: pd.DataFrame, panel_display_name: str = "Target Coverage"
+    ) -> None:
+        r = await asyncio.to_thread(
+            _compute_boxplot_chart_data, bed_df.copy(), panel_display_name
+        )
+        _apply_boxplot_payload(r)
+
+    def _update_boxplot(
+        bed_df: pd.DataFrame, panel_display_name: str = "Target Coverage"
+    ) -> None:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _apply_boxplot_payload(
+                _compute_boxplot_chart_data(bed_df, panel_display_name)
+            )
+            return
+        asyncio.create_task(_apply_boxplot_async(bed_df, panel_display_name))
+
+    def _apply_time_series_payload(r: Dict[str, Any]) -> None:
+        if not r.get("ok"):
+            err = r.get("error")
+            if err:
                 _log_notify(
-                    "No valid chromosome data found for target coverage chart",
+                    f"Coverage-over-time update failed: {err}",
                     level="warning",
                     notify=False,
                 )
-                return
-            
-            names_short = [_short_chr_label(n) for n in names]
-            echart_target_cov.options["xAxis"]["data"] = names_short
-            grouped = grouped.set_index("chrom").reindex(names).reset_index()
-            
-            # Get off-target data - group by chromosome and take mean if multiple entries
-            temp_df_grouped = temp_df.groupby(name_col)["meandepth"].mean()
-            off_target_data = [
-                float(temp_df_grouped.get(chrom, 0.0)) if pd.notna(temp_df_grouped.get(chrom, 0.0)) else 0.0
-                for chrom in names
-            ]
-            
-            # Get on-target data
-            on_target_data = [
-                float(v) if pd.notna(v) else 0.0 
-                for v in grouped["meandepth"].fillna(0).tolist()
-            ]
-            
-            _on, _off = _cov_on_off_colors()
-            echart_target_cov.options["series"] = [
-                {
-                    "type": "bar",
-                    "name": "On Target",
-                    "barWidth": "32%",
-                    "barGap": "15%",
-                    "data": on_target_data,
-                    "itemStyle": {"color": _on},
-                },
-                {
-                    "type": "bar",
-                    "name": "Off Target",
-                    "barWidth": "32%",
-                    "data": off_target_data,
-                    "itemStyle": {"color": _off},
-                },
-            ]
-            _apply_coverage_target_cov_chrome(echart_target_cov)
-            echart_target_cov.update()
-        except Exception as e:
-            _log_notify(
-                f"Target vs Off-target coverage update failed: {e}",
-                level="warning",
-                notify=False,
-            )
+            return
+        echart_time.options["series"][0]["data"] = r["points"]
+        _apply_coverage_time_series_chrome(echart_time)
+        echart_time.update()
 
-    def _echarts_option_to_json(obj: Any) -> Any:
-        """Convert ECharts options to JSON-serializable form (numpy types, NaN)."""
-        if isinstance(obj, dict):
-            return {k: _echarts_option_to_json(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_echarts_option_to_json(x) for x in obj]
-        if isinstance(obj, (np.floating, np.integer)):
-            v = float(obj) if isinstance(obj, np.floating) else int(obj)
-            return None if (isinstance(obj, np.floating) and np.isnan(obj)) else v
-        if isinstance(obj, float) and np.isnan(obj):
-            return None
-        return obj
-
-    def _update_boxplot(bed_df: pd.DataFrame, panel_display_name: str = "Target Coverage") -> None:
-        try:
-            df = bed_df.copy()
-            if "coverage" not in df.columns:
-                df["length"] = (df["endpos"] - df["startpos"] + 1).astype(float)
-                df["coverage"] = df["bases"] / df["length"]
-            # Normalize chrom to canonical form so "chr1" and "1" map to one category per chromosome
-            chrom_str = df["chrom"].astype(str).str.strip()
-            df["chrom"] = chrom_str.where(chrom_str.str.startswith("chr"), "chr" + chrom_str)
-            chroms = natsort.natsorted(df["chrom"].unique())
-            chrom_lookup = {chrom: idx for idx, chrom in enumerate(chroms)}
-            df["chrom_index"] = df["chrom"].map(chrom_lookup)
-            agg = (
-                df.groupby("chrom")
-                .agg(
-                    min=("coverage", "min"),
-                    Q1=("coverage", lambda x: float(np.percentile(x, 25))),
-                    median=("coverage", "median"),
-                    Q3=("coverage", lambda x: float(np.percentile(x, 75))),
-                    max=("coverage", "max"),
-                    chrom_index=("chrom_index", "first"),
-                )
-                .reset_index()
-            )
-            agg["chrom"] = pd.Categorical(agg["chrom"], categories=chroms, ordered=True)
-            agg = agg.sort_values("chrom").reset_index(drop=True)
-            result = [
-                ["chrom", "min", "Q1", "median", "Q3", "max", "chrom_index"]
-            ] + agg.values.tolist()
-
-            def iqr_bounds(sub):
-                q1 = np.percentile(sub["coverage"], 25)
-                q3 = np.percentile(sub["coverage"], 75)
-                iqr = q3 - q1
-                return q1 - 1.5 * iqr, q3 + 1.5 * iqr
-
-            out_rows = []
-            for c in chroms:
-                sub = df[df["chrom"].astype(str) == c]
-                lb, ub = iqr_bounds(sub)
-                out = sub[(sub["coverage"] < lb) | (sub["coverage"] > ub)]
-                out_rows += out[["chrom", "coverage", "name"]].values.tolist()
-            lb_g, ub_g = iqr_bounds(df)
-            glob = df[(df["coverage"] < lb_g) | (df["coverage"] > ub_g)]
-            glob_rows = glob[["chrom", "coverage", "name"]].values.tolist()
-            target_boxplot.options["dataset"][0]["source"] = result
-            target_boxplot.options["dataset"][1]["source"] = df[
-                ["chrom", "coverage", "name"]
-            ].values.tolist()
-            target_boxplot.options["dataset"][2]["source"] = out_rows
-            target_boxplot.options["dataset"][3]["source"] = glob_rows
-            target_boxplot.options["xAxis"]["data"] = chroms
-            target_boxplot.options["xAxis"]["name"] = "Chromosome"
-            target_boxplot.options["xAxis"]["nameLocation"] = "middle"
-            target_boxplot.options["xAxis"]["nameGap"] = 40
-
-            # Restore original series configuration (explicit ids so ECharts replaceMerge
-            # replaces series correctly on update, avoiding duplicate boxes per chromosome)
-            target_boxplot.options["series"] = [
-                {
-                    "id": "target_box_series",
-                    "name": "box plot",
-                    "type": "boxplot",
-                    "itemStyle": _cov_boxplot_item_style(),
-                    "datasetId": "raw",
-                    "universalTransition": True,
-                    "animationDurationUpdate": 1000,
-                    "encode": {
-                        "x": "chrom",
-                        "y": ["min", "Q1", "median", "Q3", "max"],
-                        "itemName": ["chrom"],
-                        "tooltip": ["min", "Q1", "median", "Q3", "max"],
-                    },
-                },
-                {
-                    "id": "target_outliers_series",
-                    "name": "outliers",
-                    "type": "scatter",
-                    "datasetId": "outliers",
-                    "symbolSize": 6,
-                    "itemStyle": _cov_scatter_outlier_style(),
-                    "label": {
-                        "show": True,
-                        "position": "right",
-                        "formatter": "{@name}",
-                    },
-                    "encode": {
-                        "x": "chrom",
-                        "y": "coverage",
-                        "label": ["name"],
-                        "tooltip": ["name", "coverage"],
-                    },
-                },
-                {
-                    "id": "target_global_outliers_series",
-                    "name": "global outliers",
-                    "type": "scatter",
-                    "datasetId": "globaloutliers",
-                    "symbolSize": 6,
-                    "itemStyle": _cov_scatter_outlier_style(),
-                    "label": {
-                        "show": True,
-                        "position": "right",
-                        "formatter": "{@name}",
-                    },
-                    "encode": {
-                        "x": "chrom",
-                        "y": "coverage",
-                        "label": ["name"],
-                        "tooltip": ["name", "coverage"],
-                    },
-                },
-            ]
-            
-            # Restore original title and legend
-            target_boxplot.options["title"]["text"] = f"Target Coverage ({panel_display_name})"
-            target_boxplot.options["title"]["subtext"] = ""
-            target_boxplot.options["legend"]["show"] = True
-            _apply_coverage_boxplot_chrome(target_boxplot)
-            
-            target_boxplot.update()
-
-            # Force ECharts to replace series/dataset instead of merging, so we don't get
-            # duplicate boxes per chromosome on first load (merge can append series).
-            try:
-                options_clean = _echarts_option_to_json(target_boxplot.options)
-                options_json = json.dumps(options_clean)
-                options_escaped = json.dumps(options_json)
-                ui.run_javascript(
-                    f"""
-                    (function() {{
-                      var el = document.querySelector('.target-coverage-boxplot');
-                      if (!el) return;
-                      var chart = echarts.getInstanceByDom(el);
-                      if (!chart) {{
-                        var child = el.querySelector('div');
-                        if (child) chart = echarts.getInstanceByDom(child);
-                      }}
-                      if (!chart) return;
-                      try {{
-                        var options = JSON.parse({options_escaped});
-                        chart.setOption(options, {{ replaceMerge: ['series', 'dataset'] }});
-                      }} catch (e) {{ console.warn('Target coverage replaceMerge:', e); }}
-                    }})();
-                    """
-                )
-            except Exception as js_err:
-                logging.debug("Target coverage replaceMerge JS skip: %s", js_err)
-        except Exception as e:
-            _log_notify(
-                f"Target boxplot update failed: {e}", level="warning", notify=False
-            )
+    async def _apply_time_series_async(npy_path: Path) -> None:
+        r = await asyncio.to_thread(_load_coverage_time_series_points, npy_path)
+        _apply_time_series_payload(r)
 
     def _update_time(npy_path: Path) -> None:
         try:
-            arr = np.load(npy_path)
-            raw = arr.tolist()
-            # Ensure [[ts_ms, cov], ...] for time axis
-            echart_time.options["series"][0]["data"] = raw
-            _apply_coverage_time_series_chrome(echart_time)
-            echart_time.update()
-        except Exception as e:
-            _log_notify(
-                f"Coverage-over-time update failed: {e}", level="warning", notify=False
-            )
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _apply_time_series_payload(_load_coverage_time_series_points(npy_path))
+            return
+        asyncio.create_task(_apply_time_series_async(npy_path))
+
+    async def _apply_target_table_async(df: pd.DataFrame) -> None:
+        r = await asyncio.to_thread(_compute_target_cov_table_rows, df.copy())
+        if not r.get("ok"):
+            err = r.get("error")
+            if err:
+                _log_notify(
+                    f"Target table update failed: {err}",
+                    level="warning",
+                    notify=False,
+                )
+            return
+        target_cov_table.rows = r["rows"]
+        target_cov_table.update()
 
     def _update_target_table(df: pd.DataFrame) -> None:
         try:
-            dfx = df.copy()
-            if "coverage" not in dfx.columns:
-                dfx["length"] = (dfx["endpos"] - dfx["startpos"] + 1).astype(float)
-                dfx["coverage"] = dfx["bases"] / dfx["length"]
-            dfx["coverage"] = dfx["coverage"].astype(float).round(2)
-
-            # Compute outlier status using 2 SD method (matches Target Coverage Over Time plot)
-            outlier_status = []
-            if len(dfx) >= 3:
-                mean_cov = dfx["coverage"].mean()
-                std_cov = dfx["coverage"].std()
-                if std_cov > 0:
-                    lower = mean_cov - 2.0 * std_cov
-                    upper = mean_cov + 2.0 * std_cov
-                    for cov in dfx["coverage"]:
-                        if cov > upper:
-                            outlier_status.append("High")
-                        elif cov < lower:
-                            outlier_status.append("Low")
-                        else:
-                            outlier_status.append("")
-                else:
-                    outlier_status = [""] * len(dfx)
-            else:
-                outlier_status = [""] * len(dfx)
-
-            dfx["outlier_status"] = outlier_status
-            rows = dfx[
-                ["chrom", "startpos", "endpos", "name", "coverage", "outlier_status"]
-            ].to_dict(orient="records")
-            target_cov_table.rows = rows
+            asyncio.get_running_loop()
+        except RuntimeError:
+            r = _compute_target_cov_table_rows(df)
+            if not r.get("ok"):
+                err = r.get("error")
+                if err:
+                    _log_notify(
+                        f"Target table update failed: {err}",
+                        level="warning",
+                        notify=False,
+                    )
+                return
+            target_cov_table.rows = r["rows"]
             target_cov_table.update()
-        except Exception as e:
-            _log_notify(
-                f"Target table update failed: {e}", level="warning", notify=False
-            )
+            return
+        asyncio.create_task(_apply_target_table_async(df))
 
     async def _refresh_coverage_async() -> None:
-        """Refresh coverage data asynchronously."""
+        """Refresh coverage: load CSV/npy off the event loop, then update UI on the main thread."""
         try:
-            # Check directory existence
             if not sample_dir or not sample_dir.exists():
                 _log_notify(
                     f"Sample directory not found: {sample_dir}",
@@ -6489,221 +7088,88 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     notify=True,
                 )
                 return
-            
-            # Run coverage refresh synchronously (already in background)
-            _refresh_coverage_sync(sample_dir, launcher)
-                
+
+            key = str(sample_dir)
+            prev = launcher._coverage_state.get(key, {})
+            prev_meta = {
+                "has_last_visit": "last_visit_time" in prev,
+                "cov_main_mtime": prev.get("cov_main_mtime", 0),
+                "bed_cov_mtime": prev.get("bed_cov_mtime", 0),
+                "target_cov_mtime": prev.get("target_cov_mtime", 0),
+                "cov_time_mtime": prev.get("cov_time_mtime", 0),
+                "target_cov_time_csv_mtime": prev.get("target_cov_time_csv_mtime", 0),
+                "has_cov_df": "cov_df" in prev,
+                "has_bed_df": "bed_df" in prev,
+                "cov_df_ref": prev.get("cov_df"),
+                "bed_df_ref": prev.get("bed_df"),
+            }
+            load_result = await asyncio.to_thread(
+                _coverage_load_refresh_data, sample_dir, prev_meta
+            )
+            await _refresh_coverage_apply(load_result)
         except Exception as e:
             _log_notify(
                 f"Unexpected coverage refresh error: {e}", level="error", notify=True
             )
 
-    def _refresh_coverage_sync(sample_dir: Path, launcher: Any) -> None:
-        """Synchronous coverage refresh - runs in background thread."""
+    async def _refresh_coverage_apply(load_result: Dict[str, Any]) -> None:
+        """Merge loaded data into state and update UI (NiceGUI / event-loop thread only)."""
         try:
             key = str(sample_dir)
             state = launcher._coverage_state.get(key, {})
-            
-            # Check if this is a fresh page visit (no last_visit_time means new page)
-            # Force updates on fresh page visits regardless of mtime
-            is_fresh_visit = "last_visit_time" not in state
-            if is_fresh_visit:
+
+            if load_result.get("is_fresh_visit"):
                 state["last_visit_time"] = time.time()
-            
-            cov_main = sample_dir / "coverage_main.csv"
-            bed_cov = sample_dir / "bed_coverage_main.csv"
-            target_cov = sample_dir / "target_coverage.csv"
-            cov_time = sample_dir / "coverage_time_chart.npy"
-            
-            # Check modification times for all files
-            cov_main_mtime = cov_main.stat().st_mtime if cov_main.exists() else 0
-            bed_cov_mtime = bed_cov.stat().st_mtime if bed_cov.exists() else 0
-            target_cov_mtime = target_cov.stat().st_mtime if target_cov.exists() else 0
-            cov_time_mtime = cov_time.stat().st_mtime if cov_time.exists() else 0
-            
-            # Get previous state values (use sentinel values if not present)
-            prev_cov_main_mtime = state.get("cov_main_mtime", 0)
-            prev_bed_cov_mtime = state.get("bed_cov_mtime", 0)
-            prev_target_cov_mtime = state.get("target_cov_mtime", 0)
-            prev_cov_time_mtime = state.get("cov_time_mtime", 0)
-            
-            # Check if any file has changed
-            cov_main_changed = prev_cov_main_mtime != cov_main_mtime
-            bed_cov_changed = prev_bed_cov_mtime != bed_cov_mtime
-            target_cov_changed = prev_target_cov_mtime != target_cov_mtime
-            cov_time_changed = prev_cov_time_mtime != cov_time_mtime
-            
-            # Also check if data is missing from state (needs initial load)
-            data_missing = (
-                (cov_main.exists() and "cov_df" not in state) or
-                (bed_cov.exists() and "bed_df" not in state)
-            )
-            
-            # Determine if any update is needed
-            needs_update = (
-                is_fresh_visit
-                or cov_main_changed
-                or bed_cov_changed
-                or target_cov_changed
-                or cov_time_changed
-                or data_missing
-            )
-            
-            # Early exit if nothing has changed (except for periodic checks that run less frequently)
+
+            for err in load_result.get("errors", []):
+                _log_notify(
+                    err["message"],
+                    level=err.get("level", "warning"),
+                    notify=err.get("notify", False),
+                )
+
+            needs_update = load_result.get("needs_update", False)
             if not needs_update:
-                # Still check for SNP/LGA/IGV status updates (these have their own throttling)
-                # But skip all file reading and UI updates
-                logging.debug(f"[Coverage] ⏭ Skipping coverage update - no file changes detected")
-                # Continue to SNP/LGA/IGV checks below (they have their own throttling)
-                # But we'll skip the file processing section
+                logging.debug(
+                    "[Coverage] ⏭ Skipping coverage update - no file changes detected"
+                )
             else:
-                # Log what changed
-                reasons = []
-                if is_fresh_visit:
-                    reasons.append("fresh_visit")
-                if cov_main_changed:
-                    reasons.append("coverage_main.csv")
-                if bed_cov_changed:
-                    reasons.append("bed_coverage_main.csv")
-                if target_cov_changed:
-                    reasons.append("target_coverage.csv")
-                if cov_time_changed:
-                    reasons.append("coverage_time_chart.npy")
-                if data_missing:
-                    reasons.append("data_missing")
-                logging.debug(f"[Coverage] Update needed. Reasons: {', '.join(reasons)}")
-            # Only process files if update is needed
-            if needs_update:
-                if cov_main.exists():
-                    m = cov_main_mtime
-                    # Force update on fresh page visit or if mtime changed or data not in state
-                    if is_fresh_visit or cov_main_changed or "cov_df" not in state:
-                        try:
-                            cov_df = pd.read_csv(cov_main)
-                            # Backfill meandepth if missing
-                            if "meandepth" not in cov_df.columns and {
-                                "covbases",
-                                "endpos",
-                            }.issubset(set(cov_df.columns)):
-                                cov_df = cov_df.copy()
-                                with np.errstate(divide="ignore", invalid="ignore"):
-                                    cov_df["meandepth"] = (
-                                        cov_df["covbases"]
-                                        / cov_df["endpos"].replace(0, np.nan)
-                                    ).fillna(0)
-                            state["cov_df"] = cov_df
-                            state["cov_main_mtime"] = m  # only set on success
-                        except Exception as e:
-                            _log_notify(
-                                f"Failed to read coverage_main.csv: {e}",
-                                level="error",
-                                notify=True,
-                            )
-                else:
-                    _log_notify("coverage_main.csv not found", level="debug", notify=False)
-                if bed_cov.exists():
-                    m = bed_cov_mtime
-                    # Force update on fresh page visit or if mtime changed or data not in state
-                    if is_fresh_visit or bed_cov_changed or "bed_df" not in state:
-                        try:
-                            bed_df = pd.read_csv(bed_cov)
-                            state["bed_df"] = bed_df
-                            panel_display_name = state.get("panel_display_name", "Target Coverage")
-                            _update_boxplot(bed_df, panel_display_name)
-                            if state.get("cov_df") is not None:
-                                _update_target_cov(state["cov_df"], bed_df)
-                            state["bed_cov_mtime"] = m  # only set on success
-                        except Exception as e:
-                            _log_notify(
-                                f"Failed to read bed_coverage_main.csv: {e}",
-                                level="error",
-                                notify=True,
-                            )
-                else:
-                    _log_notify(
-                        "bed_coverage_main.csv not found", level="debug", notify=False
-                    )
-                if target_cov.exists():
-                    m = target_cov_mtime
-                    # Force update on fresh page visit or if mtime changed
-                    if is_fresh_visit or target_cov_changed:
-                        try:
-                            tdf = pd.read_csv(target_cov)
-                            _update_target_table(tdf)
-                            state["target_cov_mtime"] = m  # only set on success
-                        except Exception as e:
-                            _log_notify(
-                                f"Failed to read target_coverage.csv: {e}",
-                                level="error",
-                                notify=True,
-                            )
-                else:
-                    _log_notify(
-                        "target_coverage.csv not found", level="debug", notify=False
-                    )
-                if cov_time.exists():
-                    m = cov_time_mtime
-                    # Force update on fresh page visit or if mtime changed
-                    if is_fresh_visit or cov_time_changed:
-                        try:
-                            _update_time(cov_time)
-                            state["cov_time_mtime"] = m
-                        except Exception as e:
-                            _log_notify(
-                                f"Failed to load coverage_time_chart.npy: {e}",
-                                level="warning",
-                                notify=False,
-                            )
-                # Summary - only recalculate if data changed
-                try:
-                    global_cov = None
-                    target_cov_v = None
-                    enrich_v = None
+                logging.debug("[Coverage] Update needed (data loaded off event loop).")
+                state.update(load_result.get("state_updates", {}))
+
+                loaded_bed_df = load_result.get("loaded_bed_df", False)
+                panel_display_name = state.get("panel_display_name", "Target Coverage")
+
+                if loaded_bed_df and state.get("bed_df") is not None:
+                    await _apply_boxplot_async(state["bed_df"], panel_display_name)
                     if state.get("cov_df") is not None:
-                        cdf = state["cov_df"]
-                        if (
-                            "covbases" in cdf.columns
-                            and "endpos" in cdf.columns
-                            and cdf["endpos"].sum() > 0
-                        ):
-                            global_cov = float(cdf["covbases"].sum()) / float(
-                                cdf["endpos"].sum()
-                            )
-                    if state.get("bed_df") is not None:
-                        bdf = state["bed_df"].copy()
-                        if "length" not in bdf.columns:
-                            bdf["length"] = (bdf["endpos"] - bdf["startpos"] + 1).astype(
-                                float
-                            )
-                        if bdf["length"].sum() > 0:
-                            target_cov_v = float(bdf["bases"].sum()) / float(
-                                bdf["length"].sum()
-                            )
-                    if (
-                        global_cov is not None
-                        and target_cov_v is not None
-                        and global_cov > 0
-                    ):
-                        enrich_v = target_cov_v / global_cov
-                    if target_cov_v is not None:
-                        if target_cov_v >= 30:
-                            q_text, q_cls, q_bg = (
-                                "Sufficient",
-                                "text-emerald-700",
-                                "bg-emerald-100",
-                            )
-                        elif target_cov_v >= 15:
-                            q_text, q_cls, q_bg = (
-                                "Moderate",
-                                "text-amber-700",
-                                "bg-amber-100",
-                            )
-                        else:
-                            q_text, q_cls, q_bg = (
-                                "Low",
-                                "text-rose-700",
-                                "bg-rose-100",
-                            )
+                        await _apply_target_cov_async(
+                            state["cov_df"], state["bed_df"]
+                        )
+
+                if load_result.get("loaded_target_df") and load_result.get(
+                    "target_df"
+                ) is not None:
+                    await _apply_target_table_async(load_result["target_df"])
+
+                if load_result.get("cov_time_refresh") and load_result.get(
+                    "cov_time_path"
+                ) is not None:
+                    await _apply_time_series_async(load_result["cov_time_path"])
+
+                if load_result.get("target_cov_time_analysis_refresh"):
+                    _plot_target_coverage_over_time()
+
+                summary = load_result.get("summary") or {}
+                try:
+                    global_cov = summary.get("global_cov")
+                    target_cov_v = summary.get("target_cov_v")
+                    enrich_v = summary.get("enrich_v")
+                    quality = summary.get("quality")
+                    if quality and target_cov_v is not None:
+                        q_text = quality["q_text"]
+                        q_cls = quality["q_cls"]
+                        q_bg = quality["q_bg"]
                         cov_quality_label.set_text(f"Quality: {q_text}")
                         try:
                             cov_quality_label.classes(
@@ -6714,7 +7180,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             )
                         except Exception:
                             pass
-                        cov_quality_badge.set_text(f"{target_cov_v:.2f}x")
+                        cov_quality_badge.set_text(quality["badge_text"])
                     if global_cov is not None:
                         cov_global_lbl.set_text(
                             f"Global Estimated Coverage: {global_cov:.2f}x"
@@ -6731,14 +7197,15 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         level="warning",
                         notify=False,
                     )
-            # Update state with current modification times
-            if needs_update:
-                state["cov_main_mtime"] = cov_main_mtime
-                state["bed_cov_mtime"] = bed_cov_mtime
-                state["target_cov_mtime"] = target_cov_mtime
-                state["cov_time_mtime"] = cov_time_mtime
+
+                mt = load_result.get("mtimes", {})
+                state["cov_main_mtime"] = mt.get("cov_main", 0)
+                state["bed_cov_mtime"] = mt.get("bed_cov", 0)
+                state["target_cov_mtime"] = mt.get("target_cov", 0)
+                state["cov_time_mtime"] = mt.get("cov_time", 0)
+                state["target_cov_time_csv_mtime"] = mt.get("target_cov_time_csv", 0)
                 state["last_visit_time"] = state.get("last_visit_time", time.time())
-            
+
             launcher._coverage_state[key] = state
 
             # SNP Analysis results check - only update if necessary

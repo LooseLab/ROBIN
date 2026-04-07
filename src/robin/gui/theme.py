@@ -47,6 +47,7 @@ import subprocess
 import importlib.metadata
 import weakref
 import time
+import json
 from typing import Callable, Optional, Any, Dict, List
 
 
@@ -977,10 +978,63 @@ def frame(navtitle: str, batphone=False, smalltitle=None, center: str = None, se
                             'color="primary"'
                         ).bind_value(app.storage.general, "use_on_air")
                         ui.separator()
+
+                        def _dark_mode_initial() -> bool:
+                            """Prefer session (browser) storage so initial value matches first paint."""
+                            try:
+                                if "dark_mode" in app.storage.browser:
+                                    return bool(app.storage.browser["dark_mode"])
+                                u = app.storage.user.get("dark_mode")
+                                if u is not None:
+                                    return bool(u)
+                            except Exception:
+                                pass
+                            return False
+
+                        # Drive Quasar from ui.dark_mode; persist via POST (session cookie) like nicegui.io —
+                        # browser storage is available on the initial request; user storage stays in sync for plots.
+                        dark_mode_el = ui.dark_mode(value=_dark_mode_initial())
+
+                        def _persist_dark_mode(
+                            e: events.ValueChangeEventArguments,
+                        ) -> None:
+                            val = bool(e.value)
+                            try:
+                                app.storage.user["dark_mode"] = val
+                            except Exception:
+                                pass
+                            # Session must be updated via a new request (see NiceGUI app.storage.browser docs).
+                            body = json.dumps({"value": val})
+                            ui.run_javascript(
+                                f"""
+                                fetch('/robin_dark_mode', {{
+                                    method: 'POST',
+                                    headers: {{'Content-Type': 'application/json'}},
+                                    body: {json.dumps(body)},
+                                }});
+                                """
+                            )
+
+                        def _sync_dark_mode_from_storage() -> None:
+                            try:
+                                if "dark_mode" in app.storage.browser:
+                                    want = bool(app.storage.browser["dark_mode"])
+                                else:
+                                    want = bool(app.storage.user.get("dark_mode"))
+                                if bool(dark_mode_el.value) != want:
+                                    dark_mode_el.set_value(want)
+                            except Exception:
+                                pass
+
+                        dark_mode_el.on_value_change(_persist_dark_mode)
+                        try:
+                            ui.context.client.on_connect(_sync_dark_mode_from_storage)
+                        except Exception:
+                            pass
+
                         ui.switch("Dark Mode").classes("ml-4 bg-transparent").props(
                             'color="primary"'
-                        ).bind_value(app.storage.user, "dark_mode")
-                        ui.dark_mode().bind_value(app.storage.user, "dark_mode")
+                        ).bind_value(dark_mode_el)
                         ui.separator()
                         ui.menu_item("Close", menu.close).classes(
                             "text-body-medium"

@@ -7,6 +7,16 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-04-07
+
+### Changed
+- **NiceGUI responsiveness:** Periodic and initial refresh paths for **Coverage**, **Fusion**, **Classification**, **MGMT**, **MNP-Flex**, and **CNV** now use **async** handlers and offload blocking disk I/O and parsing (for example CSV reads and heavy loads) with **`asyncio.to_thread`**, so the UI event loop stays responsive during updates (aligned with NiceGUI guidance to avoid blocking the main thread).
+- **GUI launcher:** Replaced noisy debug **`print`** calls with **`logging.debug`** for quieter operation.
+- **Coverage (Target Coverage Over Time):** **`target_coverage_time.csv`** changes are picked up during the same periodic coverage refresh flow (file mtime tracked). Removed the redundant **“Refresh Analysis”** control; **“Outliers to show”** remains for adjusting the chart.
+
+### Notes
+- Model asset downloads in **`assets.json`** remain pinned to the **`v0.5`** GitHub release artifacts (unchanged hashes and URLs); this patch is application-only.
+
 ## [0.5] - 2026-04-04
 
 ### Changed

@@ -412,7 +412,8 @@ class GUILauncher:
         self.reload = reload
         self.center = None  # Center ID for the analysis
         self._auth_middleware_registered = False
-        self._unrestricted_page_routes = {"/login"}
+        # /robin_dark_mode: session cookie for theme (must work on /login before auth).
+        self._unrestricted_page_routes = {"/login", "/robin_dark_mode"}
         self._password_hash: Optional[str] = None  # cached after first read
 
         # Sample status transition timeout (in seconds)
@@ -1842,6 +1843,19 @@ class GUILauncher:
             threading.current_thread().name = "robin-GUI-Thread"
             self._register_auth_middleware()
 
+            # Session cookie dark_mode (nicegui.io pattern): available on first HTML response so theme matches paint.
+            if app is not None:
+
+                @app.post("/robin_dark_mode")
+                async def _robin_dark_mode(request: Request):
+                    data = await request.json()
+                    v = data.get("value")
+                    app.storage.browser["dark_mode"] = bool(v)
+                    try:
+                        app.storage.user["dark_mode"] = bool(v)
+                    except Exception:
+                        pass
+
             @ui.page("/login")
             def login_page(redirect_to: str = "/"):
                 """Authenticate user session before allowing access."""
@@ -2697,16 +2711,16 @@ class GUILauncher:
                     # Handle finalize-target action
                     def _on_finalize_target(event):
                         try:
-                            print(f"[DEBUG finalize] event={event!r}", flush=True)
+                            logging.debug("finalize-target event: %r", event)
                             sample_id = getattr(event, "args", None) if hasattr(event, "args") else None
-                            print(f"[DEBUG finalize] extracted sample_id={sample_id!r}", flush=True)
+                            logging.debug("finalize-target sample_id=%r", sample_id)
                             if isinstance(sample_id, str):
                                 # Keep this UI callback non-blocking.
                                 # All heavyweight checks/submissions run in background logic.
                                 self._trigger_target_bam_finalization(sample_id, trigger_snp=True)
-                                print(
-                                    f"[DEBUG finalize] called _trigger_target_bam_finalization(sample_id={sample_id}, trigger_snp=True)",
-                                    flush=True,
+                                logging.debug(
+                                    "finalize-target queued: sample_id=%s trigger_snp=True",
+                                    sample_id,
                                 )
                                 ui.notify(
                                     f"Triggered run finalization for {sample_id}. "
@@ -6939,26 +6953,25 @@ class GUILauncher:
     def _resolve_submission_result(self, maybe_result: Any, operation: str) -> bool:
         """Normalize workflow submission return (sync bool or async coroutine)."""
         try:
-            print(
-                f"[DEBUG submit] operation={operation} type={type(maybe_result).__name__}",
-                flush=True,
+            logging.debug(
+                "workflow submit: %s return_type=%s",
+                operation,
+                type(maybe_result).__name__,
             )
             if asyncio.iscoroutine(maybe_result):
-                print(
-                    f"[DEBUG submit] operation={operation} detected coroutine; running asyncio.run",
-                    flush=True,
+                logging.debug(
+                    "workflow submit: %s running asyncio.run on coroutine", operation
                 )
                 result = bool(asyncio.run(maybe_result))
-                print(
-                    f"[DEBUG submit] operation={operation} coroutine result={result}",
-                    flush=True,
+                logging.debug(
+                    "workflow submit: %s coroutine result=%s", operation, result
                 )
                 return result
             result = bool(maybe_result)
-            print(f"[DEBUG submit] operation={operation} sync result={result}", flush=True)
+            logging.debug("workflow submit: %s sync result=%s", operation, result)
             return result
         except Exception as e:
-            print(f"[DEBUG submit] operation={operation} exception={e}", flush=True)
+            logging.debug("workflow submit: %s exception: %s", operation, e)
             logging.error(f"{operation} failed: {e}", exc_info=True)
             return False
 
@@ -7336,9 +7349,8 @@ class GUILauncher:
 
     def _trigger_target_bam_finalization(self, sample_id: str, *, trigger_snp: bool = False) -> None:
         """Trigger target.bam finalization for a sample. Optionally start SNP analysis afterwards."""
-        print(
-            f"[DEBUG finalize] _trigger_target_bam_finalization start sample_id={sample_id} trigger_snp={trigger_snp}",
-            flush=True,
+        logging.debug(
+            "target_bam_finalize: start sample_id=%s trigger_snp=%s", sample_id, trigger_snp
         )
         self._set_pipeline_status(
             sample_id,
@@ -7347,7 +7359,7 @@ class GUILauncher:
             detail="Preparing finalization job",
         )
         if not self.monitored_directory:
-            print("[DEBUG finalize] monitored_directory missing, return", flush=True)
+            logging.debug("target_bam_finalize: no monitored_directory")
             self._set_pipeline_status(
                 sample_id,
                 phase="Finalize failed",
@@ -7359,7 +7371,9 @@ class GUILauncher:
 
         if self._is_target_bam_finalize_redundant(sample_id):
             self._finalized_samples.add(sample_id)
-            print(f"[DEBUG finalize] redundant finalize for sample_id={sample_id}, return", flush=True)
+            logging.debug(
+                "target_bam_finalize: redundant (target.bam already) sample_id=%s", sample_id
+            )
             self._set_pipeline_status(
                 sample_id,
                 phase="Finalize already complete",
@@ -7372,11 +7386,11 @@ class GUILauncher:
             )
             if not trigger_snp:
                 return
-            print(
-                f"[DEBUG finalize] redundant finalize but trigger_snp=True; continuing to SNP path for sample_id={sample_id}",
-                flush=True,
+            logging.debug(
+                "target_bam_finalize: redundant but trigger_snp=True, SNP path sample_id=%s",
+                sample_id,
             )
-        
+
         try:
             from robin.analysis.target_analysis import finalize_accumulation_for_sample
             import csv
@@ -7386,11 +7400,12 @@ class GUILauncher:
             master_csv = sample_dir / "master.csv"
             target_panel = "rCNS2"  # Default
             reference_path_for_finalize = self._locate_reference_for_sample(sample_dir)
-            print(
-                f"[DEBUG finalize] resolved reference for finalize sample_id={sample_id}: {reference_path_for_finalize}",
-                flush=True,
+            logging.debug(
+                "target_bam_finalize: reference sample_id=%s path=%s",
+                sample_id,
+                reference_path_for_finalize,
             )
-            
+
             if master_csv.exists():
                 try:
                     with master_csv.open("r", newline="") as fh:
@@ -7409,9 +7424,12 @@ class GUILauncher:
             import threading
             def finalize_in_background():
                 try:
-                    print(
-                        f"[DEBUG finalize] background thread entered sample_id={sample_id} trigger_snp={trigger_snp} already_finalized={already_finalized}",
-                        flush=True,
+                    logging.debug(
+                        "target_bam_finalize: worker start sample_id=%s trigger_snp=%s "
+                        "already_finalized=%s",
+                        sample_id,
+                        trigger_snp,
+                        already_finalized,
                     )
                     self._set_pipeline_status(
                         sample_id,
@@ -7422,10 +7440,11 @@ class GUILauncher:
                     finalization_succeeded = True
 
                     if already_finalized:
-                        print(f"[DEBUG finalize] sample already finalized: {sample_id}", flush=True)
                         logging.info(f"Sample {sample_id} already finalized; skipping target.bam merge")
                     else:
-                        print(f"[DEBUG finalize] processing finalization path sample_id={sample_id}", flush=True)
+                        logging.debug(
+                            "target_bam_finalize: merge path sample_id=%s", sample_id
+                        )
                         logging.info(
                             f"Triggering target.bam finalization for sample {sample_id} (status: Complete)"
                         )
@@ -7433,9 +7452,10 @@ class GUILauncher:
                         if workflow_runner and hasattr(
                             workflow_runner, "submit_target_bam_finalize_job"
                         ):
-                            print(
-                                f"[DEBUG finalize] attempting submit_target_bam_finalize_job sample_id={sample_id}",
-                                flush=True,
+                            logging.debug(
+                                "target_bam_finalize: submit_target_bam_finalize_job "
+                                "sample_id=%s",
+                                sample_id,
                             )
                             submitted = self._resolve_submission_result(
                                 workflow_runner.submit_target_bam_finalize_job(
@@ -7446,9 +7466,9 @@ class GUILauncher:
                                 ),
                                 operation=f"Target BAM finalize submission for {sample_id}",
                             )
-                            print(
-                                f"[DEBUG finalize] submit_target_bam_finalize_job returned {submitted!r} type={type(submitted).__name__}",
-                                flush=True,
+                            logging.debug(
+                                "target_bam_finalize: submit finalize returned %s",
+                                submitted,
                             )
                             if submitted:
                                 self._set_pipeline_status(
@@ -7476,9 +7496,11 @@ class GUILauncher:
                                     ready = self._wait_for_target_bam_or_timeout(
                                         sample_id, poll_s=2.0, max_wait_s=3600.0
                                     )
-                                    print(
-                                        f"[DEBUG finalize] wait_for_target_bam sample_id={sample_id} ready={ready}",
-                                        flush=True,
+                                    logging.debug(
+                                        "target_bam_finalize: wait target.bam sample_id=%s "
+                                        "ready=%s",
+                                        sample_id,
+                                        ready,
                                     )
                                     if not ready:
                                         finalization_succeeded = False
@@ -7504,13 +7526,19 @@ class GUILauncher:
                                     f"Target BAM finalization job submission failed for {sample_id}; running inline"
                                 )
                         if finalization_succeeded:
-                            print(f"[DEBUG finalize] running finalize_accumulation_for_sample sample_id={sample_id}", flush=True)
+                            logging.debug(
+                                "target_bam_finalize: finalize_accumulation_for_sample "
+                                "sample_id=%s",
+                                sample_id,
+                            )
                             result = finalize_accumulation_for_sample(
                                 sample_id=sample_id,
                                 work_dir=str(self.monitored_directory),
                                 target_panel=target_panel,
                             )
-                            print(f"[DEBUG finalize] finalize_accumulation result={result!r}", flush=True)
+                            logging.debug(
+                                "target_bam_finalize: accumulation result=%s", result
+                            )
                             if result.get("status") != "error":
                                 self._finalized_samples.add(sample_id)
                                 self._set_pipeline_status(
@@ -7542,7 +7570,10 @@ class GUILauncher:
                             progress=0.7,
                             detail="Checking prerequisites",
                         )
-                        print(f"[DEBUG finalize] entering SNP submission path sample_id={sample_id}", flush=True)
+                        logging.debug(
+                            "target_bam_finalize: SNP submission path sample_id=%s",
+                            sample_id,
+                        )
                         # Ensure only one SNP analysis submission runs at a time
                         with self._snp_analysis_lock:
                             running_sample = self._snp_analysis_running_sample
@@ -7568,12 +7599,17 @@ class GUILauncher:
                                 return
 
                             self._snp_analysis_running_sample = sample_id
-                            print(f"[DEBUG finalize] snp lock set for sample_id={sample_id}", flush=True)
+                            logging.debug(
+                                "target_bam_finalize: snp lock set sample_id=%s", sample_id
+                            )
 
                         try:
                             reference_path = self._locate_reference_for_sample(sample_dir)
                             if not reference_path:
-                                print(f"[DEBUG finalize] no reference for sample_id={sample_id}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: no reference sample_id=%s",
+                                    sample_id,
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP skipped",
@@ -7600,7 +7636,10 @@ class GUILauncher:
 
                             target_bam = sample_dir / "target.bam"
                             if not target_bam.exists():
-                                print(f"[DEBUG finalize] target.bam missing for sample_id={sample_id}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: target.bam missing sample_id=%s",
+                                    sample_id,
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP skipped",
@@ -7625,7 +7664,11 @@ class GUILauncher:
                             from robin.analysis.target_analysis import is_docker_available_for_snp_analysis
                             docker_ok, docker_error = is_docker_available_for_snp_analysis()
                             if not docker_ok:
-                                print(f"[DEBUG finalize] docker unavailable in SNP path sample_id={sample_id}: {docker_error}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: docker unavailable sample_id=%s: %s",
+                                    sample_id,
+                                    docker_error,
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP skipped",
@@ -7654,7 +7697,11 @@ class GUILauncher:
                             if workflow_runner and hasattr(
                                 workflow_runner, "submit_snp_analysis_job"
                             ):
-                                print(f"[DEBUG finalize] attempting submit_snp_analysis_job sample_id={sample_id}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: submit_snp_analysis_job "
+                                    "sample_id=%s",
+                                    sample_id,
+                                )
                                 submitted = self._resolve_submission_result(
                                     workflow_runner.submit_snp_analysis_job(
                                         sample_dir=str(sample_dir),
@@ -7665,14 +7712,20 @@ class GUILauncher:
                                     ),
                                     operation=f"SNP submission for {sample_id}",
                                 )
-                                print(
-                                    f"[DEBUG finalize] submit_snp_analysis_job returned {submitted!r} type={type(submitted).__name__}",
-                                    flush=True,
+                                logging.debug(
+                                    "target_bam_finalize: submit_snp_analysis_job "
+                                    "sample_id=%s submitted=%s",
+                                    sample_id,
+                                    submitted,
                                 )
                             elif workflow_runner and hasattr(
                                 workflow_runner, "submit_sample_job"
                             ):
-                                print(f"[DEBUG finalize] attempting fallback submit_sample_job(snp_analysis) sample_id={sample_id}", flush=True)
+                                logging.debug(
+                                    "target_bam_finalize: fallback submit_sample_job "
+                                    "(snp_analysis) sample_id=%s",
+                                    sample_id,
+                                )
                                 submitted = self._resolve_submission_result(
                                     workflow_runner.submit_sample_job(
                                         sample_dir=str(sample_dir),
@@ -7681,9 +7734,11 @@ class GUILauncher:
                                     ),
                                     operation=f"SNP fallback submission for {sample_id}",
                                 )
-                                print(
-                                    f"[DEBUG finalize] fallback submit_sample_job returned {submitted!r} type={type(submitted).__name__}",
-                                    flush=True,
+                                logging.debug(
+                                    "target_bam_finalize: fallback submit sample_id=%s "
+                                    "submitted=%s",
+                                    sample_id,
+                                    submitted,
                                 )
                             else:
                                 submitted = False
@@ -7779,9 +7834,16 @@ class GUILauncher:
                         finally:
                             with self._snp_analysis_lock:
                                 self._snp_analysis_running_sample = None
-                            print(f"[DEBUG finalize] snp lock cleared sample_id={sample_id}", flush=True)
+                            logging.debug(
+                                "target_bam_finalize: snp lock cleared sample_id=%s",
+                                sample_id,
+                            )
                 except Exception as e:
-                    print(f"[DEBUG finalize] background exception sample_id={sample_id}: {e}", flush=True)
+                    logging.debug(
+                        "target_bam_finalize: worker exception sample_id=%s: %s",
+                        sample_id,
+                        e,
+                    )
                     self._set_pipeline_status(
                         sample_id,
                         phase="Finalize/SNP failed",
@@ -7792,172 +7854,17 @@ class GUILauncher:
                     logging.error(f"Error finalizing target.bam for {sample_id}: {e}")
             
             thread = threading.Thread(target=finalize_in_background, daemon=True)
-            print(f"[DEBUG finalize] starting thread name={thread.name} sample_id={sample_id}", flush=True)
+            logging.debug(
+                "target_bam_finalize: starting worker thread sample_id=%s", sample_id
+            )
             thread.start()
-            print(f"[DEBUG finalize] thread started sample_id={sample_id}", flush=True)
-            
+
         except Exception as e:
-            print(f"[DEBUG finalize] outer exception sample_id={sample_id}: {e}", flush=True)
+            logging.debug(
+                "target_bam_finalize: outer exception sample_id=%s: %s", sample_id, e
+            )
             logging.error(f"Failed to trigger target.bam finalization for {sample_id}: {e}")
     
-    def _scan_and_seed_samples(self, preexisting: bool = False) -> None:
-        """Synchronous version - kept for backward compatibility and io_bound calls"""
-        try:
-            base = Path(self.monitored_directory) if self.monitored_directory else None
-            if not base or not base.exists():
-                return
-            rows: List[Dict[str, Any]] = []
-            for sample_dir in base.iterdir():
-                if not sample_dir.is_dir():
-                    continue
-                master = sample_dir / "master.csv"
-                if master.exists():
-                    sid = sample_dir.name
-                    if preexisting:
-                        self._preexisting_sample_ids.add(sid)
-                    # Determine last_seen from file mtime
-                    last_seen = master.stat().st_mtime
-                    # Try to load persisted overview and run info
-                    run_start = ""
-                    device = ""
-                    flowcell = ""
-                    ov_active = 0
-                    ov_pending = 0
-                    ov_total = 0
-                    ov_completed = 0
-                    ov_failed = 0
-                    ov_job_types = ""
-                    try:
-                        with master.open("r", newline="") as fh:
-                            reader = csv.DictReader(fh)
-                            first_row = next(reader, None)
-                        if first_row:
-                            run_start = first_row.get("run_info_run_time", "")
-                            device = first_row.get("run_info_device", "")
-                            flowcell = first_row.get("run_info_flow_cell", "")
-                            # Use saved last_seen if present
-                            try:
-                                saved_last = float(
-                                    first_row.get("samples_overview_last_seen", 0.0)
-                                )
-                                if saved_last:
-                                    last_seen = saved_last
-                            except Exception:
-                                pass
-                            ov_active = int(
-                                first_row.get("samples_overview_active_jobs", 0) or 0
-                            )
-                            ov_pending = int(
-                                first_row.get("samples_overview_pending_jobs", 0) or 0
-                            )
-                            ov_total = int(
-                                first_row.get("samples_overview_total_jobs", 0) or 0
-                            )
-                            ov_completed = int(
-                                first_row.get("samples_overview_completed_jobs", 0) or 0
-                            )
-                            ov_failed = int(
-                                first_row.get("samples_overview_failed_jobs", 0) or 0
-                            )
-                            ov_job_types = str(
-                                first_row.get("samples_overview_job_types", "") or ""
-                            )
-                    except Exception:
-                        pass
-                    origin_value = (
-                        "Pre-existing"
-                        if sid in self._preexisting_sample_ids and (time.time() - last_seen) >= self.completion_timeout_seconds
-                        else "Live"
-                    )
-                    if origin_value == "Live" and (time.time() - last_seen) >= self.completion_timeout_seconds:
-                        if ov_active == 0 and ov_pending == 0:
-                            expected = self._get_expected_completion_job_types()
-                            if expected:
-                                complete_on_disk = self._expected_jobs_completed(
-                                    sample_dir, expected
-                                )
-                            else:
-                                complete_on_disk = self._is_target_bam_finalize_redundant(
-                                    sid
-                                )
-                            if not complete_on_disk:
-                                complete_on_disk = self._is_target_bam_finalize_redundant(
-                                    sid
-                                )
-                            if complete_on_disk:
-                                origin_value = "Complete"
-                    try:
-                        # Only mark as Complete if timeout passed AND no active jobs
-                        if origin_value == "Live" and (time.time() - last_seen) >= self.completion_timeout_seconds:
-                            if ov_active == 0 and ov_pending == 0:
-                                origin_value = "Complete"
-                                # Check if this is a transition from Live to Complete
-                                existing = self._last_samples_rows or []
-                                prev_origin = None
-                                for prev_row in existing:
-                                    if prev_row.get("sample_id") == sid:
-                                        prev_origin = prev_row.get("origin")
-                                        break
-                                # Trigger finalization only on a real Live→Complete transition
-                                if prev_origin == "Live":
-                                    self._trigger_target_bam_finalization(sid)
-                            # If there are active jobs, keep as Live even if timeout passed
-                    except Exception:
-                        pass
-                    rows.append(
-                        {
-                            "sample_id": sid,
-                            "origin": origin_value,
-                            "run_start": self._format_timestamp_for_display(run_start),
-                            "device": device,
-                            "flowcell": flowcell,
-                            "active_jobs": ov_active,
-                            "pending_jobs": ov_pending,
-                            "total_jobs": ov_total,
-                            "completed_jobs": ov_completed,
-                            "failed_jobs": ov_failed,
-                            "job_types": ov_job_types,
-                            "last_seen": time.strftime(
-                                "%Y-%m-%d %H:%M:%S", time.localtime(last_seen)
-                            ),
-                            "_last_seen_raw": last_seen,
-                        }
-                    )
-            if rows:
-                # Merge with any current rows and update table
-                existing = {r["sample_id"]: r for r in (self._last_samples_rows or [])}
-                for r in rows:
-                    existing[r["sample_id"]] = r
-                merged = list(existing.values())
-                # Sort rows by last activity in reverse chronological order (newest first)
-                try:
-                    merged.sort(key=lambda r: float(r.get("_last_seen_raw", 0)), reverse=True)
-                except Exception:
-                    # Fallback to sorting by last_seen string if _last_seen_raw is not available
-                    try:
-                        merged.sort(key=lambda r: r.get("last_seen", ""), reverse=True)
-                    except Exception:
-                        pass
-                
-                if hasattr(self, "samples_table"):
-                    try:
-                        self.samples_table.rows = merged
-                        self.samples_table.update()
-                    except Exception:
-                        pass
-                self._last_samples_rows = merged
-                self._known_sample_ids = {r["sample_id"] for r in merged}
-            if preexisting:
-                self._preexisting_scanned = True
-        except Exception:
-            pass
-
-    def _get_cached_samples(self) -> Optional[List[Dict[str, Any]]]:
-        """Return cached sample data if available and recent"""
-        if self._last_samples_rows and time.time() - self._last_cache_time < self._cache_duration:
-            return self._last_samples_rows
-        return None
-
     def _get_expected_completion_job_types(self) -> Set[str]:
         """Get the set of job types expected to complete for this workflow."""
         if not self.workflow_steps:
@@ -8037,414 +7944,6 @@ class GUILauncher:
                 "failed_jobs": 0,
                 "job_types": ""
             }
-
-    async def _load_samples_progressively(self, sample_dirs: List[Path], batch_size: int = 10) -> None:
-        """Load samples in small batches to avoid blocking the UI"""
-        try:
-            total_dirs = len(sample_dirs)
-            processed = 0
-            
-            # Show progress
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.clear()
-                with self.samples_loading_container:
-                    ui.spinner(size="lg", color="primary")
-                    ui.label("Loading samples...").classes("ml-2 text-lg")
-                    progress_label = ui.label(f"Processing {processed}/{total_dirs} samples").classes("text-sm text-gray-500 mt-2")
-            
-            rows: List[Dict[str, Any]] = []
-            
-            for i in range(0, total_dirs, batch_size):
-                batch = sample_dirs[i:i + batch_size]
-                
-                # Process batch asynchronously in background thread
-                import asyncio
-                batch_rows = await asyncio.to_thread(self._process_sample_batch, batch)
-                rows.extend(batch_rows)
-                
-                processed += len(batch)
-                
-                # Update progress
-                if hasattr(self, "samples_loading_container") and 'progress_label' in locals():
-                    progress_label.set_text(f"Processing {processed}/{total_dirs} samples")
-                
-                # Small delay to keep UI responsive
-                await asyncio.sleep(0.1)
-            
-            # Update table with all rows
-            if rows:
-                self._last_samples_rows = rows
-                self._last_cache_time = time.time()
-                
-                if hasattr(self, "samples_table"):
-                    try:
-                        self.samples_table.rows = rows
-                        self.samples_table.update()
-                    except Exception:
-                        pass
-            
-            # Hide loading container
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.set_visibility(False)
-                
-        except Exception as e:
-            logging.error(f"Error in progressive loading: {e}")
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.set_visibility(False)
-
-    def _process_sample_batch(self, sample_dirs: List[Path]) -> List[Dict[str, Any]]:
-        """Process a batch of sample directories synchronously"""
-        rows: List[Dict[str, Any]] = []
-        expected_job_types = self._get_expected_completion_job_types()
-        
-        for sample_dir in sample_dirs:
-            if not sample_dir.is_dir():
-                continue
-                
-            master = sample_dir / "master.csv"
-            if master.exists():
-                sid = sample_dir.name
-                
-                # Determine last_seen from file mtime
-                last_seen = master.stat().st_mtime
-                
-                # Try to load persisted overview and run info
-                run_start = ""
-                device = ""
-                flowcell = ""
-                ov_active = 0
-                ov_pending = 0
-                ov_total = 0
-                ov_completed = 0
-                ov_failed = 0
-                ov_job_types = ""
-                
-                try:
-                    with master.open("r", newline="") as fh:
-                        reader = csv.DictReader(fh)
-                        first_row = next(reader, None)
-                    if first_row:
-                        run_start = first_row.get("run_info_run_time", "")
-                        device = first_row.get("run_info_device", "")
-                        flowcell = first_row.get("run_info_flow_cell", "")
-                        
-                        # Use saved last_seen if present
-                        try:
-                            saved_last = float(
-                                first_row.get("samples_overview_last_seen", 0.0)
-                            )
-                            if saved_last:
-                                last_seen = saved_last
-                        except Exception:
-                            pass
-                            
-                        # Try to get overview data from master.csv first
-                        ov_active = int(
-                            first_row.get("samples_overview_active_jobs", 0) or 0
-                        )
-                        ov_pending = int(
-                            first_row.get("samples_overview_pending_jobs", 0) or 0
-                        )
-                        ov_total = int(
-                            first_row.get("samples_overview_total_jobs", 0) or 0
-                        )
-                        ov_completed = int(
-                            first_row.get("samples_overview_completed_jobs", 0) or 0
-                        )
-                        ov_failed = int(
-                            first_row.get("samples_overview_failed_jobs", 0) or 0
-                        )
-                        ov_job_types = str(
-                            first_row.get("samples_overview_job_types", "") or ""
-                        )
-                        
-                        # If overview data is not available (0 values), calculate from actual analysis files
-                        if ov_total == 0 and ov_completed == 0:
-                            calculated_counts = self._calculate_job_counts_from_files(
-                                sample_dir,
-                                expected_job_types=expected_job_types or None,
-                            )
-                            ov_total = calculated_counts["total_jobs"]
-                            ov_completed = calculated_counts["completed_jobs"]
-                            ov_failed = calculated_counts["failed_jobs"]
-                            ov_job_types = calculated_counts["job_types"]
-                except Exception:
-                    pass
-                    
-                origin_value = (
-                    "Pre-existing"
-                    if sid in self._preexisting_sample_ids and (time.time() - last_seen) >= self.completion_timeout_seconds
-                    else "Live"
-                )
-                try:
-                    # Only mark as Complete if timeout passed AND no active jobs
-                    if origin_value == "Live" and (time.time() - last_seen) >= self.completion_timeout_seconds:
-                        if ov_active == 0:
-                            should_complete = True
-                            if expected_job_types:
-                                should_complete = self._expected_jobs_completed(
-                                    sample_dir, expected_job_types
-                                )
-                            if should_complete:
-                                origin_value = "Complete"
-                        # If there are active jobs, keep as Live even if timeout passed
-                except Exception:
-                    pass
-                    
-                # File progress - use the same job counts that drive other columns
-                # This ensures consistency with the Active, Total, Completed columns
-                files_seen = ov_total  # Use total_jobs as files_seen
-                files_processed = ov_completed  # Use completed_jobs as files_processed
-                file_progress = files_processed / files_seen if files_seen > 0 else 0.0
-                
-                row_data = {
-                    "sample_id": sid,
-                    "origin": origin_value,
-                    "run_start": self._format_timestamp_for_display(run_start),
-                    "device": device,
-                    "flowcell": flowcell,
-                    "active_jobs": ov_active,
-                    "pending_jobs": ov_pending,
-                    "total_jobs": ov_total,
-                    "completed_jobs": ov_completed,
-                    "failed_jobs": ov_failed,
-                    "job_types": ov_job_types,
-                    "files_seen": files_seen,
-                    "files_processed": files_processed,
-                    "file_progress": file_progress,
-                    "last_seen": time.strftime(
-                        "%Y-%m-%d %H:%M:%S", time.localtime(last_seen)
-                    ),
-                    "_last_seen_raw": last_seen,
-                }
-                
-                rows.append(row_data)
-        
-        return rows
-
-    async def _scan_and_seed_samples_async(self, preexisting: bool = False) -> None:
-        """Asynchronous version that runs file operations in background thread"""
-        try:
-            # Check if we have recent cached data
-            cached_data = self._get_cached_samples()
-            if cached_data and not preexisting:
-                # Use cached data and update UI immediately
-                if hasattr(self, "samples_table"):
-                    try:
-                        self.samples_table.rows = cached_data
-                        self.samples_table.update()
-                        # Hide loading indicator
-                        if hasattr(self, "samples_loading_container"):
-                            self.samples_loading_container.set_visibility(False)
-                    except Exception:
-                        pass
-                return
-            
-            # Check if we need progressive loading for large directories
-            base = Path(self.monitored_directory) if self.monitored_directory else None
-            if base and base.exists():
-                sample_dirs = [d for d in base.iterdir() if d.is_dir()]
-                
-                # Use progressive loading for directories with many samples
-                if len(sample_dirs) > 20:
-                    await self._load_samples_progressively(sample_dirs)
-                    return
-            
-            # Show loading indicator
-            if hasattr(self, "samples_loading_indicator"):
-                self.samples_loading_indicator.set_visibility(True)
-            
-            # Run the synchronous file operations in a background thread using asyncio.to_thread
-            # This prevents blocking the main thread and GUI updates
-            import asyncio
-            result = await asyncio.to_thread(self._scan_and_seed_samples, preexisting)
-            
-            # Update cache timestamp
-            self._last_cache_time = time.time()
-            
-            # Hide loading indicator
-            if hasattr(self, "samples_loading_indicator"):
-                self.samples_loading_indicator.set_visibility(False)
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.set_visibility(False)
-            
-        except Exception as e:
-            logging.error(f"Error in async sample scanning: {e}")
-            
-            # Hide loading indicators on error
-            if hasattr(self, "samples_loading_indicator"):
-                self.samples_loading_indicator.set_visibility(False)
-            if hasattr(self, "samples_loading_container"):
-                self.samples_loading_container.set_visibility(False)
-
-    async def _scan_for_new_samples_async(self) -> None:
-        """Asynchronous version of new samples scanning"""
-        try:
-            # Always scan for new samples to ensure we get updates
-            # The cache will be updated by _scan_for_new_samples if there are changes
-            self._scan_for_new_samples()
-        except Exception as e:
-            logging.error(f"Error in async new samples scanning: {e}")
-
-    def _scan_for_new_samples(self) -> None:
-        try:
-            base = Path(self.monitored_directory) if self.monitored_directory else None
-            if not base or not base.exists():
-                return
-            # Prepare mappings for efficient lookups and updates
-            new_rows: List[Dict[str, Any]] = []
-            updated_rows: List[Dict[str, Any]] = []
-            existing_by_id: Dict[str, Dict[str, Any]] = {
-                r.get("sample_id"): r
-                for r in (self._last_samples_rows or [])
-                if r.get("sample_id")
-            }
-            for sample_dir in base.iterdir():
-                if not sample_dir.is_dir():
-                    continue
-                sid = sample_dir.name
-                master = sample_dir / "master.csv"
-                if master.exists():
-                    try:
-                        last_seen = master.stat().st_mtime
-                        # Load persisted overview and run info
-                        run_start = ""
-                        device = ""
-                        flowcell = ""
-                        ov_active = 0
-                        ov_pending = 0
-                        ov_total = 0
-                        ov_completed = 0
-                        ov_failed = 0
-                        ov_job_types = ""
-                        with master.open("r", newline="") as fh:
-                            reader = csv.DictReader(fh)
-                            first_row = next(reader, None)
-                        if first_row:
-                            run_start = first_row.get("run_info_run_time", "")
-                            device = first_row.get("run_info_device", "")
-                            flowcell = first_row.get("run_info_flow_cell", "")
-                            try:
-                                saved_last = float(
-                                    first_row.get("samples_overview_last_seen", 0.0)
-                                )
-                                if saved_last:
-                                    last_seen = saved_last
-                            except Exception:
-                                pass
-                            ov_active = int(
-                                first_row.get("samples_overview_active_jobs", 0) or 0
-                            )
-                            ov_pending = int(
-                                first_row.get("samples_overview_pending_jobs", 0) or 0
-                            )
-                            ov_total = int(
-                                first_row.get("samples_overview_total_jobs", 0) or 0
-                            )
-                            ov_completed = int(
-                                first_row.get("samples_overview_completed_jobs", 0) or 0
-                            )
-                            ov_failed = int(
-                                first_row.get("samples_overview_failed_jobs", 0) or 0
-                            )
-                            ov_job_types = str(
-                                first_row.get("samples_overview_job_types", "") or ""
-                            )
-                    except Exception:
-                        last_seen = None
-                    if last_seen is None:
-                        continue
-
-                    existing_row = existing_by_id.get(sid)
-                    if existing_row is None:
-                        # New sample discovered → mark as Live
-                        new_rows.append(
-                            {
-                                "sample_id": sid,
-                                "origin": "Live",
-                                "run_start": run_start,
-                                "device": device,
-                                "flowcell": flowcell,
-                                "active_jobs": ov_active,
-                                "total_jobs": ov_total,
-                                "completed_jobs": ov_completed,
-                                "failed_jobs": ov_failed,
-                                "job_types": ov_job_types,
-                                "last_seen": time.strftime(
-                                    "%H:%M:%S", time.localtime(last_seen)
-                                ),
-                                "_last_seen_raw": last_seen,
-                            }
-                        )
-                    else:
-                        # Existing sample: if master.csv has a newer mtime, update and flip to Live
-                        prev_seen = existing_row.get("_last_seen_raw") or 0
-                        if last_seen > prev_seen:
-                            updated = dict(existing_row)
-                            # Preserve or refresh run info/overview from persisted values
-                            formatted_run_start = (
-                                self._format_timestamp_for_display(run_start)
-                                if run_start
-                                else ""
-                            )
-                            updated["run_start"] = (
-                                formatted_run_start or existing_row.get("run_start", "")
-                            )
-                            updated["device"] = device or existing_row.get("device", "")
-                            updated["flowcell"] = flowcell or existing_row.get(
-                                "flowcell", ""
-                            )
-                            if ov_job_types:
-                                updated["job_types"] = ov_job_types
-                            updated["active_jobs"] = ov_active
-                            updated["pending_jobs"] = ov_pending
-                            updated["total_jobs"] = ov_total
-                            updated["completed_jobs"] = ov_completed
-                            updated["failed_jobs"] = ov_failed
-                            updated["last_seen"] = time.strftime(
-                                "%H:%M:%S", time.localtime(last_seen)
-                            )
-                            updated["_last_seen_raw"] = last_seen
-                            # Determine origin based on inactivity threshold AND active jobs status
-                            prev_origin = existing_row.get("origin")
-                            try:
-                                # Only mark as Complete if timeout passed AND no active jobs
-                                if (time.time() - last_seen) >= self.completion_timeout_seconds:
-                                    if ov_active == 0 and ov_pending == 0:
-                                        updated["origin"] = "Complete"
-                                        # Trigger finalization if transitioning from Live to Complete
-                                        if prev_origin == "Live":
-                                            self._trigger_target_bam_finalization(sid)
-                                    else:
-                                        # If there are active jobs, keep as Live even if timeout passed
-                                        updated["origin"] = "Live"
-                                else:
-                                    updated["origin"] = "Live"
-                            except Exception:
-                                updated["origin"] = "Live"
-                            updated_rows.append(updated)
-
-            if new_rows or updated_rows:
-                merged_map: Dict[str, Dict[str, Any]] = {
-                    r["sample_id"]: r for r in (self._last_samples_rows or [])
-                }
-                for r in new_rows:
-                    merged_map[r["sample_id"]] = r
-                for r in updated_rows:
-                    merged_map[r["sample_id"]] = r
-                merged = list(merged_map.values())
-                if hasattr(self, "samples_table"):
-                    try:
-                        self.samples_table.rows = merged
-                        self.samples_table.update()
-                    except Exception:
-                        pass
-                self._last_samples_rows = merged
-                self._known_sample_ids = {r["sample_id"] for r in merged}
-                # Update cache timestamp when we update the samples data
-                self._last_cache_time = time.time()
-        except Exception:
-            pass
 
     def _create_watched_folders_page(self):
         """Create the watched folders management page."""

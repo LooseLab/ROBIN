@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any, Dict, List
 import logging
@@ -348,16 +349,287 @@ def add_mgmt_section(launcher: Any, sample_dir: Path) -> None:
             return []
 
     def _refresh_mgmt() -> None:
-        """Refresh MGMT data."""
+        """Schedule MGMT refresh (heavy work off the NiceGUI event loop)."""
         try:
-            # Simple directory check
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _refresh_mgmt_sync(sample_dir, launcher)
+            return
+        asyncio.create_task(_refresh_mgmt_async())
+
+    async def _refresh_mgmt_async() -> None:
+        """Refresh MGMT: CSV/BED reads and locus figure off the event loop."""
+        try:
             if not sample_dir or not sample_dir.exists():
                 logging.warning(f"[MGMT] Sample directory not found: {sample_dir}")
                 return
-            
-            # Run MGMT refresh directly (already in background)
-            _refresh_mgmt_sync(sample_dir, launcher)
-                
+
+            def _count_from_name(p: Path) -> int:
+                try:
+                    return int(p.name.split("_")[0])
+                except Exception:
+                    return -1
+
+            final_files = list(sample_dir.glob("final_mgmt.csv"))
+            is_final_file = False
+            if final_files:
+                latest_csv = final_files[0]
+                is_final_file = True
+            else:
+                csv_files = list(sample_dir.glob("*_mgmt.csv"))
+                if not csv_files:
+                    return
+                latest_csv = max(csv_files, key=_count_from_name)
+
+            key = str(sample_dir)
+            state = launcher._mgmt_state.get(key, {})
+            is_fresh_visit = "last_visit_time" not in state
+            if is_fresh_visit:
+                state["last_visit_time"] = time.time()
+
+            current_count = _count_from_name(latest_csv)
+            csv_mtime = latest_csv.stat().st_mtime
+            csv_needs_update = (
+                is_fresh_visit
+                or state.get("csv_path") != str(latest_csv)
+                or state.get("csv_mtime") != csv_mtime
+            )
+
+            try:
+                df = await asyncio.to_thread(pd.read_csv, latest_csv)
+            except Exception as e:
+                logging.error(f"[MGMT] Failed to read CSV file {latest_csv}: {e}")
+                return
+
+            if csv_needs_update:
+                try:
+                    status = str(df.get("status", pd.Series(["Unknown"])).iloc[0])
+                    average = float(df.get("average", pd.Series([0.0])).iloc[0])
+                    pred = float(df.get("pred", pd.Series([0.0])).iloc[0])
+                    mgmt_status.set_text(f"MGMT status: {status}")
+                    mgmt_avg.set_text(f"Average methylation: {average:.2f}%")
+                    _tier = _mgmt_meth_tier(average)
+                    try:
+                        mgmt_avg.classes(
+                            replace=(
+                                f"classification-insight-level "
+                                f"classification-insight-level--{_tier} w-full"
+                            )
+                        )
+                    except Exception:
+                        pass
+                    mgmt_pred.set_text(f"Prediction score: {pred:.2f}%")
+                    try:
+                        mgmt_results_table.rows = [
+                            {
+                                "average": f"{average:.2f}",
+                                "pred": f"{pred:.2f}",
+                                "status": status,
+                            }
+                        ]
+                        mgmt_results_table.update()
+                    except Exception:
+                        pass
+                except Exception as e:
+                    logging.error(f"[MGMT] Failed to update CSV UI elements: {e}")
+
+            if is_final_file:
+                bed_path = sample_dir / "final_mgmt.bed"
+                if not bed_path.exists():
+                    alt_bed = sample_dir / "final_mgmt_mgmt.bed"
+                    bed_path = alt_bed if alt_bed.exists() else bed_path
+            else:
+                bed_path = sample_dir / f"{current_count}_mgmt.bed"
+                if not bed_path.exists():
+                    alt_bed = sample_dir / f"{current_count}_mgmt_mgmt.bed"
+                    bed_path = alt_bed if alt_bed.exists() else bed_path
+
+            site_rows: List[Dict[str, Any]] = []
+            if bed_path.exists():
+                bed_mtime = bed_path.stat().st_mtime
+                bed_needs_update = (
+                    is_fresh_visit
+                    or state.get("bed_path") != str(bed_path)
+                    or state.get("bed_mtime") != bed_mtime
+                )
+                site_rows = await asyncio.to_thread(
+                    _extract_mgmt_specific_sites, bed_path
+                )
+                if bed_needs_update:
+                    try:
+                        mgmt_sites_table.rows = site_rows
+                        mgmt_sites_table.update()
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        mgmt_sites_table.rows = site_rows
+                        mgmt_sites_table.update()
+                    except Exception:
+                        pass
+
+            bam_path = sample_dir / "mgmt_sorted.bam"
+            if is_final_file:
+                pickle_path = sample_dir / "final_mgmt.pkl"
+            else:
+                pickle_path = sample_dir / f"{current_count}_mgmt.pkl"
+
+            pickle_mtime = pickle_path.stat().st_mtime if pickle_path.exists() else 0
+            bam_mtime = bam_path.stat().st_mtime if bam_path.exists() else 0
+            current_bam_path_str = str(bam_path) if bam_path.exists() else ""
+            current_pickle_path_str = str(pickle_path) if pickle_path.exists() else ""
+
+            prev_pickle_path = state.get("pickle_path", "")
+            prev_pickle_mtime = state.get("pickle_mtime", 0)
+            prev_bam_path = state.get("bam_path", "")
+            prev_bam_mtime = state.get("bam_mtime", 0)
+
+            pickle_changed = prev_pickle_path != current_pickle_path_str
+            pickle_mtime_changed = prev_pickle_mtime != pickle_mtime
+            bam_changed = prev_bam_path != current_bam_path_str
+            bam_mtime_changed = prev_bam_mtime != bam_mtime
+
+            figure_needs_update = (
+                is_fresh_visit
+                or pickle_changed
+                or pickle_mtime_changed
+                or bam_changed
+                or bam_mtime_changed
+            )
+
+            if bam_path.exists() and figure_needs_update:
+
+                def _build_mgmt_figure():
+                    import matplotlib.pyplot as plt
+                    import warnings
+                    from robin.analysis.methylation_wrapper import (
+                        has_bam_index,
+                        locus_figure,
+                        load_figure_pickle,
+                        save_figure_pickle,
+                    )
+
+                    fig = None
+                    use_pickle = False
+                    if pickle_path.exists():
+                        try:
+                            if pickle_mtime >= bam_mtime:
+                                fig = load_figure_pickle(str(pickle_path))
+                                use_pickle = True
+                        except Exception as e:
+                            logging.warning(
+                                f"[MGMT] Failed to load pickle file {pickle_path}: {e}"
+                            )
+
+                    if fig is None:
+                        if not has_bam_index(str(bam_path)):
+                            raise RuntimeError(
+                                "BAM file is not indexed. Index file (.bai or .csi) not found or invalid."
+                            )
+                        fig = locus_figure(
+                            interval="chr10:129466536-129467536",
+                            bam_path=str(bam_path),
+                            motif="CG",
+                            mods="m",
+                            extra_cli=["--width", "18", "--height", "8"],
+                            site_rows=site_rows,
+                        )
+                        if not use_pickle:
+                            try:
+                                save_figure_pickle(fig, str(pickle_path))
+                            except Exception as e:
+                                logging.debug(
+                                    f"[MGMT] Failed to save pickle file (non-fatal): {e}"
+                                )
+                    return fig
+
+                try:
+                    fig = await asyncio.to_thread(_build_mgmt_figure)
+                    import matplotlib.pyplot as plt
+                    import warnings
+
+                    with warnings.catch_warnings():
+                        warnings.simplefilter("ignore", UserWarning)
+                        if hasattr(mgmt_mpl, "figure") and mgmt_mpl.figure is not None:
+                            try:
+                                plt.close(mgmt_mpl.figure)
+                            except Exception:
+                                pass
+                        _apply_mgmt_figure_theme(fig, _is_dark_mode())
+                        mgmt_mpl.figure = fig
+                        mgmt_mpl.update()
+                except Exception as e:
+                    logging.exception(f"[MGMT] Failed to create methylation plot: {e}")
+                    import matplotlib.pyplot as plt
+
+                    if hasattr(mgmt_mpl, "figure") and mgmt_mpl.figure is not None:
+                        try:
+                            plt.close(mgmt_mpl.figure)
+                        except Exception:
+                            pass
+                    fig, ax = plt.subplots(figsize=(24, 12))
+                    ax.text(
+                        0.5,
+                        0.5,
+                        f"Methylation plot unavailable\n({str(e)})",
+                        ha="center",
+                        va="center",
+                        transform=ax.transAxes,
+                        fontsize=10,
+                        color="red",
+                    )
+                    ax.set_xlim(0, 1)
+                    ax.set_ylim(0, 1)
+                    ax.axis("off")
+                    ax.set_title("MGMT Methylation Plot")
+                    _apply_mgmt_figure_theme(fig, _is_dark_mode())
+                    mgmt_mpl.figure = fig
+                    mgmt_mpl.update()
+            elif not bam_path.exists():
+                if is_fresh_visit or state.get("bam_path") != str(bam_path):
+                    logging.warning(f"[MGMT] BAM file not found: {bam_path}")
+                    import matplotlib.pyplot as plt
+
+                    if hasattr(mgmt_mpl, "figure") and mgmt_mpl.figure is not None:
+                        try:
+                            plt.close(mgmt_mpl.figure)
+                        except Exception:
+                            pass
+                    fig, ax = plt.subplots(figsize=(24, 12))
+                    ax.text(
+                        0.5,
+                        0.5,
+                        "MGMT BAM file not found\n(mgmt_sorted.bam)",
+                        ha="center",
+                        va="center",
+                        transform=ax.transAxes,
+                        fontsize=10,
+                        color="orange",
+                    )
+                    ax.set_xlim(0, 1)
+                    ax.set_ylim(0, 1)
+                    ax.axis("off")
+                    ax.set_title("MGMT Methylation Plot")
+                    _apply_mgmt_figure_theme(fig, _is_dark_mode())
+                    mgmt_mpl.figure = fig
+                    mgmt_mpl.update()
+
+            if pickle_path.exists():
+                pickle_mtime = pickle_path.stat().st_mtime
+
+            launcher._mgmt_state[key] = {
+                "last_count": current_count,
+                "csv_path": str(latest_csv),
+                "csv_mtime": csv_mtime,
+                "bed_path": str(bed_path) if bed_path.exists() else "",
+                "bed_mtime": bed_path.stat().st_mtime if bed_path.exists() else 0,
+                "pickle_path": current_pickle_path_str,
+                "pickle_mtime": pickle_mtime,
+                "bam_path": current_bam_path_str,
+                "bam_mtime": bam_mtime,
+                "last_visit_time": state.get("last_visit_time", time.time()),
+                "mgmt_plot_theme_dark": _is_dark_mode(),
+            }
         except Exception as e:
             logging.exception(f"[MGMT] Refresh failed: {e}")
 

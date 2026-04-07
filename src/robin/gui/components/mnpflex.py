@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 import base64
 import json
 import logging
@@ -719,9 +720,10 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 )
                 last_updated_label.set_text(f"Last updated: {updated}")
 
-        def _refresh_from_disk() -> None:
+        def _load_mnpflex_disk_payload() -> Dict[str, Any]:
+            """Read summary JSON and image bytes (no UI). Safe for asyncio.to_thread."""
             results_dir = _find_results_dir()
-            summary_path = None
+            summary_path: Optional[Path] = None
             summary = None
             if results_dir:
                 summary_path = results_dir / "bundle_summary.json"
@@ -733,36 +735,44 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                             f"[MNPFlex] Failed to parse summary: {summary_path}"
                         )
                         summary = None
-
-            _update_labels(summary, summary_path)
-
-            qc_plots_container.clear()
-            mgmt_plot_container.clear()
+            plots: List[Dict[str, Any]] = []
             if results_dir:
                 image_specs = [
+                    ("qc", "QC coverage plot", results_dir / "qc_coverage_plot.png"),
                     (
-                        qc_plots_container,
-                        "QC coverage plot",
-                        results_dir / "qc_coverage_plot.png",
-                    ),
-                    (
-                        qc_plots_container,
+                        "qc",
                         "QC methylation density plot",
                         results_dir / "qc_methylation_density_plot.png",
                     ),
-                    (
-                        mgmt_plot_container,
-                        "MGMT region plot",
-                        results_dir / "mgmt_region_plot.png",
-                    ),
+                    ("mgmt", "MGMT region plot", results_dir / "mgmt_region_plot.png"),
                 ]
-                for container, title, img_path in image_specs:
+                for which, title, img_path in image_specs:
                     data_url = _read_image_base64(img_path)
                     if data_url:
-                        with container:
-                            with ui.column().classes("w-full gap-3"):
-                                ui.label(title).classes("classification-insight-meta")
-                                ui.image(data_url).classes("w-full")
+                        plots.append(
+                            {"which": which, "title": title, "data_url": data_url}
+                        )
+            return {
+                "summary": summary,
+                "summary_path": summary_path,
+                "plots": plots,
+            }
+
+        def _apply_mnpflex_disk_payload(payload: Dict[str, Any]) -> None:
+            """Apply preloaded MNPFlex summary and images to the UI."""
+            _update_labels(payload.get("summary"), payload.get("summary_path"))
+            qc_plots_container.clear()
+            mgmt_plot_container.clear()
+            for p in payload.get("plots") or []:
+                container = (
+                    qc_plots_container
+                    if p.get("which") == "qc"
+                    else mgmt_plot_container
+                )
+                with container:
+                    with ui.column().classes("w-full gap-3"):
+                        ui.label(p["title"]).classes("classification-insight-meta")
+                        ui.image(p["data_url"]).classes("w-full")
 
         def _run_fetch(auto: bool = False) -> None:
             if state["running"]:
@@ -826,7 +836,7 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             thread = threading.Thread(target=_worker, daemon=True)
             thread.start()
 
-        def _poll_status() -> None:
+        def _poll_status_sync() -> None:
             if state["running"]:
                 status_badge.set_text("Running")
                 status_badge.classes(
@@ -850,7 +860,42 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 if results_dir is None and _sample_is_complete():
                     state["auto_fetch_attempted"] = True
                     _run_fetch(auto=True)
-            _refresh_from_disk()
+            _apply_mnpflex_disk_payload(_load_mnpflex_disk_payload())
+
+        async def _poll_status_async() -> None:
+            if state["running"]:
+                status_badge.set_text("Running")
+                status_badge.classes(
+                    replace="mnpflex-toolbar-badge mnpflex-toolbar-badge--running"
+                )
+            else:
+                status_badge.set_text("Idle")
+                status_badge.classes(
+                    replace="mnpflex-toolbar-badge mnpflex-toolbar-badge--idle"
+                )
+                fetch_button.enable()
+                build_button.enable()
+
+            if state["last_error"]:
+                error_label.set_text(state["last_error"])
+            else:
+                error_label.set_text("")
+
+            if not state["auto_fetch_attempted"]:
+                results_dir = _find_results_dir()
+                if results_dir is None and _sample_is_complete():
+                    state["auto_fetch_attempted"] = True
+                    _run_fetch(auto=True)
+            payload = await asyncio.to_thread(_load_mnpflex_disk_payload)
+            _apply_mnpflex_disk_payload(payload)
+
+        def _poll_status() -> None:
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                _poll_status_sync()
+                return
+            asyncio.create_task(_poll_status_async())
 
         fetch_button.on_click(_handle_fetch_click)
         build_button.on_click(_handle_build_click)

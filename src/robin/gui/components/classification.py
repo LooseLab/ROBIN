@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import csv
 import logging
 import zlib
@@ -700,11 +701,22 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
 
                     for k in series_map:
                         series_map[k] = sorted(series_map[k], key=_sort_key)
+                number_probes: Optional[int] = None
+                try:
+                    lr = rows[-1]
+                    for nk in ("number_probes", "Number_probes"):
+                        raw = lr.get(nk)
+                        if raw is not None and str(raw).strip() != "":
+                            number_probes = int(float(raw))
+                            break
+                except Exception:
+                    number_probes = None
                 return {
                     "last": last_scores,
                     "x": x_labels,
                     "series": series_map,
                     "has_time": bool(time_key),
+                    "number_probes": number_probes,
                 }
         except Exception:
             return None
@@ -743,13 +755,17 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             )
         return out
 
-    def _update_charts_from_file(tool_name: str, file_name: str):
+    def _update_charts_from_file(
+        tool_name: str,
+        file_name: str,
+        preloaded: Optional[Dict[str, Any]] = None,
+    ):
         try:
             file_path = sample_dir / file_name if sample_dir else None
             if not file_path or not file_path.exists():
                 return
             mode = charts[tool_name].get("mode", "percent")
-            data = _read_scores_csv(file_path, mode)
+            data = preloaded if preloaded is not None else _read_scores_csv(file_path, mode)
             if not data:
                 return
             bar = charts[tool_name]["bar"]
@@ -956,22 +972,14 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                         )
                     labels_map["conf"].set_text(f"Confidence: {best_value:.2f}%")
                     try:
-                        with file_path.open("r", newline="") as fh:
-                            reader = csv.DictReader(fh)
-                            rows = list(reader)
-                        if rows:
-                            npv = rows[-1].get("number_probes") or rows[-1].get(
-                                "number_probes".lower()
+                        npv = data.get("number_probes")
+                        if npv is not None:
+                            label = (
+                                "Features"
+                                if tool_name == "Random Forest"
+                                else "Probes"
                             )
-                            if npv is not None:
-                                label = (
-                                    "Features"
-                                    if tool_name == "Random Forest"
-                                    else "Probes"
-                                )
-                                labels_map["probes"].set_text(
-                                    f"{label}: {int(float(npv))}"
-                                )
+                            labels_map["probes"].set_text(f"{label}: {int(npv)}")
                     except Exception:
                         pass
                 try:
@@ -986,20 +994,19 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         except Exception:
             pass
 
-    def _refresh_classification() -> None:
-        """Refresh classification data."""
+    def _refresh_classification_sync_impl() -> None:
+        """Refresh classification data (synchronous; for contexts without asyncio loop)."""
         try:
-            # Check directory existence
             if not sample_dir or not sample_dir.exists():
                 logging.warning(f"[Classification] Sample directory not found: {sample_dir}")
                 return
-            
-            # Check modification times for all files upfront
+
             import time
+
             file_mtimes = {}
             files_changed = {}
             any_changes = False
-            
+
             for tool_name, cfg in tool_to_file.items():
                 file_path = sample_dir / cfg["file"] if sample_dir else None
                 if file_path and file_path.exists():
@@ -1014,19 +1021,18 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                 else:
                     file_mtimes[tool_name] = 0
                     files_changed[tool_name] = False
-            
-            # Check if this is a fresh visit (no files have been processed yet)
+
             is_fresh_visit = any(
-                charts[tool_name].get("last_mtime") is None 
+                charts[tool_name].get("last_mtime") is None
                 for tool_name in tool_to_file.keys()
             )
-            
-            # Early exit if nothing has changed and not a fresh visit
+
             if not any_changes and not is_fresh_visit:
-                logging.debug(f"[Classification] ⏭ Skipping classification update - no file changes detected")
+                logging.debug(
+                    "[Classification] ⏭ Skipping classification update - no file changes detected"
+                )
                 return
-            
-            # Log what changed
+
             if any_changes or is_fresh_visit:
                 reasons = []
                 if is_fresh_visit:
@@ -1035,18 +1041,93 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
                     if changed:
                         reasons.append(f"{tool_to_file[tool_name]['file']}")
                 if reasons:
-                    logging.debug(f"[Classification] Update needed. Reasons: {', '.join(reasons)}")
-            
-            # Update only files that have changed
+                    logging.debug(
+                        f"[Classification] Update needed. Reasons: {', '.join(reasons)}"
+                    )
+
             for tool_name, cfg in tool_to_file.items():
                 file_path = sample_dir / cfg["file"] if sample_dir else None
                 if file_path and files_changed.get(tool_name, False):
                     _check_and_update_file(tool_name, cfg["file"], file_path, charts)
-                    # Update mtime in charts dict after successful update
                     if tool_name in file_mtimes:
                         charts[tool_name]["last_mtime"] = file_mtimes[tool_name]
         except Exception as e:
             logging.exception(f"[Classification] Refresh failed: {e}")
+
+    async def _refresh_classification_async() -> None:
+        """Parse score CSVs off the event loop, then update ECharts on the main thread."""
+        try:
+            if not sample_dir or not sample_dir.exists():
+                logging.warning(f"[Classification] Sample directory not found: {sample_dir}")
+                return
+
+            import time
+
+            file_mtimes = {}
+            files_changed = {}
+            any_changes = False
+
+            for tool_name, cfg in tool_to_file.items():
+                file_path = sample_dir / cfg["file"] if sample_dir else None
+                if file_path and file_path.exists():
+                    mtime = file_path.stat().st_mtime
+                    file_mtimes[tool_name] = mtime
+                    prev_mtime = charts[tool_name].get("last_mtime", 0)
+                    if prev_mtime is None or mtime > prev_mtime:
+                        files_changed[tool_name] = True
+                        any_changes = True
+                    else:
+                        files_changed[tool_name] = False
+                else:
+                    file_mtimes[tool_name] = 0
+                    files_changed[tool_name] = False
+
+            is_fresh_visit = any(
+                charts[tool_name].get("last_mtime") is None
+                for tool_name in tool_to_file.keys()
+            )
+
+            if not any_changes and not is_fresh_visit:
+                logging.debug(
+                    "[Classification] ⏭ Skipping classification update - no file changes detected"
+                )
+                return
+
+            if any_changes or is_fresh_visit:
+                reasons = []
+                if is_fresh_visit:
+                    reasons.append("fresh_visit")
+                for tool_name, changed in files_changed.items():
+                    if changed:
+                        reasons.append(f"{tool_to_file[tool_name]['file']}")
+                if reasons:
+                    logging.debug(
+                        f"[Classification] Update needed. Reasons: {', '.join(reasons)}"
+                    )
+
+            for tool_name, cfg in tool_to_file.items():
+                file_path = sample_dir / cfg["file"] if sample_dir else None
+                if not file_path or not files_changed.get(tool_name, False):
+                    continue
+                mode = charts[tool_name].get("mode", "percent")
+                data = await asyncio.to_thread(_read_scores_csv, file_path, mode)
+                if data:
+                    _update_charts_from_file(
+                        tool_name, cfg["file"], preloaded=data
+                    )
+                if tool_name in file_mtimes:
+                    charts[tool_name]["last_mtime"] = file_mtimes[tool_name]
+        except Exception as e:
+            logging.exception(f"[Classification] Refresh failed: {e}")
+
+    def _refresh_classification() -> None:
+        """Refresh classification data."""
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            _refresh_classification_sync_impl()
+            return
+        asyncio.create_task(_refresh_classification_async())
 
     def _check_and_update_file(tool_name: str, filename: str, file_path: Path, charts: Dict[str, Any]) -> None:
         """Check file and update charts if needed.
