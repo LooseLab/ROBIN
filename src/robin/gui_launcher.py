@@ -3154,6 +3154,27 @@ class GUILauncher:
                                             'sample_id': sid
                                         })
                                 
+                                # Export consolidated master CSV (one row per selected sample).
+                                if bool(state.get("export_csv", False)) and self.monitored_directory:
+                                    try:
+                                        export_root = os.path.join(
+                                            str(self.monitored_directory), "exports"
+                                        )
+                                        ts = datetime.now().strftime("%Y%m%dT%H%M%S")
+                                        master_export_path = os.path.join(
+                                            export_root, f"master_export_{ts}.csv"
+                                        )
+                                        MasterCSVManager(str(self.monitored_directory)).export_master_csv_rows(
+                                            selected, master_export_path
+                                        )
+                                        if os.path.exists(master_export_path):
+                                            files_to_download.append(master_export_path)
+                                    except Exception as e:
+                                        logging.warning(
+                                            "Failed to export consolidated master CSV: %s",
+                                            e,
+                                        )
+
                                 # Mark as complete
                                 download_complete["done"] = True
                                 logging.info(f"Bulk export complete. {len(files_to_download)} file(s) ready for download.")
@@ -4459,6 +4480,17 @@ class GUILauncher:
                     )
                     if os.path.exists(zip_path):
                         files_to_download.append(zip_path)
+                    try:
+                        master_export_path = os.path.join(
+                            export_csv_dir, f"{sample_id}_master_export.csv"
+                        )
+                        MasterCSVManager(str(self.monitored_directory)).export_master_csv_rows(
+                            [sample_id], master_export_path
+                        )
+                        if os.path.exists(master_export_path):
+                            files_to_download.append(master_export_path)
+                    except Exception as e:
+                        logging.warning("Failed to export master CSV for %s: %s", sample_id, e)
                 
             except Exception as e:
                 # Mark report as failed
@@ -4532,6 +4564,17 @@ class GUILauncher:
                     )
                     if os.path.exists(zip_path):
                         ui.download(zip_path)
+                    try:
+                        master_export_path = os.path.join(
+                            export_csv_dir, f"{sample_id}_master_export.csv"
+                        )
+                        MasterCSVManager(str(self.monitored_directory)).export_master_csv_rows(
+                            [sample_id], master_export_path
+                        )
+                        if os.path.exists(master_export_path):
+                            ui.download(master_export_path)
+                    except Exception as e:
+                        logging.warning("Failed to export master CSV for %s: %s", sample_id, e)
                 
             except Exception as e:
                 # Mark report as failed

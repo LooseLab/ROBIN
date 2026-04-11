@@ -75,6 +75,7 @@ Matt Loose
 """
 
 import os
+import json
 import logging
 import time
 import pickle
@@ -921,6 +922,90 @@ def generate_bed_files(bed_dir, analysis_counter, breakpoints, cnv_data, bin_wid
         logger.error(f"Error generating BED files: {e}")
 
 
+def persist_ichor_py_outputs(
+    sample_dir,
+    result3_cnv: Dict,
+    bin_width: int,
+    logger,
+) -> bool:
+    """
+    Run the ichor_py grid fit on normalized CNV (CNV3) and write
+    ``ichor_py_params.json`` and ``ichor_py_segments.tsv`` under ``sample_dir``.
+
+    Use this from the GUI to backfill ichor outputs without re-running the full
+    CNV pipeline, as long as CNV3-like per-chromosome arrays and ``bin_width``
+    are available.
+    """
+    try:
+        from robin.analysis.ichor_py import run_ichor_like_from_cnv_dict
+
+        ichor_out = run_ichor_like_from_cnv_dict(
+            result3_cnv,
+            bin_width=int(bin_width),
+            normal_grid=(0.1, 0.2, 0.3, 0.4, 0.5, 0.6),
+            ploidy_grid=(1.8, 2.0, 2.2, 2.5, 3.0, 3.5),
+            min_cn=0,
+            max_cn=6,
+            self_transition=0.995,
+        )
+        ffit = ichor_out.fit
+        params_payload = {
+            "method": "ichor_py_grid_v0",
+            "normal_fraction": float(ffit.normal_fraction),
+            "tumor_fraction": float(ffit.tumor_fraction),
+            "tumor_ploidy": float(ffit.tumor_ploidy),
+            "log_likelihood": float(ffit.log_likelihood),
+            "altered_genome_fraction": float(
+                ichor_out.segments.altered_genome_fraction
+            ),
+            "n_segments": int(ichor_out.segments.n_segments),
+            "n_altered_segments": int(ichor_out.segments.n_altered_segments),
+            "state_copy_numbers": [
+                int(v) for v in ffit.state_space.copy_numbers.tolist()
+            ],
+            "state_labels": [str(v) for v in ffit.state_space.labels],
+        }
+        if getattr(ffit, "tumor_ploidy_hmm_only", None) is not None:
+            params_payload["tumor_ploidy_hmm_only"] = float(ffit.tumor_ploidy_hmm_only)
+            params_payload["normal_fraction_hmm_only"] = float(
+                ffit.normal_fraction_hmm_only
+            )
+            params_payload["tumor_fraction_hmm_only"] = float(
+                1.0 - float(ffit.normal_fraction_hmm_only)
+            )
+            params_payload["log_likelihood_hmm_only"] = float(
+                ffit.log_likelihood_hmm_only
+            )
+        if getattr(ffit, "xy_sex_used", None) is not None:
+            params_payload["xy_sex_used"] = ffit.xy_sex_used
+            params_payload["xy_sigma"] = ffit.xy_sigma
+            params_payload["xy_weight"] = ffit.xy_weight
+            if ffit.combined_score is not None:
+                params_payload["combined_score"] = float(ffit.combined_score)
+            if ffit.xy_penalty_at_best is not None:
+                params_payload["xy_penalty_at_best"] = float(ffit.xy_penalty_at_best)
+        params_path = os.path.join(sample_dir, "ichor_py_params.json")
+        with open(params_path, "w", encoding="utf-8") as f:
+            json.dump(params_payload, f, indent=2)
+
+        seg_df = ichor_out.segments.segments.copy()
+        if not seg_df.empty:
+            seg_df = seg_df.sort_values(
+                ["chrom", "start"], ascending=[True, True]
+            ).reset_index(drop=True)
+        seg_path = os.path.join(sample_dir, "ichor_py_segments.tsv")
+        seg_df.to_csv(seg_path, sep="\t", index=False)
+        logger.info(
+            "[ichor_py] Saved params to %s and segments to %s",
+            params_path,
+            seg_path,
+        )
+        return True
+    except Exception as e:
+        logger.warning("[ichor_py] fit/save failed: %s", e)
+        return False
+
+
 def save_cnv_files(
     sample_dir,
     analysis_counter,
@@ -1012,6 +1097,10 @@ def save_cnv_files(
 
         # Generate BED files for CNV regions and breakpoints
         generate_bed_files(bed_dir, analysis_counter, breakpoints, result3_cnv, bin_width, logger)
+
+        # Run python-native ichor-like purity/ploidy fit and persist compact outputs.
+        # This uses normalized CNV (CNV3) and autosomes by default.
+        persist_ichor_py_outputs(sample_dir, result3_cnv, int(bin_width), logger)
 
         # Generate master BED file only if requested (should only be done once per batch at the end)
         # Use async (non-blocking) generation to avoid blocking the analysis pipeline
@@ -1280,7 +1369,7 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
                 result3_cnv[key] = moving_avg_data1 - moving_avg_data2
 
         analysis_result["processing_steps"].append("normalized_cnv_calculated")
-        
+
         # Estimate sex from CNV data
         sex_estimate = estimate_sex_from_cnv(result3_cnv, logger)
         analysis_result["sex_estimate"] = sex_estimate

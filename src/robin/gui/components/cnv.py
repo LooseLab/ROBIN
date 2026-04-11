@@ -10,6 +10,7 @@ from functools import lru_cache
 import logging
 import pickle
 import time
+import json
 import importlib.resources as importlib_resources
 import pandas as pd
 
@@ -20,6 +21,8 @@ except ImportError:  # pragma: no cover
 
 from robin.gui.theme import styled_table, register_theme_sync_callback
 from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary, CNVEvent
+from robin.analysis.cnv_analysis import moving_average, pad_arrays, persist_ichor_py_outputs
+from robin.analysis.ploidy_cnv import estimate_ploidy_from_sample_cnv
 from robin.classification_config import get_cnv_thresholds
 
 # Same chromosome set as reporting (plotting.py): chr0–chr22, chrX, chrY only
@@ -27,10 +30,591 @@ CNV_PLOT_CONTIGS = frozenset(
     ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]
 )
 
+# Integer-clonality metrics use this genomic bin width (not the GUI plot bin width).
+INTEGER_CLONAL_TARGET_BIN_BP = 500_000
+
 
 def _cnv_contig_ok(contig: str) -> bool:
     """True if contig should be included in CNV plots (matches report behaviour)."""
     return contig in CNV_PLOT_CONTIGS
+
+
+def _cnv_sample_bin_map_from_state(state: Dict[str, Any]) -> Optional[Dict[str, np.ndarray]]:
+    """Resolve per-chromosome bin arrays from GUI state (matches ``CNV.npy`` layout)."""
+    raw = state.get("cnv")
+    if not raw:
+        return None
+    if isinstance(raw, dict) and "cnv" in raw:
+        raw = raw["cnv"]
+    return raw if isinstance(raw, dict) else None
+
+
+def _cnv_ref_bin_map_from_state(state: Dict[str, Any]) -> Optional[Dict[str, np.ndarray]]:
+    """Reference pass bins (``CNV2.npy``), same layout as sample."""
+    raw = state.get("cnv2")
+    if not raw:
+        return None
+    if isinstance(raw, dict) and "cnv" in raw:
+        raw = raw["cnv"]
+    return raw if isinstance(raw, dict) else None
+
+
+def _format_ploidy_gui_line(est: Dict[str, Any]) -> str:
+    """Single-line summary for the CNV panel."""
+    fr = est.get("failure_reason")
+    if fr:
+        return f"Ploidy (CNV bins): unavailable ({fr})"
+    st = est.get("seq_type", "unknown")
+    sk = est.get("sex_karyotype")
+    rg = est.get("reference_guided")
+    xr, yr = est.get("x_ratio"), est.get("y_ratio")
+    skew = est.get("skewness")
+    parts = [f"class: {st}"]
+    if rg:
+        parts.append("ref-masked bins")
+    if sk:
+        parts.append(f"karyotype: {sk}")
+    if xr is not None and yr is not None:
+        parts.append(f"X ratio {xr:.3f}, Y ratio {yr:.3f}")
+    if isinstance(skew, (int, float)) and not (isinstance(skew, float) and np.isnan(skew)):
+        parts.append(f"skew {skew:.3f}")
+    return "Ploidy (CNV bins): " + " · ".join(parts)
+
+
+def _apply_ploidy_rescale(vals: np.ndarray, assumed_ploidy: float) -> np.ndarray:
+    """Rescale saved CNV/CNV3 arrays as if ``cnv_from_bam`` had used this ploidy (default lib = 2).
+
+    Library output is proportional to ``(bin_sum / median) * ploidy_run`` with ``ploidy_run=2``.
+    Multiplying stored values by ``assumed_ploidy / 2`` matches changing only that factor.
+    """
+    p = float(assumed_ploidy)
+    if p <= 0:
+        p = 2.0
+    return np.asarray(vals, dtype=float) * (p / 2.0)
+
+
+def _downsample_cnv_bins_for_plot(
+    values_1d: np.ndarray,
+    analysis_bin_width: int,
+    plot_bin_width: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Downsample CNV values when plot_bin_width > analysis_bin_width (same as CNV plots).
+
+    Returns ``(x_positions_bp, values)``. If plot_bin_width <= analysis_bin_width,
+    returns original positions and values unchanged.
+    """
+    if plot_bin_width <= analysis_bin_width or plot_bin_width <= 0:
+        x_bp = np.arange(len(values_1d), dtype=float) * analysis_bin_width
+        return x_bp, np.asarray(values_1d, dtype=float)
+    group_size = int(plot_bin_width / analysis_bin_width)
+    if group_size < 1:
+        x_bp = np.arange(len(values_1d), dtype=float) * analysis_bin_width
+        return x_bp, np.asarray(values_1d, dtype=float)
+    n = len(values_1d)
+    n_trim = (n // group_size) * group_size
+    if n_trim == 0:
+        x_bp = np.arange(n, dtype=float) * analysis_bin_width
+        return x_bp, np.asarray(values_1d, dtype=float)
+    trimmed = np.asarray(values_1d[:n_trim], dtype=float)
+    grouped = trimmed.reshape(-1, group_size)
+    values_out = np.mean(grouped, axis=1)
+    x_bp = (np.arange(len(values_out)) + 0.5) * plot_bin_width
+    return x_bp, values_out
+
+
+def _cnv_autosome_keys(cnv_map: Dict[str, np.ndarray]) -> List[str]:
+    """chr1–chr22 only (excludes chr0 and sex chromosomes)."""
+    out: List[str] = []
+    for k in natsort.natsorted(cnv_map.keys()):
+        if k.startswith("chr") and k[3:].isdigit():
+            n = int(k[3:])
+            if 1 <= n <= 22:
+                out.append(k)
+    return out
+
+
+def _cnv_unwrap_inner_map(raw: Any) -> Optional[Dict[str, np.ndarray]]:
+    if not raw or not isinstance(raw, dict):
+        return None
+    if "cnv" in raw:
+        raw = raw["cnv"]
+    return raw if isinstance(raw, dict) else None
+
+
+def _cnv_autosomes_have_bins(cnv_dict: Optional[Dict[str, np.ndarray]]) -> bool:
+    if not cnv_dict:
+        return False
+    for k in _cnv_autosome_keys(cnv_dict):
+        if k in cnv_dict and np.asarray(cnv_dict[k]).size > 0:
+            return True
+    return False
+
+
+def _masked_contiguous_runs(mask: np.ndarray) -> List[Tuple[int, int]]:
+    """Return ``[start, end)`` index spans where ``mask`` is True."""
+    m = np.asarray(mask, dtype=bool)
+    if m.size == 0 or not np.any(m):
+        return []
+    idx = np.where(m)[0]
+    runs: List[Tuple[int, int]] = []
+    start = int(idx[0])
+    prev = int(idx[0])
+    for i in idx[1:]:
+        ii = int(i)
+        if ii == prev + 1:
+            prev = ii
+        else:
+            runs.append((start, prev + 1))
+            start = ii
+            prev = ii
+    runs.append((start, prev + 1))
+    return runs
+
+
+def _chunk_1d(arr: np.ndarray, chunk_bins: int) -> List[np.ndarray]:
+    if chunk_bins < 1:
+        chunk_bins = 1
+    a = np.asarray(arr, dtype=float).ravel()
+    if a.size == 0:
+        return []
+    out: List[np.ndarray] = []
+    for i in range(0, len(a), chunk_bins):
+        out.append(a[i : i + chunk_bins])
+    return out
+
+
+def _merge_adjacent_chunks(
+    chunks: List[np.ndarray], merge_tol: float
+) -> List[np.ndarray]:
+    """Merge consecutive chunks when their medians differ by less than ``merge_tol``."""
+    if not chunks:
+        return []
+    med = [float(np.median(c)) for c in chunks]
+    groups: List[List[np.ndarray]] = [[chunks[0]]]
+    for i in range(1, len(chunks)):
+        if abs(med[i] - med[i - 1]) < merge_tol:
+            groups[-1].append(chunks[i])
+        else:
+            groups.append([chunks[i]])
+    return [np.concatenate(g) for g in groups]
+
+
+def _segment_medians_from_run(
+    r_run: np.ndarray, chunk_bins: int, merge_tol: float
+) -> List[float]:
+    """Split a residual run into coarse chunks, merge neighbours, return one median per segment."""
+    chunks = _chunk_1d(r_run, chunk_bins)
+    if not chunks:
+        return []
+    merged = _merge_adjacent_chunks(chunks, merge_tol)
+    return [float(np.median(block)) for block in merged]
+
+
+def _segment_spans_from_series(
+    x: np.ndarray,
+    y: np.ndarray,
+    *,
+    chunk_bins: int = 5,
+    merge_tol: float = 0.12,
+) -> List[Tuple[float, float, float]]:
+    """Return horizontal segment spans ``(x_start, x_end, y_median)`` from series."""
+    xx = np.asarray(x, dtype=float).ravel()
+    yy = np.asarray(y, dtype=float).ravel()
+    n = min(len(xx), len(yy))
+    if n == 0:
+        return []
+    xx = xx[:n]
+    yy = yy[:n]
+    if n < 2:
+        return [(float(xx[0]), float(xx[0]), float(yy[0]))]
+    chunks_x = _chunk_1d(xx, max(1, int(chunk_bins)))
+    chunks_y = _chunk_1d(yy, max(1, int(chunk_bins)))
+    if not chunks_x or not chunks_y:
+        return []
+    med = [float(np.median(c)) for c in chunks_y]
+    groups: List[List[int]] = [[0]]
+    for i in range(1, len(chunks_y)):
+        if abs(med[i] - med[i - 1]) < float(merge_tol):
+            groups[-1].append(i)
+        else:
+            groups.append([i])
+    spans: List[Tuple[float, float, float]] = []
+    for g in groups:
+        i0, i1 = g[0], g[-1]
+        x0 = float(chunks_x[i0][0])
+        x1 = float(chunks_x[i1][-1])
+        ymed = float(np.median(np.concatenate([chunks_y[i] for i in g])))
+        spans.append((x0, x1, ymed))
+    return spans
+
+
+def _resample_residuals_to_target_bin_width(
+    r: np.ndarray,
+    mask: np.ndarray,
+    analysis_bin_width_bp: int,
+    target_bin_width_bp: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Resample per-bin residuals to ~``target_bin_width_bp`` windows (mean + ref mask).
+
+    If the analysis bin is **wider** than the target (e.g. 1 Mb vs 500 kb), each value is
+    repeated across ``analysis/target`` target bins (constant within the analysis bin).
+    If the analysis bin is **narrower**, consecutive bins are averaged until each block
+    covers ~target width; all-masked blocks are dropped.
+    """
+    r = np.asarray(r, dtype=float).ravel()
+    mask = np.asarray(mask, dtype=bool).ravel()
+    n = min(len(r), len(mask))
+    if n == 0:
+        return np.array([], dtype=float), np.array([], dtype=bool)
+    r, mask = r[:n], mask[:n]
+    aw = max(1, int(analysis_bin_width_bp))
+    tw = max(1, int(target_bin_width_bp))
+    if aw == tw:
+        return r, mask
+    if tw > aw:
+        k = max(1, int(round(float(tw) / float(aw))))
+        n_out = n // k
+        if n_out == 0:
+            return np.array([], dtype=float), np.array([], dtype=bool)
+        rs: List[float] = []
+        ms: List[bool] = []
+        for i in range(0, n_out * k, k):
+            blk_r = r[i : i + k]
+            blk_m = mask[i : i + k]
+            if not np.any(blk_m):
+                continue
+            rs.append(float(np.mean(blk_r[blk_m])))
+            ms.append(True)
+        return np.asarray(rs, dtype=float), np.asarray(ms, dtype=bool)
+    rep = max(1, int(round(float(aw) / float(tw))))
+    return np.repeat(r, rep), np.repeat(mask, rep)
+
+
+def _compute_data_driven_integer_band(
+    r_all: np.ndarray,
+    mask_all: np.ndarray,
+    *,
+    variable_threshold: float,
+    k_sigma: float = 2.5,
+    band_floor: float = 0.04,
+    band_ceiling: float = 0.22,
+    min_neutral_bins: int = 40,
+) -> Tuple[float, float, int]:
+    """Return ``(band, sigma, neutral_bin_count)`` for classifying non-integer residuals.
+
+    ``sigma`` is the standard deviation of residuals in **neutral** bins (|r| below
+    ``variable_threshold`` when enough bins exist; otherwise a widened percentile band).
+    ``band = clip(k_sigma * sigma, band_floor, band_ceiling)``.
+    """
+    r = np.asarray(r_all, dtype=float).ravel()
+    m = np.asarray(mask_all, dtype=bool).ravel()
+    n = min(len(r), len(m))
+    if n == 0:
+        return float(band_floor), 0.0, 0
+    r, m = r[:n], m[:n]
+    if not np.any(m):
+        return float(band_floor), 0.0, 0
+    ra = r[m]
+    if ra.size == 0:
+        return float(band_floor), 0.0, 0
+    vt = float(variable_threshold)
+    neutral = np.abs(ra) < vt
+    nn = int(np.sum(neutral))
+    if nn < min_neutral_bins and ra.size >= 10:
+        pct = float(
+            np.percentile(
+                np.abs(ra),
+                min(55.0, max(25.0, 100.0 * min_neutral_bins / max(ra.size, 1))),
+            )
+        )
+        neutral = np.abs(ra) <= pct
+        nn = int(np.sum(neutral))
+    if nn >= 10:
+        sigma = float(np.std(ra[neutral]))
+    else:
+        sigma = float(np.std(ra))
+    band = float(np.clip(k_sigma * sigma, band_floor, band_ceiling))
+    return band, sigma, nn
+
+
+def _build_autosome_residuals(
+    cnv_map: Dict[str, np.ndarray],
+    *,
+    assumed_ploidy: float,
+    cnv3_map: Optional[Dict[str, np.ndarray]],
+    cnv2_map: Optional[Dict[str, np.ndarray]],
+) -> Tuple[str, List[Tuple[str, np.ndarray, np.ndarray]]]:
+    """Return ``(signal_source, list of (chrom, residual_r, mask))`` for autosomes.
+
+    Preference order matches the batch pipeline: use persisted **CNV3** (smoothed
+    sample−reference) when present; else **moving_average(sample) − moving_average(ref)**
+    when **CNV2** exists; else absolute **CNV** minus assumed ploidy.
+
+    **CNV2** bins with value ``<= 0`` are excluded (same unmappable / zero-control idea
+    as ploidy estimation).
+    """
+    p = float(assumed_ploidy)
+    if p <= 0:
+        p = 2.0
+
+    use_cnv3 = _cnv_autosomes_have_bins(cnv3_map)
+    use_ref = cnv2_map is not None and isinstance(cnv2_map, dict)
+
+    rows: List[Tuple[str, np.ndarray, np.ndarray]] = []
+
+    if use_cnv3 and cnv3_map is not None:
+        for contig in _cnv_autosome_keys(cnv3_map):
+            if contig not in cnv3_map:
+                continue
+            raw3 = np.asarray(cnv3_map[contig], dtype=float).ravel()
+            if raw3.size == 0:
+                continue
+            v = _apply_ploidy_rescale(raw3, p)
+            r = v
+            mask = np.ones(len(r), dtype=bool)
+            if use_ref and contig in cnv2_map:
+                ref = np.asarray(cnv2_map[contig], dtype=float).ravel()
+                n = min(len(r), len(ref))
+                r = r[:n]
+                mask = ref[:n] > 0
+            rows.append((contig, r, mask))
+        if rows:
+            return ("cnv3", rows)
+
+    if use_ref:
+        for contig in _cnv_autosome_keys(cnv_map):
+            if contig not in cnv_map or contig not in cnv2_map:
+                continue
+            s = np.asarray(cnv_map[contig], dtype=float).ravel()
+            ref = np.asarray(cnv2_map[contig], dtype=float).ravel()
+            if s.size == 0:
+                continue
+            s_ma = moving_average(s)
+            r_ma = moving_average(ref)
+            s_ma, r_ma = pad_arrays(s_ma, r_ma)
+            diff = s_ma - r_ma
+            v = _apply_ploidy_rescale(diff, p)
+            r = v
+            mask = r_ma > 0
+            rows.append((contig, np.asarray(r, dtype=float), mask))
+        if rows:
+            return ("ref_ma_diff", rows)
+
+    for contig in _cnv_autosome_keys(cnv_map):
+        raw = np.asarray(cnv_map[contig], dtype=float).ravel()
+        if raw.size == 0:
+            continue
+        v = _apply_ploidy_rescale(raw, p)
+        r = v - p
+        mask = np.ones(len(r), dtype=bool)
+        if use_ref and contig in cnv2_map:
+            ref = np.asarray(cnv2_map[contig], dtype=float).ravel()
+            n = min(len(r), len(ref))
+            r = r[:n]
+            mask = ref[:n] > 0
+        rows.append((contig, r, mask))
+    return ("absolute", rows)
+
+
+def estimate_cnv_integer_clonal_diagnostics(
+    cnv_map: Dict[str, np.ndarray],
+    *,
+    bin_width_analysis: int,
+    plot_bin_width: int,
+    assumed_ploidy: float,
+    cnv3_map: Optional[Dict[str, np.ndarray]] = None,
+    cnv2_map: Optional[Dict[str, np.ndarray]] = None,
+    band: Optional[float] = None,
+    band_k_sigma: float = 2.5,
+    band_floor: float = 0.04,
+    band_ceiling: float = 0.22,
+    variable_threshold: float = 0.25,
+    segment_chunk_bins: int = 5,
+    segment_merge_tol: Optional[float] = None,
+    target_bin_width_bp: int = INTEGER_CLONAL_TARGET_BIN_BP,
+) -> Optional[Dict[str, Any]]:
+    """Summarise integer clonality using **control-aware** residuals and **segment medians**.
+
+    When **CNV3** (sample−reference, as in the batch pipeline) is available, residuals are
+    ``rescale(CNV3)`` with expected **0** — reference pass **CNV2** removes shared GC /
+    mappability bias. Bins with **reference ≤ 0** are skipped (unmappable control bins).
+
+    If **CNV3** is absent but **CNV2** exists, we use ``MA(sample) − MA(reference)``
+    like ``save_cnv_files`` / ``process_single_bam``.
+
+    Otherwise we fall back to absolute ``rescale(CNV) − assumed_ploidy`` (optionally
+    **ref-masked**).
+
+    **Autosomes only** (chr1–chr22). Residuals are **resampled to** ``target_bin_width_bp``
+    (default **500 kb**) before the non-integer band and segmentation — **not** the GUI plot
+    bin width. The **band** for ``|r − round(r)|`` is **data-driven**:
+    ``clip(band_k_sigma * σ, band_floor, band_ceiling)`` where **σ** is the standard deviation
+    of residuals in **neutral** bins (``|r| < variable_threshold``, with a percentile fallback
+    if too few). Pass ``band`` to override with a fixed width.
+
+    Segments: on the **500 kb** (or target) series, chunks of ``segment_chunk_bins`` bins,
+    merged when adjacent chunk medians differ by less than ``segment_merge_tol`` (default
+    tied to the computed band).
+
+    ``plot_bin_width`` is unused here (kept for API compatibility).
+
+    Returns keys including ``signal_source``, ``band``, ``band_sigma``, ``frac_outside_band``,
+    ``median_frac_dev_variable``, ``purity_proxy``, ``n_bins_all``, ``target_bin_width_bp``.
+    """
+    _ = plot_bin_width
+    if not cnv_map:
+        return None
+    aw = int(bin_width_analysis)
+    if aw <= 0:
+        return None
+    tw = max(1, int(target_bin_width_bp))
+
+    p = float(assumed_ploidy)
+    if p <= 0:
+        p = 2.0
+
+    source, per_chrom = _build_autosome_residuals(
+        cnv_map,
+        assumed_ploidy=p,
+        cnv3_map=cnv3_map,
+        cnv2_map=cnv2_map,
+    )
+    if not per_chrom:
+        return None
+
+    resampled: List[Tuple[np.ndarray, np.ndarray]] = []
+    r_parts: List[np.ndarray] = []
+    m_parts: List[np.ndarray] = []
+    n_bins = 0
+    for _contig, r, mask in per_chrom:
+        r = np.asarray(r, dtype=float).ravel()
+        mask = np.asarray(mask, dtype=bool).ravel()
+        n = min(len(r), len(mask))
+        if n == 0:
+            continue
+        r = r[:n]
+        mask = mask[:n]
+        r5, m5 = _resample_residuals_to_target_bin_width(r, mask, aw, tw)
+        if r5.size == 0:
+            continue
+        resampled.append((r5, m5))
+        r_parts.append(r5)
+        m_parts.append(m5)
+        n_bins += int(np.sum(m5))
+
+    if not r_parts:
+        return None
+
+    r_cat = np.concatenate(r_parts)
+    m_cat = np.concatenate(m_parts)
+    band_auto, sigma, neutral_n = _compute_data_driven_integer_band(
+        r_cat,
+        m_cat,
+        variable_threshold=variable_threshold,
+        k_sigma=float(band_k_sigma),
+        band_floor=float(band_floor),
+        band_ceiling=float(band_ceiling),
+    )
+    band_eff = float(band) if band is not None else band_auto
+    merge_tol = (
+        float(segment_merge_tol)
+        if segment_merge_tol is not None
+        else max(0.08, 0.95 * band_eff)
+    )
+    chunk_bins = max(1, int(segment_chunk_bins))
+
+    seg_medians: List[float] = []
+    for r5, m5 in resampled:
+        for start, end in _masked_contiguous_runs(m5):
+            run = r5[start:end]
+            if run.size == 0:
+                continue
+            seg_medians.extend(
+                _segment_medians_from_run(run, chunk_bins, merge_tol)
+            )
+
+    if not seg_medians:
+        return None
+
+    sm = np.asarray(seg_medians, dtype=float)
+    frac_dev = np.abs(sm - np.round(sm))
+    n_seg = int(sm.size)
+    mean_all = float(np.mean(frac_dev))
+    frac_out = float(np.mean(frac_dev > band_eff))
+
+    var_mask = np.abs(sm) > variable_threshold
+    n_var_seg = int(np.sum(var_mask))
+    base_meta = {
+        "signal_source": source,
+        "band": band_eff,
+        "band_sigma": float(sigma),
+        "band_auto": float(band_auto),
+        "band_neutral_bins": float(neutral_n),
+        "band_override": band is not None,
+        "target_bin_width_bp": float(tw),
+        "variable_threshold": variable_threshold,
+        "n_bins_all": float(n_bins),
+        "n_segments_all": float(n_seg),
+        "mean_frac_dev_all": mean_all,
+        "frac_outside_band": frac_out,
+    }
+    if n_var_seg == 0:
+        return {
+            **base_meta,
+            "n_segments_variable": 0.0,
+            "median_frac_dev_variable": float("nan"),
+            "purity_proxy": float("nan"),
+        }
+
+    fv = frac_dev[var_mask]
+    med_v = float(np.median(fv))
+    purity = max(0.0, min(1.0, 1.0 - 2.0 * med_v))
+    return {
+        **base_meta,
+        "n_segments_variable": float(n_var_seg),
+        "median_frac_dev_variable": med_v,
+        "purity_proxy": purity,
+    }
+
+
+def _format_integer_clonal_line(d: Optional[Dict[str, Any]]) -> str:
+    """One-line GUI summary for :func:`estimate_cnv_integer_clonal_diagnostics`."""
+    if not d:
+        return "Integer clonality (heuristic): --"
+    src = str(d.get("signal_source", ""))
+    src_lbl = {
+        "cnv3": "CNV3+ref-mask",
+        "ref_ma_diff": "MA−ref",
+        "absolute": "absolute CNV",
+    }.get(src, src or "?")
+    tw = int(d.get("target_bin_width_bp", INTEGER_CLONAL_TARGET_BIN_BP))
+    tw_kb = max(1, tw // 1000)
+    n_bins = int(d.get("n_bins_all", 0))
+    n_seg = int(d.get("n_segments_all", 0))
+    n_var = int(d.get("n_segments_variable", 0))
+    band = float(d.get("band", 0.12))
+    frac_out = d.get("frac_outside_band")
+    med_v = d.get("median_frac_dev_variable")
+    pur = d.get("purity_proxy")
+    sig = d.get("band_sigma")
+    parts = [f"{src_lbl}", f"{tw_kb} kb", f"{n_bins} bins", f"{n_seg} seg."]
+    if d.get("band_override"):
+        parts.append("band=fixed")
+    elif sig is not None and not (isinstance(sig, float) and np.isnan(sig)):
+        parts.append(f"band≈{band:.3f} (σ={float(sig):.3f})")
+    else:
+        parts.append(f"band≈{band:.3f}")
+    if frac_out is not None and not (isinstance(frac_out, float) and np.isnan(frac_out)):
+        parts.append(f"non-int. seg. Δ >{band:.2f}: {frac_out:.1%}")
+    if n_var == 0:
+        vt = float(d.get("variable_threshold", 0.25))
+        parts.append(f"no seg. |r|>{vt:.2f} (proxy N/A)")
+        return "Integer clonality (heuristic): " + " · ".join(parts)
+    if med_v is not None and not (isinstance(med_v, float) and np.isnan(med_v)):
+        parts.append(f"median |r−round(r)| (var. seg.): {med_v:.3f}")
+    if pur is not None and not (isinstance(pur, float) and np.isnan(pur)):
+        parts.append(f"proxy purity ≈ {pur:.0%}")
+    return "Integer clonality (heuristic): " + " · ".join(parts)
 
 
 def _cnv_load_binary_payload(
@@ -38,6 +622,7 @@ def _cnv_load_binary_payload(
     *,
     cnv_dict_npy_changed: bool,
     cnv_npy_changed: bool,
+    cnv2_npy_changed: bool,
     cnv3_npy_changed: bool,
     data_array_reload: bool,
     xy_pkl_changed: bool,
@@ -46,6 +631,7 @@ def _cnv_load_binary_payload(
     out: Dict[str, Any] = {}
     cnv_dict_npy = sample_dir / "CNV_dict.npy"
     cnv_npy = sample_dir / "CNV.npy"
+    cnv2_npy = sample_dir / "CNV2.npy"
     cnv3_npy = sample_dir / "CNV3.npy"
     data_array_npy = sample_dir / "cnv_data_array.npy"
     xy_pkl = sample_dir / "XYestimate.pkl"
@@ -66,6 +652,12 @@ def _cnv_load_binary_payload(
         except Exception:
             out["cnv"] = None
 
+    if cnv2_npy_changed and cnv2_npy.exists():
+        try:
+            out["cnv2"] = np.load(cnv2_npy, allow_pickle=True).item()
+        except Exception:
+            out["cnv2"] = None
+
     if cnv3_npy_changed and cnv3_npy.exists():
         try:
             out["cnv3"] = np.load(cnv3_npy, allow_pickle=True).item()
@@ -79,6 +671,35 @@ def _cnv_load_binary_payload(
             pass
 
     return out
+
+
+def _cnv3_map_and_binwidth_for_ichor(
+    state: Dict[str, Any], sample_dir: Path
+) -> Tuple[Optional[Dict[str, np.ndarray]], int]:
+    """Resolve CNV3 per-chromosome arrays and analysis bin width from GUI state or disk."""
+    cnv3 = state.get("cnv3")
+    if not cnv3 and (sample_dir / "CNV3.npy").exists():
+        try:
+            cnv3 = np.load(sample_dir / "CNV3.npy", allow_pickle=True).item()
+        except Exception:
+            cnv3 = None
+    raw: Any = cnv3
+    if isinstance(raw, dict) and "cnv" in raw:
+        raw = raw["cnv"]
+    cnv3_map = raw if isinstance(raw, dict) else None
+
+    bw = 0
+    cd = state.get("cnv_dict")
+    if isinstance(cd, dict) and isinstance(cd.get("bin_width"), (int, float)):
+        bw = int(cd["bin_width"])
+    if bw <= 0 and (sample_dir / "CNV_dict.npy").exists():
+        try:
+            d = np.load(sample_dir / "CNV_dict.npy", allow_pickle=True).item()
+            if isinstance(d, dict) and isinstance(d.get("bin_width"), (int, float)):
+                bw = int(d["bin_width"])
+        except Exception:
+            pass
+    return cnv3_map, bw
 
 
 def _is_dark_mode() -> bool:
@@ -266,6 +887,21 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
     Uses `launcher._cnv_state` for per-sample cache/state.
     Expects CNV.npy, CNV3.npy, CNV_dict.npy, XYestimate.pkl, cnv_data_array.npy in sample folder.
 
+    The "Ploidy (CNV bins)" line is computed in the GUI from sample bin data (``CNV.npy`` +
+    ``bin_width`` in ``CNV_dict.npy``), and when present uses ``CNV2.npy`` (reference bins)
+    to restrict medians to bins where the reference bin is non-zero; it is not written during
+    batch CNV analysis.
+
+    **Assumed ploidy** (default 2) rescales loaded ``CNV.npy`` and ``CNV3.npy`` values by
+    ``assumed / 2`` for plotting only, matching a different ``ploidy`` argument to
+    ``cnv_from_bam`` without re-running the BAM.
+
+    **Integer clonality** is a heuristic: prefer **CNV3** (sample−reference) with **CNV2**
+    ref-masking to reduce GC/mappability noise; otherwise ``MA(sample)−MA(ref)`` or absolute
+    CNV. Residuals are resampled to **500 kb** genomic bins (not the plot bin width); the
+    non-integer band is **data-driven** from neutral-bin variance. **Segment medians**
+    (chunk + merge) tighten noise. It is not a substitute for BAF-based tumour purity.
+
     Controls now trigger immediate refresh instead of waiting for timer updates.
     """
     with ui.element("div").classes("w-full min-w-0").props("id=analysis-detail-cnv"):
@@ -288,6 +924,24 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     cnv_xy = ui.label("Genetic sex: --").classes(
                         "classification-insight-meta w-full"
                     )
+                    cnv_ploidy = ui.label("Ploidy (CNV bins): --").classes(
+                        "classification-insight-meta w-full"
+                    )
+                    cnv_integer_clonal = ui.label(
+                        "Integer clonality (heuristic): --"
+                    ).classes("classification-insight-meta w-full")
+                    with ui.row().classes("w-full items-center gap-2 flex-wrap"):
+                        cnv_ichor_py = ui.label(
+                            "Tumour fraction/ploidy (ichor_py): --"
+                        ).classes("classification-insight-meta flex-grow min-w-0")
+                        cnv_run_ichor_py = (
+                            ui.button("Run ichor_py", icon="calculate")
+                            .props("flat dense no-caps")
+                            .tooltip(
+                                "Compute tumour fraction and ploidy from CNV3 in memory "
+                                "or from CNV3.npy on disk — no BAM re-run required."
+                            )
+                        )
                     with ui.row().classes(
                         "w-full justify-end gap-4 flex-wrap items-baseline"
                     ):
@@ -340,12 +994,44 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     options=_PLOT_BIN_OPTIONS,
                     value=_PLOT_BIN_KEY_DEFAULT,
                 ).style("width: 120px")
+                ui.label("Segments").classes("classification-insight-meta ml-2")
+                cnv_segments = ui.toggle(
+                    options={"hide": "Hide", "show": "Show"}, value="show"
+                ).classes("mt-1")
+                ui.label("Segment source").classes("classification-insight-meta ml-2")
+                cnv_segment_source = ui.toggle(
+                    options={"heuristic": "Heuristic", "ichor_py": "IchorPy"},
+                    value="heuristic",
+                ).classes("mt-1")
                 cnv_bp_label = ui.label("Breakpoints").classes(
                     "classification-insight-meta ml-2"
                 ).style("display: none")
                 cnv_bp = ui.toggle(
                     options={"hide": "Hide", "show": "Show"}, value="show"
                 ).classes("mt-1").style("display: none")
+            with ui.row().classes(
+                "w-full gap-3 items-center mb-1 flex-wrap"
+            ):
+                ui.label("Assumed ploidy (display)").classes(
+                    "classification-insight-meta"
+                )
+                cnv_assumed_ploidy = ui.number(
+                    value=2.0, min=0.5, max=16.0, step=0.5, format="%.2f"
+                ).classes("max-w-[140px]").props("dense")
+                try:
+                    _st_cnv = launcher._cnv_state.setdefault(str(sample_dir), {})
+                    if "plot_assumed_ploidy" not in _st_cnv and "plot_abs_baseline_copy" in _st_cnv:
+                        try:
+                            b = float(_st_cnv.get("plot_abs_baseline_copy", 2.0))
+                            if b > 0:
+                                _st_cnv["plot_assumed_ploidy"] = 4.0 / b
+                        except Exception:
+                            pass
+                    _ap = float(_st_cnv.get("plot_assumed_ploidy", 2.0))
+                    if _ap > 0:
+                        cnv_assumed_ploidy.value = _ap
+                except Exception:
+                    pass
             with ui.element("div").classes("w-full target-coverage-panel__plot-wrap"):
                 cnv_abs = ui.echart(
                     {
@@ -697,6 +1383,18 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         except Exception:
             pass
 
+    def _clear_segment_series(chart: Any) -> None:
+        """Remove previously rendered segment overlay line series."""
+        try:
+            base = chart.options.get("series", [])
+            chart.options["series"] = [
+                s
+                for s in base
+                if not str(s.get("name", "")).startswith(("seg_abs", "seg_diff"))
+            ]
+        except Exception:
+            pass
+
     @lru_cache(maxsize=1)
     def _load_centromere_regions() -> Dict[str, List[Tuple[int, int, str]]]:
         """Load centromere/satellite regions from packaged resources.
@@ -812,34 +1510,130 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             pass
         return "Unknown"
 
+    def _update_ploidy_label(state: Dict[str, Any]) -> None:
+        """Compute ploidy / karyotype from sample CNV bins (GUI-only; not written by analysis)."""
+        try:
+            cnv_map = _cnv_sample_bin_map_from_state(state)
+            if not cnv_map:
+                cnv_ploidy.set_text("Ploidy (CNV bins): --")
+                return
+            bw = int(state.get("cnv_dict", {}).get("bin_width", 1_000_000))
+            r2_map = _cnv_ref_bin_map_from_state(state)
+            est = estimate_ploidy_from_sample_cnv(
+                cnv_map,
+                bw,
+                logging.getLogger("robin.gui.cnv.ploidy"),
+                r2_cnv=r2_map,
+            )
+            cnv_ploidy.set_text(_format_ploidy_gui_line(est))
+        except Exception as exc:
+            logging.debug("CNV ploidy GUI update failed: %s", exc)
+            cnv_ploidy.set_text("Ploidy (CNV bins): unavailable")
+
+    def _update_integer_clonal_label(state: Dict[str, Any]) -> None:
+        """Heuristic tumour purity proxy from deviation of residuals from integers (autosomes)."""
+        try:
+            cnv_map = _cnv_sample_bin_map_from_state(state)
+            if not cnv_map:
+                cnv_integer_clonal.set_text("Integer clonality (heuristic): --")
+                return
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            if "plot_assumed_ploidy" not in st and "plot_abs_baseline_copy" in st:
+                try:
+                    b = float(st.get("plot_abs_baseline_copy", 2.0))
+                    if b > 0:
+                        st["plot_assumed_ploidy"] = 4.0 / b
+                except Exception:
+                    pass
+            ploidy_assumed = float(st.get("plot_assumed_ploidy", 2.0))
+            if ploidy_assumed <= 0:
+                ploidy_assumed = 2.0
+            try:
+                ploidy_assumed = float(cnv_assumed_ploidy.value)
+                if ploidy_assumed > 0:
+                    st["plot_assumed_ploidy"] = ploidy_assumed
+            except Exception:
+                pass
+            binw = int(state.get("cnv_dict", {}).get("bin_width", 1_000_000))
+            plot_bw = state.get("plot_bin_width") or binw
+            if plot_bw is not None and int(plot_bw) < binw:
+                plot_bw = binw
+            cnv3_map = _cnv_unwrap_inner_map(state.get("cnv3"))
+            cnv2_map = _cnv_ref_bin_map_from_state(state)
+            diag = estimate_cnv_integer_clonal_diagnostics(
+                cnv_map,
+                bin_width_analysis=binw,
+                plot_bin_width=int(plot_bw) if plot_bw else binw,
+                assumed_ploidy=ploidy_assumed,
+                cnv3_map=cnv3_map,
+                cnv2_map=cnv2_map,
+            )
+            cnv_integer_clonal.set_text(_format_integer_clonal_line(diag))
+        except Exception as exc:
+            logging.debug("CNV integer clonality GUI update failed: %s", exc)
+            cnv_integer_clonal.set_text("Integer clonality (heuristic): unavailable")
+
+    def _update_ichor_py_label() -> None:
+        """Display persisted ichor_py purity/ploidy estimates if available."""
+        try:
+            p = sample_dir / "ichor_py_params.json"
+            if not p.exists():
+                cnv_ichor_py.set_text("Tumour fraction/ploidy (ichor_py): --")
+                return
+            with p.open("r", encoding="utf-8") as f:
+                obj = json.load(f)
+            tf = obj.get("tumor_fraction")
+            pl = obj.get("tumor_ploidy")
+            ag = obj.get("altered_genome_fraction")
+            ns = obj.get("n_segments")
+            if isinstance(tf, (int, float)) and isinstance(pl, (int, float)):
+                text = (
+                    f"Tumour fraction/ploidy (ichor_py): {float(tf):.1%}, {float(pl):.2f}"
+                )
+                pl_hmm = obj.get("tumor_ploidy_hmm_only")
+                if isinstance(pl_hmm, (int, float)):
+                    text += f" · HMM-only ploidy {float(pl_hmm):.2f}"
+                if isinstance(ag, (int, float)):
+                    text += f" · altered genome {float(ag):.1%}"
+                if isinstance(ns, (int, float)):
+                    text += f" · segments {int(ns)}"
+                cnv_ichor_py.set_text(text)
+            else:
+                cnv_ichor_py.set_text("Tumour fraction/ploidy (ichor_py): unavailable")
+        except Exception as exc:
+            logging.debug("ichor_py GUI label update failed: %s", exc)
+            cnv_ichor_py.set_text("Tumour fraction/ploidy (ichor_py): unavailable")
+
+    def _load_ichor_segments_cached(state: Dict[str, Any]) -> Optional[pd.DataFrame]:
+        """Load ichor_py segments TSV with mtime cache in state."""
+        try:
+            seg_path = sample_dir / "ichor_py_segments.tsv"
+            if not seg_path.exists():
+                state["ichor_segments_df"] = None
+                state["ichor_segments_m"] = 0
+                return None
+            m = seg_path.stat().st_mtime
+            if state.get("ichor_segments_m") == m and isinstance(
+                state.get("ichor_segments_df"), pd.DataFrame
+            ):
+                return state.get("ichor_segments_df")
+            df = pd.read_csv(seg_path, sep="\t")
+            state["ichor_segments_df"] = df
+            state["ichor_segments_m"] = m
+            return df
+        except Exception:
+            state["ichor_segments_df"] = None
+            return None
+
     def _downsample_cnv_for_plot(
         values_1d: np.ndarray,
         analysis_bin_width: int,
         plot_bin_width: int,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Downsample CNV values for display when plot_bin_width > analysis_bin_width.
-
-        Returns (x_positions_bp, values) where x is in genomic bp. If plot_bin_width
-        <= analysis_bin_width, returns original positions and values unchanged.
-        """
-        if plot_bin_width <= analysis_bin_width or plot_bin_width <= 0:
-            x_bp = np.arange(len(values_1d), dtype=float) * analysis_bin_width
-            return x_bp, np.asarray(values_1d, dtype=float)
-        group_size = int(plot_bin_width / analysis_bin_width)
-        if group_size < 1:
-            x_bp = np.arange(len(values_1d), dtype=float) * analysis_bin_width
-            return x_bp, np.asarray(values_1d, dtype=float)
-        n = len(values_1d)
-        n_trim = (n // group_size) * group_size
-        if n_trim == 0:
-            x_bp = np.arange(n, dtype=float) * analysis_bin_width
-            return x_bp, np.asarray(values_1d, dtype=float)
-        trimmed = np.asarray(values_1d[:n_trim], dtype=float)
-        grouped = trimmed.reshape(-1, group_size)
-        values_out = np.mean(grouped, axis=1)
-        # Center of each group in bp (within chromosome)
-        x_bp = (np.arange(len(values_out)) + 0.5) * plot_bin_width
-        return x_bp, values_out
+        """Downsample CNV values for display when plot_bin_width > analysis_bin_width."""
+        return _downsample_cnv_bins_for_plot(
+            values_1d, analysis_bin_width, plot_bin_width
+        )
 
     def _analyze_cytoband_cnv(
         cnv_data: Dict[str, np.ndarray],
@@ -1214,6 +2008,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
     def _render_cnv_from_state(state: Dict[str, Any]) -> None:
         try:
+            _clear_segment_series(cnv_abs)
+            _clear_segment_series(cnv_diff)
             cnv_map = state.get("cnv")
             cnv3_map = state.get("cnv3")
             if isinstance(cnv_map, dict) and "cnv" in cnv_map:
@@ -1222,9 +2018,24 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv3_map = cnv3_map["cnv"]
             if not cnv_map:
                 return
+            _st_plot = launcher._cnv_state.setdefault(str(sample_dir), {})
+            if "plot_assumed_ploidy" not in _st_plot and "plot_abs_baseline_copy" in _st_plot:
+                try:
+                    b = float(_st_plot.get("plot_abs_baseline_copy", 2.0))
+                    if b > 0:
+                        _st_plot["plot_assumed_ploidy"] = 4.0 / b
+                except Exception:
+                    pass
+            ploidy_assumed = float(_st_plot.get("plot_assumed_ploidy", 2.0))
+            if ploidy_assumed <= 0:
+                ploidy_assumed = 2.0
             dark_ui = _is_dark_mode()
             chrom_palette = _cnv_chromosome_scatter_palette(dark_ui)
             col_high, col_low, col_norm = _cnv_value_mode_colors(dark_ui)
+            seg_col_abs = "#e5e7eb" if dark_ui else "#111827"
+            seg_col_diff = "#cbd5e1" if dark_ui else "#6b7280"
+            seg_lbl_col = "#f8fafc" if dark_ui else "#0f172a"
+            seg_lbl_bg = "rgba(15, 23, 42, 0.75)" if dark_ui else "rgba(255, 255, 255, 0.9)"
             chrom_divider = _cnv_echart_palette(dark_ui)["muted"]
             binw_analysis = state.get("cnv_dict", {}).get("bin_width", 1_000_000)
             plot_bin_width = state.get("plot_bin_width") or binw_analysis
@@ -1245,8 +2056,22 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv_plot_bin.update()
             except Exception:
                 pass
+            try:
+                cnv_segments.value = "show" if state.get("show_segments", True) else "hide"
+                cnv_segments.update()
+            except Exception:
+                pass
+            try:
+                cnv_segment_source.value = state.get("segment_source", "heuristic")
+                cnv_segment_source.update()
+            except Exception:
+                pass
             selected = state.get("selected_chrom", "All")
             use_log = state.get("y_scale", "linear") == "log"
+            show_segments = bool(state.get("show_segments", True))
+            segment_source = str(state.get("segment_source", "heuristic")).strip().lower()
+            if segment_source not in ("heuristic", "ichor_py"):
+                segment_source = "heuristic"
             raw_color_mode = state.get("color_mode", "chromosome")
             # normalize color mode to expected keys
             lval = str(raw_color_mode).strip().lower()
@@ -1313,8 +2138,50 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             logging.debug(
                 f"CNV render: selected={selected}, y_scale={state.get('y_scale')}, color_mode={state.get('color_mode')}"
             )
+
+            def _segment_spans_for_plot(
+                x_coords: np.ndarray,
+                y_vals: np.ndarray,
+                *,
+                contig: Optional[str] = None,
+                contig_offset_bp: float = 0.0,
+            ) -> List[Tuple[float, float, float]]:
+                if not len(x_coords) or not len(y_vals):
+                    return []
+                if segment_source == "heuristic":
+                    return _segment_spans_from_series(
+                        x_coords, y_vals, chunk_bins=5, merge_tol=0.12
+                    )
+                seg_df = _load_ichor_segments_cached(state)
+                if seg_df is None or seg_df.empty or not contig:
+                    return []
+                try:
+                    seg_chr = seg_df[seg_df["chrom"].astype(str) == str(contig)]
+                except Exception:
+                    return []
+                if seg_chr.empty:
+                    return []
+                x_local = np.asarray(x_coords, dtype=float) - float(contig_offset_bp)
+                y_arr = np.asarray(y_vals, dtype=float)
+                spans: List[Tuple[float, float, float]] = []
+                for _, row in seg_chr.iterrows():
+                    try:
+                        s0 = float(row["start"])
+                        s1 = float(row["end"])
+                    except Exception:
+                        continue
+                    if s1 <= s0:
+                        continue
+                    mask = (x_local >= s0) & (x_local <= s1)
+                    if not np.any(mask):
+                        continue
+                    sy = float(np.nanmedian(y_arr[mask]))
+                    spans.append((s0 + contig_offset_bp, s1 + contig_offset_bp, sy))
+                return spans
+
             # Absolute plot
             series_abs = []
+            segment_abs = []
             # Prepare chromosome partitions for labels/areas when viewing All
             chrom_bounds = []  # list of (name, start_bp, end_bp)
             chrom_offsets: Dict[str, float] = {}
@@ -1327,8 +2194,39 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     x_local, vals = _downsample_cnv_for_plot(
                         np.asarray(cnv), binw_analysis, int(plot_bin_width)
                     )
+                    vals = _apply_ploidy_rescale(vals, ploidy_assumed)
                     x_global = offset_bp + x_local
                     pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
+                    if show_segments and len(vals):
+                        spans = _segment_spans_for_plot(
+                            x_global,
+                            vals,
+                            contig=contig,
+                            contig_offset_bp=offset_bp,
+                        )
+                        for si, (sx0, sx1, sy) in enumerate(spans):
+                            segment_abs.append(
+                                {
+                                    "type": "line",
+                                    "name": f"seg_abs_{contig}",
+                                    "showSymbol": False,
+                                    "symbol": "none",
+                                    "lineStyle": {"color": seg_col_abs, "width": 2, "opacity": 0.9},
+                                    "label": {
+                                        "show": False,
+                                        "formatter": f"{sy:.2f}",
+                                        "color": seg_lbl_col,
+                                        "fontSize": 11,
+                                        "fontWeight": "bold",
+                                        "backgroundColor": seg_lbl_bg,
+                                        "padding": [2, 4],
+                                        "borderRadius": 3,
+                                    },
+                                    "silent": True,
+                                    "data": [[sx0, sy], [sx1, sy]],
+                                    "z": 5,
+                                }
+                            )
                     start_bp = offset_bp
                     end_bp = offset_bp + len(cnv) * binw_analysis
                     chrom_offsets[contig] = start_bp
@@ -1354,7 +2252,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     else:
                         try:
                             autosome_vals = [
-                                v
+                                float(v) * (ploidy_assumed / 2.0)
                                 for k, arr in cnv_map.items()
                                 if k.startswith("chr") and k[3:].isdigit()
                                 for v in arr
@@ -1409,7 +2307,35 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     x_local, vals = _downsample_cnv_for_plot(
                         np.asarray(cnv), binw_analysis, int(plot_bin_width)
                     )
+                    vals = _apply_ploidy_rescale(vals, ploidy_assumed)
                     pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
+                    if show_segments and len(vals):
+                        spans = _segment_spans_for_plot(x_local, vals, contig=selected)
+                        for si, (sx0, sx1, sy) in enumerate(spans):
+                            show_label = (si % 2 == 0)
+                            segment_abs.append(
+                                {
+                                    "type": "line",
+                                    "name": "seg_abs",
+                                    "showSymbol": False,
+                                    "symbol": "none",
+                                    "lineStyle": {"color": seg_col_abs, "width": 2, "opacity": 0.9},
+                                    "label": {
+                                        "show": show_label,
+                                        "position": "end",
+                                        "formatter": f"{sy:.2f}",
+                                        "color": seg_lbl_col,
+                                        "fontSize": 11,
+                                        "fontWeight": "bold",
+                                        "backgroundColor": seg_lbl_bg,
+                                        "padding": [2, 4],
+                                        "borderRadius": 3,
+                                    },
+                                    "silent": True,
+                                    "data": [[sx0, sy], [sx1, sy]],
+                                    "z": 5,
+                                }
+                            )
                     if color_mode == "chromosome":
                         series_abs.append(
                             {
@@ -1421,12 +2347,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             }
                         )
                     else:
-                        expected = 2.0
+                        expected = float(ploidy_assumed)
                         try:
                             if selected in ("chrX", "chrY") and str(
                                 state.get("xy", "")
                             ).upper().startswith("MALE"):
-                                expected = 1.0
+                                expected = float(ploidy_assumed) / 2.0
                         except Exception:
                             pass
                         vals = [v for _, v in pts]
@@ -1473,7 +2399,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 for s in cnv_abs.options["series"]
                 if s.get("name") in ("centromeres_highlight", "cytobands_highlight")
             ]
-            cnv_abs.options["series"] = series_abs + keep
+            cnv_abs.options["series"] = series_abs + segment_abs + keep
             # Build background chromosome areas and vertical labels when showing All
             try:
                 if selected == "All" and chrom_bounds:
@@ -1768,26 +2694,33 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 idx_cyto_abs is not None
                                 and state.get("bp_array") is not None
                             ):
-                                arr = state["bp_array"]
-                                pos = [
-                                    int(r["end_pos"]) for r in arr if r["name"] == selected
-                                ]
-                                lines = [
-                                    {
-                                        "xAxis": float(p),
-                                        "lineStyle": {
-                                            "type": "dashed",
-                                            "color": "#E0162B",
-                                        },
-                                    }
-                                    for p in pos
-                                ]
                                 cnv_abs.options["series"][idx_cyto_abs].setdefault(
                                     "markLine", {"symbol": "none", "data": []}
                                 )
-                                cnv_abs.options["series"][idx_cyto_abs]["markLine"][
-                                    "data"
-                                ] = lines
+                                if state.get("show_bp", True):
+                                    arr = state["bp_array"]
+                                    pos = [
+                                        int(r["end_pos"])
+                                        for r in arr
+                                        if r["name"] == selected
+                                    ]
+                                    lines = [
+                                        {
+                                            "xAxis": float(p),
+                                            "lineStyle": {
+                                                "type": "dashed",
+                                                "color": "#E0162B",
+                                            },
+                                        }
+                                        for p in pos
+                                    ]
+                                    cnv_abs.options["series"][idx_cyto_abs]["markLine"][
+                                        "data"
+                                    ] = lines
+                                else:
+                                    cnv_abs.options["series"][idx_cyto_abs]["markLine"][
+                                        "data"
+                                    ] = []
                         except Exception:
                             pass
                 # debug label removed
@@ -1839,11 +2772,22 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             except Exception as e:
                 pass
             
+            try:
+                abs_title = "CNV scatter plot"
+                if abs(ploidy_assumed - 2.0) > 1e-6:
+                    abs_title = (
+                        f"CNV scatter (rescaled ×{ploidy_assumed:.2f}/2)"
+                    )
+                cnv_abs.options["title"]["text"] = abs_title
+            except Exception:
+                pass
+
             _apply_cnv_echart_chrome(cnv_abs, _is_dark_mode())
             cnv_abs.update()
             # Difference plot
             if cnv3_map:
                 series_diff = []
+                segment_diff = []
                 if selected == "All":
                     offset_bp = 0
                     dj = 0
@@ -1853,8 +2797,39 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         x_local, vals = _downsample_cnv_for_plot(
                             np.asarray(cnv), binw_analysis, int(plot_bin_width)
                         )
+                        vals = _apply_ploidy_rescale(vals, ploidy_assumed)
                         x_global = offset_bp + x_local
                         pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
+                        if show_segments and len(vals):
+                            spans = _segment_spans_for_plot(
+                                x_global,
+                                vals,
+                                contig=contig,
+                                contig_offset_bp=offset_bp,
+                            )
+                            for si, (sx0, sx1, sy) in enumerate(spans):
+                                segment_diff.append(
+                                    {
+                                        "type": "line",
+                                        "name": f"seg_diff_{contig}",
+                                        "showSymbol": False,
+                                        "symbol": "none",
+                                        "lineStyle": {"color": seg_col_diff, "width": 2, "opacity": 0.9},
+                                        "label": {
+                                            "show": False,
+                                            "formatter": f"{sy:.2f}",
+                                            "color": seg_lbl_col,
+                                            "fontSize": 11,
+                                            "fontWeight": "bold",
+                                            "backgroundColor": seg_lbl_bg,
+                                            "padding": [2, 4],
+                                            "borderRadius": 3,
+                                        },
+                                        "silent": True,
+                                        "data": [[sx0, sy], [sx1, sy]],
+                                        "z": 5,
+                                    }
+                                )
                         offset_bp += len(cnv) * binw_analysis
                         series_diff.append(
                             {
@@ -1876,7 +2851,35 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         x_local, vals = _downsample_cnv_for_plot(
                             np.asarray(cnv), binw_analysis, int(plot_bin_width)
                         )
+                        vals = _apply_ploidy_rescale(vals, ploidy_assumed)
                         pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
+                        if show_segments and len(vals):
+                            spans = _segment_spans_for_plot(x_local, vals, contig=selected)
+                            for si, (sx0, sx1, sy) in enumerate(spans):
+                                show_label = (si % 2 == 0)
+                                segment_diff.append(
+                                    {
+                                        "type": "line",
+                                        "name": "seg_diff",
+                                        "showSymbol": False,
+                                        "symbol": "none",
+                                        "lineStyle": {"color": seg_col_diff, "width": 2, "opacity": 0.9},
+                                        "label": {
+                                            "show": show_label,
+                                            "position": "end",
+                                            "formatter": f"{sy:.2f}",
+                                            "color": seg_lbl_col,
+                                            "fontSize": 11,
+                                            "fontWeight": "bold",
+                                            "backgroundColor": seg_lbl_bg,
+                                            "padding": [2, 4],
+                                            "borderRadius": 3,
+                                        },
+                                        "silent": True,
+                                        "data": [[sx0, sy], [sx1, sy]],
+                                        "z": 5,
+                                    }
+                                )
                         series_diff.append(
                             {
                                 "type": "scatter",
@@ -1897,8 +2900,17 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     ]
                 except Exception:
                     keep = []
-                cnv_diff.options["series"] = series_diff + keep
+                cnv_diff.options["series"] = series_diff + segment_diff + keep
                 _thin_chart_series(cnv_diff, MAX_POINTS_PER_CHART)
+                try:
+                    diff_title = "Difference plot"
+                    if abs(ploidy_assumed - 2.0) > 1e-6:
+                        diff_title = (
+                            f"Difference plot (rescaled ×{ploidy_assumed:.2f}/2)"
+                        )
+                    cnv_diff.options["title"]["text"] = diff_title
+                except Exception:
+                    pass
                 
                 # Apply gene zoom to difference chart before updating
                 try:
@@ -1945,6 +2957,16 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
                 cnv_diff.update()
             else:
+                try:
+                    keep = [
+                        s
+                        for s in (cnv_diff.options.get("series") or [])
+                        if s.get("name") in ("centromeres_highlight", "cytobands_highlight")
+                    ]
+                    cnv_diff.options["series"] = keep
+                    cnv_diff.options["title"]["text"] = "Difference plot"
+                except Exception:
+                    pass
                 _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
                 cnv_diff.update()
 
@@ -2026,7 +3048,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 ui_changed = True
             ui_bp = getattr(cnv_bp, "value", None)
             if ui_bp is not None:
-                desired = ui_bp == "show"
+                vbp = str(ui_bp).strip().lower()
+                desired = vbp in ("show", "true", "1")
                 if desired != state.get("show_bp", True):
                     state["show_bp"] = desired
                     ui_changed = True
@@ -2043,6 +3066,20 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 if want_bin != state.get("plot_bin_width"):
                     state["plot_bin_width"] = want_bin
                     ui_changed = True
+            ui_segments = getattr(cnv_segments, "value", None)
+            if ui_segments is not None:
+                show_seg = ui_segments == "show"
+                if show_seg != state.get("show_segments", True):
+                    state["show_segments"] = show_seg
+                    ui_changed = True
+            ui_seg_source = getattr(cnv_segment_source, "value", None)
+            if ui_seg_source is not None:
+                ssrc = str(ui_seg_source).strip().lower()
+                if ssrc not in ("heuristic", "ichor_py"):
+                    ssrc = "heuristic"
+                if ssrc != state.get("segment_source", "heuristic"):
+                    state["segment_source"] = ssrc
+                    ui_changed = True
         except Exception:
             pass
 
@@ -2051,28 +3088,43 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             state["last_visit_time"] = time.time()
 
         cnv_npy = sample_dir / "CNV.npy"
+        cnv2_npy = sample_dir / "CNV2.npy"
         cnv3_npy = sample_dir / "CNV3.npy"
         cnv_dict_npy = sample_dir / "CNV_dict.npy"
         data_array_npy = sample_dir / "cnv_data_array.npy"
         xy_pkl = sample_dir / "XYestimate.pkl"
+        ichor_params_json = sample_dir / "ichor_py_params.json"
+        ichor_seg_tsv = sample_dir / "ichor_py_segments.tsv"
 
         cnv_npy_mtime = cnv_npy.stat().st_mtime if cnv_npy.exists() else 0
+        cnv2_npy_mtime = cnv2_npy.stat().st_mtime if cnv2_npy.exists() else 0
         cnv3_npy_mtime = cnv3_npy.stat().st_mtime if cnv3_npy.exists() else 0
         cnv_dict_npy_mtime = cnv_dict_npy.stat().st_mtime if cnv_dict_npy.exists() else 0
         data_array_npy_mtime = data_array_npy.stat().st_mtime if data_array_npy.exists() else 0
         xy_pkl_mtime = xy_pkl.stat().st_mtime if xy_pkl.exists() else 0
+        ichor_params_mtime = (
+            ichor_params_json.stat().st_mtime if ichor_params_json.exists() else 0
+        )
+        ichor_seg_mtime = ichor_seg_tsv.stat().st_mtime if ichor_seg_tsv.exists() else 0
 
         prev_cnv_npy_mtime = state.get("cnv_m", 0)
+        prev_cnv2_npy_mtime = state.get("cnv2_m", 0)
         prev_cnv3_npy_mtime = state.get("cnv3_m", 0)
         prev_cnv_dict_npy_mtime = state.get("dict_m", 0)
         prev_data_array_npy_mtime = state.get("bp_array_mtime", 0)
         prev_xy_pkl_mtime = state.get("xy_m", 0)
+        prev_ichor_params_mtime = state.get("ichor_params_m", 0)
+        prev_ichor_seg_mtime = state.get("ichor_seg_m", 0)
 
         cnv_npy_changed = prev_cnv_npy_mtime != cnv_npy_mtime
+        cnv2_npy_changed = prev_cnv2_npy_mtime != cnv2_npy_mtime
         cnv3_npy_changed = prev_cnv3_npy_mtime != cnv3_npy_mtime
         cnv_dict_npy_changed = prev_cnv_dict_npy_mtime != cnv_dict_npy_mtime
         data_array_npy_changed = prev_data_array_npy_mtime != data_array_npy_mtime
         xy_pkl_changed = prev_xy_pkl_mtime != xy_pkl_mtime
+        ichor_params_changed = prev_ichor_params_mtime != ichor_params_mtime
+        ichor_seg_changed = prev_ichor_seg_mtime != ichor_seg_mtime
+        ichor_outputs_changed = ichor_params_changed or ichor_seg_changed
 
         force_color_refresh = state.get("_force_color_refresh", False)
         force_gene_refresh = state.get("_force_gene_refresh", False)
@@ -2080,10 +3132,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
         files_changed = (
             cnv_npy_changed
+            or cnv2_npy_changed
             or cnv3_npy_changed
             or cnv_dict_npy_changed
             or data_array_npy_changed
             or xy_pkl_changed
+            or ichor_outputs_changed
         )
 
         needs_update = (
@@ -2106,6 +3160,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             reasons.append("fresh_visit")
         if cnv_npy_changed:
             reasons.append("CNV.npy")
+        if cnv2_npy_changed:
+            reasons.append("CNV2.npy")
         if cnv3_npy_changed:
             reasons.append("CNV3.npy")
         if cnv_dict_npy_changed:
@@ -2114,6 +3170,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             reasons.append("cnv_data_array.npy")
         if xy_pkl_changed:
             reasons.append("XYestimate.pkl")
+        if ichor_params_changed:
+            reasons.append("ichor_py_params.json")
+        if ichor_seg_changed:
+            reasons.append("ichor_py_segments.tsv")
         if ui_changed:
             reasons.append("ui_changed")
         if force_color_refresh:
@@ -2130,6 +3190,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         need_load = (
             cnv_dict_npy_changed
             or cnv_npy_changed
+            or cnv2_npy_changed
             or cnv3_npy_changed
             or data_array_reload
             or xy_pkl_changed
@@ -2141,22 +3202,28 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             "ui_changed": ui_changed,
             "is_fresh_visit": is_fresh_visit,
             "cnv_npy": cnv_npy,
+            "cnv2_npy": cnv2_npy,
             "cnv3_npy": cnv3_npy,
             "cnv_dict_npy": cnv_dict_npy,
             "data_array_npy": data_array_npy,
             "xy_pkl": xy_pkl,
             "cnv_npy_mtime": cnv_npy_mtime,
+            "cnv2_npy_mtime": cnv2_npy_mtime,
             "cnv3_npy_mtime": cnv3_npy_mtime,
             "cnv_dict_npy_mtime": cnv_dict_npy_mtime,
             "data_array_npy_mtime": data_array_npy_mtime,
             "xy_pkl_mtime": xy_pkl_mtime,
             "cnv_dict_npy_changed": cnv_dict_npy_changed,
             "cnv_npy_changed": cnv_npy_changed,
+            "cnv2_npy_changed": cnv2_npy_changed,
             "cnv3_npy_changed": cnv3_npy_changed,
             "data_array_npy_changed": data_array_npy_changed,
             "xy_pkl_changed": xy_pkl_changed,
             "data_array_reload": data_array_reload,
             "need_load": need_load,
+            "ichor_params_mtime": ichor_params_mtime,
+            "ichor_seg_mtime": ichor_seg_mtime,
+            "ichor_outputs_changed": ichor_outputs_changed,
         }
 
     def _apply_cnv_refresh_after_load(
@@ -2170,22 +3237,28 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         is_fresh_visit = p["is_fresh_visit"]
         cnv_dict_npy = p["cnv_dict_npy"]
         cnv_npy = p["cnv_npy"]
+        cnv2_npy = p["cnv2_npy"]
         cnv3_npy = p["cnv3_npy"]
         data_array_npy = p["data_array_npy"]
         xy_pkl = p["xy_pkl"]
         cnv_npy_mtime = p["cnv_npy_mtime"]
+        cnv2_npy_mtime = p["cnv2_npy_mtime"]
         cnv3_npy_mtime = p["cnv3_npy_mtime"]
         cnv_dict_npy_mtime = p["cnv_dict_npy_mtime"]
         data_array_npy_mtime = p["data_array_npy_mtime"]
         xy_pkl_mtime = p["xy_pkl_mtime"]
         cnv_dict_npy_changed = p["cnv_dict_npy_changed"]
         cnv_npy_changed = p["cnv_npy_changed"]
+        cnv2_npy_changed = p["cnv2_npy_changed"]
         cnv3_npy_changed = p["cnv3_npy_changed"]
         data_array_npy_changed = p["data_array_npy_changed"]
         data_array_reload = p["data_array_reload"]
         xy_pkl_changed = p["xy_pkl_changed"]
+        ichor_outputs_changed = p.get("ichor_outputs_changed", False)
+        ichor_params_mtime = p.get("ichor_params_mtime", 0)
+        ichor_seg_mtime = p.get("ichor_seg_mtime", 0)
 
-        changed = ("cnv" in payload or "cnv3" in payload)
+        changed = ("cnv" in payload or "cnv2" in payload or "cnv3" in payload)
 
         if cnv_dict_npy.exists():
             m = cnv_dict_npy_mtime
@@ -2200,6 +3273,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     else "Variance: --"
                 )
                 state["dict_m"] = m
+                if state.get("cnv"):
+                    _update_ploidy_label(state)
+                    _update_integer_clonal_label(state)
         if xy_pkl.exists():
             m = xy_pkl_mtime
             if xy_pkl_changed:
@@ -2215,6 +3291,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         if "cnv" in payload:
             state["cnv"] = payload["cnv"]
             state["cnv_m"] = cnv_npy_mtime
+        if "cnv2" in payload:
+            state["cnv2"] = payload["cnv2"]
+            state["cnv2_m"] = cnv2_npy_mtime
         if "cnv3" in payload:
             state["cnv3"] = payload["cnv3"]
             state["cnv3_m"] = cnv3_npy_mtime
@@ -2258,6 +3337,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 or force_color_refresh
                 or force_gene_refresh
                 or force_chrom_refresh
+                or ichor_outputs_changed
             ):
                 _render_cnv_from_state(state)
                 state["_rendered_once"] = True
@@ -2269,6 +3349,16 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     state["_force_chrom_refresh"] = False
 
             _update_cnv_events_analysis(state)
+            _update_ploidy_label(state)
+            _update_integer_clonal_label(state)
+            _update_ichor_py_label()
+        else:
+            try:
+                cnv_ploidy.set_text("Ploidy (CNV bins): --")
+                cnv_integer_clonal.set_text("Integer clonality (heuristic): --")
+                cnv_ichor_py.set_text("Tumour fraction/ploidy (ichor_py): --")
+            except Exception:
+                pass
 
         if data_array_npy.exists() and (data_array_npy_changed or is_fresh_visit):
             try:
@@ -2370,9 +3460,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     pass
 
         state["cnv_m"] = cnv_npy_mtime
+        state["cnv2_m"] = cnv2_npy_mtime
         state["cnv3_m"] = cnv3_npy_mtime
         state["dict_m"] = cnv_dict_npy_mtime
         state["xy_m"] = xy_pkl_mtime
+        state["ichor_params_m"] = ichor_params_mtime
+        state["ichor_seg_m"] = ichor_seg_mtime
         state["last_visit_time"] = state.get("last_visit_time", time.time())
         state["cnv_plot_theme_dark"] = _is_dark_mode()
 
@@ -2390,6 +3483,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     sample_dir,
                     cnv_dict_npy_changed=plan["cnv_dict_npy_changed"],
                     cnv_npy_changed=plan["cnv_npy_changed"],
+                    cnv2_npy_changed=plan["cnv2_npy_changed"],
                     cnv3_npy_changed=plan["cnv3_npy_changed"],
                     data_array_reload=plan["data_array_reload"],
                     xy_pkl_changed=plan["xy_pkl_changed"],
@@ -2411,6 +3505,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     sample_dir,
                     cnv_dict_npy_changed=plan["cnv_dict_npy_changed"],
                     cnv_npy_changed=plan["cnv_npy_changed"],
+                    cnv2_npy_changed=plan["cnv2_npy_changed"],
                     cnv3_npy_changed=plan["cnv3_npy_changed"],
                     data_array_reload=plan["data_array_reload"],
                     xy_pkl_changed=plan["xy_pkl_changed"],
@@ -2506,9 +3601,30 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
         def _on_bp(ev):
             st = launcher._cnv_state.setdefault(str(sample_dir), {})
-            show_bp = _val(ev, "show") == "show"
+            raw = _val(ev, "show")
+            v = str(raw).strip().lower()
+            show_bp = v in ("show", "true", "1")
             st["show_bp"] = show_bp
+            st["_force_chrom_refresh"] = True
+            st["_last_refresh"] = 0  # bypass debounce for immediate repaint
             # Trigger immediate refresh to update all UI elements
+            ui.timer(0.12, _refresh_cnv, once=True)
+
+        def _on_segments(ev):
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            sval = str(_val(ev, "show")).strip().lower()
+            st["show_segments"] = sval in ("show", "true", "1")
+            st["_force_color_refresh"] = True
+            ui.timer(0.1, _refresh_cnv, once=True)
+
+        def _on_segment_source(ev):
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            sval = str(_val(ev, "heuristic")).strip().lower()
+            if sval not in ("heuristic", "ichor_py"):
+                sval = "heuristic"
+            st["segment_source"] = sval
+            st["_force_color_refresh"] = True
+            st["_last_refresh"] = 0
             ui.timer(0.1, _refresh_cnv, once=True)
 
         def _on_color(ev):
@@ -2546,6 +3662,74 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             st["_force_chrom_refresh"] = True  # force re-render with new bin width
             ui.timer(0.1, _refresh_cnv, once=True)
 
+        def _on_assumed_ploidy_display() -> None:
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            try:
+                v = float(cnv_assumed_ploidy.value)
+                st["plot_assumed_ploidy"] = v if v > 0 else 2.0
+            except (TypeError, ValueError):
+                st["plot_assumed_ploidy"] = 2.0
+            st["_force_color_refresh"] = True
+            ui.timer(0.1, _refresh_cnv, once=True)
+
+        def _on_run_ichor_py(_ev=None) -> None:
+            """Run ichor_py on CNV3 from GUI state or from CNV3.npy on disk (no full reanalysis)."""
+            st = launcher._cnv_state.setdefault(str(sample_dir), {})
+            cnv3_map, bw = _cnv3_map_and_binwidth_for_ichor(st, sample_dir)
+            if not cnv3_map or bw <= 0:
+                try:
+                    ui.notify(
+                        "Need CNV3 data and bin width (CNV3.npy and CNV_dict.npy in the sample folder, "
+                        "or load the sample in this panel first).",
+                        type="negative",
+                    )
+                except Exception:
+                    pass
+                return
+            cnv_ichor_py.set_text("Tumour fraction/ploidy (ichor_py): computing…")
+            log = logging.getLogger("robin.gui.cnv")
+
+            def _after_run(ok: bool) -> None:
+                try:
+                    cnv_run_ichor_py.enable()
+                except Exception:
+                    pass
+                st["_last_refresh"] = 0
+                if ok:
+                    st["ichor_params_m"] = 0
+                    st["ichor_seg_m"] = 0
+                _refresh_cnv()
+                if ok:
+                    try:
+                        ui.notify("ichor_py results saved to sample folder.", type="positive")
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        ui.notify("ichor_py did not complete (see logs).", type="warning")
+                    except Exception:
+                        pass
+
+            try:
+                cnv_run_ichor_py.disable()
+            except Exception:
+                pass
+
+            def _run_blocking() -> bool:
+                return persist_ichor_py_outputs(str(sample_dir), cnv3_map, bw, log)
+
+            try:
+                asyncio.get_running_loop()
+            except RuntimeError:
+                _after_run(_run_blocking())
+                return
+
+            async def _async_run() -> None:
+                ok = await asyncio.to_thread(_run_blocking)
+                _after_run(ok)
+
+            asyncio.create_task(_async_run())
+
         # Bind both native change and model-value updates for robustness
         cnv_chrom_select.on("change", _on_chrom)
         cnv_chrom_select.on("update:model-value", _on_chrom)
@@ -2565,10 +3749,17 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         cnv_scale.on("update:model-value", _on_scale)
         cnv_plot_bin.on("change", _on_plot_bin)
         cnv_plot_bin.on("update:model-value", _on_plot_bin)
+        cnv_segments.on("change", _on_segments)
+        cnv_segments.on("update:model-value", _on_segments)
+        cnv_segment_source.on("change", _on_segment_source)
+        cnv_segment_source.on("update:model-value", _on_segment_source)
         cnv_bp.on("change", _on_bp)
         cnv_bp.on("update:model-value", _on_bp)
         cnv_color.on("change", _on_color)
         cnv_color.on("update:model-value", _on_color)
+        cnv_assumed_ploidy.on("change", _on_assumed_ploidy_display)
+        cnv_assumed_ploidy.on("update:model-value", _on_assumed_ploidy_display)
+        cnv_run_ichor_py.on("click", _on_run_ichor_py)
     except Exception:
         pass
 

@@ -7,6 +7,7 @@ This module handles the Copy Number Variation (CNV) analysis section of the repo
 import os
 import re
 import pickle
+import json
 import logging
 import numpy as np
 import pandas as pd
@@ -566,6 +567,63 @@ class CNVSection(ReportSection):
                     ),
                 ]
             )
+
+            # Add ichor_py estimates if available
+            ichor_params = {}
+            ichor_params_path = os.path.join(self.report.output, "ichor_py_params.json")
+            if os.path.exists(ichor_params_path):
+                try:
+                    with open(ichor_params_path, "r", encoding="utf-8") as f:
+                        ichor_params = json.load(f)
+                    tf = ichor_params.get("tumor_fraction")
+                    pl = ichor_params.get("tumor_ploidy")
+                    ag = ichor_params.get("altered_genome_fraction")
+                    if isinstance(tf, (int, float)):
+                        summary_data.append(
+                            [
+                                Paragraph(
+                                    "Tumour Fraction (ichor_py):",
+                                    self.styles.styles["Normal"],
+                                ),
+                                Paragraph(f"{float(tf):.1%}", self.styles.styles["Normal"]),
+                            ]
+                        )
+                    if isinstance(pl, (int, float)):
+                        summary_data.append(
+                            [
+                                Paragraph(
+                                    "Tumour Ploidy (ichor_py):",
+                                    self.styles.styles["Normal"],
+                                ),
+                                Paragraph(f"{float(pl):.2f}", self.styles.styles["Normal"]),
+                            ]
+                        )
+                    pl_hmm = ichor_params.get("tumor_ploidy_hmm_only")
+                    if isinstance(pl_hmm, (int, float)):
+                        summary_data.append(
+                            [
+                                Paragraph(
+                                    "Tumour Ploidy (ichor_py, autosome HMM LL):",
+                                    self.styles.styles["Normal"],
+                                ),
+                                Paragraph(
+                                    f"{float(pl_hmm):.2f}",
+                                    self.styles.styles["Normal"],
+                                ),
+                            ]
+                        )
+                    if isinstance(ag, (int, float)):
+                        summary_data.append(
+                            [
+                                Paragraph(
+                                    "Altered Genome Fraction (ichor_py):",
+                                    self.styles.styles["Normal"],
+                                ),
+                                Paragraph(f"{float(ag):.1%}", self.styles.styles["Normal"]),
+                            ]
+                        )
+                except Exception as e:
+                    logger.debug("Could not load ichor_py params: %s", e)
             centromeres_file = os.path.join(
                 os.path.dirname(os.path.abspath(resources.__file__)),
                 "cenSatRegions.bed",
@@ -681,6 +739,62 @@ class CNVSection(ReportSection):
                     )
                 )
                 self.elements.append(summary_table)
+
+            # Add top altered ichor_py segments if available
+            ichor_seg_path = os.path.join(self.report.output, "ichor_py_segments.tsv")
+            if os.path.exists(ichor_seg_path):
+                try:
+                    seg_df = pd.read_csv(ichor_seg_path, sep="\t")
+                    if not seg_df.empty:
+                        seg_df = seg_df[seg_df["label"] != "NEUT"].copy()
+                        if not seg_df.empty:
+                            seg_df = seg_df.sort_values(
+                                "length_bp", ascending=False
+                            ).head(10)
+                            seg_rows = [
+                                [
+                                    str(r["chrom"]).replace("chr", ""),
+                                    f"{int(r['start'])/1e6:.1f}",
+                                    f"{int(r['end'])/1e6:.1f}",
+                                    str(r["label"]),
+                                    str(int(r["cn"])) if "cn" in seg_df.columns else "",
+                                    f"{int(r['length_bp'])/1e6:.1f}",
+                                ]
+                                for _, r in seg_df.iterrows()
+                            ]
+                            self.elements.append(
+                                Paragraph(
+                                    "Top Altered Segments (ichor_py)",
+                                    ParagraphStyle(
+                                        "IchorSegTitle",
+                                        parent=self.styles.styles["Heading3"],
+                                        fontSize=11,
+                                        fontName="Helvetica-Bold",
+                                        textColor=self.styles.COLORS["primary"],
+                                        spaceBefore=10,
+                                        spaceAfter=6,
+                                    ),
+                                )
+                            )
+                            seg_table = self.create_table(
+                                [
+                                    [
+                                        "Chrom",
+                                        "Start (Mb)",
+                                        "End (Mb)",
+                                        "State",
+                                        "CN",
+                                        "Length (Mb)",
+                                    ]
+                                ]
+                                + seg_rows,
+                                auto_col_width=True,
+                                compact=True,
+                                font_size=8,
+                            )
+                            self.elements.append(seg_table)
+                except Exception as e:
+                    logger.debug("Could not render ichor_py segments table: %s", e)
 
             # Detect CNV events using centralized classification rules
             logger.info("Detecting CNV events using centralized rules")
