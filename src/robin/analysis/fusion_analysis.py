@@ -348,7 +348,7 @@ def process_multiple_files(bam_paths, metadata_list, work_dir, logger, target_pa
         metadata_list: List of metadata dictionaries (one per BAM file)
         work_dir: Working directory
         logger: Logger instance
-        target_panel: Target panel type (rCNS2, AML, PanCan)
+        target_panel: Target panel type (rCNS2, AML, or custom panel)
         reference: Optional path to reference genome
 
     Returns:
@@ -866,7 +866,7 @@ def fusion_handler(job, work_dir=None, target_panel=None):
 
 def _get_available_panels() -> List[str]:
     """Get list of available panels from resources directory."""
-    panels = ["rCNS2", "AML", "PanCan"]  # Built-in panels
+    panels = ["rCNS2", "AML"]  # Built-in panels
     
     try:
         from pathlib import Path

@@ -14,7 +14,7 @@ All require the interactive **disclaimer** (`I agree`).
 
 ## `robin list-panels`
 
-Lists **built-in** panels (`rCNS2`, `AML`, `PanCan`, …) and **custom** panels registered in `robin.resources`.
+Lists **built-in** panels (`rCNS2`, `AML`, …) and **custom** panels registered in `robin.resources`.
 
 ```bash
 robin list-panels
@@ -46,7 +46,7 @@ robin add-panel /path/to/panel.bed MyPanelName
 
 ### Reserved names
 
-You **cannot** use `rCNS2`, `AML`, or `PanCan` as custom names.
+You **cannot** use `rCNS2` or `AML` as custom names.
 
 ### What ROBIN stores
 

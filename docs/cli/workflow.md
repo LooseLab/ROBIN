@@ -16,7 +16,7 @@ robin workflow <PATH> -w <WORKFLOW> --center <ID> --target-panel <PANEL> [OPTION
 | `PATH` | Yes | Directory containing (or receiving) BAM files. Must exist. |
 | `-w` / `--workflow` | Yes | Comma-separated job types or legacy `queue:job` steps (see [Job types](jobs.md)). |
 | `--center` | Yes | Site or study label (e.g. `Sherwood`, `Auckland`) — used in outputs and reports. |
-| `--target-panel` | Yes | Panel name: built-in (`rCNS2`, `AML`, `PanCan`, …) or custom from `robin add-panel`. Run `robin utils sequencing-files --help` to see choices on your install. |
+| `--target-panel` | Yes | Panel name: built-in (`rCNS2`, `AML`, …) or custom from `robin add-panel`. Run `robin utils sequencing-files --help` to see choices on your install. |
 | `-d` / `--work-dir` | No | Base directory for all run outputs. |
 | `-r` / `--reference` | No* | Path to reference **FASTA**. If provided, ROBIN validates the file and ensures an index (e.g. `.fai`). Required for analyses that need a reference. |
 

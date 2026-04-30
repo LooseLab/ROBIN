@@ -185,7 +185,7 @@ robin workflow <data_folder> --work-dir <output_folder> \
 | `-w` / `--workflow` | Comma-separated job types (see [`list-job-types`](#list-job-types)) |
 | `--reference` | Reference FASTA (required for many analyses) |
 | `--center` | Site ID (e.g. `Sherwood`, `Auckland`, `New York`) |
-| `--target-panel` | Panel for target/CNV/fusion (e.g. `rCNS2`, `PanCan`) |
+| `--target-panel` | Panel for target/CNV/fusion (e.g. `rCNS2`, `AML`) |
 
 More examples:
 
@@ -204,7 +204,7 @@ robin workflow ~/data/bam_files \
   -w mgmt,sturgeon \
   --reference ~/references/hg38_simple.fa \
   --center Auckland \
-  --target-panel PanCan
+  --target-panel AML
 
 # Verbose logging
 robin workflow ~/data/bam_files \
@@ -265,7 +265,7 @@ robin workflow /path/to/directory --workflow "workflow_plan" [OPTIONS]
 
 ### Panel management
 
-Built-in panels include `rCNS2`, `AML`, `PanCan`. Custom panels are stored after you add them from a BED file.
+Built-in panels include `rCNS2`, `AML`. Custom panels are stored after you add them from a BED file.
 
 **List panels**
 
@@ -280,7 +280,7 @@ robin add-panel /path/to/your_panel.bed MyCustomPanel
 robin add-panel /path/to/your_panel.bed MyCustomPanel --validate-only
 ```
 
-Names must be non-empty and not reserved (`rCNS2`, `AML`, `PanCan`).
+Names must be non-empty and not reserved (`rCNS2`, `AML`).
 
 **Remove a custom panel**
 

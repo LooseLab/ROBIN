@@ -82,7 +82,7 @@ Use this section to judge whether sequencing depth is **adequate overall** and w
 
 ### Target coverage
 
-**Target coverage** is the **gene- and region-level** view for your **panel** (for example rCNS2, AML, PanCan—whatever your run used). You should see the **panel name**, a note that targets come from the **gene panel BED**, and often an **info** expansion with panel and BED file details.
+**Target coverage** is the **gene- and region-level** view for your **panel** (for example rCNS2, AML, or a custom panel—whatever your run used). You should see the **panel name**, a note that targets come from the **gene panel BED**, and often an **info** expansion with panel and BED file details.
 
 ![Target coverage: per-chromosome distribution with outliers and searchable targets table](../images/TargetCoverage.png)
 

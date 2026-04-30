@@ -7,6 +7,14 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-04-30
+
+### Changed
+- Removed **PanCan** as a built-in target panel across CLI, analysis, GUI panel mappings, and documentation.
+- Removed packaged PanCan panel resources: `PanCan_panel_name_uniq.bed` and `PanCan_panel_source.bed`.
+- Kept **PanNanoDX** classifier support unchanged (`pannanodx` workflows and model references remain available).
+- Bumped project/app version metadata from **`0.5`** to **`0.5.1`**.
+
 ## [0.5] - 2026-04-04
 
 ### Changed
