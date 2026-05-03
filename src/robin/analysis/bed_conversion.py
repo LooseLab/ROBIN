@@ -267,7 +267,11 @@ class BedConversionAnalysis:
     def _update_state(
         self, state: str, data: List[str], sample_id: str, file_number: int
     ) -> str:
-        """Update the state with new data from BAM processing - creates parquet file directly"""
+        """Update the state with new data from BAM processing - creates parquet file directly.
+
+        ``file_number`` is retained for callers (incremental naming); merge uses ``len(data)``
+        as the number of BAM-derived matkit inputs.
+        """
         logger = _LOGGER
 
         if merge_modkit_files is None:
@@ -285,8 +289,14 @@ class BedConversionAnalysis:
         }
 
         logger.debug(f"Creating parquet file: {state}")
-        logger.debug(f"Processing {len(data)} matkit files")
+        logger.debug(
+            "Processing %s matkit files (file_number=%s)",
+            len(data),
+            file_number,
+        )
 
+        # One matkit output file per BAM; merge needs the true count for metadata/cumulative stats
+        num_bam_files = len(data)
         # Use merge_modkit_files exactly like the working code
         # This function is designed to create binary parquet files, not text files
         merge_modkit_files(
@@ -297,7 +307,7 @@ class BedConversionAnalysis:
             sample_id,
             self.work_dir,
             mnpflex_config,
-            1,  # Number of BAM files that contributed
+            num_bam_files,
         )
 
         # When no reads passed the QS filter, all per-BAM parquets are empty and merge
@@ -392,10 +402,12 @@ def process_multiple_files(
         logger.info("Initialized bed conversion analyzer")
         analysis_result["processing_steps"].append("analyzer_initialized")
 
-        # Process all BAMs in one call so _process_bams can run them in parallel (threads)
-        valid_bam_paths = [p for p in bam_paths if os.path.exists(p)]
+        # Single pass: collect existing paths and warn on misses
+        valid_bam_paths: List[str] = []
         for p in bam_paths:
-            if not os.path.exists(p):
+            if os.path.exists(p):
+                valid_bam_paths.append(p)
+            else:
                 logger.warning(f"BAM file not found: {p}")
         if not valid_bam_paths:
             analysis_result["error_message"] = "No BAM files found or all paths missing"

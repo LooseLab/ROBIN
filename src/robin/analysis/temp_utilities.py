@@ -219,15 +219,22 @@ def merge_modkit_files(
                 if bed.endswith(".parquet"):
                     # Matkit wrote 8-column parquet; read directly (no CSV parse, types already correct)
                     pl_df = pl.read_parquet(bed, columns=essential_cols)
-                    # Matkit may write chrom/mod_code/strand as binary; decode to Utf8 (Polars .str.decode is hex/base64 only)
-                    def _binary_to_utf8(s: pl.Series) -> pl.Series:
-                        return s.map_elements(
-                            lambda x: x.decode("utf-8", errors="replace") if x is not None else None,
-                            return_dtype=pl.Utf8,
-                        )
+                    # Matkit may write chrom/mod_code/strand as binary; decode to Utf8.
+                    # Column-wise decode via list comp avoids per-row map_elements overhead.
                     for c in categorical_cols:
                         if pl_df.schema.get(c) == pl.Binary:
-                            pl_df = pl_df.with_columns(_binary_to_utf8(pl.col(c)).alias(c))
+                            raw_vals = pl_df[c].to_list()
+                            decoded = [
+                                (
+                                    bytes(x).decode("utf-8", errors="replace")
+                                    if x is not None
+                                    else None
+                                )
+                                for x in raw_vals
+                            ]
+                            pl_df = pl_df.with_columns(
+                                pl.Series(c, decoded, dtype=pl.Utf8).alias(c)
+                            )
                 else:
                     # Legacy BEDMethyl text: read CSV, select essential columns, cast
                     pl_df = pl.read_csv(

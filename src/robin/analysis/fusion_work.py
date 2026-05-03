@@ -1680,17 +1680,20 @@ def process_bam_single_pass(
                     if not ref_name or ref_name == "chrM":
                         continue
                     
-                    # Check for supplementary alignments
-                    # If we have a complete supplementary_read_ids list, trust it and skip SA tag checks
+                    # Single SA fetch for incomplete-list path (reused below for master BED parsing).
+                    # Complete-list path trusts preprocessing and fetches SA once at master BED stage.
+                    sa_tag_cached: Optional[str] = None
                     if supplementary_reads_set is not None and supplementary_read_ids_complete:
                         if read.query_name not in supplementary_reads_set:
                             continue
-                        has_supplementary = True
                     else:
-                        # Always check SA tag directly to ensure we catch ALL reads
-                        has_supplementary = read.has_tag("SA")
-                        # Optional optimization: if we have a supplementary_read_ids list and the read is not in it,
-                        # we can skip the SA tag check (but this risks missing reads if the list is incomplete)
+                        try:
+                            sa_tag_cached = read.get_tag("SA")
+                        except KeyError:
+                            sa_tag_cached = None
+                        has_supplementary = sa_tag_cached is not None
+                        # Optional: if we have a supplementary_read_ids list and the read is not in it,
+                        # keep the read only when it still has an SA tag (same as has_tag("SA") before).
                         if supplementary_reads_set is not None and read.query_name not in supplementary_reads_set:
                             if not has_supplementary:
                                 continue
@@ -1794,17 +1797,19 @@ def process_bam_single_pass(
                     if len(master_bed_rows) >= master_bed_chunk_size:
                         _flush_master_bed_rows(master_bed_rows)
                     
-                    # Parse SA tag to get all supplementary alignments
+                    # Parse SA tag for supplementary master BED rows (one fetch: reuse sa_tag_cached or get once)
                     if supplementary_reads_set is not None and supplementary_read_ids_complete:
                         try:
-                            sa_tag = read.get_tag("SA")
+                            sa_tag_to_parse = read.get_tag("SA")
                         except KeyError:
                             continue
-                    elif read.has_tag("SA"):
+                    else:
+                        sa_tag_to_parse = sa_tag_cached
+
+                    if sa_tag_to_parse:
                         try:
-                            sa_tag = read.get_tag("SA")
                             # SA tag format: "chr,pos,strand,CIGAR,mapQ,NM;chr,pos,strand,CIGAR,mapQ,NM;..."
-                            sa_entries = sa_tag.split(";")
+                            sa_entries = sa_tag_to_parse.split(";")
                             for sa_entry in sa_entries:
                                 if not sa_entry:
                                     continue
@@ -2269,28 +2274,31 @@ def accumulate_fusion_candidates(
             for file_path in file_list:
                 try:
                     file_start = time.time()
-                    df = pd.read_parquet(file_path)
+                    batch_id = _extract_batch_id(file_path)
+                    n = _append_fusion_candidates_parquet_from_file(
+                        file_path,
+                        candidate_type,
+                        work_dir,
+                        sample_id,
+                        batch_id,
+                    )
                     load_elapsed = time.time() - file_start
-                    if df is None or df.empty:
+                    total_rows += n
+                    if n:
+                        logger.debug(
+                            "Appended %s parquet %s rows=%d in %.3fs",
+                            candidate_type,
+                            os.path.basename(file_path),
+                            n,
+                            load_elapsed,
+                        )
+                    else:
                         logger.debug(
                             "Loaded %s parquet %s (empty) in %.3fs",
                             candidate_type,
                             os.path.basename(file_path),
                             load_elapsed,
                         )
-                        continue
-                    batch_id = _extract_batch_id(file_path)
-                    _append_fusion_candidates_parquet(
-                        df, candidate_type, work_dir, sample_id, batch_id
-                    )
-                    total_rows += len(df)
-                    logger.debug(
-                        "Appended %s parquet %s rows=%d in %.3fs",
-                        candidate_type,
-                        os.path.basename(file_path),
-                        len(df),
-                        load_elapsed,
-                    )
                 except Exception as e:
                     logger.warning(
                         f"Error loading {candidate_type} staging file {os.path.basename(file_path)}: {e}"
@@ -4956,6 +4964,46 @@ def _extract_staging_batch_id(staging_files: List[str]) -> int:
     if counters:
         return max(counters)
     return int(time.time())
+
+
+def _append_fusion_candidates_parquet_from_file(
+    source_path: str,
+    candidate_type: str,
+    work_dir: str,
+    sample_id: str,
+    batch_id: int,
+) -> int:
+    """
+    Copy a staging Parquet file into the append-only dataset using PyArrow only
+    (no pandas round-trip). Returns number of rows appended (0 if empty).
+
+    Raises if the file is unreadable (same contract as pd.read_parquet for staging).
+    """
+    pf = pq.ParquetFile(source_path, memory_map=True)
+    nrow = int(pf.metadata.num_rows)
+    if nrow == 0:
+        logger.debug(
+            "Skipping empty %s staging parquet %s",
+            candidate_type,
+            os.path.basename(source_path),
+        )
+        return 0
+    table = pf.read()
+    dataset_dir = _get_parquet_dataset_dir(work_dir, sample_id, candidate_type)
+    os.makedirs(dataset_dir, exist_ok=True)
+    part_path = os.path.join(dataset_dir, f"part_{batch_id:06d}.parquet")
+    if os.path.exists(part_path):
+        part_path = os.path.join(
+            dataset_dir, f"part_{batch_id:06d}_{int(time.time())}.parquet"
+        )
+    pq.write_table(table, part_path, compression="snappy")
+    logger.debug(
+        "Appended %d %s rows from staging to %s",
+        nrow,
+        candidate_type,
+        part_path,
+    )
+    return nrow
 
 
 def _append_fusion_candidates_parquet(

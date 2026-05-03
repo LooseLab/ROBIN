@@ -18,7 +18,6 @@ import os
 import tempfile
 import logging
 import time
-import gc
 import json
 import subprocess
 import shutil
@@ -40,6 +39,13 @@ try:
     import docker
 except ImportError:
     docker = None
+
+# BAM flag: supplementary (0x800) | secondary (0x100) — alignments to skip for "primary-only" logic
+_BAM_NON_PRIMARY_MASK = 0x800 | 0x100
+
+# Fast Parquet I/O (matches fusion_work / accumulation pipelines)
+_PARQUET_WRITE_KWARGS = {"index": False, "engine": "pyarrow", "compression": "snappy"}
+_PARQUET_READ_KWARGS = {"engine": "pyarrow"}
 
 
 def is_docker_available_for_snp_analysis() -> tuple[bool, str]:
@@ -186,6 +192,22 @@ except ImportError:
     resources = None
 
 
+def _bam_has_any_alignment(bam_path: str) -> bool:
+    """
+    True if the BAM contains at least one alignment record (stops after first read).
+    Faster than AlignmentFile.count(until_eof=True) for emptiness checks.
+    """
+    try:
+        if not os.path.exists(bam_path) or os.path.getsize(bam_path) == 0:
+            return False
+        with pysam.AlignmentFile(bam_path, "rb") as bam:
+            for _ in bam.fetch(until_eof=True):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def _load_bed_regions(bedfile: str) -> List[Tuple[str, int, int]]:
     """Load BED regions into a list of (chrom, start, end) tuples."""
     regions: List[Tuple[str, int, int]] = []
@@ -259,9 +281,8 @@ def run_bedtools(bamfile, bedfile, tempbamfile, regions: Optional[List[Tuple[str
                 try:
                     # Fetch reads overlapping this region
                     for read in in_bam.fetch(chrom, start, end):
-                        # Only consider primary alignments (not supplementary or secondary)
-                        # Flag checks: not supplementary (0x800) and not secondary (0x100)
-                        if not (read.flag & 0x800) and not (read.flag & 0x100):
+                        # Only primary alignments (not supplementary or secondary)
+                        if (read.flag & _BAM_NON_PRIMARY_MASK) == 0:
                             read_names.add(read.query_name)
                 except ValueError:
                     # Chromosome not found in BAM, skip
@@ -284,12 +305,13 @@ def run_bedtools(bamfile, bedfile, tempbamfile, regions: Optional[List[Tuple[str
         logger.debug(f"Step 2: Extracting all alignments for {len(read_names)} read names")
         
         reads_written = 0
+        names = read_names
         with pysam.AlignmentFile(bamfile, "rb") as in_bam:
             header = in_bam.header.copy()
             with pysam.AlignmentFile(tempbamfile, "wb", header=header) as out_bam:
-                # Iterate through all reads in the BAM file
+                # Single pass: emit all alignments for reads that hit target regions in step 1
                 for read in in_bam.fetch(until_eof=True):
-                    if read.query_name in read_names:
+                    if read.query_name in names:
                         out_bam.write(read)
                         reads_written += 1
                 
@@ -364,15 +386,20 @@ def get_covdfs(bamfile, bedfile=None):
 
         newcovdf = pd.read_csv(StringIO(coverage_output), sep="\t")
 
-        logger.debug(f"Raw pysam.coverage columns: {list(newcovdf.columns)}")
-        logger.debug(f"Sample raw coverage data: {newcovdf.head(2).to_dict('records')}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"Raw pysam.coverage columns: {list(newcovdf.columns)}")
+            logger.debug(
+                "Sample raw coverage data: %s",
+                newcovdf.head(2).to_dict("records"),
+            )
 
         newcovdf.drop(
             columns=["coverage", "meanbaseq", "meanmapq"],
             inplace=True,
         )
 
-        logger.debug(f"After dropping columns: {list(newcovdf.columns)}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"After dropping columns: {list(newcovdf.columns)}")
 
         # Find target BED file - use provided bedfile or fallback to unique_genes.bed
         target_bed = bedfile
@@ -473,24 +500,17 @@ def get_read_counts_per_target(bamfile, bedfile):
         read_counts = []
         with pysam.AlignmentFile(bamfile, "rb") as bam:
             index_file = f"{bamfile}.bai"
-            use_indexed = os.path.exists(index_file)
-            
+            if not os.path.exists(index_file):
+                logger.debug(
+                    "BAM index (.bai) not found for %s; pysam may work if BAM is coordinate-sorted",
+                    bamfile,
+                )
             for chrom, start, end, name in bed_regions:
                 try:
-                    # Count primary alignments only (not supplementary or secondary)
                     read_count = 0
-                    if use_indexed:
-                        # Use indexed access (faster)
-                        for read in bam.fetch(chrom, start, end):
-                            # Only count primary alignments
-                            if not (read.flag & 0x800) and not (read.flag & 0x100):
-                                read_count += 1
-                    else:
-                        # BAM is not indexed, count manually
-                        for read in bam.fetch(chrom, start, end):
-                            # Only count primary alignments
-                            if not (read.flag & 0x800) and not (read.flag & 0x100):
-                                read_count += 1
+                    for read in bam.fetch(chrom, start, end):
+                        if (read.flag & _BAM_NON_PRIMARY_MASK) == 0:
+                            read_count += 1
                     
                     read_counts.append({
                         'chrom': chrom,
@@ -926,8 +946,8 @@ class TargetAnalysis:
             )
             
             # Save coverage data to staging
-            newcovdf.to_parquet(coverage_staging, index=False)
-            bedcovdf.to_parquet(bedcov_staging, index=False)
+            newcovdf.to_parquet(coverage_staging, **_PARQUET_WRITE_KWARGS)
+            bedcovdf.to_parquet(bedcov_staging, **_PARQUET_WRITE_KWARGS)
             
             # Save timestamp for coverage tracking
             current_timestamp = timestamp * 1000 if (self.simtime and timestamp) else time.time() * 1000
@@ -963,9 +983,6 @@ class TargetAnalysis:
                 logger.info(
                     f"Accumulation threshold reached ({pending_count} >= {self.batch_size})"
                 )
-            
-            # Step 8: Force garbage collection
-            gc.collect()
             
             target_result.processing_steps.append("staging_complete")
             elapsed = time.time() - start_time
@@ -1084,11 +1101,8 @@ class TargetAnalysis:
                 # Run bedtools intersection
                 run_bedtools(file_path, targets_bed, tempbamfile.name)
 
-                # Check if target BAM has reads
-                if (
-                    pysam.AlignmentFile(tempbamfile.name, "rb").count(until_eof=True)
-                    > 0
-                ):
+                # Check if target BAM has reads (first record only, not full count)
+                if _bam_has_any_alignment(tempbamfile.name):
                     logger.info(f"Target regions found in {sample_id}")
 
                     # Handle target BAM file accumulation
@@ -1261,7 +1275,9 @@ class TargetAnalysis:
                     previous_cumulative_reads = None
                     if os.path.exists(latest_reads_cache):
                         try:
-                            previous_cumulative_reads = pd.read_parquet(latest_reads_cache)
+                            previous_cumulative_reads = pd.read_parquet(
+                                latest_reads_cache, **_PARQUET_READ_KWARGS
+                            )
                             previous_cumulative_reads.rename(columns={'reads': 'previous_reads'}, inplace=True)
                         except Exception as e:
                             logger.debug(f"Could not load cached latest reads, will try CSV: {e}")
@@ -1322,9 +1338,9 @@ class TargetAnalysis:
                     
                     # Save latest cumulative reads to cache for next time (fast access)
                     try:
-                        target_coverage_with_reads[['chrom', 'startpos', 'endpos', 'name', 'reads']].to_parquet(
-                            latest_reads_cache, index=False
-                        )
+                        target_coverage_with_reads[
+                            ['chrom', 'startpos', 'endpos', 'name', 'reads']
+                        ].to_parquet(latest_reads_cache, **_PARQUET_WRITE_KWARGS)
                     except Exception as e:
                         logger.debug(f"Could not save latest reads cache: {e}")
                     
@@ -1458,9 +1474,6 @@ class TargetAnalysis:
                     sample_id, analysis_counter, self.work_dir, logger
                 )
                 target_result.processing_steps.append("counter_updated")
-
-                # Step 16: Force garbage collection
-                gc.collect()
 
                 target_result.processing_steps.append("target_analysis_complete")
                 logger.info(f"Target analysis complete for {sample_id}")
@@ -1730,8 +1743,8 @@ class TargetAnalysis:
             bedcov_batch = sorted(glob.glob(os.path.join(batch_dir, "bedcov_*.parquet")))
             timestamp_batch = sorted(glob.glob(os.path.join(batch_dir, "timestamp_*.txt")))
             source_bam_batch = sorted(glob.glob(os.path.join(batch_dir, "source_bam_*.txt")))
-            batch_covdf = None
-            batch_bedcovdf = None
+            cov_frames: List[pd.DataFrame] = []
+            bed_frames: List[pd.DataFrame] = []
             timestamps = []
             source_bam_paths = []
             loaded_files = 0
@@ -1739,34 +1752,12 @@ class TargetAnalysis:
                 coverage_batch, bedcov_batch, timestamp_batch, source_bam_batch
             ):
                 try:
-                    cov_df = pd.read_parquet(cov_file)
-                    bed_df = pd.read_parquet(bed_file)
-                    cov_df = cov_df.groupby(['#rname', 'startpos', 'endpos'], as_index=False).agg({
-                        'numreads': 'sum', 'covbases': 'sum', 'meandepth': 'sum'
-                    })
-                    bed_df = bed_df.groupby(
-                        ['chrom', 'startpos', 'endpos', 'name'], as_index=False
-                    ).agg({'bases': 'sum'})
-                    if batch_covdf is None:
-                        batch_covdf = cov_df
-                    else:
-                        batch_covdf = batch_covdf.merge(
-                            cov_df, on=['#rname', 'startpos', 'endpos'], how='outer',
-                            suffixes=('_df1', '_df2'),
-                        )
-                        batch_covdf['numreads'] = batch_covdf['numreads_df1'].fillna(0) + batch_covdf['numreads_df2'].fillna(0)
-                        batch_covdf['covbases'] = batch_covdf['covbases_df1'].fillna(0) + batch_covdf['covbases_df2'].fillna(0)
-                        batch_covdf['meandepth'] = batch_covdf['meandepth_df1'].fillna(0) + batch_covdf['meandepth_df2'].fillna(0)
-                        batch_covdf.drop(columns=['numreads_df1', 'numreads_df2', 'covbases_df1', 'covbases_df2', 'meandepth_df1', 'meandepth_df2'], inplace=True)
-                    if batch_bedcovdf is None:
-                        batch_bedcovdf = bed_df
-                    else:
-                        batch_bedcovdf = batch_bedcovdf.merge(
-                            bed_df, on=['chrom', 'startpos', 'endpos', 'name'], how='outer',
-                            suffixes=('_df1', '_df2'),
-                        )
-                        batch_bedcovdf['bases'] = batch_bedcovdf['bases_df1'].fillna(0) + batch_bedcovdf['bases_df2'].fillna(0)
-                        batch_bedcovdf.drop(columns=['bases_df1', 'bases_df2'], inplace=True)
+                    cov_frames.append(
+                        pd.read_parquet(cov_file, **_PARQUET_READ_KWARGS)
+                    )
+                    bed_frames.append(
+                        pd.read_parquet(bed_file, **_PARQUET_READ_KWARGS)
+                    )
                     with open(ts_file, "r") as f:
                         timestamps.append(float(f.read().strip()))
                     with open(source_bam_file, "r") as f:
@@ -1774,6 +1765,34 @@ class TargetAnalysis:
                     loaded_files += 1
                 except Exception as e:
                     logger.warning(f"Error loading staging file {cov_file}: {e}")
+            if not cov_frames or not bed_frames:
+                batch_covdf = None
+                batch_bedcovdf = None
+            else:
+                batch_covdf = (
+                    pd.concat(cov_frames, ignore_index=True)
+                    .groupby(
+                        ["#rname", "startpos", "endpos"],
+                        as_index=False,
+                        sort=False,
+                    )
+                    .agg(
+                        {
+                            "numreads": "sum",
+                            "covbases": "sum",
+                            "meandepth": "sum",
+                        }
+                    )
+                )
+                batch_bedcovdf = (
+                    pd.concat(bed_frames, ignore_index=True)
+                    .groupby(
+                        ["chrom", "startpos", "endpos", "name"],
+                        as_index=False,
+                        sort=False,
+                    )
+                    .agg({"bases": "sum"})
+                )
             if batch_covdf is None or batch_bedcovdf is None:
                 logger.error("No staging files could be loaded successfully")
                 if batch_dir and os.path.exists(batch_dir):
@@ -1934,7 +1953,9 @@ class TargetAnalysis:
                     previous_cumulative_reads = None
                     if os.path.exists(latest_reads_cache):
                         try:
-                            previous_cumulative_reads = pd.read_parquet(latest_reads_cache)
+                            previous_cumulative_reads = pd.read_parquet(
+                                latest_reads_cache, **_PARQUET_READ_KWARGS
+                            )
                             previous_cumulative_reads.rename(columns={'reads': 'previous_reads'}, inplace=True)
                         except Exception:
                             pass
@@ -1973,9 +1994,9 @@ class TargetAnalysis:
                          'timestamp', 'reads', 'reads_per_length']
                     ]
                     try:
-                        target_coverage_with_reads[['chrom', 'startpos', 'endpos', 'name', 'reads']].to_parquet(
-                            latest_reads_cache, index=False
-                        )
+                        target_coverage_with_reads[
+                            ['chrom', 'startpos', 'endpos', 'name', 'reads']
+                        ].to_parquet(latest_reads_cache, **_PARQUET_WRITE_KWARGS)
                     except Exception:
                         pass
                     file_exists = os.path.exists(time_coverage_file)
@@ -2008,7 +2029,6 @@ class TargetAnalysis:
                     except OSError:
                         pass
 
-            gc.collect()
             elapsed = time.time() - start_time
             logger.info(
                 f"Batch accumulation complete for {sample_id}: "

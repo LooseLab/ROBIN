@@ -2439,7 +2439,26 @@ class Coordinator:
         
         # Invalidate stats cache since we're updating stats
         self._stats_cache = None
-        
+
+        # Release backpressure for this job BEFORE awaiting submit_jobs() for downstream
+        # triggers. Otherwise, at max_total_waiting (~20480), _dispatch_ready_job blocks
+        # forever in _wait_for_global_capacity() and never returns — inflight is not
+        # decremented and _drain_waiting_jobs never runs (Coordinator deadlock; GUI frozen).
+        try:
+            jt_bp = job.job_type
+            if self.inflight_by_type.get(jt_bp, 0) > 0:
+                self.inflight_by_type[jt_bp] -= 1
+                if self.inflight_by_type[jt_bp] == 0:
+                    self.inflight_by_type.pop(jt_bp, None)
+            qn_bp = queue_name or job_queue_of(jt_bp)
+            if self.inflight_by_queue.get(qn_bp, 0) > 0:
+                self.inflight_by_queue[qn_bp] -= 1
+                if self.inflight_by_queue[qn_bp] == 0:
+                    self.inflight_by_queue.pop(qn_bp, None)
+            await self._drain_waiting_jobs(qn_bp, jt_bp)
+        except Exception:
+            pass
+
         if ok:
             if not is_skipped:
                 self.completed_count += 1
@@ -2785,25 +2804,6 @@ class Coordinator:
                         "start_time": time.time(),
                     }
 
-        # Release backpressure queues after a job finishes
-        try:
-            jt = job.job_type
-            # decrement inflight count for this type
-            if self.inflight_by_type.get(jt, 0) > 0:
-                self.inflight_by_type[jt] -= 1
-                if self.inflight_by_type[jt] == 0:
-                    self.inflight_by_type.pop(jt, None)
-            # decrement inflight count for this queue
-            qn = queue_name or job_queue_of(jt)
-            if self.inflight_by_queue.get(qn, 0) > 0:
-                self.inflight_by_queue[qn] -= 1
-                if self.inflight_by_queue[qn] == 0:
-                    self.inflight_by_queue.pop(qn, None)
-            await self._drain_waiting_jobs(qn, jt)
-        except Exception:
-            pass
-        except Exception:
-            pass
         if job.job_type in CLASSIFICATION_TYPES:
             # decrement pending for this type
             if self.classif_pending_by_type.get(job.job_type, 0) > 0:

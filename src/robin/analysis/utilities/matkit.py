@@ -820,7 +820,6 @@ def run_matkit(sortfile: str, temp: str) -> None:
     del mod_sites
     del debug_data
     logging.info(f"Modkit2 processing complete. Output written to: {temp}")
-    gc.collect()
 
 
 def run_modkit(sortfile: str, temp: str, threads: int) -> None:
