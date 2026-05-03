@@ -1373,7 +1373,6 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             bed_file_mapping = {
                             "rCNS2": "rCNS2_panel_name_uniq.bed",
                             "AML": "AML_panel_name_uniq.bed",
-                            "PanCan": "PanCan_panel_name_uniq.bed",
                             "Sarcoma": "Sarcoma_panel_name_uniq.bed"
                             }
                     
@@ -2395,8 +2394,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 return "rCNS2"
                             elif "aml" in bed_name:
                                 return "AML"
-                            elif "pancan" in bed_name or "pan_can" in bed_name:
-                                return "PanCan"
                             elif "sarcoma" in bed_name:
                                 return "Sarcoma"
                     
@@ -2418,7 +2415,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             panel_colors = {
                 "rCNS2": ("bg-blue-100", "text-blue-800", "rCNS2 Panel"),
                 "AML": ("bg-green-100", "text-green-800", "AML Panel"), 
-                "PanCan": ("bg-purple-100", "text-purple-800", "Pan-Cancer Panel"),
                 "Sarcoma": ("bg-orange-100", "text-orange-800", "Sarcoma Panel"),
                 "Unknown Panel": ("bg-yellow-100", "text-yellow-800", "Unknown Panel")
             }
@@ -2463,8 +2459,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     bed_filename = "rCNS2_panel_name_uniq.bed"
                 elif target_panel == "AML":
                     bed_filename = "AML_panel_name_uniq.bed"
-                elif target_panel == "PanCan":
-                    bed_filename = "PanCan_panel_name_uniq.bed"
                 elif target_panel and target_panel.strip():
                     # For custom panels, construct the expected filename
                     bed_filename = f"{target_panel}_panel_name_uniq.bed"
@@ -2499,7 +2493,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         panel_descriptions = {
                             "rCNS2": "Central Nervous System genes (244 regions)",
                             "AML": "Acute Myeloid Leukemia genes (1,181 regions)", 
-                            "PanCan": "Pan-Cancer comprehensive gene set (1,389 regions)",
                             "Sarcoma": "Sarcoma-specific gene panel",
                             "Unknown Panel": "Panel type could not be determined"
                         }
@@ -3469,7 +3462,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     bed_file_mapping = {
                                     "rCNS2": "rCNS2_panel_name_uniq.bed",
                                     "AML": "AML_panel_name_uniq.bed",
-                                    "PanCan": "PanCan_panel_name_uniq.bed",
                                     "Sarcoma": "Sarcoma_panel_name_uniq.bed"
                                     }
                             

@@ -713,8 +713,6 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 bed_filename = "rCNS2_panel_name_uniq.bed"
             elif panel == "AML":
                 bed_filename = "AML_panel_name_uniq.bed"
-            elif panel == "PanCan":
-                bed_filename = "PanCan_panel_name_uniq.bed"
             else:
                 # Check for custom panel
                 bed_filename = f"{panel}_panel_name_uniq.bed"

@@ -36,7 +36,7 @@ robin utils sequencing-files --panel rCNS2 --output-dir ~/references/robin_ref
 
 | Option | Purpose |
 |--------|---------|
-| `-p` / `--panel` | **Required.** Same names as `--target-panel` (built-in panels such as `rCNS2`, `AML`, `PanCan`; run `robin utils sequencing-files --help` for the list on your install). |
+| `-p` / `--panel` | **Required.** Same names as `--target-panel` (built-in panels such as `rCNS2`, `AML`; run `robin utils sequencing-files --help` for the list on your install). |
 | `-r` / `--reference` | **Reference FASTA:** either an **HTTPS URL** to download, or a **local path** to `.fa` / `.fa.gz`. If omitted, ROBIN uses the default **NCBI GRCh38 no-alt analysis set** (UCSC-style contig names) — a **large** download; use `-r` to point at an existing file if you already have GRCh38. |
 | `-o` / `--output-dir` | Output folder (default: **`./reference_files`** in the current directory). |
 | `-y` / `--yes` | Skip the confirmation prompt (for scripts). |
@@ -73,7 +73,7 @@ robin workflow <data_folder> --work-dir <output_folder> \
 | `-w` | Comma-separated analysis types |
 | `--reference` | Reference FASTA (needed for most steps) |
 | `--center` | Site label (e.g. `Sherwood`, `Auckland`) |
-| `--target-panel` | Panel name, e.g. `rCNS2`, `PanCan` |
+| `--target-panel` | Panel name, e.g. `rCNS2` |
 
 ### Examples
 
@@ -92,7 +92,7 @@ robin workflow ~/data/bam_files \
   -w mgmt,sturgeon \
   --reference ~/references/hg38_simple.fa \
   --center Auckland \
-  --target-panel PanCan
+  --target-panel AML
 
 # More logging
 robin workflow ~/data/bam_files \
@@ -144,7 +144,7 @@ Useful options (full list: `robin workflow --help`):
 
 ## Panel management
 
-Built-in panels include **rCNS2**, **AML**, **PanCan**. Custom panels are registered from BED (at least four columns: chr, start, end, gene name(s)).
+Built-in panels include **rCNS2** and **AML**. Custom panels are registered from BED (at least four columns: chr, start, end, gene name(s)).
 
 ```bash
 robin list-panels
@@ -154,7 +154,7 @@ robin remove-panel MyCustomPanel
 robin remove-panel MyCustomPanel --force
 ```
 
-You cannot reuse reserved names: `rCNS2`, `AML`, `PanCan`.
+You cannot reuse reserved names: `rCNS2`, `AML`.
 
 ---
 

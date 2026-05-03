@@ -740,8 +740,6 @@ class TargetAnalysis:
             bed_filename = "rCNS2_panel_name_uniq.bed"
         elif target_panel == "AML":
             bed_filename = "AML_panel_name_uniq.bed"
-        elif target_panel == "PanCan":
-            bed_filename = "PanCan_panel_name_uniq.bed"
         else:
             # Check for custom panel
             bed_filename = f"{target_panel}_panel_name_uniq.bed"
@@ -2051,7 +2049,7 @@ def process_single_file(
         work_dir: Working directory
         logger: Logger instance
         reference: Optional reference genome path
-        target_panel: Target panel type (rCNS2, AML, PanCan)
+        target_panel: Target panel type (rCNS2, AML, or custom panel)
 
     Returns:
         Dictionary with target analysis results
@@ -2142,7 +2140,7 @@ def process_multiple_files(bam_paths, metadata_list, work_dir, logger, reference
         work_dir: Working directory
         logger: Logger instance
         reference: Optional path to reference genome for SNP calling
-        target_panel: Target panel type (rCNS2, AML, PanCan)
+        target_panel: Target panel type (rCNS2, AML, or custom panel)
 
     Returns:
         Dictionary with aggregated target analysis results
@@ -3087,8 +3085,6 @@ def run_snp_analysis(
                     bed_filename = "rCNS2_panel_name_uniq.bed"
                 elif target_panel == "AML":
                     bed_filename = "AML_panel_name_uniq.bed"
-                elif target_panel == "PanCan":
-                    bed_filename = "PanCan_panel_name_uniq.bed"
                 else:
                     bed_filename = f"{target_panel}_panel_name_uniq.bed"
 
