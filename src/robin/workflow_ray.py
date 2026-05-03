@@ -1416,7 +1416,10 @@ class Coordinator:
         return int(self.max_waiting_per_queue.get(queue_name, self.max_inflight_per_type * 20))
 
     async def _wait_for_global_capacity(self) -> None:
-        while self._total_waiting() >= self.max_total_waiting:
+        # Strict `>= max` deadlocks when `from_waiting` dispatches push `_total_waiting`
+        # one past `max_total_waiting` (e.g. 20481 vs 20480): a single drain leaves
+        # `_total_waiting == max` and this loop never exits. Block only when *over* cap.
+        while self._total_waiting() > self.max_total_waiting:
             await asyncio.sleep(0.05)
 
     async def _wait_for_queue_capacity(self, queue_name: str) -> None:
@@ -1428,7 +1431,7 @@ class Coordinator:
             n = int(n or 0)
         except Exception:
             n = 0
-        return (self._total_waiting() + n) < self.max_total_waiting
+        return (self._total_waiting() + n) <= self.max_total_waiting
 
     async def _dispatch_ready_job(self, job: Job, sample_id: str, from_waiting: bool = False) -> None:
         # Ensure global waiting does not grow without bound for new submissions
@@ -2441,9 +2444,10 @@ class Coordinator:
         self._stats_cache = None
 
         # Release backpressure for this job BEFORE awaiting submit_jobs() for downstream
-        # triggers. Otherwise, at max_total_waiting (~20480), _dispatch_ready_job blocks
-        # forever in _wait_for_global_capacity() and never returns — inflight is not
-        # decremented and _drain_waiting_jobs never runs (Coordinator deadlock; GUI frozen).
+        # triggers. Otherwise _dispatch_ready_job can block forever in
+        # _wait_for_global_capacity() (Coordinator deadlock; GUI frozen). Also see
+        # _wait_for_global_capacity: use strict `>` vs cap so one-past-max waiting
+        # (e.g. 20481 vs 20480) can still drain.
         try:
             jt_bp = job.job_type
             if self.inflight_by_type.get(jt_bp, 0) > 0:
