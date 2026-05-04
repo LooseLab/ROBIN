@@ -1718,6 +1718,40 @@ class Coordinator:
                 pass
             await self._dispatch_ready_job(nxt_job_g, sid, from_waiting=True)
 
+    def _defer_submit_after_finish(
+        self, jobs: List[Job], *, internal: bool = False
+    ) -> None:
+        """Schedule submit_jobs / _submit_jobs_internal without blocking _on_finish.
+
+        Ray may run only one Coordinator handler at a time when sync+async methods
+        mix, or nested awaits (_drain → _wait_for_queue_capacity, submit →
+        _wait_for_global_capacity) can otherwise prevent further _on_finish calls
+        from workers — then nothing drains, Done freezes, and Wait stays high.
+        """
+        if not jobs:
+            return
+        snapshot = list(jobs)
+
+        async def _run() -> None:
+            try:
+                if internal:
+                    await self._submit_jobs_internal(snapshot)
+                else:
+                    await self.submit_jobs(snapshot)
+            except Exception:
+                logging.getLogger("robin.workflow").exception(
+                    "Deferred submit after completion failed (internal=%s, n=%s)",
+                    internal,
+                    len(snapshot),
+                )
+
+        try:
+            asyncio.create_task(_run())
+        except Exception:
+            logging.getLogger("robin.workflow").exception(
+                "Could not schedule deferred submit after completion"
+            )
+
     # ----- submission & lifecycle -----
     async def submit_jobs(self, jobs: List[Job]) -> None:
         # Check if shutdown has been requested
@@ -2501,6 +2535,85 @@ class Coordinator:
         # Invalidate stats cache since we're updating stats
         self._stats_cache = None
 
+        # Terminal counts + per-sample rollup BEFORE any await that can block this actor
+        # (_drain_waiting_jobs → _wait_for_queue_capacity, submit_jobs → _wait_*). If those
+        # run first, _on_finish never reaches completed_count / failed_count and the GUI
+        # "Done" line freezes even while workers complete jobs (same observed Wait/Act).
+        if ok:
+            if not is_skipped:
+                self.completed_count += 1
+                self.completed_by_type[job.job_type] = (
+                    self.completed_by_type.get(job.job_type, 0) + 1
+                )
+            else:
+                self.total_skipped += 1
+        else:
+            if not is_skipped:
+                self.failed_count += 1
+                self.failed_by_type[job.job_type] = (
+                    self.failed_by_type.get(job.job_type, 0) + 1
+                )
+                try:
+                    err_str = (err or "")[:1500]
+                    err_lower = err_str.lower()
+                    is_oom = (
+                        "oom" in err_lower
+                        or "out of memory" in err_lower
+                        or "outofmemory" in err_lower
+                        or "worker killed" in err_lower
+                        or "killed (oom)" in err_lower
+                        or "memory error" in err_lower
+                        or "worker died" in err_lower
+                        or "worker unexpectedly exits" in err_lower
+                        or "worker exit" in err_lower
+                        or "sigkill" in err_lower
+                        or "connection error" in err_lower
+                        or "system_error" in err_lower
+                    )
+                    sid_fail = (
+                        job.context.get_sample_id()
+                        if hasattr(job.context, "get_sample_id")
+                        else "unknown"
+                    )
+                    fp_fail = getattr(job.context, "filepath", "") or ""
+                    self._failed_jobs_log.append(
+                        {
+                            "sample_id": sid_fail,
+                            "filepath": fp_fail,
+                            "job_type": job.job_type,
+                            "error": err_str,
+                            "is_oom": is_oom,
+                            "failure_kind": failure_kind or "",
+                        }
+                    )
+                except Exception:
+                    pass
+        try:
+            sid_early = (
+                job.context.get_sample_id()
+                if hasattr(job.context, "get_sample_id")
+                else "unknown"
+            )
+            ent_early = self.samples_by_id.get(sid_early)
+            if ent_early is not None:
+                if ent_early.get("active_jobs", 0) > 0:
+                    ent_early["active_jobs"] -= 1
+                is_skip_early = False
+                try:
+                    is_skip_early = (job.job_type == "preprocessing") and bool(
+                        job.context.metadata.get("skip_downstream", False)
+                    )
+                except Exception:
+                    is_skip_early = False
+                if not is_skip_early:
+                    if ok:
+                        ent_early["completed_jobs"] = ent_early.get("completed_jobs", 0) + 1
+                    else:
+                        ent_early["failed_jobs"] = ent_early.get("failed_jobs", 0) + 1
+                ent_early["last_seen"] = time.time()
+        except Exception:
+            pass
+
         # Release backpressure for this job BEFORE awaiting submit_jobs() for downstream
         # triggers. Otherwise _dispatch_ready_job can block forever in
         # _wait_for_global_capacity() (Coordinator deadlock; GUI frozen). Also see
@@ -2522,14 +2635,6 @@ class Coordinator:
             pass
 
         if ok:
-            if not is_skipped:
-                self.completed_count += 1
-                self.completed_by_type[job.job_type] = (
-                    self.completed_by_type.get(job.job_type, 0) + 1
-                )
-            else:
-                # Track skip for stats
-                self.total_skipped += 1
             # trigger downstream (preferred). For bed_conversion, schedule
             # classifiers/slow once per sample instead of per-file.
             requested = job.context.metadata.get("original_workflow", [])
@@ -2644,7 +2749,7 @@ class Coordinator:
                         
                         # Submit non-CNV jobs immediately
                         if other_jobs:
-                            await self.submit_jobs(other_jobs)
+                            self._defer_submit_after_finish(other_jobs)
                         
                         # For CNV jobs, add them to the batcher
                         for cnv_job in cnv_jobs:
@@ -2688,86 +2793,18 @@ class Coordinator:
                                     pass
                                 # Convert BatchedJob to regular Job for processing
                                 regular_jobs = self._convert_batched_jobs(batches)
-                                await self._submit_jobs_internal(regular_jobs)
+                                self._defer_submit_after_finish(
+                                    regular_jobs, internal=True
+                                )
                     else:
                         # No batching, submit all jobs normally
-                        await self.submit_jobs(triggered_jobs)
+                        self._defer_submit_after_finish(triggered_jobs)
                 else:
                     # advance linear chain if any
                     nxt = job.next_job()
                     if (not is_skipped) and nxt:
-                        await self.submit_jobs([nxt])
-        else:
-            # Only record as failed if not a deliberate skip
-            if not is_skipped:
-                self.failed_count += 1
-                self.failed_by_type[job.job_type] = (
-                    self.failed_by_type.get(job.job_type, 0) + 1
-                )
-                # Record failed job for tracking and OOM diagnosis
-                try:
-                    err_str = (err or "")[:1500]  # Keep more of traceback so root cause is visible
-                    err_lower = err_str.lower()
-                    # Ray OOM: worker is killed by raylet; error often says "worker died" / "connection" / "SIGKILL" not "oom"
-                    is_oom = (
-                        "oom" in err_lower
-                        or "out of memory" in err_lower
-                        or "outofmemory" in err_lower
-                        or "worker killed" in err_lower
-                        or "killed (oom)" in err_lower
-                        or "memory error" in err_lower
-                        or "worker died" in err_lower
-                        or "worker unexpectedly exits" in err_lower
-                        or "worker exit" in err_lower
-                        or "sigkill" in err_lower
-                        or "connection error" in err_lower
-                        or "system_error" in err_lower
-                    )
-                    sid_fail = (
-                        job.context.get_sample_id()
-                        if hasattr(job.context, "get_sample_id")
-                        else "unknown"
-                    )
-                    fp_fail = getattr(job.context, "filepath", "") or ""
-                    self._failed_jobs_log.append({
-                        "sample_id": sid_fail,
-                        "filepath": fp_fail,
-                        "job_type": job.job_type,
-                        "error": err_str,
-                        "is_oom": is_oom,
-                        "failure_kind": failure_kind or "",
-                    })
-                except Exception:
-                    pass
+                        self._defer_submit_after_finish([nxt])
 
-        # per-sample finish updates
-        try:
-            sid2 = (
-                job.context.get_sample_id()
-                if hasattr(job.context, "get_sample_id")
-                else "unknown"
-            )
-            ent2 = self.samples_by_id.get(sid2)
-            if ent2 is not None:
-                if ent2.get("active_jobs", 0) > 0:
-                    ent2["active_jobs"] -= 1
-                # Do not count deliberately skipped preprocessing as completed or failed
-                is_skipped = False
-                try:
-                    is_skipped = (job.job_type == "preprocessing") and bool(
-                        job.context.metadata.get("skip_downstream", False)
-                    )
-                except Exception:
-                    is_skipped = False
-                if not is_skipped:
-                    if ok:
-                        ent2["completed_jobs"] = ent2.get("completed_jobs", 0) + 1
-                    else:
-                        ent2["failed_jobs"] = ent2.get("failed_jobs", 0) + 1
-                ent2["last_seen"] = time.time()
-        except Exception:
-            pass
-        
         # Periodically clean up completed samples to prevent memory growth
         self._jobs_since_last_cleanup += 1
         if self._jobs_since_last_cleanup >= self._sample_cleanup_interval:
@@ -4734,11 +4771,18 @@ async def run(
     if job_timeout > 0:
         logging.info(f"Per-job timeout enabled: jobs running longer than {job_timeout}s will be cancelled (ROBIN_JOB_TIMEOUT_SECONDS)")
     try:
-        coord = Coordinator.options(name="robin_coordinator", num_cpus=0).remote(
+        coord = Coordinator.options(
+            name="robin_coordinator",
+            num_cpus=0,
+            max_concurrency=32,
+        ).remote(
             target_panel=target_panel, analysis_workers=analysis_workers, preset=preset, reference=reference, enable_batching=enable_batching, job_timeout_seconds=job_timeout
         )
     except Exception:
-        coord = Coordinator.options(name="robin_coordinator").remote(
+        coord = Coordinator.options(
+            name="robin_coordinator",
+            max_concurrency=32,
+        ).remote(
             target_panel=target_panel, analysis_workers=analysis_workers, preset=preset, reference=reference, enable_batching=enable_batching, job_timeout_seconds=job_timeout
         )
 
