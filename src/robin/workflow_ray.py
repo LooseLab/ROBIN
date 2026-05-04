@@ -1045,6 +1045,19 @@ class Coordinator:
             except Exception:
                 _slack = self.max_total_inflight * 2
             self.max_total_waiting: int = self.max_total_inflight * 40 + max(0, _slack)
+        # _wait_for_global_capacity blocks when total > max + this slack (not when > max).
+        # Sequential _dispatch_ready_job calls in one submit burst can land a few slots
+        # above max_total_waiting before the next check; without slack, Wait shows max+1
+        # and the coordinator wedges (e.g. 1281 vs ROBIN_MAX_TOTAL_WAITING=1280).
+        # Optional: ROBIN_GLOBAL_WAIT_SOFT_SLACK=int (default: max(32, 4 * queue_count))
+        try:
+            self._global_wait_soft_slack = int(
+                os.getenv("ROBIN_GLOBAL_WAIT_SOFT_SLACK", "0") or "0"
+            )
+        except Exception:
+            self._global_wait_soft_slack = 0
+        if self._global_wait_soft_slack <= 0:
+            self._global_wait_soft_slack = max(32, int(queue_count) * 4)
         self.max_inflight_per_queue: Dict[str, int] = {
             q: self.max_inflight_per_type for q in QUEUE_TO_TYPES
         }
@@ -1445,11 +1458,17 @@ class Coordinator:
     def _queue_waiting_cap(self, queue_name: str) -> int:
         return int(self.max_waiting_per_queue.get(queue_name, self.max_inflight_per_type * 20))
 
+    def _global_waiting_relief_threshold(self) -> int:
+        """Soft ceiling for _wait_for_global_capacity (policy cap + burst slack)."""
+        return int(self.max_total_waiting) + int(
+            getattr(self, "_global_wait_soft_slack", 32) or 0
+        )
+
     async def _wait_for_global_capacity(self) -> None:
-        # Strict `>= max` deadlocks when `from_waiting` dispatches push `_total_waiting`
-        # one past `max_total_waiting` (e.g. 20481 vs 20480): a single drain leaves
-        # `_total_waiting == max` and this loop never exits. Block only when *over* cap.
-        while self._total_waiting() > self.max_total_waiting:
+        # Block new work until total is strictly below relief threshold. Policy
+        # admission stays at max_total_waiting (see can_accept_jobs); this threshold
+        # is slightly higher so brief burst overshoot cannot wedge the coordinator.
+        while self._total_waiting() > self._global_waiting_relief_threshold():
             await asyncio.sleep(0.05)
 
     async def _wait_for_queue_capacity(self, queue_name: str) -> None:
@@ -2476,8 +2495,8 @@ class Coordinator:
         # Release backpressure for this job BEFORE awaiting submit_jobs() for downstream
         # triggers. Otherwise _dispatch_ready_job can block forever in
         # _wait_for_global_capacity() (Coordinator deadlock; GUI frozen). Also see
-        # _wait_for_global_capacity: use strict `>` vs cap so one-past-max waiting
-        # (e.g. 20481 vs 20480) can still drain.
+        # _wait_for_global_capacity uses max_total_waiting + _global_wait_soft_slack
+        # so brief burst overshoot (e.g. 1281 vs cap 1280) cannot wedge the actor.
         try:
             jt_bp = job.job_type
             if self.inflight_by_type.get(jt_bp, 0) > 0:
