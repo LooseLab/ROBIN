@@ -1049,7 +1049,7 @@ class Coordinator:
         # Sequential _dispatch_ready_job calls in one submit burst can land a few slots
         # above max_total_waiting before the next check; without slack, Wait shows max+1
         # and the coordinator wedges (e.g. 1281 vs ROBIN_MAX_TOTAL_WAITING=1280).
-        # Optional: ROBIN_GLOBAL_WAIT_SOFT_SLACK=int (default: max(32, 4 * queue_count))
+        # Optional: ROBIN_GLOBAL_WAIT_SOFT_SLACK=int (overrides auto slack below)
         try:
             self._global_wait_soft_slack = int(
                 os.getenv("ROBIN_GLOBAL_WAIT_SOFT_SLACK", "0") or "0"
@@ -1057,7 +1057,16 @@ class Coordinator:
         except Exception:
             self._global_wait_soft_slack = 0
         if self._global_wait_soft_slack <= 0:
-            self._global_wait_soft_slack = max(32, int(queue_count) * 4)
+            # Auto slack: small test caps (ROBIN_MAX_TOTAL_WAITING) need a large *relative*
+            # cushion. One preprocessing finish can fan out to many downstream jobs in one
+            # coordinator turn; each may append to waiting lists before the next capacity
+            # check, so total waiting can jump tens or hundreds above the nominal cap (e.g.
+            # 1313 vs cap 1280). Production caps are already large + ROBIN_MAX_TOTAL_WAITING_SLACK.
+            mtw = int(self.max_total_waiting)
+            if mtw < 10000:
+                self._global_wait_soft_slack = max(384, mtw // 2 + 128)
+            else:
+                self._global_wait_soft_slack = max(128, int(queue_count) * 16)
         self.max_inflight_per_queue: Dict[str, int] = {
             q: self.max_inflight_per_type for q in QUEUE_TO_TYPES
         }
