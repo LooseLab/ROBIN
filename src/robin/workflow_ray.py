@@ -1011,10 +1011,18 @@ class Coordinator:
         # backpressure: global and per-queue caps to prevent queue explosions
         queue_count = max(1, len(QUEUE_TO_TYPES))
         self.max_total_inflight: int = self.max_inflight_per_type * queue_count
-        # Backpressure cap for total waiting jobs.
-        # Test change: temporarily allow 2x waiting capacity to see if we
-        # simply stall because the queue limit is reached.
-        self.max_total_waiting: int = self.max_total_inflight * 40
+        # Backpressure cap for total waiting jobs (sum of waiting_by_type_global,
+        # waiting_by_queue, and waiting_global — see _total_waiting()).
+        # One submit_jobs() burst can append several waiting entries while only
+        # re-checking capacity at the start of each _dispatch_ready_job, so the
+        # total can land a few slots above (max_inflight * 40). Add slack so
+        # _wait_for_global_capacity() does not wedge at max+1/max+2. Optional:
+        #   ROBIN_MAX_TOTAL_WAITING_SLACK=int  (default: 2 * max_total_inflight)
+        try:
+            _slack = int(os.getenv("ROBIN_MAX_TOTAL_WAITING_SLACK", str(self.max_total_inflight * 2)))
+        except Exception:
+            _slack = self.max_total_inflight * 2
+        self.max_total_waiting: int = self.max_total_inflight * 40 + max(0, _slack)
         self.max_inflight_per_queue: Dict[str, int] = {
             q: self.max_inflight_per_type for q in QUEUE_TO_TYPES
         }
