@@ -1018,11 +1018,33 @@ class Coordinator:
         # total can land a few slots above (max_inflight * 40). Add slack so
         # _wait_for_global_capacity() does not wedge at max+1/max+2. Optional:
         #   ROBIN_MAX_TOTAL_WAITING_SLACK=int  (default: 2 * max_total_inflight)
-        try:
-            _slack = int(os.getenv("ROBIN_MAX_TOTAL_WAITING_SLACK", str(self.max_total_inflight * 2)))
-        except Exception:
-            _slack = self.max_total_inflight * 2
-        self.max_total_waiting: int = self.max_total_inflight * 40 + max(0, _slack)
+        #   ROBIN_MAX_TOTAL_WAITING=int        (if set, overrides cap for testing, e.g. 1280)
+        _env_waiting_cap = os.getenv("ROBIN_MAX_TOTAL_WAITING", "").strip()
+        if _env_waiting_cap:
+            try:
+                self.max_total_waiting: int = max(64, int(_env_waiting_cap))
+            except Exception:
+                try:
+                    _slack = int(
+                        os.getenv(
+                            "ROBIN_MAX_TOTAL_WAITING_SLACK",
+                            str(self.max_total_inflight * 2),
+                        )
+                    )
+                except Exception:
+                    _slack = self.max_total_inflight * 2
+                self.max_total_waiting = self.max_total_inflight * 40 + max(0, _slack)
+        else:
+            try:
+                _slack = int(
+                    os.getenv(
+                        "ROBIN_MAX_TOTAL_WAITING_SLACK",
+                        str(self.max_total_inflight * 2),
+                    )
+                )
+            except Exception:
+                _slack = self.max_total_inflight * 2
+            self.max_total_waiting: int = self.max_total_inflight * 40 + max(0, _slack)
         self.max_inflight_per_queue: Dict[str, int] = {
             q: self.max_inflight_per_type for q in QUEUE_TO_TYPES
         }
