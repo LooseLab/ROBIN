@@ -7,6 +7,11 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-05-05
+
+### Changed
+- Improved workflow throughput for very large datasets by refining queue backpressure and job-admission behavior so the pipeline sustains progress more reliably under heavy load.
+
 ## [0.5.1] - 2026-04-30
 
 ### Changed
