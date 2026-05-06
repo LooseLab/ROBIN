@@ -1444,6 +1444,9 @@ def _create_ray_workflow_runner(
                     try:
                         final_result = ray.get(result, timeout=30.0)
                         return final_result
+                    except ray.exceptions.GetTimeoutError:
+                        # Submission may still have reached the coordinator; avoid false-negative UI status.
+                        return True
                     except Exception:
                         return False
 
@@ -1514,6 +1517,12 @@ def _create_ray_workflow_runner(
                                 err=True,
                             )
                         return final_result
+                    except ray.exceptions.GetTimeoutError:
+                        click.echo(
+                            f"[SNP] Submit confirmation timed out for sample '{sid_for_log}', treating as queued.",
+                            err=True,
+                        )
+                        return True
                     except Exception as e:
                         click.echo(
                             f"[SNP] Failed waiting for submit confirmation for sample '{sid_for_log}': {e}",
@@ -1586,6 +1595,12 @@ def _create_ray_workflow_runner(
                                 err=True,
                             )
                         return final_result
+                    except ray.exceptions.GetTimeoutError:
+                        click.echo(
+                            f"[Finalize] Submit confirmation timed out for sample '{sid_for_log}', treating as queued.",
+                            err=True,
+                        )
+                        return True
                     except Exception as e:
                         click.echo(
                             f"[Finalize] Failed waiting for submit confirmation for sample '{sid_for_log}': {e}",

@@ -3030,6 +3030,10 @@ class GUILauncher:
                                 except Exception:
                                     ng_run = None  # type: ignore
                                 
+                                should_generate_report = bool(
+                                    state.get("export_pdf", True)
+                                    or state.get("export_csv", False)
+                                )
                                 for idx, sid in enumerate(selected):
                                     try:
                                         # Update overall progress
@@ -3055,71 +3059,79 @@ class GUILauncher:
                                         
                                         # Don't use notification system - only update dialog
                                         
-                                        filename = f"{sid}_run_report.pdf"
-                                        pdf_path = os.path.join(
-                                            str(sample_dir), filename
-                                        )
-                                        os.makedirs(str(sample_dir), exist_ok=True)
-                                        export_csv_dir = None
-                                        if bool(state.get("export_csv", False)):
-                                            export_csv_dir = os.path.join(
-                                                str(sample_dir), "report_csv"
+                                        if should_generate_report:
+                                            filename = f"{sid}_run_report.pdf"
+                                            pdf_path = os.path.join(
+                                                str(sample_dir), filename
                                             )
-                                        
-                                        # Don't use the notification system - use only our dialog callback
-                                        if ng_run is not None:
-                                            # Use custom callback that updates dialog only
-                                            def sample_progress_callback(data: Dict[str, Any]):
-                                                data['sample_id'] = sid  # Add sample ID to track which bar to update
-                                                progress_callback(data)  # This updates the dialog via progress_updates queue
-                                            
-                                            pdf_file = await ng_run.io_bound(
-                                                create_pdf,
-                                                pdf_path,
-                                                str(sample_dir),
-                                                self.center or "Unknown",
-                                                report_type=state.get("type", "detailed"),
-                                                export_csv_dir=export_csv_dir,
-                                                export_xlsx=False,
-                                                export_zip=bool(
-                                                    state.get("export_csv", False)
-                                                ),
-                                                progress_callback=sample_progress_callback,  # Pass the dialog-only callback
-                                                workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                                            )
+                                            os.makedirs(str(sample_dir), exist_ok=True)
+                                            export_csv_dir = None
+                                            if bool(state.get("export_csv", False)):
+                                                export_csv_dir = os.path.join(
+                                                    str(sample_dir), "report_csv"
+                                                )
+
+                                            # Don't use the notification system - use only our dialog callback
+                                            if ng_run is not None:
+                                                # Use custom callback that updates dialog only
+                                                def sample_progress_callback(data: Dict[str, Any]):
+                                                    data['sample_id'] = sid
+                                                    progress_callback(data)
+
+                                                pdf_file = await ng_run.io_bound(
+                                                    create_pdf,
+                                                    pdf_path,
+                                                    str(sample_dir),
+                                                    self.center or "Unknown",
+                                                    report_type=state.get("type", "detailed"),
+                                                    export_csv_dir=export_csv_dir,
+                                                    export_xlsx=False,
+                                                    export_zip=bool(
+                                                        state.get("export_csv", False)
+                                                    ),
+                                                    progress_callback=sample_progress_callback,
+                                                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                )
+                                            else:
+                                                # Use custom callback that updates dialog only
+                                                def sample_progress_callback(data: Dict[str, Any]):
+                                                    data['sample_id'] = sid
+                                                    progress_callback(data)
+
+                                                pdf_file = create_pdf(
+                                                    pdf_path,
+                                                    str(sample_dir),
+                                                    self.center or "Unknown",
+                                                    report_type=state.get("type", "detailed"),
+                                                    export_csv_dir=export_csv_dir,
+                                                    export_xlsx=False,
+                                                    export_zip=bool(
+                                                        state.get("export_csv", False)
+                                                    ),
+                                                    progress_callback=sample_progress_callback,
+                                                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                )
+
+                                            if bool(state.get("export_pdf", True)):
+                                                files_to_download.append(pdf_file)
+
+                                            # Also offer CSV ZIP if requested
+                                            if (
+                                                bool(state.get("export_csv", False))
+                                                and export_csv_dir
+                                            ):
+                                                zip_path = os.path.join(
+                                                    export_csv_dir, f"{sid}_report_data.zip"
+                                                )
+                                                if os.path.exists(zip_path):
+                                                    files_to_download.append(zip_path)
                                         else:
-                                            # Use custom callback that updates dialog only
-                                            def sample_progress_callback(data: Dict[str, Any]):
-                                                data['sample_id'] = sid  # Add sample ID to track which bar to update
-                                                progress_callback(data)  # This updates the dialog via progress_updates queue
-                                            
-                                            pdf_file = create_pdf(
-                                                pdf_path,
-                                                str(sample_dir),
-                                                self.center or "Unknown",
-                                                report_type=state.get("type", "detailed"),
-                                                export_csv_dir=export_csv_dir,
-                                                export_xlsx=False,
-                                                export_zip=bool(
-                                                    state.get("export_csv", False)
-                                                ),
-                                                progress_callback=sample_progress_callback,  # Pass the dialog-only callback
-                                                workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                                            )
-                                        
-                                        # Queue file for download instead of downloading immediately
-                                        files_to_download.append(pdf_file)
-                                        
-                                        # Also offer CSV ZIP if requested
-                                        if (
-                                            bool(state.get("export_csv", False))
-                                            and export_csv_dir
-                                        ):
-                                            zip_path = os.path.join(
-                                                export_csv_dir, f"{sid}_report_data.zip"
-                                            )
-                                            if os.path.exists(zip_path):
-                                                files_to_download.append(zip_path)
+                                            progress_updates.put({
+                                                'stage': 'processing_sections',
+                                                'message': 'No PDF/CSV selected; skipping report build',
+                                                'progress': 1.0,
+                                                'sample_id': sid
+                                            })
                                         
                                         # Mark sample as complete
                                         progress_updates.put({
@@ -3169,7 +3181,9 @@ class GUILauncher:
                             }
                             state: Dict[str, Any] = {
                                 "type": "detailed",
+                                "export_pdf": True,
                                 "export_csv": False,
+                                "export_tsv": True,
                             }
 
                             with ui.dialog().props("persistent") as dialog:
@@ -3194,14 +3208,28 @@ class GUILauncher:
                                             )
 
                                         with ui.column().classes("mb-4"):
-                                            ui.label("Include data").classes(
+                                            ui.label("Output formats").classes(
                                                 "target-coverage-panel__meta-label mb-2"
+                                            )
+                                            ui.checkbox(
+                                                "PDF report",
+                                                value=True,
+                                                on_change=lambda e: state.update(
+                                                    {"export_pdf": bool(e.value)}
+                                                ),
                                             )
                                             ui.checkbox(
                                                 "CSV data (ZIP)",
                                                 value=False,
                                                 on_change=lambda e: state.update(
                                                     {"export_csv": bool(e.value)}
+                                                ),
+                                            )
+                                            ui.checkbox(
+                                                "Sample tracking TSV",
+                                                value=True,
+                                                on_change=lambda e: state.update(
+                                                    {"export_tsv": bool(e.value)}
                                                 ),
                                             )
 
@@ -3245,6 +3273,20 @@ class GUILauncher:
                             dialog_result = await dialog
                             if dialog_result != "Export":
                                 return
+                            if not (
+                                bool(state.get("export_pdf", True))
+                                or bool(state.get("export_csv", False))
+                                or bool(state.get("export_tsv", True))
+                            ):
+                                ui.notify(
+                                    "Select at least one output format (PDF, CSV, or TSV).",
+                                    type="warning",
+                                )
+                                return
+
+                            tsv_export_path = None
+                            if bool(state.get("export_tsv", True)):
+                                tsv_export_path = self._build_sample_tracking_tsv_export(selected_ids)
 
                             # Now show the progress dialog
                             with ui.dialog().props("persistent") as progress_dialog:
@@ -3264,8 +3306,15 @@ class GUILauncher:
                                         f"Report Type: {state.get('type', 'detailed').title()}"
                                     ).classes("text-sm mb-2")
                                     
+                                    selected_outputs = []
+                                    if bool(state.get("export_pdf", True)):
+                                        selected_outputs.append("PDF")
+                                    if bool(state.get("export_csv", False)):
+                                        selected_outputs.append("CSV (ZIP)")
+                                    if bool(state.get("export_tsv", True)):
+                                        selected_outputs.append("TSV")
                                     ui.label(
-                                        f"Output: PDF{' + CSV (ZIP)' if state.get('export_csv', False) else ''}"
+                                        f"Output: {' + '.join(selected_outputs) if selected_outputs else 'None'}"
                                     ).classes("text-sm mb-4")
                                     
                                     # Create individual progress bars for each sample
@@ -3340,7 +3389,7 @@ class GUILauncher:
                                     is_generating = {"active": True}
 
                                     # Storage for the files to download
-                                    files_to_download = []
+                                    files_to_download = [tsv_export_path] if tsv_export_path else []
                                     download_complete = {"done": False}
                                     
                                     # Timer to handle downloads once background task is done
@@ -4112,7 +4161,9 @@ class GUILauncher:
             }
             state: Dict[str, Any] = {
                 "type": "detailed",
+                "export_pdf": True,
                 "export_csv": False,
+                "export_tsv": False,
                 "include_sample_ids": False,
                 "sample_dob": "",
             }
@@ -4178,14 +4229,28 @@ class GUILauncher:
                             )
 
                         with ui.column().classes("mb-4"):
-                            ui.label("Include data").classes(
+                            ui.label("Output formats").classes(
                                 "target-coverage-panel__meta-label mb-2"
                             )
-                            csv_checkbox = ui.checkbox(
+                            ui.checkbox(
+                                "PDF report",
+                                value=True,
+                                on_change=lambda e: state.update(
+                                    {"export_pdf": bool(e.value)}
+                                ),
+                            )
+                            ui.checkbox(
                                 "CSV data (ZIP)",
                                 value=False,
                                 on_change=lambda e: state.update(
                                     {"export_csv": bool(e.value)}
+                                ),
+                            )
+                            ui.checkbox(
+                                "Sample summary TSV",
+                                value=False,
+                                on_change=lambda e: state.update(
+                                    {"export_tsv": bool(e.value)}
                                 ),
                             )
 
@@ -4222,6 +4287,16 @@ class GUILauncher:
 
             dialog_result = await dialog
             if dialog_result != "Yes":
+                return
+            if not (
+                bool(state.get("export_pdf", True))
+                or bool(state.get("export_csv", False))
+                or bool(state.get("export_tsv", False))
+            ):
+                ui.notify(
+                    "Select at least one output format (PDF, CSV, or TSV).",
+                    type="warning",
+                )
                 return
 
             # If user requested sample identifiers, decrypt with DOB
@@ -4289,8 +4364,15 @@ class GUILauncher:
                         f"Report Type: {state.get('type', 'detailed').title()}"
                     ).classes("text-sm mb-2")
                     
+                    selected_outputs = []
+                    if bool(state.get("export_pdf", True)):
+                        selected_outputs.append("PDF")
+                    if bool(state.get("export_csv", False)):
+                        selected_outputs.append("CSV (ZIP)")
+                    if bool(state.get("export_tsv", False)):
+                        selected_outputs.append("TSV")
                     output_display = ui.label(
-                        f"Output: PDF{' + CSV (ZIP)' if state.get('export_csv', False) else ''}"
+                        f"Output: {' + '.join(selected_outputs) if selected_outputs else 'None'}"
                     ).classes("text-sm mb-4")
                     
                     # Progress indicator
@@ -4402,49 +4484,59 @@ class GUILauncher:
                         type="warning",
                     ), once=True)
                     return
-                
-                filename = f"{sample_id}_run_report.pdf"
-                pdf_path = os.path.join(str(sample_dir), filename)
-                os.makedirs(str(sample_dir), exist_ok=True)
-                export_csv_dir = None
-                if bool(state.get("export_csv", False)):
-                    export_csv_dir = os.path.join(
-                        str(sample_dir), "report_csv"
-                    )
-                
-                # Use only our custom callback, not the notification system
-                def combined_callback(progress_data: Dict[str, Any]):
-                    """Custom callback for dialog updates only (no notifications)."""
-                    progress_callback(progress_data)
-                
-                pdf_file = await ng_run.io_bound(
-                    create_pdf,
-                    pdf_path,
-                    str(sample_dir),
-                    self.center or "Unknown",
-                    report_type=state.get("type", "detailed"),
-                    export_csv_dir=export_csv_dir,
-                    export_xlsx=False,
-                    export_zip=bool(state.get("export_csv", False)),
-                    progress_callback=combined_callback,
-                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                    sample_identifiers=state.get("sample_identifiers"),
+
+                should_generate_report = bool(
+                    state.get("export_pdf", True) or state.get("export_csv", False)
                 )
-                
-                # Mark report as completed
-                from robin.gui.report_progress import progress_manager
-                progress_manager.complete_report(sample_id, filename)
-                
-                # Queue files for download in UI context
-                files_to_download.append(pdf_file)
-                
-                # Also offer CSV ZIP if requested
-                if bool(state.get("export_csv", False)) and export_csv_dir:
-                    zip_path = os.path.join(
-                        export_csv_dir, f"{sample_id}_report_data.zip"
+                if should_generate_report:
+                    filename = f"{sample_id}_run_report.pdf"
+                    pdf_path = os.path.join(str(sample_dir), filename)
+                    os.makedirs(str(sample_dir), exist_ok=True)
+                    export_csv_dir = None
+                    if bool(state.get("export_csv", False)):
+                        export_csv_dir = os.path.join(
+                            str(sample_dir), "report_csv"
+                        )
+
+                    # Use only our custom callback, not the notification system
+                    def combined_callback(progress_data: Dict[str, Any]):
+                        """Custom callback for dialog updates only (no notifications)."""
+                        progress_callback(progress_data)
+
+                    pdf_file = await ng_run.io_bound(
+                        create_pdf,
+                        pdf_path,
+                        str(sample_dir),
+                        self.center or "Unknown",
+                        report_type=state.get("type", "detailed"),
+                        export_csv_dir=export_csv_dir,
+                        export_xlsx=False,
+                        export_zip=bool(state.get("export_csv", False)),
+                        progress_callback=combined_callback,
+                        workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                        sample_identifiers=state.get("sample_identifiers"),
                     )
-                    if os.path.exists(zip_path):
-                        files_to_download.append(zip_path)
+
+                    # Mark report as completed
+                    from robin.gui.report_progress import progress_manager
+                    progress_manager.complete_report(sample_id, filename)
+
+                    # Queue files for download in UI context
+                    if bool(state.get("export_pdf", True)):
+                        files_to_download.append(pdf_file)
+
+                    # Also offer CSV ZIP if requested
+                    if bool(state.get("export_csv", False)) and export_csv_dir:
+                        zip_path = os.path.join(
+                            export_csv_dir, f"{sample_id}_report_data.zip"
+                        )
+                        if os.path.exists(zip_path):
+                            files_to_download.append(zip_path)
+
+                if bool(state.get("export_tsv", False)):
+                    tsv_path = self._build_sample_tracking_tsv_export([sample_id])
+                    if tsv_path and os.path.exists(tsv_path):
+                        files_to_download.append(tsv_path)
                 
             except Exception as e:
                 # Mark report as failed
@@ -6880,6 +6972,389 @@ class GUILauncher:
             logging.error(f"Could not zip export files: {e}")
             return None
 
+    def _build_sample_tracking_tsv_export(self, sample_ids: List[str]) -> Optional[str]:
+        """Build TSV export with tracked-table fields and summary data."""
+        try:
+            if not sample_ids or not self.monitored_directory:
+                return None
+
+            table_fields: List[str] = []
+            table = getattr(self, "samples_table", None)
+            for col in (getattr(table, "columns", None) or []):
+                field = str(col.get("field", "") or "").strip()
+                if field and field not in ("actions", "export") and field not in table_fields:
+                    table_fields.append(field)
+            if not table_fields:
+                table_fields = [
+                    "sample_id",
+                    "test_id",
+                    "origin",
+                    "run_start",
+                    "device",
+                    "flowcell",
+                    "file_progress",
+                    "pipeline_progress",
+                    "active_jobs",
+                    "pending_jobs",
+                    "total_jobs",
+                    "completed_jobs",
+                    "failed_jobs",
+                    "job_types",
+                    "last_seen",
+                ]
+
+            run_info_fields = [
+                "run_time",
+                "model",
+                "device",
+                "flow_cell",
+                "panel",
+                "bam_passed",
+                "bam_failed",
+                "total_bases",
+                "mapped_reads",
+                "unmapped_reads",
+                "bam_batches",
+            ]
+            classification_models = ["sturgeon", "nanodx", "pannanodx", "random_forest"]
+            analysis_fields = {
+                "coverage": ["quality", "global_coverage", "target_coverage", "enrichment"],
+                "cnv": ["genetic_sex", "bin_width", "variance", "gained", "lost"],
+                "cnv_broad": [
+                    "whole_chromosome_events",
+                    "arm_events",
+                    "broad_gain_events",
+                    "broad_loss_events",
+                ],
+                "mgmt": [
+                    "status",
+                    "methylation_percent",
+                    "average_methylation",
+                    "prediction_score",
+                    "cpg_sites",
+                ],
+                "fusion": [
+                    "target_fusions",
+                    "genome_fusions",
+                    "target_pairs",
+                    "target_groups",
+                    "genome_pairs",
+                    "genome_groups",
+                ],
+                "mnpflex": [
+                    "qc_status",
+                    "qc_avg_coverage",
+                    "qc_missing_site_count",
+                    "mgmt_status",
+                    "mgmt_average",
+                    "mgmt_site_count",
+                    "classifier_name",
+                    "classifier_version",
+                    "classifier_type",
+                    "has_hierarchical_summary",
+                    "top_path",
+                    "top_path_score",
+                ],
+                "variants": [
+                    "snp_total_variants",
+                    "snp_pathogenic_variants",
+                    "snp_pathogenic_list",
+                    "indel_total_variants",
+                    "indel_pathogenic_variants",
+                    "indel_pathogenic_list",
+                ],
+            }
+
+            headers = list(table_fields)
+            headers.extend([f"run_summary_{k}" for k in run_info_fields])
+            for model_name in classification_models:
+                headers.extend(
+                    [
+                        f"classification_{model_name}_class",
+                        f"classification_{model_name}_confidence",
+                        f"classification_{model_name}_confidence_level",
+                        f"classification_{model_name}_features",
+                    ]
+                )
+            for section, keys in analysis_fields.items():
+                headers.extend([f"analysis_{section}_{k}" for k in keys])
+
+            rows_by_id = {
+                str(r.get("sample_id")): r
+                for r in (self._last_samples_rows or [])
+                if r.get("sample_id")
+            }
+            from robin.gui.components.summary import _refresh_summary_cache_sync
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = os.path.join(tempfile.gettempdir(), f"robin_sample_tracking_{timestamp}.tsv")
+            if os.path.exists(out_path):
+                i = 2
+                while os.path.exists(out_path):
+                    out_path = os.path.join(
+                        tempfile.gettempdir(), f"robin_sample_tracking_{timestamp}_{i}.tsv"
+                    )
+                    i += 1
+
+            def _clean_tsv_value(value: Any) -> Any:
+                if value is None:
+                    return ""
+                if isinstance(value, (int, float, bool)):
+                    return value
+                text = str(value)
+                return text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+            with open(out_path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=headers, delimiter="\t")
+                writer.writeheader()
+                for sample_id in [str(s) for s in sample_ids]:
+                    sample_dir = Path(self.monitored_directory) / sample_id
+                    row_data = dict(rows_by_id.get(sample_id, {}))
+                    summary = (
+                        _refresh_summary_cache_sync(sample_dir, sample_id, self)
+                        if sample_dir.exists()
+                        else {}
+                    )
+                    run_info = summary.get("run_info", {}) or {}
+                    classification = summary.get("classification_data", {}) or {}
+                    analysis = summary.get("analysis_data", {}) or {}
+                    mnpflex_data: Dict[str, Any] = {}
+                    variant_data: Dict[str, Any] = {}
+                    cnv_broad_data: Dict[str, Any] = {}
+
+                    # Variant/SNP summary extraction (when available)
+                    try:
+                        def _format_pathogenic_rows(rows: Any) -> str:
+                            if not isinstance(rows, list):
+                                return ""
+                            formatted: List[str] = []
+                            for row in rows:
+                                if not isinstance(row, dict):
+                                    continue
+                                chrom = str(row.get("CHROM", "") or "").strip()
+                                pos = str(row.get("POS", "") or "").strip()
+                                ref = str(row.get("REF", "") or "").strip()
+                                alt = str(row.get("ALT", "") or "").strip()
+                                gene = str(
+                                    row.get("SYMBOL", "")
+                                    or row.get("GENE", "")
+                                    or row.get("GENEINFO", "")
+                                    or ""
+                                ).strip()
+                                clnsig = str(row.get("CLNSIG", "") or "").strip()
+                                locus = f"{chrom}:{pos}" if chrom and pos else ""
+                                allele = f"{ref}>{alt}" if ref and alt else ""
+                                item_parts = [p for p in [locus, allele, gene, clnsig] if p]
+                                if item_parts:
+                                    formatted.append("|".join(item_parts))
+                            # Keep deterministic + compact while still "listing" all hits.
+                            return "; ".join(formatted)
+
+                        clair_dir = sample_dir / "clair3"
+                        snp_display_path = clair_dir / "snpsift_output_display.json"
+                        if snp_display_path.exists():
+                            with open(snp_display_path, "r", encoding="utf-8") as f:
+                                snp_display = json.load(f)
+                            summary_dict = snp_display.get("summary", {}) or {}
+                            rows_all = snp_display.get("rows_all", []) or []
+                            rows_pathogenic = snp_display.get("rows_pathogenic", []) or []
+                            variant_data["snp_total_variants"] = summary_dict.get(
+                                "total_variants", len(rows_all)
+                            )
+                            variant_data["snp_pathogenic_variants"] = summary_dict.get(
+                                "pathogenic_variants", len(rows_pathogenic)
+                            )
+                            variant_data["snp_pathogenic_list"] = _format_pathogenic_rows(
+                                rows_pathogenic
+                            )
+
+                        # INDEL summary (from ClinVar-annotated display if available)
+                        indel_display_path = clair_dir / "snpsift_indel_output_display.json"
+                        if indel_display_path.exists():
+                            with open(indel_display_path, "r", encoding="utf-8") as f:
+                                indel_display = json.load(f)
+                            indel_summary = indel_display.get("summary", {}) or {}
+                            indel_rows_all = indel_display.get("rows_all", []) or []
+                            indel_rows_pathogenic = indel_display.get("rows_pathogenic", []) or []
+                            variant_data["indel_total_variants"] = indel_summary.get(
+                                "total_variants", len(indel_rows_all)
+                            )
+                            variant_data["indel_pathogenic_variants"] = indel_summary.get(
+                                "pathogenic_variants", len(indel_rows_pathogenic)
+                            )
+                            variant_data["indel_pathogenic_list"] = _format_pathogenic_rows(
+                                indel_rows_pathogenic
+                            )
+                        else:
+                            # Fallback: count records from annotated INDEL VCF if present
+                            indel_vcf = clair_dir / "snpsift_indel_output.vcf"
+                            if indel_vcf.exists():
+                                total_indel = 0
+                                pathogenic_indel = 0
+                                pathogenic_indel_items: List[str] = []
+                                with open(indel_vcf, "r", encoding="utf-8", errors="ignore") as f:
+                                    for line in f:
+                                        if not line or line.startswith("#"):
+                                            continue
+                                        total_indel += 1
+                                        if "CLNSIG=Pathogenic" in line or "CLNSIG=Likely_pathogenic" in line:
+                                            pathogenic_indel += 1
+                                            fields = line.strip().split("\t")
+                                            if len(fields) >= 5:
+                                                chrom, pos, _vid, ref, alt = fields[:5]
+                                                pathogenic_indel_items.append(
+                                                    f"{chrom}:{pos}|{ref}>{alt}"
+                                                )
+                                variant_data["indel_total_variants"] = total_indel
+                                variant_data["indel_pathogenic_variants"] = pathogenic_indel
+                                variant_data["indel_pathogenic_list"] = "; ".join(
+                                    pathogenic_indel_items
+                                )
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract variant/SNP TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
+
+                    # Broad CNV events extraction (whole-chromosome / arm-level)
+                    try:
+                        cnv_results_csv = sample_dir / "cnv_results.csv"
+                        if cnv_results_csv.exists():
+                            whole_chr_events = 0
+                            arm_events = 0
+                            broad_gain_events = 0
+                            broad_loss_events = 0
+                            with open(cnv_results_csv, "r", newline="", encoding="utf-8", errors="ignore") as f:
+                                reader = csv.DictReader(f)
+                                for event_row in reader:
+                                    region = str(
+                                        event_row.get("Region")
+                                        or event_row.get("region")
+                                        or ""
+                                    ).lower()
+                                    state = str(
+                                        event_row.get("State")
+                                        or event_row.get("state")
+                                        or event_row.get("event_type")
+                                        or ""
+                                    ).upper()
+                                    if "whole chromosome" in region:
+                                        whole_chr_events += 1
+                                    if "arm" in region:
+                                        arm_events += 1
+                                    if any(k in state for k in ("GAIN", "HIGH_GAIN")):
+                                        broad_gain_events += 1
+                                    if any(k in state for k in ("LOSS", "DEEP_LOSS")):
+                                        broad_loss_events += 1
+                            cnv_broad_data = {
+                                "whole_chromosome_events": whole_chr_events,
+                                "arm_events": arm_events,
+                                "broad_gain_events": broad_gain_events,
+                                "broad_loss_events": broad_loss_events,
+                            }
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract broad CNV TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
+
+                    try:
+                        results_dir = self._mnpflex_results_dir_for_sample(sample_dir, sample_id)
+                        if results_dir:
+                            bundle_path = results_dir / "bundle_summary.json"
+                            if bundle_path.exists():
+                                with open(bundle_path, "r", encoding="utf-8") as f:
+                                    bundle = json.load(f)
+                                qc = bundle.get("qc", {}) or {}
+                                mgmt = bundle.get("mgmt", {}) or {}
+                                classifier_summary = bundle.get("classifier_summary", {}) or {}
+                                classifier = classifier_summary.get("classifier", {}) or {}
+                                hierarchy = classifier_summary.get("summary_hierarchical", []) or []
+                                scores = classifier_summary.get("scores") or []
+                                top_path = ""
+                                top_path_score = ""
+                                try:
+                                    if hierarchy:
+                                        def _flatten(nodes: List[Dict[str, Any]], path: Optional[List[str]] = None):
+                                            current_path = path or []
+                                            flat_rows = []
+                                            for node in nodes or []:
+                                                group = node.get("group", "Unknown")
+                                                score = node.get("score")
+                                                next_path = current_path + [group]
+                                                members = node.get("members") or []
+                                                if members:
+                                                    flat_rows.extend(_flatten(members, next_path))
+                                                else:
+                                                    flat_rows.append((score, next_path))
+                                            return flat_rows
+
+                                        flat = _flatten(hierarchy)
+                                        if flat:
+                                            best_score, best_path = max(flat, key=lambda x: x[0] or 0)
+                                            top_path = " > ".join(best_path)
+                                            top_path_score = best_score
+                                    elif scores:
+                                        top = sorted(
+                                            scores,
+                                            key=lambda item: float(item.get("score", 0) or 0),
+                                            reverse=True,
+                                        )[:1]
+                                        if top:
+                                            top_ref = top[0].get("reference_group") or {}
+                                            top_path = (
+                                                top_ref.get("molecular_subclass")
+                                                or top_ref.get("name")
+                                                or ""
+                                            )
+                                            top_path_score = top[0].get("score", "")
+                                except Exception:
+                                    pass
+                                mnpflex_data = {
+                                    "qc_status": qc.get("status", ""),
+                                    "qc_avg_coverage": qc.get("avg_coverage", ""),
+                                    "qc_missing_site_count": qc.get("missing_site_count", ""),
+                                    "mgmt_status": mgmt.get("status", ""),
+                                    "mgmt_average": mgmt.get("average", ""),
+                                    "mgmt_site_count": mgmt.get("site_count", ""),
+                                    "classifier_name": classifier.get("name", ""),
+                                    "classifier_version": classifier.get("version", ""),
+                                    "classifier_type": classifier.get("classifier_type", ""),
+                                    "has_hierarchical_summary": bool(hierarchy),
+                                    "top_path": top_path,
+                                    "top_path_score": top_path_score,
+                                }
+                    except Exception as ex:
+                        logging.debug("Could not extract MNP-Flex TSV fields for %s: %s", sample_id, ex)
+                    if mnpflex_data:
+                        analysis["mnpflex"] = mnpflex_data
+                    if variant_data:
+                        analysis["variants"] = variant_data
+                    if cnv_broad_data:
+                        analysis["cnv_broad"] = cnv_broad_data
+
+                    export_row: Dict[str, Any] = {k: row_data.get(k, "") for k in table_fields}
+                    for key in run_info_fields:
+                        export_row[f"run_summary_{key}"] = run_info.get(key, "")
+                    for model_name in classification_models:
+                        model_data = classification.get(model_name, {}) or {}
+                        export_row[f"classification_{model_name}_class"] = model_data.get("classification", "")
+                        export_row[f"classification_{model_name}_confidence"] = model_data.get("confidence", "")
+                        export_row[f"classification_{model_name}_confidence_level"] = model_data.get("confidence_level", "")
+                        export_row[f"classification_{model_name}_features"] = model_data.get("features", "")
+                    for section, keys in analysis_fields.items():
+                        section_data = analysis.get(section, {}) or {}
+                        for key in keys:
+                            export_row[f"analysis_{section}_{key}"] = section_data.get(key, "")
+                    writer.writerow({k: _clean_tsv_value(v) for k, v in export_row.items()})
+
+            return out_path
+        except Exception as e:
+            logging.error("Failed to build sample tracking TSV export: %s", e, exc_info=True)
+            return None
+
     def _wait_for_snp_outputs_or_timeout(
         self,
         sample_id: str,
@@ -7378,7 +7853,6 @@ class GUILauncher:
             )
         
         try:
-            from robin.analysis.target_analysis import finalize_accumulation_for_sample
             import csv
             
             # Read target_panel from master.csv
@@ -7504,6 +7978,7 @@ class GUILauncher:
                                     f"Target BAM finalization job submission failed for {sample_id}; running inline"
                                 )
                         if finalization_succeeded:
+                            from robin.analysis.target_analysis import finalize_accumulation_for_sample
                             print(f"[DEBUG finalize] running finalize_accumulation_for_sample sample_id={sample_id}", flush=True)
                             result = finalize_accumulation_for_sample(
                                 sample_id=sample_id,

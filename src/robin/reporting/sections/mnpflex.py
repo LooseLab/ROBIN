@@ -197,6 +197,71 @@ class MNPFlexSection(ReportSection):
             self.elements.append(self.create_table(hierarchy_rows))
             self.elements.append(Spacer(1, 6))
 
+        # Export frames for CSV/XLSX/ZIP artifacts
+        try:
+            import pandas as pd
+
+            top_path = ""
+            top_score = None
+            if flat:
+                top_score, best_path = max(flat, key=lambda x: x[0] or 0)
+                top_path = " > ".join(best_path)
+
+            self.export_frames["mnpflex_summary"] = pd.DataFrame(
+                [
+                    {
+                        "results_dir": results_dir,
+                        "qc_status": qc.get("status", "Unknown"),
+                        "qc_avg_coverage": qc.get("avg_coverage"),
+                        "qc_missing_site_count": qc.get("missing_site_count"),
+                        "mgmt_status": mgmt.get("status", "Unknown"),
+                        "mgmt_average": mgmt.get("average"),
+                        "mgmt_site_count": mgmt.get("site_count"),
+                        "classifier_name": classifier.get("name", "Unknown"),
+                        "classifier_version": classifier.get("version", "Unknown"),
+                        "classifier_type": classifier.get("classifier_type", "Unknown"),
+                        "has_hierarchical_summary": bool(has_hierarchical_summary),
+                        "top_path": top_path,
+                        "top_path_score": top_score,
+                    }
+                ]
+            )
+
+            if hierarchy:
+                self.export_frames["mnpflex_hierarchy"] = pd.DataFrame(
+                    [
+                        {
+                            "group": node.get("group", "Unknown"),
+                            "score": node.get("score"),
+                            "description": self._collect_descriptions(node),
+                        }
+                        for node in hierarchy
+                    ]
+                )
+
+            scores = classifier_summary.get("scores") or []
+            if scores:
+                top_scores = sorted(
+                    scores,
+                    key=lambda item: float(item.get("score", 0) or 0),
+                    reverse=True,
+                )[:10]
+                self.export_frames["mnpflex_top_scores"] = pd.DataFrame(
+                    [
+                        {
+                            "score": item.get("score"),
+                            "subclass": (item.get("reference_group") or {}).get("molecular_subclass")
+                            or (item.get("reference_group") or {}).get("name"),
+                            "class": (item.get("reference_group") or {}).get("molecular_class"),
+                            "family": (item.get("reference_group") or {}).get("molecular_family"),
+                            "superfamily": (item.get("reference_group") or {}).get("molecular_superfamily"),
+                        }
+                        for item in top_scores
+                    ]
+                )
+        except Exception as ex:
+            logger.error("Error building MNP-Flex export DataFrames: %s", ex, exc_info=True)
+
         # Top 10 classifier scores
         scores = classifier_summary.get("scores") or []
         if scores:
