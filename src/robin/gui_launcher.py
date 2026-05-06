@@ -6790,7 +6790,7 @@ class GUILauncher:
         return True, ""
 
     def _list_samples_needing_snp_calling(self) -> List[str]:
-        """Samples under work dir that are ready for SNP but lack Clair3 outputs."""
+        """Samples lacking SNP outputs that can run SNP now or via finalize-first."""
         logging.info(
             "[missing_snp_scan] thread=%s",
             threading.current_thread().name,
@@ -6808,12 +6808,56 @@ class GUILauncher:
                 sid = d.name
                 if self._sample_has_snp_calling_outputs(sid):
                     continue
-                ok, _ = self._sample_snp_prerequisites_met(d)
-                if ok:
+                # Need a non-empty targets BED either way.
+                targets_bed = d / "targets_exceeding_threshold.bed"
+                if not targets_bed.is_file():
+                    continue
+                try:
+                    if not targets_bed.read_text(encoding="utf-8", errors="replace").strip():
+                        continue
+                except OSError:
+                    continue
+
+                # Eligible if SNP can start now (target.bam exists) or if we can
+                # likely finalize first (batch BAMs pending merge).
+                target_bam = d / "target.bam"
+                can_finalize_first = False
+                if not target_bam.is_file():
+                    try:
+                        can_finalize_first = any(d.glob("batch_*.bam"))
+                    except Exception:
+                        can_finalize_first = False
+                if target_bam.is_file() or can_finalize_first:
                     need.append(sid)
         except Exception as e:
             logging.debug(f"List samples needing SNP: {e}")
         return need
+
+    def _wait_for_snp_outputs_or_terminal_status(
+        self,
+        sample_id: str,
+        *,
+        poll_s: float = 5.0,
+        max_wait_s: float = 86400.0,
+    ) -> bool:
+        """Wait for SNP outputs, but exit early on terminal failure/skip statuses."""
+        terminal_phases = {
+            "Finalize failed",
+            "Finalize timeout",
+            "SNP skipped",
+            "SNP submit failed",
+            "SNP failed",
+            "Finalize/SNP failed",
+        }
+        deadline = time.time() + max_wait_s
+        while time.time() < deadline:
+            if self._sample_has_snp_calling_outputs(sample_id):
+                return True
+            phase = str(self._sample_pipeline_status.get(sample_id, {}).get("phase", "") or "")
+            if phase in terminal_phases:
+                return False
+            time.sleep(poll_s)
+        return False
 
     def _is_mnpflex_enabled_for_gui(self) -> bool:
         """True when MNP-Flex credentials exist in the server environment."""
@@ -7490,6 +7534,52 @@ class GUILauncher:
                 sample_dir = Path(self.monitored_directory) / sid
                 ok, reason = self._sample_snp_prerequisites_met(sample_dir)
                 if not ok:
+                    if str(reason) == "missing target.bam":
+                        self._set_pipeline_status(
+                            sid,
+                            phase="Finalize requested",
+                            progress=0.1,
+                            detail="Bulk SNP triggering finalize-first path",
+                        )
+                        self._trigger_target_bam_finalization(sid, trigger_snp=True)
+                        finished = self._wait_for_snp_outputs_or_terminal_status(
+                            sid, poll_s=5.0, max_wait_s=86400.0
+                        )
+                        if finished:
+                            self._set_pipeline_status(
+                                sid,
+                                phase="SNP complete",
+                                progress=1.0,
+                                detail="SNP outputs detected",
+                            )
+                            logging.info("Bulk SNP: completed via finalize-first %s", sid)
+                        else:
+                            phase = str(
+                                self._sample_pipeline_status
+                                .get(sid, {})
+                                .get("phase", "SNP still running")
+                            )
+                            if phase not in {
+                                "SNP skipped",
+                                "SNP submit failed",
+                                "SNP failed",
+                                "Finalize failed",
+                                "Finalize timeout",
+                                "Finalize/SNP failed",
+                            }:
+                                self._set_pipeline_status(
+                                    sid,
+                                    phase="SNP still running",
+                                    progress=0.9,
+                                    detail="Timed out waiting for outputs",
+                                    level="warning",
+                                )
+                            logging.warning(
+                                "Bulk SNP: finalize-first path incomplete/terminal for %s (phase=%s)",
+                                sid,
+                                phase,
+                            )
+                        continue
                     self._set_pipeline_status(
                         sid,
                         phase="SNP skipped",
@@ -7552,7 +7642,7 @@ class GUILauncher:
                         progress=0.85,
                         detail="Queued in slow worker",
                     )
-                    finished = self._wait_for_snp_outputs_or_timeout(
+                    finished = self._wait_for_snp_outputs_or_terminal_status(
                         sid, poll_s=5.0, max_wait_s=86400.0
                     )
                     if finished:
