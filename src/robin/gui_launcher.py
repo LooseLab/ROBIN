@@ -2326,6 +2326,30 @@ class GUILauncher:
                         self._samples_filters = getattr(
                             self, "_samples_filters", None
                         ) or {"query": "", "origin": "All", "job_type": "All"}
+                        # Guard against stale persisted values:
+                        # job_type options are hydrated later from rows, but at initial render
+                        # the select only has ["All"] and NiceGUI rejects unknown defaults.
+                        try:
+                            if (
+                                not isinstance(self._samples_filters, dict)
+                                or self._samples_filters.get("job_type") != "All"
+                            ):
+                                self._samples_filters = {
+                                    "query": str(
+                                        (self._samples_filters or {}).get("query", "")
+                                    ),
+                                    "origin": str(
+                                        (self._samples_filters or {}).get("origin", "All")
+                                    )
+                                    or "All",
+                                    "job_type": "All",
+                                }
+                        except Exception:
+                            self._samples_filters = {
+                                "query": "",
+                                "origin": "All",
+                                "job_type": "All",
+                            }
 
                         # Global search box
                         self.samples_search = (
