@@ -24,6 +24,7 @@ import shutil
 import glob
 import fcntl
 import uuid
+import re
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from dataclasses import dataclass
@@ -836,10 +837,59 @@ class TargetAnalysis:
         return os.path.join(lock_dir, f"{lock_type}.lock")
     
     def _get_pending_count(self, sample_id: str) -> int:
-        """Get count of files pending accumulation (thread-safe)"""
+        """Get count of complete staging sets pending accumulation (thread-safe)."""
         staging_dir = self._get_staging_dir(sample_id)
-        staging_files = glob.glob(os.path.join(staging_dir, "coverage_*.parquet"))
-        return len(staging_files)
+        complete_sets, _, _ = self._collect_complete_staging_sets(staging_dir)
+        return len(complete_sets)
+
+    def _collect_complete_staging_sets(
+        self, staging_dir: str
+    ) -> Tuple[List[Tuple[str, str, str, str]], Dict[str, int], List[str]]:
+        """
+        Build aligned staging tuples using the shared numeric suffix.
+
+        Returns:
+            - complete_sets: list of (coverage, bedcov, timestamp, source_bam)
+            - counts: raw file counts per staging type
+            - incomplete_ids: staged suffix IDs that are missing one or more companion files
+        """
+        pattern_map = {
+            "coverage": ("coverage", "parquet"),
+            "bedcov": ("bedcov", "parquet"),
+            "timestamp": ("timestamp", "txt"),
+            "source_bam": ("source_bam", "txt"),
+        }
+
+        indexed_paths: Dict[str, Dict[str, str]] = {k: {} for k in pattern_map}
+        counts: Dict[str, int] = {}
+
+        for key, (prefix, ext) in pattern_map.items():
+            files = sorted(glob.glob(os.path.join(staging_dir, f"{prefix}_*.{ext}")))
+            counts[key] = len(files)
+            suffix_re = re.compile(rf"^{re.escape(prefix)}_(\d+)\.{re.escape(ext)}$")
+            for file_path in files:
+                name = os.path.basename(file_path)
+                match = suffix_re.match(name)
+                if not match:
+                    continue
+                indexed_paths[key][match.group(1)] = file_path
+
+        id_sets = [set(v.keys()) for v in indexed_paths.values()]
+        shared_ids = sorted(set.intersection(*id_sets)) if id_sets else []
+        all_ids = set.union(*id_sets) if id_sets else set()
+        incomplete_ids = sorted(all_ids - set(shared_ids))
+
+        complete_sets = [
+            (
+                indexed_paths["coverage"][suffix_id],
+                indexed_paths["bedcov"][suffix_id],
+                indexed_paths["timestamp"][suffix_id],
+                indexed_paths["source_bam"][suffix_id],
+            )
+            for suffix_id in shared_ids
+        ]
+
+        return complete_sets, counts, incomplete_ids
     
     def _atomic_counter_increment(self, sample_id: str) -> int:
         """
@@ -1714,43 +1764,71 @@ class TargetAnalysis:
             batch_dir = None
             num_claimed = 0
             with FileLock(lock_file, timeout=60.0):
-                coverage_files = sorted(glob.glob(os.path.join(staging_dir, "coverage_*.parquet")))
-                bedcov_files = sorted(glob.glob(os.path.join(staging_dir, "bedcov_*.parquet")))
-                timestamp_files = sorted(glob.glob(os.path.join(staging_dir, "timestamp_*.txt")))
-                source_bam_files = sorted(glob.glob(os.path.join(staging_dir, "source_bam_*.txt")))
-                if not coverage_files:
-                    logger.info(f"No staged files to accumulate for {sample_id}")
-                    return {"status": "no_files", "files_processed": 0}
-                if not force and len(coverage_files) < self.batch_size:
+                complete_sets, staging_counts, incomplete_ids = self._collect_complete_staging_sets(
+                    staging_dir
+                )
+                if not complete_sets:
+                    if any(staging_counts.values()):
+                        logger.warning(
+                            "Skipping accumulation for %s - no complete staging sets "
+                            "(counts=%s, incomplete_ids=%d)",
+                            sample_id,
+                            staging_counts,
+                            len(incomplete_ids),
+                        )
+                    else:
+                        logger.info(f"No staged files to accumulate for {sample_id}")
+                    return {
+                        "status": "no_files",
+                        "files_processed": 0,
+                        "files_pending": 0,
+                        "incomplete_staging_sets": len(incomplete_ids),
+                    }
+                if incomplete_ids:
+                    logger.warning(
+                        "Found %d incomplete staging sets for %s; accumulating only complete sets",
+                        len(incomplete_ids),
+                        sample_id,
+                    )
+                complete_count = len(complete_sets)
+                if not force and complete_count < self.batch_size:
                     logger.info(
-                        f"Skipping accumulation - only {len(coverage_files)} files staged "
+                        f"Skipping accumulation - only {complete_count} complete files staged "
                         f"(threshold: {self.batch_size}, force={force})"
                     )
-                    return {"status": "below_threshold", "files_pending": len(coverage_files)}
-                n_claim = len(coverage_files) if force else min(self.batch_size, len(coverage_files))
+                    return {
+                        "status": "below_threshold",
+                        "files_pending": complete_count,
+                        "incomplete_staging_sets": len(incomplete_ids),
+                    }
+                n_claim = complete_count if force else min(self.batch_size, complete_count)
                 batch_id = str(uuid.uuid4())
                 batch_dir = os.path.join(staging_dir, f"_batch_{batch_id}")
                 os.makedirs(batch_dir, exist_ok=True)
-                for i in range(n_claim):
-                    for src in (coverage_files[i], bedcov_files[i], timestamp_files[i], source_bam_files[i]):
+                for coverage_src, bedcov_src, timestamp_src, source_bam_src in complete_sets[:n_claim]:
+                    for src in (coverage_src, bedcov_src, timestamp_src, source_bam_src):
                         if os.path.exists(src):
                             shutil.move(src, os.path.join(batch_dir, os.path.basename(src)))
                 num_claimed = n_claim
             # Lock released
 
             # --- No lock: load from batch dir ---
-            coverage_batch = sorted(glob.glob(os.path.join(batch_dir, "coverage_*.parquet")))
-            bedcov_batch = sorted(glob.glob(os.path.join(batch_dir, "bedcov_*.parquet")))
-            timestamp_batch = sorted(glob.glob(os.path.join(batch_dir, "timestamp_*.txt")))
-            source_bam_batch = sorted(glob.glob(os.path.join(batch_dir, "source_bam_*.txt")))
+            batch_sets, batch_counts, batch_incomplete = self._collect_complete_staging_sets(
+                batch_dir
+            )
+            if batch_incomplete:
+                logger.warning(
+                    "Batch %s has %d incomplete staging sets after claim (counts=%s)",
+                    os.path.basename(batch_dir),
+                    len(batch_incomplete),
+                    batch_counts,
+                )
             cov_frames: List[pd.DataFrame] = []
             bed_frames: List[pd.DataFrame] = []
             timestamps = []
             source_bam_paths = []
             loaded_files = 0
-            for cov_file, bed_file, ts_file, source_bam_file in zip(
-                coverage_batch, bedcov_batch, timestamp_batch, source_bam_batch
-            ):
+            for cov_file, bed_file, ts_file, source_bam_file in batch_sets:
                 try:
                     cov_frames.append(
                         pd.read_parquet(cov_file, **_PARQUET_READ_KWARGS)
