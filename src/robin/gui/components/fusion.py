@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Dict, List, Optional
 from pathlib import Path
 import logging
@@ -2835,34 +2836,73 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
             logging.exception(f"[Fusion] Failed to handle gene pair selection: {e}")
 
     def refresh_fusion() -> None:
-        """Refresh fusion data."""
+        """Refresh fusion data.
+
+        Pickle IO and breakpoint validation run in a worker thread so the UI event
+        loop stays responsive; matplotlib / NiceGUI updates stay on the main thread.
+        """
+
         import time as _time
-        t_start = _time.perf_counter()
+
+        async def _refresh_fusion_async() -> None:
+            t_start = _time.perf_counter()
+            try:
+                logging.info(
+                    f"[Fusion] refresh_fusion() async task for sample_dir: {sample_dir}"
+                )
+                if not sample_dir or not sample_dir.exists():
+                    logging.warning(
+                        f"[Fusion] Sample directory not found: {sample_dir}"
+                    )
+                    return
+                logging.info(f"[Fusion] Loading fusion data from: {sample_dir}")
+                t_before_load = _time.perf_counter()
+                fusion_data = await asyncio.to_thread(_load_fusion_data, sample_dir)
+                t_after_load = _time.perf_counter()
+                logging.info(
+                    f"[Fusion] Loaded fusion data (load took {t_after_load - t_before_load:.2f}s): {fusion_data}"
+                )
+                t_before_ui = _time.perf_counter()
+                _update_fusion_ui(fusion_data, state, sample_dir)
+                t_after_ui = _time.perf_counter()
+                logging.info(
+                    f"[Fusion] refresh_fusion() completed in {t_after_ui - t_start:.2f}s "
+                    f"(load={t_after_load - t_before_load:.2f}s, ui={t_after_ui - t_before_ui:.2f}s)"
+                )
+            except Exception as e:
+                logging.exception(f"[Fusion] Refresh failed: {e}")
+
+        def _refresh_fusion_sync() -> None:
+            t_start = _time.perf_counter()
+            try:
+                logging.info(
+                    f"[Fusion] refresh_fusion() sync fallback for sample_dir: {sample_dir}"
+                )
+                if not sample_dir or not sample_dir.exists():
+                    logging.warning(
+                        f"[Fusion] Sample directory not found: {sample_dir}"
+                    )
+                    return
+                t_before_load = _time.perf_counter()
+                fusion_data = _load_fusion_data(sample_dir)
+                t_after_load = _time.perf_counter()
+                logging.info(
+                    f"[Fusion] Loaded fusion data (load took {t_after_load - t_before_load:.2f}s): {fusion_data}"
+                )
+                t_before_ui = _time.perf_counter()
+                _update_fusion_ui(fusion_data, state, sample_dir)
+                t_after_ui = _time.perf_counter()
+                logging.info(
+                    f"[Fusion] refresh_fusion() completed in {t_after_ui - t_start:.2f}s "
+                    f"(load={t_after_load - t_before_load:.2f}s, ui={t_after_ui - t_before_ui:.2f}s)"
+                )
+            except Exception as e:
+                logging.exception(f"[Fusion] Refresh failed: {e}")
+
         try:
-            logging.info(f"[Fusion] refresh_fusion() called for sample_dir: {sample_dir}")
-            
-            # Simple directory check
-            if not sample_dir or not sample_dir.exists():
-                logging.warning(f"[Fusion] Sample directory not found: {sample_dir}")
-                return
-            
-            logging.info(f"[Fusion] Loading fusion data from: {sample_dir}")
-            t_before_load = _time.perf_counter()
-            
-            # Load fusion data directly (already in background)
-            fusion_data = _load_fusion_data(sample_dir)
-            
-            t_after_load = _time.perf_counter()
-            logging.info(f"[Fusion] Loaded fusion data (load took {t_after_load - t_before_load:.2f}s): {fusion_data}")
-            
-            # Update UI directly
-            t_before_ui = _time.perf_counter()
-            _update_fusion_ui(fusion_data, state, sample_dir)
-            t_after_ui = _time.perf_counter()
-            logging.info(f"[Fusion] refresh_fusion() completed in {t_after_ui - t_start:.2f}s (load={t_after_load - t_before_load:.2f}s, ui={t_after_ui - t_before_ui:.2f}s)")
-                
-        except Exception as e:
-            logging.exception(f"[Fusion] Refresh failed: {e}")
+            asyncio.create_task(_refresh_fusion_async())
+        except RuntimeError:
+            _refresh_fusion_sync()
 
     def _load_fusion_data(sample_dir: Path) -> Dict[str, Any]:
         """Load fusion data from files with optional breakpoint validation."""
@@ -3484,9 +3524,8 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
             pass
         
         # Start the refresh timer (every 30 seconds)
-        logging.info("[Fusion] Setting up refresh timer (30s interval + 0.5s deferred + immediate)")
+        logging.info("[Fusion] Setting up refresh timer (30s interval + immediate async load)")
         refresh_timer = ui.timer(30.0, refresh_fusion, active=True, immediate=False)
-        ui.timer(0.5, refresh_fusion, once=True)
 
         def _sync_fusion_plot_theme_if_needed() -> None:
             try:

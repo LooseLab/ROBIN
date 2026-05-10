@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 import json
 import time
 import os
@@ -2068,21 +2068,24 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     # Convert timestamp to datetime (milliseconds to datetime)
                     df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
                     
-                    # Create unique target identifier (chrom, startpos, endpos) - distinguishes multiple regions with same gene name
-                    df['target_key'] = df.apply(
-                        lambda r: (str(r['chrom']), int(r['startpos']), int(r['endpos'])),
-                        axis=1
+                    # Create unique target identifier (chrom, startpos, endpos) — vectorized
+                    df["target_key"] = list(
+                        zip(
+                            df["chrom"].astype(str),
+                            df["startpos"].astype(np.int64),
+                            df["endpos"].astype(np.int64),
+                        )
                     )
-                    # Build display labels: include chromosome and position (Mb) when gene name appears multiple times
-                    name_counts = df.groupby('name').size()
-                    def _target_label(row):
-                        name = row['name']
-                        chrom = str(row['chrom'])
-                        start_mb = row['startpos'] / 1e6
-                        if name_counts.get(name, 0) > 1:
-                            return f"{name} ({chrom} {start_mb:.2f} Mb)"
-                        return f"{name} ({chrom} {start_mb:.2f} Mb)"
-                    df['target_label'] = df.apply(_target_label, axis=1)
+                    # Display labels (same format for all rows; avoids slow df.apply)
+                    _start_mb = (df["startpos"].astype(np.float64) / 1e6).round(2)
+                    df["target_label"] = (
+                        df["name"].astype(str)
+                        + " ("
+                        + df["chrom"].astype(str)
+                        + " "
+                        + _start_mb.astype(str)
+                        + " Mb)"
+                    )
                     
                     # Calculate mean coverage per timepoint
                     mean_coverage = df.groupby('timestamp')['coverage'].mean().reset_index()
@@ -2463,8 +2466,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         with target_coverage_time_chart_state["container"]:
                             ui.label(f"Error: {str(e)}").classes("text-red-600")
             
-            # Auto-plot on load
-            _plot_target_coverage_over_time()
+            # Defer plot work so the sample page shell and websocket can finish first
+            ui.timer(0.05, _plot_target_coverage_over_time, once=True)
             
             def _set_outlier_limit(e) -> None:
                 try:
@@ -3999,21 +4002,32 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         "Note: Both target.bam and targets_exceeding_threshold.bed are automatically generated when you run target analysis. You don't need to create them manually."
                     ).classes("text-sm text-blue-800")
 
-            # SNP Analysis results display
-            with ui.expansion().classes("w-full").props("icon=assessment"):
-                ui.label("Results").classes("text-sm font-medium mb-2")
+            # Lazy-load SNP/INDEL UI when Results expansion opens (avoids full VCF parse on page load)
+            snp_results_lazy_state: Dict[str, Any] = {"sig": None}
 
-                # Results status
+            def _snp_results_file_signature() -> Tuple[Optional[int], Optional[int]]:
+                clair_dir = sample_dir / "clair3"
+                snp_vcf = clair_dir / "snpsift_output.vcf"
+                indel_vcf = clair_dir / "snpsift_indel_output.vcf"
+
+                def _mt(p: Path) -> Optional[int]:
+                    try:
+                        return p.stat().st_mtime_ns if p.exists() else None
+                    except OSError:
+                        return None
+
+                return (_mt(snp_vcf), _mt(indel_vcf))
+
+            snp_results_expansion = ui.expansion("Results", icon="assessment").classes(
+                "w-full"
+            )
+            with snp_results_expansion:
                 snp_results_status = (
-                    ui.label("No SNP analysis results yet")
+                    ui.label("Expand this section to load variant results.")
                     .classes("text-sm text-gray-600")
                     .props("data-snp-results-status")
                 )
-
-                # Results table placeholder
                 snp_results_container = ui.column().classes("w-full")
-
-                # Function to check and display SNP results
 
             def _check_snp_results():
                 try:
@@ -4087,6 +4101,17 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                 except Exception as e:
                     snp_results_status.set_text(f"Error checking results: {e}")
+
+            def _on_snp_results_expansion_change(e) -> None:
+                if not e.value:
+                    return
+                sig = _snp_results_file_signature()
+                if sig == snp_results_lazy_state["sig"]:
+                    return
+                _check_snp_results()
+                snp_results_lazy_state["sig"] = sig
+
+            snp_results_expansion.on_value_change(_on_snp_results_expansion_change)
 
             # Helper function to detect gzipped files
             def _is_gzipped(file_path):
@@ -4497,9 +4522,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 except Exception as e:
                     ui.notify(f"Export failed: {e}", type="error")
 
-            # Check for existing results (after all functions are defined)
-            _check_snp_results()
-
             # Function to check file availability
             def _check_snp_file_availability():
                 try:
@@ -4600,6 +4622,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     # The reference genome is passed via CLI and stored in workflow_runner.reference
 
                     # Update UI state
+                    snp_results_lazy_state["sig"] = None
                     snp_analysis_button.disable()
                     snp_status_label.set_text("Starting SNP analysis...")
                     snp_status_label.classes(replace="text-sm text-blue-600")
