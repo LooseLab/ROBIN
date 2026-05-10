@@ -6,9 +6,11 @@ import asyncio
 import threading
 import json
 import csv
+import time
 from datetime import datetime
 import hashlib
 import logging
+from collections import OrderedDict
 
 try:
     from nicegui import ui
@@ -24,20 +26,53 @@ from robin.gui.config import (
 )
 
 
-_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
+_SUMMARY_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _SUMMARY_CACHE_LOCK = threading.Lock()
+_SUMMARY_CACHE_MAX_SAMPLES = 64
+_SUMMARY_CACHE_MAX_AGE_SECONDS = 15 * 60
+
+
+def _evict_summary_cache_locked(now_ts: Optional[float] = None) -> None:
+    now_ts = now_ts or time.time()
+    stale_keys = [
+        key
+        for key, payload in _SUMMARY_CACHE.items()
+        if (now_ts - float(payload.get("_cached_at", 0.0))) > _SUMMARY_CACHE_MAX_AGE_SECONDS
+    ]
+    for key in stale_keys:
+        _SUMMARY_CACHE.pop(key, None)
+    while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX_SAMPLES:
+        _SUMMARY_CACHE.popitem(last=False)
 
 
 def _get_summary_cache(sample_dir: Path) -> Dict[str, Any]:
     key = str(sample_dir)
     with _SUMMARY_CACHE_LOCK:
-        return dict(_SUMMARY_CACHE.get(key, {}))
+        payload = _SUMMARY_CACHE.get(key)
+        if not payload:
+            return {}
+        now_ts = time.time()
+        if (now_ts - float(payload.get("_cached_at", 0.0))) > _SUMMARY_CACHE_MAX_AGE_SECONDS:
+            _SUMMARY_CACHE.pop(key, None)
+            return {}
+        _SUMMARY_CACHE.move_to_end(key)
+        return {k: v for k, v in payload.items() if k != "_cached_at"}
 
 
 def _set_summary_cache(sample_dir: Path, data: Dict[str, Any]) -> None:
     key = str(sample_dir)
     with _SUMMARY_CACHE_LOCK:
-        _SUMMARY_CACHE[key] = data
+        payload = dict(data)
+        payload["_cached_at"] = time.time()
+        _SUMMARY_CACHE[key] = payload
+        _SUMMARY_CACHE.move_to_end(key)
+        _evict_summary_cache_locked()
+
+
+def _clear_summary_cache(sample_dir: Path) -> None:
+    key = str(sample_dir)
+    with _SUMMARY_CACHE_LOCK:
+        _SUMMARY_CACHE.pop(key, None)
 
 
 def _run_summary_cell(
@@ -349,7 +384,11 @@ def add_summary_section(sample_dir: Path, sample_id: str, launcher: Any = None) 
         30.0, _refresh_summary_cache_async, active=True, immediate=False
     )
     try:
-        ui.context.client.on_disconnect(lambda: refresh_timer.deactivate())
+        def _on_disconnect_cleanup() -> None:
+            refresh_timer.deactivate()
+            _clear_summary_cache(sample_dir)
+
+        ui.context.client.on_disconnect(_on_disconnect_cleanup)
     except Exception:
         pass
 
@@ -937,10 +976,11 @@ def _get_analysis_panel(sample_dir: Path) -> str:
     try:
         master_csv_path = sample_dir / "master.csv"
         if master_csv_path.exists():
-            import pandas as pd
-            df = pd.read_csv(master_csv_path)
-            if not df.empty and "analysis_panel" in df.columns:
-                panel = df.iloc[0]["analysis_panel"]
+            with master_csv_path.open("r", newline="") as fh:
+                reader = csv.DictReader(fh)
+                row = next(reader, None)
+            if row:
+                panel = row.get("analysis_panel", "")
                 if panel and str(panel).strip() != "":
                     return str(panel).strip()
         # No fallback to rCNS2 - return empty string if not found
@@ -1139,7 +1179,11 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
             try:
                 import pandas as pd
 
-                cov_df = pd.read_csv(cov_main)
+                cov_df = pd.read_csv(
+                    cov_main,
+                    usecols=lambda c: c in {"covbases", "endpos"},
+                    dtype={"covbases": "float64", "endpos": "float64"},
+                )
 
                 # Calculate global coverage using the same formula as coverage component
                 if (
@@ -1160,7 +1204,16 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
             try:
                 import pandas as pd
 
-                bed_df = pd.read_csv(bed_cov)
+                bed_df = pd.read_csv(
+                    bed_cov,
+                    usecols=lambda c: c in {"bases", "length", "endpos", "startpos"},
+                    dtype={
+                        "bases": "float64",
+                        "length": "float64",
+                        "endpos": "float64",
+                        "startpos": "float64",
+                    },
+                )
 
                 # Calculate target coverage using the same formula as coverage component
                 if "bases" in bed_df.columns:
@@ -1333,7 +1386,13 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
         try:
             import pandas as pd
 
-            df = pd.read_csv(latest_csv)
+            required_cols = {"status", "pred", "average"}
+            df = pd.read_csv(
+                latest_csv,
+                usecols=lambda c: c in required_cols,
+                nrows=1,
+                dtype=str,
+            )
 
             # Extract data using the same column names as the MGMT component
             if "status" in df.columns:

@@ -40,6 +40,130 @@ except ImportError:  # pragma: no cover
     ui = None
 
 
+def _render_paged_df_table(
+    df: pd.DataFrame,
+    columns: List[Dict[str, Any]],
+    *,
+    pagination_default: int = 100,
+    class_size: str = "table-xs",
+    search_placeholder: str = "Search...",
+) -> Any:
+    """Render a DataFrame with Quasar server-side pagination (Python slices rows per page)."""
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    preview_mode = len(df) > 50_000
+    source_df = df.iloc[:5_000].copy() if preview_mode else df
+    n_rows = len(source_df)
+    page_state: Dict[str, Any] = {
+        "filtered_positions": list(range(n_rows)),
+    }
+
+    total0 = len(page_state["filtered_positions"])
+    pd_default = int(pagination_default)
+    init_pagination = clamp_qtable_server_pagination(
+        {
+            "sortBy": None,
+            "descending": False,
+            "page": 1,
+            "rowsPerPage": pd_default,
+            "rowsNumber": total0,
+        },
+        rows_number=total0,
+        rows_per_page_default=pd_default,
+    )
+    _, table = styled_server_paged_table(
+        columns=columns,
+        rows=[],
+        pagination=init_pagination,
+        row_key="__row_idx",
+        class_size=class_size,
+        rows_per_page_options=[25, 50, 100, 250],
+    )
+
+    count_label = ui.label("").classes("text-xs text-gray-500")
+    if preview_mode:
+        ui.label(
+            f"Preview mode: showing first {len(source_df):,} rows of {len(df):,}."
+        ).classes("text-xs text-amber-600")
+
+    def _fill_from_pagination(pag: Dict[str, Any]) -> None:
+        total = len(page_state["filtered_positions"])
+        pag = clamp_qtable_server_pagination(
+            pag,
+            rows_number=total,
+            rows_per_page_default=pd_default,
+        )
+        rpp = int(pag["rowsPerPage"])
+        page = int(pag["page"])
+        start = (page - 1) * rpp
+        end = start + rpp
+        positions = page_state["filtered_positions"]
+        slice_pos = positions[start:end]
+        page_rows = (
+            source_df.iloc[slice_pos].reset_index(drop=True).to_dict("records")
+            if slice_pos
+            else []
+        )
+        for i, pos in enumerate(slice_pos):
+            page_rows[i]["__row_idx"] = int(pos)
+        table.rows = page_rows
+        table.pagination = pag
+        count_label.text = (
+            f"{total} rows match search ({len(df)} total in source)"
+            if total
+            else f"0 rows match ({len(df)} total in source)"
+        )
+        table.update()
+
+    wire_qtable_server_pagination_handlers(table, _fill_from_pagination)
+
+    def _apply_search(term: str) -> None:
+        txt = str(term or "").strip().lower()
+        if not txt:
+            page_state["filtered_positions"] = list(range(n_rows))
+        else:
+            filtered: List[int] = []
+            for pos in range(n_rows):
+                row = source_df.iloc[pos]
+                for col in source_df.columns:
+                    value = row.get(col)
+                    if value is not None and txt in str(value).lower():
+                        filtered.append(pos)
+                        break
+            page_state["filtered_positions"] = filtered
+        pag = clamp_qtable_server_pagination(
+            dict(table.pagination),
+            rows_number=len(page_state["filtered_positions"]),
+            rows_per_page_default=pd_default,
+        )
+        pag["page"] = 1
+        _fill_from_pagination(pag)
+
+    with table.add_slot("top-right"):
+        search_input = ui.input(placeholder=search_placeholder).props(
+            "type=search dense clearable"
+        )
+        search_input.on("update:model-value", lambda e: _apply_search(getattr(e, "value", "")))
+
+    for col in table.columns:
+        col["sortable"] = False
+
+    _fill_from_pagination(init_pagination)
+    try:
+        def _cleanup_table_state() -> None:
+            page_state["filtered_positions"] = []
+            table.rows = []
+
+        ui.context.client.on_disconnect(_cleanup_table_state)
+    except Exception:
+        pass
+    return table
+
+
 def _is_dark_mode() -> bool:
     """Match Quasar ``body--dark`` via app storage (see theme.frame)."""
     try:
@@ -492,27 +616,13 @@ def _make_fusion_table(container: Any, df: pd.DataFrame) -> Any:
                 "sortable": True
             })
         
-        # Create rows from DataFrame
-        rows = processed_df.to_dict('records')
-        
-        # Create styled table
-        table_container, table = styled_table(
-            columns=columns,
-            rows=rows,
-            pagination=25,
-            class_size="table-xs"
+        table = _render_paged_df_table(
+            processed_df,
+            columns,
+            pagination_default=100,
+            class_size="table-xs",
+            search_placeholder="Search",
         )
-        
-        # Add search functionality
-        try:
-            with table.add_slot("top-right"):
-                with ui.input(placeholder="Search").props("type=search").bind_value(
-                    table, "filter"
-                ).add_slot("append"):
-                    ui.icon("search")
-        except Exception:
-            pass
-        
         return table
 
 
@@ -764,24 +874,42 @@ def _summarize_master_bed_events(df: pd.DataFrame, min_read_support: int = 3, mi
             if "mapping_span" in read_supplementaries.columns:
                 supp_cols.append("mapping_span")
             
-            primaries_list = read_primaries[primary_cols].to_dict("records")
-            supplementaries_list = read_supplementaries[supp_cols].to_dict("records")
+            primaries_list = list(read_primaries[primary_cols].itertuples(index=False, name=None))
+            supplementaries_list = list(read_supplementaries[supp_cols].itertuples(index=False, name=None))
             
             # Create all combinations
+            p_idx = {name: i for i, name in enumerate(primary_cols)}
+            s_idx = {name: i for i, name in enumerate(supp_cols)}
             for primary_row in primaries_list:
                 for supp_row in supplementaries_list:
                     breakpoint_pairs.append({
                         "read_id": read_id,
-                        "primary_chrom": primary_row["reference_id"],
-                        "primary_start": int(primary_row["reference_start"]),
-                        "primary_end": int(primary_row["reference_end"]),
-                        "primary_mapq": primary_row.get("mapping_quality", 0) if "mapping_quality" in primary_row else 0,
-                        "primary_span": primary_row.get("mapping_span", 0) if "mapping_span" in primary_row else 0,
-                        "supp_chrom": supp_row["reference_id"],
-                        "supp_start": int(supp_row["reference_start"]),
-                        "supp_end": int(supp_row["reference_end"]),
-                        "supp_mapq": supp_row.get("mapping_quality", 0) if "mapping_quality" in supp_row else 0,
-                        "supp_span": supp_row.get("mapping_span", 0) if "mapping_span" in supp_row else 0,
+                        "primary_chrom": primary_row[p_idx["reference_id"]],
+                        "primary_start": int(primary_row[p_idx["reference_start"]]),
+                        "primary_end": int(primary_row[p_idx["reference_end"]]),
+                        "primary_mapq": (
+                            primary_row[p_idx["mapping_quality"]]
+                            if "mapping_quality" in p_idx
+                            else 0
+                        ),
+                        "primary_span": (
+                            primary_row[p_idx["mapping_span"]]
+                            if "mapping_span" in p_idx
+                            else 0
+                        ),
+                        "supp_chrom": supp_row[s_idx["reference_id"]],
+                        "supp_start": int(supp_row[s_idx["reference_start"]]),
+                        "supp_end": int(supp_row[s_idx["reference_end"]]),
+                        "supp_mapq": (
+                            supp_row[s_idx["mapping_quality"]]
+                            if "mapping_quality" in s_idx
+                            else 0
+                        ),
+                        "supp_span": (
+                            supp_row[s_idx["mapping_span"]]
+                            if "mapping_span" in s_idx
+                            else 0
+                        ),
                     })
         
         if not breakpoint_pairs:
@@ -1036,26 +1164,13 @@ def _make_master_bed_summary_table(container: Any, df: pd.DataFrame, sample_dir:
             },
         ]
         
-        # Convert to rows
-        rows = summary_df.to_dict('records')
-        
-        # Create styled table
-        table_container, table = styled_table(
-            columns=columns,
-            rows=rows,
-            pagination=20,
-            class_size="table-xs"
+        table = _render_paged_df_table(
+            summary_df,
+            columns,
+            pagination_default=100,
+            class_size="table-xs",
+            search_placeholder="Search events...",
         )
-        
-        # Add search functionality
-        try:
-            with table.add_slot("top-right"):
-                with ui.input(placeholder="Search events...").props("type=search").bind_value(
-                    table, "filter"
-                ).add_slot("append"):
-                    ui.icon("search")
-        except Exception:
-            pass
         
         # Add summary information
         total_events = len(summary_df)
@@ -1819,29 +1934,15 @@ def _make_fusion_reads_table(container: Any, reads_df: pd.DataFrame, gene_pair: 
                 "sortable": True
             })
         
-        # Create rows from DataFrame
-        rows = reads_subset.to_dict('records')
-        
         # Add title
         ui.label(f"Reads supporting fusion: {'-'.join(gene_pair)}").classes("text-sm font-medium mb-2")
-        
-        # Create styled table
-        table_container, table = styled_table(
-            columns=columns,
-            rows=rows,
-            pagination=20,
-            class_size="table-xs"
+        table = _render_paged_df_table(
+            reads_subset,
+            columns,
+            pagination_default=100,
+            class_size="table-xs",
+            search_placeholder="Search reads...",
         )
-        
-        # Add search functionality
-        try:
-            with table.add_slot("top-right"):
-                with ui.input(placeholder="Search reads...").props("type=search").bind_value(
-                    table, "filter"
-                ).add_slot("append"):
-                    ui.icon("search")
-        except Exception:
-            pass
         
         # Add summary information
         total_reads = len(reads_subset)

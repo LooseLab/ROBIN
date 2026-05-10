@@ -19,6 +19,130 @@ except ImportError:  # pragma: no cover
 
 from robin.gui.theme import styled_table, register_theme_sync_callback
 
+# Shared paged table renderer to avoid materializing full row lists for large DataFrames.
+def _render_paged_df_table(
+    df: pd.DataFrame,
+    columns: List[Dict[str, Any]],
+    *,
+    pagination_default: int = 100,
+    class_size: str = "table-xs",
+    search_placeholder: str = "Search...",
+) -> Any:
+    """Quasar server-side pagination over a bounded ``source_df`` slice (Python is source of truth)."""
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    preview_mode = len(df) > 50_000
+    source_df = df.iloc[:5_000].copy() if preview_mode else df
+    n_rows = len(source_df)
+    page_state: Dict[str, Any] = {
+        "filtered_positions": list(range(n_rows)),
+    }
+
+    total0 = len(page_state["filtered_positions"])
+    pd_default = int(pagination_default)
+    init_pagination = clamp_qtable_server_pagination(
+        {
+            "sortBy": None,
+            "descending": False,
+            "page": 1,
+            "rowsPerPage": pd_default,
+            "rowsNumber": total0,
+        },
+        rows_number=total0,
+        rows_per_page_default=pd_default,
+    )
+    _, table = styled_server_paged_table(
+        columns=columns,
+        rows=[],
+        pagination=init_pagination,
+        row_key="__row_idx",
+        class_size=class_size,
+        rows_per_page_options=[25, 50, 100, 250],
+    )
+
+    count_label = ui.label("").classes("text-xs text-gray-500")
+    if preview_mode:
+        ui.label(
+            f"Preview mode: showing first {len(source_df):,} rows of {len(df):,}."
+        ).classes("text-xs text-amber-600")
+
+    def _fill_from_pagination(pag: Dict[str, Any]) -> None:
+        total = len(page_state["filtered_positions"])
+        pag = clamp_qtable_server_pagination(
+            pag,
+            rows_number=total,
+            rows_per_page_default=pd_default,
+        )
+        rpp = int(pag["rowsPerPage"])
+        page = int(pag["page"])
+        start = (page - 1) * rpp
+        end = start + rpp
+        positions = page_state["filtered_positions"]
+        slice_pos = positions[start:end]
+        page_rows = (
+            source_df.iloc[slice_pos].reset_index(drop=True).to_dict("records")
+            if slice_pos
+            else []
+        )
+        for i, pos in enumerate(slice_pos):
+            page_rows[i]["__row_idx"] = int(pos)
+        table.rows = page_rows
+        table.pagination = pag
+        count_label.text = (
+            f"{total} rows match search ({len(df)} total in source)"
+            if total
+            else f"0 rows match ({len(df)} total in source)"
+        )
+        table.update()
+
+    wire_qtable_server_pagination_handlers(table, _fill_from_pagination)
+
+    def _apply_search(term: str) -> None:
+        txt = str(term or "").strip().lower()
+        if not txt:
+            page_state["filtered_positions"] = list(range(n_rows))
+        else:
+            filtered: List[int] = []
+            for pos in range(n_rows):
+                row = source_df.iloc[pos]
+                for col in source_df.columns:
+                    value = row.get(col)
+                    if value is not None and txt in str(value).lower():
+                        filtered.append(pos)
+                        break
+            page_state["filtered_positions"] = filtered
+        pag = clamp_qtable_server_pagination(
+            dict(table.pagination),
+            rows_number=len(page_state["filtered_positions"]),
+            rows_per_page_default=pd_default,
+        )
+        pag["page"] = 1
+        _fill_from_pagination(pag)
+
+    with table.add_slot("top-right"):
+        search_input = ui.input(placeholder=search_placeholder).props(
+            "type=search dense clearable"
+        )
+        search_input.on("update:model-value", lambda e: _apply_search(getattr(e, "value", "")))
+
+    for col in table.columns:
+        col["sortable"] = False
+
+    _fill_from_pagination(init_pagination)
+    try:
+        def _cleanup_table_state() -> None:
+            page_state["filtered_positions"] = []
+            table.rows = []
+
+        ui.context.client.on_disconnect(_cleanup_table_state)
+    except Exception:
+        pass
+    return table
+
 # --- Coverage charts (design.md §9.5): on/off colours, mean line, gene palette ---
 _COV_GENE_LINE_PALETTE = [
     "#06b6d4",  # cyan
@@ -4248,16 +4372,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 "sortable": True
                             })
                         
-                        # Create rows from DataFrame
-                        rows = display_df.to_dict('records')
-                        
-                        # Create styled table for consistency
-                        from robin.gui.theme import styled_table
-                        table_container, variant_table = styled_table(
-                            columns=columns,
-                            rows=rows,
-                            pagination=25,
-                            class_size="table-xs"
+                        # Create paged table (slice rows per page, avoid full row materialization).
+                        variant_table = _render_paged_df_table(
+                            display_df,
+                            columns,
+                            pagination_default=100,
+                            class_size="table-xs",
+                            search_placeholder=f"Search {v_type}s...",
                         )
 
                         # Make all columns sortable
@@ -4292,13 +4413,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                                 column, e.value
                                             ),
                                         )
-
-                        # Add search functionality
-                        with variant_table.add_slot("top-right"):
-                            with ui.input(placeholder=f"Search {v_type}s...").props(
-                                "type=search"
-                            ).bind_value(variant_table, "filter").add_slot("append"):
-                                ui.icon("search")
 
                         # Column toggle function
                         def toggle_column(column: dict, visible: bool) -> None:
@@ -5503,15 +5617,12 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                                 "sortable": True
                                             })
                                         
-                                        # Create rows from DataFrame
-                                        rows = df.to_dict('records')
-                                        
-                                        # Create styled table
-                                        table_container, variant_table = styled_table(
-                                            columns=columns,
-                                            rows=rows,
-                                            pagination=10,
-                                            class_size="table-xs"
+                                        variant_table = _render_paged_df_table(
+                                            df,
+                                            columns,
+                                            pagination_default=100,
+                                            class_size="table-xs",
+                                            search_placeholder="Search variants...",
                                         )
 
                                         # Make columns sortable
@@ -5798,27 +5909,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             "sortable": True
                                         })
                                     
-                                    # Create rows from DataFrame
-                                    rows = df.to_dict('records')
-                                    
-                                    # Create styled table
-                                    table_container, detailed_variant_table = styled_table(
-                                        columns=columns,
-                                        rows=rows,
-                                        pagination=20,
-                                        class_size="table-xs"
+                                    detailed_variant_table = _render_paged_df_table(
+                                        df,
+                                        columns,
+                                        pagination_default=100,
+                                        class_size="table-xs",
+                                        search_placeholder="Search variants...",
                                     )
-
-                                    # Add search functionality
-                                    with detailed_variant_table.add_slot("top-right"):
-                                        with ui.input(
-                                            placeholder="Search variants..."
-                                        ).props("type=search").bind_value(
-                                            detailed_variant_table, "filter"
-                                        ).add_slot(
-                                            "append"
-                                        ):
-                                            ui.icon("search")
 
                                     # Make columns sortable
                                     for col in detailed_variant_table.columns:

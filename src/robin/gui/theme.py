@@ -270,6 +270,119 @@ def styled_table(*, columns, rows=None, pagination=20, class_size="table-xs", **
     return container, table
 
 
+def unpack_qtable_request_pagination(event_args: Any) -> Optional[Dict[str, Any]]:
+    """Extract the pagination dict from a NiceGUI Quasar QTable ``request`` event payload."""
+    if event_args is None:
+        return None
+    if isinstance(event_args, list):
+        if not event_args:
+            return None
+        event_args = event_args[0]
+    if not isinstance(event_args, dict):
+        return None
+    pag = event_args.get("pagination")
+    if isinstance(pag, dict):
+        return pag
+    return event_args
+
+
+def clamp_qtable_server_pagination(
+    pagination: Dict[str, Any],
+    *,
+    rows_number: int,
+    rows_per_page_default: int = 100,
+) -> Dict[str, Any]:
+    """Normalize ``page`` / ``rowsPerPage`` / ``rowsNumber`` for server-side QTable paging.
+
+    Treats ``rowsPerPage <= 0`` (Quasar \"All\") as ``max(1, rows_number)`` so we never
+    materialize zero pages or rely on client-side \"all rows\" behavior.
+    """
+    try:
+        rpp = int(pagination.get("rowsPerPage"))
+    except (TypeError, ValueError):
+        rpp = rows_per_page_default
+    if rpp <= 0:
+        rpp = max(1, int(rows_number))
+
+    total = max(0, int(rows_number))
+    max_page = max(1, (total + rpp - 1) // rpp) if total else 1
+    try:
+        page = int(pagination.get("page") or 1)
+    except (TypeError, ValueError):
+        page = 1
+    page = max(1, min(page, max_page))
+
+    out = dict(pagination)
+    out["page"] = page
+    out["rowsPerPage"] = rpp
+    out["rowsNumber"] = total
+    out.setdefault("sortBy", None)
+    out.setdefault("descending", False)
+    return out
+
+
+def wire_qtable_server_pagination_handlers(
+    table: Any,
+    refill: Callable[[Dict[str, Any]], None],
+) -> None:
+    """Drive server-side row slicing from Quasar footer controls.
+
+    Changing **page** or **records per page** updates the ``pagination`` model via
+    NiceGUI's ``update:pagination`` event; some QTable setups also emit ``request``.
+    Listening to **both** keeps rows-per-page and page navigation in sync with Python.
+    """
+    def _on_request(e: Any) -> None:
+        pag = unpack_qtable_request_pagination(getattr(e, "args", None))
+        if pag is not None:
+            refill(pag)
+
+    def _on_pagination_change(e: Any) -> None:
+        val = getattr(e, "value", None)
+        if isinstance(val, dict):
+            refill(val)
+
+    table.on("request", _on_request)
+    table.on_pagination_change(_on_pagination_change)
+
+
+def styled_server_paged_table(
+    *,
+    columns: List[Dict[str, Any]],
+    rows=None,
+    pagination: Dict[str, Any],
+    class_size: str = "table-xs",
+    row_key: str = "__row_idx",
+    rows_per_page_options: Optional[List[int]] = None,
+    **kwargs: Any,
+):
+    """Styled QTable with footer pagination for server-driven row slicing.
+
+    After creating the table, call :func:`wire_qtable_server_pagination_handlers`
+    so **page** and **rows-per-page** changes refetch rows (``request`` alone is not
+    always emitted). Use ``row_key`` that exists on every rendered row (often ``__row_idx``).
+    """
+    import json
+
+    container_classes = "w-full overflow-x-auto compact-table elevation-1 rounded-lg"
+    container = ui.column().classes(container_classes)
+    with container:
+        table = ui.table(
+            columns=columns,
+            rows=rows or [],
+            row_key=row_key,
+            pagination=pagination,
+            **kwargs,
+        )
+        try:
+            table.classes(replace=f"table w-full {class_size} text-xs")
+        except Exception:
+            table.classes(f"table w-full {class_size} text-xs")
+        opts = rows_per_page_options or [25, 50, 100, 250]
+        opt_str = json.dumps(opts, separators=(",", ":"))
+        table.props(f'dense flat wrap-cells rows-per-page-options="{opt_str}"')
+    return container, table
+
+
 async def check_version():
     """
     Check the current version against the remote version on GitHub.

@@ -2296,11 +2296,14 @@ class Coordinator:
             while remaining_refs:
                 # Wait briefly for at least one task to become ready.
                 try:
+                    # ray.wait requires num_returns / timeout as keyword-only args (Ray 2.x).
                     ready_refs, remaining_refs = await asyncio.to_thread(
-                        ray.wait,
+                        lambda refs: ray.wait(
+                            refs,
+                            num_returns=1,
+                            timeout=5.0,  # keeps the shutdown console responsive
+                        ),
                         remaining_refs,
-                        1,
-                        5.0,  # timeout seconds; keeps the shutdown console responsive
                     )
                 except Exception as e:
                     print(f"[SHUTDOWN] Warning: Error while waiting for target.bam finalization tasks: {e}", flush=True)

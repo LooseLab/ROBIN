@@ -166,11 +166,12 @@ except ImportError:
 
 try:
     from fastapi import Request
-    from fastapi.responses import RedirectResponse
+    from fastapi.responses import RedirectResponse, FileResponse
     from starlette.middleware.base import BaseHTTPMiddleware
 except ImportError:  # pragma: no cover
     Request = None
     RedirectResponse = None
+    FileResponse = None
     BaseHTTPMiddleware = object
 
 try:
@@ -497,6 +498,7 @@ class GUILauncher:
         self.progress_notification_event = Event[Dict[str, Any]]()
         # CNV per-sample cache
         self._cnv_state: Dict[str, Dict[str, Any]] = {}
+        self._component_state_max_samples = 24
         # Cache last seen queue status so we can populate immediately on page creation
         self._last_queue_status: Dict[str, Any] = {}
 
@@ -2025,16 +2027,13 @@ class GUILauncher:
                     if not file_path.exists() or not file_path.is_file():
                         ui.notify(f"File {filename} not found", type="error")
                         return
-                    
-                    # Read file content
-                    with open(file_path, 'rb') as f:
-                        content = f.read()
-                    
-                    # Use NiceGUI's download functionality
-                    ui.download(
-                        content,
+                    if FileResponse is None:
+                        ui.notify("Download endpoint unavailable", type="error")
+                        return
+                    return FileResponse(
+                        path=str(file_path),
                         filename=filename,
-                        media_type='application/octet-stream'
+                        media_type="application/octet-stream",
                     )
                     
                 except Exception as e:
@@ -4044,8 +4043,33 @@ class GUILauncher:
                         state_dict[key] = {}
                         logging.info(f"Cleared all {attr} state for sample {sample_id}")
 
+            self._prune_component_state_caches()
+
         except Exception as e:
             logging.debug(f"Failed to refresh sample plots for {sample_id}: {e}")
+
+    def _touch_component_state_key(self, sample_key: str) -> None:
+        """Mark a sample key as recently used in component state dicts."""
+        for attr in ["_coverage_state", "_mgmt_state", "_cnv_state", "_fusion_state"]:
+            if not hasattr(self, attr):
+                continue
+            state_dict = getattr(self, attr)
+            if isinstance(state_dict, dict) and sample_key in state_dict:
+                value = state_dict.pop(sample_key)
+                state_dict[sample_key] = value
+
+    def _prune_component_state_caches(self) -> None:
+        """Bound component state dicts to avoid unbounded growth across samples."""
+        max_samples = max(1, int(getattr(self, "_component_state_max_samples", 24)))
+        for attr in ["_coverage_state", "_mgmt_state", "_cnv_state", "_fusion_state"]:
+            if not hasattr(self, attr):
+                continue
+            state_dict = getattr(self, attr)
+            if not isinstance(state_dict, dict):
+                continue
+            while len(state_dict) > max_samples:
+                oldest_key = next(iter(state_dict))
+                state_dict.pop(oldest_key, None)
 
     '''
     def _refresh_all_sample_plots(self):
@@ -4155,6 +4179,9 @@ class GUILauncher:
             if self.monitored_directory
             else None
         )
+        if sample_dir:
+            self._touch_component_state_key(str(sample_dir))
+            self._prune_component_state_caches()
         test_id = _get_test_id_from_manifest(sample_dir) if sample_dir else ""
 
         # Check if this is a page refresh vs navigation
@@ -5259,6 +5286,9 @@ class GUILauncher:
             if self.monitored_directory
             else None
         )
+        if sample_dir:
+            self._touch_component_state_key(str(sample_dir))
+            self._prune_component_state_caches()
         test_id = _get_test_id_from_manifest(sample_dir) if sample_dir else ""
 
         # Check if sample is known
@@ -5420,34 +5450,66 @@ class GUILauncher:
                     
                     # Fusion Pairs Table section
                     if sample_dir and sample_dir.exists():
-                        from robin.gui.components.fusion import (
-                            _load_processed_pickle,
-                            _cluster_fusion_reads
-                        )
-                        import pandas as pd
-                        
-                        # Load fusion data
-                        fusion_data_loaded = False
-                        fusion_data = None
+                        fusion_lazy_key = f"fusion_pairs_loaded:{sample_id}"
                         try:
-                            target_file = sample_dir / "fusion_candidates_master_processed.pkl"
-                            genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
-                            
-                            # Try to load target panel data first, then genome-wide
-                            if target_file.exists():
-                                fusion_data = _load_processed_pickle(target_file)
-                                if fusion_data and fusion_data.get("annotated_data") is not None:
-                                    fusion_data_loaded = True
-                            elif genome_file.exists():
-                                fusion_data = _load_processed_pickle(genome_file)
-                                if fusion_data and fusion_data.get("annotated_data") is not None:
-                                    fusion_data_loaded = True
-                        except Exception as e:
-                            logging.warning(f"Failed to load fusion data: {e}")
+                            fusion_should_load = bool(
+                                ui.storage.browser.get(fusion_lazy_key, False)
+                            )
+                        except Exception:
+                            fusion_should_load = False
+                        if not fusion_should_load:
+                            with ui.element("div").classes(
+                                "classification-insight-shell w-full min-w-0"
+                            ):
+                                ui.label("Fusion pairs").classes(
+                                    "classification-insight-heading text-headline-small"
+                                )
+                                ui.label(
+                                    "Fusion pair clustering is loaded on demand to reduce initial CPU/memory."
+                                ).classes("classification-insight-meta w-full mb-2")
+                                ui.button(
+                                    "Show fusion pairs",
+                                    on_click=lambda: (
+                                        ui.storage.browser.update({fusion_lazy_key: True}),
+                                        ui.navigate.to(ui.context.client.page.path),
+                                    ),
+                                ).props("color=primary no-caps")
+                        else:
+                            from robin.gui.components.fusion import (
+                                _load_processed_pickle,
+                                _cluster_fusion_reads
+                            )
+                            import pandas as pd
                         
-                        if fusion_data_loaded and fusion_data:
-                            annotated_data = fusion_data.get("annotated_data", pd.DataFrame())
-                            goodpairs = fusion_data.get("goodpairs", pd.Series())
+                            # Load fusion data
+                            fusion_data_loaded = False
+                            fusion_data = None
+                            try:
+                                target_file = sample_dir / "fusion_candidates_master_processed.pkl"
+                                genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
+                                
+                                # Try to load target panel data first, then genome-wide
+                                if target_file.exists():
+                                    fusion_data = _load_processed_pickle(target_file)
+                                    if fusion_data and fusion_data.get("annotated_data") is not None:
+                                        fusion_data_loaded = True
+                                elif genome_file.exists():
+                                    fusion_data = _load_processed_pickle(genome_file)
+                                    if fusion_data and fusion_data.get("annotated_data") is not None:
+                                        fusion_data_loaded = True
+                            except Exception as e:
+                                logging.warning(f"Failed to load fusion data: {e}")
+                        
+                            annotated_data = (
+                                fusion_data.get("annotated_data", pd.DataFrame())
+                                if (fusion_data_loaded and fusion_data)
+                                else pd.DataFrame()
+                            )
+                            goodpairs = (
+                                fusion_data.get("goodpairs", pd.Series())
+                                if (fusion_data_loaded and fusion_data)
+                                else pd.Series()
+                            )
                             
                             if not annotated_data.empty:
                                 # Filter to good pairs if available
@@ -5476,21 +5538,25 @@ class GUILauncher:
                                         ).classes("classification-insight-meta w-full mb-2")
                                         
                                         # Create columns for the table
-                                        from robin.gui.theme import styled_table
+                                        from robin.gui.theme import (
+                                            clamp_qtable_server_pagination,
+                                            styled_server_paged_table,
+                                            wire_qtable_server_pagination_handlers,
+                                        )
                                         
                                         columns = [
-                                            {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": True},
-                                            {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": True},
-                                            {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": True},
-                                            {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": True},
-                                            {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": True},
-                                            {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": True},
+                                            {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": False},
+                                            {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": False},
+                                            {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": False},
+                                            {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": False},
+                                            {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": False},
+                                            {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": False},
                                             {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
                                         ]
                                         
                                         # Format rows for display
                                         rows = []
-                                        fusion_region_map = {}  # Store region info for each row
+                                        # Keep region in each source row to avoid duplicate mapping storage.
                                         
                                         # Import re for position parsing
                                         import re
@@ -5562,17 +5628,18 @@ class GUILauncher:
                                                 "chr2": chr2,
                                                 "pos2": display_pos2,
                                                 "reads": int(row.get("reads", 0)),
+                                                "region": region,
+                                                "__row_idx": len(rows),
                                                 "action": "",
                                             }
                                             
                                             rows.append(formatted_row)
-                                            fusion_region_map[len(rows) - 1] = region
                                         
                                         if rows:
                                             # Store fusion regions mapped by fusion pair for easy lookup
                                             fusion_regions_by_pair = {}
                                             for idx, row_data in enumerate(rows):
-                                                fusion_regions_by_pair[row_data["fusion_pair"]] = fusion_region_map[idx]
+                                                fusion_regions_by_pair[row_data["fusion_pair"]] = row_data.get("region", "")
                                             
                                             # Create JavaScript map of regions for IGV navigation
                                             import json
@@ -5617,13 +5684,52 @@ class GUILauncher:
                                             """
                                             ui.run_javascript(js_init_regions, timeout=5.0)
                                             
-                                            # Create styled table
-                                            table_container, fusion_table = styled_table(
-                                                columns=columns,
-                                                rows=rows,
-                                                pagination=20,
-                                                class_size="table-xs"
+                                            # Render only one page at a time (Quasar server-side paging).
+                                            fusion_preview_mode = len(rows) > 50_000
+                                            fusion_rows_source = rows[:5_000] if fusion_preview_mode else rows
+                                            fusion_total = len(fusion_rows_source)
+                                            fusion_init_pagination = clamp_qtable_server_pagination(
+                                                {
+                                                    "sortBy": None,
+                                                    "descending": False,
+                                                    "page": 1,
+                                                    "rowsPerPage": 100,
+                                                    "rowsNumber": fusion_total,
+                                                },
+                                                rows_number=fusion_total,
+                                                rows_per_page_default=100,
                                             )
+                                            table_container, fusion_table = styled_server_paged_table(
+                                                columns=columns,
+                                                rows=[],
+                                                pagination=fusion_init_pagination,
+                                                row_key="__row_idx",
+                                                class_size="table-xs",
+                                            )
+                                            if fusion_preview_mode:
+                                                ui.label(
+                                                    f"Preview mode: showing first {len(fusion_rows_source):,} rows of {len(rows):,}. Apply upstream filters to narrow."
+                                                ).classes("classification-insight-level classification-insight-level--low w-full")
+
+                                            def _fill_fusion_from_pagination(pag: Dict[str, Any]) -> None:
+                                                total = len(fusion_rows_source)
+                                                pag = clamp_qtable_server_pagination(
+                                                    pag,
+                                                    rows_number=total,
+                                                    rows_per_page_default=100,
+                                                )
+                                                rpp = int(pag["rowsPerPage"])
+                                                page = int(pag["page"])
+                                                start = (page - 1) * rpp
+                                                end = start + rpp
+                                                fusion_table.rows = fusion_rows_source[start:end]
+                                                fusion_table.pagination = pag
+                                                fusion_table.update()
+
+                                            wire_qtable_server_pagination_handlers(
+                                                fusion_table, _fill_fusion_from_pagination
+                                            )
+                                            _fill_fusion_from_pagination(fusion_init_pagination)
                                             
                                             # Add clickable action button column using slot that emits events to Python
                                             try:
@@ -5638,7 +5744,7 @@ class GUILauncher:
     dense 
     flat 
     color="primary"
-    @click="$parent.$emit('fusion-view-igv', props.row.fusion_pair)"
+    @click="$parent.$emit('fusion-view-igv', props.row.__row_idx)"
     title="View in IGV"
   />
 </q-td>
@@ -5649,7 +5755,12 @@ class GUILauncher:
                                                 def on_fusion_view_igv(e):
                                                     """Handle fusion view IGV event from table button."""
                                                     try:
-                                                        fusion_pair = e.args if isinstance(e.args, str) else getattr(e, 'args', None)
+                                                        fusion_pair = ""
+                                                        row_idx = getattr(e, "args", None)
+                                                        if row_idx is not None:
+                                                            row_idx = int(row_idx)
+                                                            if 0 <= row_idx < len(fusion_rows_source):
+                                                                fusion_pair = fusion_rows_source[row_idx].get("fusion_pair", "")
                                                         if fusion_pair:
                                                             logging.debug(f"[Fusion] Button clicked for: {fusion_pair}")
                                                             navigate_to_fusion_region(fusion_pair)
@@ -5695,9 +5806,6 @@ class GUILauncher:
                                                     """
                                                     ui.run_javascript(js_inline_handler, timeout=5.0)
                                                     
-                                                    # Wait a moment for JS to execute, then add slot
-                                                    ui.timer(0.1, lambda: None, once=True)
-                                                    
                                                     fusion_table.add_slot(
                                                         "body-cell-action",
                                                         """
@@ -5716,7 +5824,7 @@ class GUILauncher:
                                                     )
                                                 except Exception as fallback_ex:
                                                     logging.warning(f"Fallback approach also failed: {fallback_ex}")
-                                            
+
                                             # Use JavaScript to attach click handlers to rows - improved with event delegation
                                             js_attach_handlers = f"""
                                                 (function() {{
@@ -5839,9 +5947,28 @@ class GUILauncher:
                                                 }})();
                                             """
                                             
-                                            # Execute JavaScript after table is created
-                                            ui.timer(0.5, lambda: ui.run_javascript(js_attach_handlers, timeout=10.0), once=True)
-                                            ui.timer(2.0, lambda: ui.run_javascript(js_attach_handlers, timeout=10.0), once=True)
+                                            # Execute JavaScript after table is created using app-level timers
+                                            # (avoids UI-slot-bound timers firing after navigation).
+                                            def _run_fusion_handlers_js() -> None:
+                                                try:
+                                                    ui.run_javascript(js_attach_handlers, timeout=10.0)
+                                                except Exception:
+                                                    pass
+
+                                            fusion_timer_1 = app.timer(0.5, _run_fusion_handlers_js, once=True)
+                                            fusion_timer_2 = app.timer(2.0, _run_fusion_handlers_js, once=True)
+                                            try:
+                                                def _cleanup_fusion_page() -> None:
+                                                    fusion_rows_source.clear()
+                                                    fusion_table.rows = []
+                                                    for timer in (fusion_timer_1, fusion_timer_2):
+                                                        try:
+                                                            timer.deactivate()
+                                                        except Exception:
+                                                            pass
+                                                ui.context.client.on_disconnect(_cleanup_fusion_page)
+                                            except Exception:
+                                                pass
                                             
                                             # Add summary
                                             total_fusions = len(rows)
@@ -5874,17 +6001,6 @@ class GUILauncher:
                                     ui.label("Fusion data is empty.").classes(
                                         "classification-insight-meta"
                                     )
-                        else:
-                            with ui.element("div").classes(
-                                "classification-insight-shell w-full min-w-0"
-                            ):
-                                ui.label("Fusion pairs").classes(
-                                    "classification-insight-heading text-headline-small"
-                                )
-                                ui.label(
-                                    "Fusion analysis data not available. Run fusion analysis first."
-                                ).classes("classification-insight-meta")
-                    
                     # Target Genes Table section
                     if sample_dir and sample_dir.exists():
                         target_coverage_file = sample_dir / "target_coverage.csv"
@@ -5923,7 +6039,27 @@ class GUILauncher:
                             # Note: This runs during page creation, not during user interaction
                             try:
                                 import pandas as pd
-                                df = pd.read_csv(coverage_file)
+                                df = pd.read_csv(
+                                    coverage_file,
+                                    usecols=lambda c: c in {
+                                        "chrom",
+                                        "startpos",
+                                        "endpos",
+                                        "name",
+                                        "coverage",
+                                        "length",
+                                        "bases",
+                                    },
+                                    dtype={
+                                        "chrom": "string",
+                                        "name": "string",
+                                        "startpos": "float64",
+                                        "endpos": "float64",
+                                        "coverage": "float64",
+                                        "length": "float64",
+                                        "bases": "float64",
+                                    },
+                                )
                                 
                                 # Ensure we have the required columns
                                 required_cols = ["chrom", "startpos", "endpos", "name"]
@@ -5961,6 +6097,7 @@ class GUILauncher:
                                             "endpos": f"{endpos_raw:,}",  # Format with commas for display
                                             "name": gene_name,
                                             "coverage": float(row.get("coverage", 0)),
+                                            "__row_idx": len(table_data),
                                             "action": "",
                                         })
                                     
@@ -5975,30 +6112,108 @@ class GUILauncher:
                                                 "Click a gene row to open the region in IGV."
                                             ).classes("classification-insight-meta w-full mb-2")
                                             
-                                            from robin.gui.theme import styled_table
+                                            from robin.gui.theme import (
+                                                clamp_qtable_server_pagination,
+                                                styled_server_paged_table,
+                                                wire_qtable_server_pagination_handlers,
+                                            )
                                             
                                             columns = [
-                                                {"name": "name", "label": "Gene Name", "field": "name", "sortable": True},
-                                                {"name": "chrom", "label": "Chromosome", "field": "chrom", "sortable": True},
-                                                {"name": "startpos", "label": "Start", "field": "startpos", "sortable": True},
-                                                {"name": "endpos", "label": "End", "field": "endpos", "sortable": True},
-                                                {"name": "coverage", "label": "Coverage (x)", "field": "coverage", "sortable": True},
+                                                {"name": "name", "label": "Gene Name", "field": "name", "sortable": False},
+                                                {"name": "chrom", "label": "Chromosome", "field": "chrom", "sortable": False},
+                                                {"name": "startpos", "label": "Start", "field": "startpos", "sortable": False},
+                                                {"name": "endpos", "label": "End", "field": "endpos", "sortable": False},
+                                                {"name": "coverage", "label": "Coverage (x)", "field": "coverage", "sortable": False},
                                                 {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
                                             ]
                                             
-                                            table_container, gene_table = styled_table(
-                                                columns=columns,
-                                                rows=table_data,
-                                                pagination=25,
-                                                class_size="table-xs"
+                                            gene_preview_mode = len(table_data) > 50_000
+                                            gene_rows_source = table_data[:5_000] if gene_preview_mode else table_data
+                                            gene_page_state: Dict[str, Any] = {
+                                                "filtered_positions": list(range(len(gene_rows_source))),
+                                            }
+                                            gene_total_matches = len(gene_page_state["filtered_positions"])
+                                            gene_init_pagination = clamp_qtable_server_pagination(
+                                                {
+                                                    "sortBy": None,
+                                                    "descending": False,
+                                                    "page": 1,
+                                                    "rowsPerPage": 100,
+                                                    "rowsNumber": gene_total_matches,
+                                                },
+                                                rows_number=gene_total_matches,
+                                                rows_per_page_default=100,
                                             )
+                                            table_container, gene_table = styled_server_paged_table(
+                                                columns=columns,
+                                                rows=[],
+                                                pagination=gene_init_pagination,
+                                                row_key="__row_idx",
+                                                class_size="table-xs",
+                                            )
+                                            if gene_preview_mode:
+                                                ui.label(
+                                                    f"Preview mode: showing first {len(gene_rows_source):,} rows of {len(table_data):,}. Apply filters to narrow."
+                                                ).classes("classification-insight-level classification-insight-level--low w-full")
+
+                                            def _fill_gene_from_pagination(pag: Dict[str, Any]) -> None:
+                                                total = len(gene_page_state["filtered_positions"])
+                                                pag = clamp_qtable_server_pagination(
+                                                    pag,
+                                                    rows_number=total,
+                                                    rows_per_page_default=100,
+                                                )
+                                                rpp = int(pag["rowsPerPage"])
+                                                page = int(pag["page"])
+                                                start = (page - 1) * rpp
+                                                end = start + rpp
+                                                positions = gene_page_state["filtered_positions"]
+                                                slice_pos = positions[start:end]
+                                                gene_table.rows = [
+                                                    gene_rows_source[i] for i in slice_pos
+                                                ]
+                                                gene_table.pagination = pag
+                                                gene_table.update()
+
+                                            wire_qtable_server_pagination_handlers(
+                                                gene_table, _fill_gene_from_pagination
+                                            )
+
+                                            def _apply_gene_search(term: str) -> None:
+                                                txt = str(term or "").strip().lower()
+                                                if not txt:
+                                                    gene_page_state["filtered_positions"] = list(
+                                                        range(len(gene_rows_source))
+                                                    )
+                                                else:
+                                                    gene_page_state["filtered_positions"] = [
+                                                        i
+                                                        for i, row in enumerate(gene_rows_source)
+                                                        if txt in str(row.get("name", "")).lower()
+                                                        or txt in str(row.get("chrom", "")).lower()
+                                                    ]
+                                                pag = clamp_qtable_server_pagination(
+                                                    dict(gene_table.pagination),
+                                                    rows_number=len(gene_page_state["filtered_positions"]),
+                                                    rows_per_page_default=100,
+                                                )
+                                                pag["page"] = 1
+                                                _fill_gene_from_pagination(pag)
+
+                                            _fill_gene_from_pagination(gene_init_pagination)
                                             
-                                            # Add search functionality
                                             try:
                                                 with gene_table.add_slot("top-right"):
-                                                    with ui.input(placeholder="Search genes...").props("type=search").bind_value(
-                                                        gene_table, "filter"
-                                                    ).add_slot("append"):
+                                                    gene_search_input = ui.input(
+                                                        placeholder="Search genes..."
+                                                    ).props("type=search dense clearable")
+                                                    gene_search_input.on(
+                                                        "update:model-value",
+                                                        lambda e: _apply_gene_search(
+                                                            getattr(e, "value", "")
+                                                        ),
+                                                    )
+                                                    with gene_search_input.add_slot("append"):
                                                         ui.icon("search")
                                             except Exception:
                                                 pass
@@ -6070,7 +6285,7 @@ class GUILauncher:
     dense 
     flat 
     color="primary"
-    @click="$parent.$emit('gene-view-igv', props.row.name)"
+    @click="$parent.$emit('gene-view-igv', props.row.__row_idx)"
     title="View in IGV"
   />
 </q-td>
@@ -6081,7 +6296,12 @@ class GUILauncher:
                                                 def on_gene_view_igv(e):
                                                     """Handle gene view IGV event from table button."""
                                                     try:
-                                                        gene_name = e.args if isinstance(e.args, str) else getattr(e, 'args', None)
+                                                        row_idx = getattr(e, "args", None)
+                                                        gene_name = ""
+                                                        if row_idx is not None:
+                                                            row_idx = int(row_idx)
+                                                            if 0 <= row_idx < len(gene_rows_source):
+                                                                gene_name = gene_rows_source[row_idx].get("name", "")
                                                         if gene_name:
                                                             logging.debug(f"[Gene] Button clicked for: {gene_name}")
                                                             navigate_to_gene_region(gene_name)
@@ -6095,6 +6315,7 @@ class GUILauncher:
                                                 import traceback
                                                 logging.warning(traceback.format_exc())
                                             
+                                            gene_handler_timers: List[Any] = []
                                             # Also add row click handlers as a fallback
                                             try:
                                                 # Create JavaScript to handle row clicks
@@ -6191,10 +6412,29 @@ class GUILauncher:
                                                     }})();
                                                 """
                                                 
-                                                ui.timer(0.5, lambda: ui.run_javascript(js_gene_table_handlers, timeout=10.0), once=True)
-                                                ui.timer(2.0, lambda: ui.run_javascript(js_gene_table_handlers, timeout=10.0), once=True)
+                                                def _run_gene_handlers_js() -> None:
+                                                    try:
+                                                        ui.run_javascript(js_gene_table_handlers, timeout=10.0)
+                                                    except Exception:
+                                                        pass
+
+                                                gene_handler_timers.append(app.timer(0.5, _run_gene_handlers_js, once=True))
+                                                gene_handler_timers.append(app.timer(2.0, _run_gene_handlers_js, once=True))
                                             except Exception as e:
                                                 logging.warning(f"Could not add gene table click handlers: {e}")
+                                            try:
+                                                def _cleanup_gene_page() -> None:
+                                                    gene_page_state["filtered_positions"] = []
+                                                    gene_rows_source.clear()
+                                                    gene_table.rows = []
+                                                    for timer_obj in gene_handler_timers:
+                                                        try:
+                                                            timer_obj.deactivate()
+                                                        except Exception:
+                                                            pass
+                                                ui.context.client.on_disconnect(_cleanup_gene_page)
+                                            except Exception:
+                                                pass
                                             
                                             # Add summary
                                             total_genes = len(table_data)
