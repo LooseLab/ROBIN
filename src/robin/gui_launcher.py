@@ -17,6 +17,7 @@ warnings.filterwarnings(
 )
 
 import asyncio
+from contextlib import contextmanager
 import hashlib
 import logging
 import queue
@@ -93,6 +94,22 @@ def _get_test_id_from_manifest(sample_dir: Path) -> str:
         return str(data.get("test_id", "") or "").strip()
     except Exception:
         return ""
+
+
+@contextmanager
+def _sample_page_section_timer(page: str, sample_id: str, section: str):
+    """Print elapsed wall time while building one UI section of a sample page."""
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - t0
+        print(
+            f"[SamplePage] page={page} sample={sample_id} "
+            f"section={section} elapsed_s={elapsed:.3f}",
+            flush=True,
+        )
+
 
 # Salt for deriving encryption key from DOB (fixed so the same DOB always produces the same key).
 _IDENTIFIER_MANIFEST_KEY_SALT = b"robin_sample_manifest_v1"
@@ -4854,7 +4871,10 @@ class GUILauncher:
                                 from robin.gui.components.summary import add_summary_section
 
                             # Create the UI components immediately on the main thread
-                            add_summary_section(sample_dir, sample_id, self)
+                            with _sample_page_section_timer(
+                                "live_data", sample_id, "summary"
+                            ):
+                                add_summary_section(sample_dir, sample_id, self)
                         except Exception as e:
                             logging.exception(f"[GUI] Summary section failed: {e}")
                             try:
@@ -4900,6 +4920,7 @@ class GUILauncher:
                                         pass
                                 analysis_container.clear()
                                 with analysis_container:
+                                    t_analysis_start = time.perf_counter()
                                     # MNP-Flex section
                                     try:
                                         try:
@@ -4907,7 +4928,12 @@ class GUILauncher:
                                         except ImportError:
                                             from robin.gui.components.mnpflex import add_mnpflex_section
 
-                                        add_mnpflex_section(self, sample_dir, sample_id)
+                                        with _sample_page_section_timer(
+                                            "live_data", sample_id, "mnpflex"
+                                        ):
+                                            add_mnpflex_section(
+                                                self, sample_dir, sample_id
+                                            )
                                     except Exception as e:
                                         logging.exception(f"[GUI] MNP-Flex section failed: {e}")
                                         try:
@@ -4928,7 +4954,14 @@ class GUILauncher:
                                                     add_classification_section,
                                                 )
 
-                                            add_classification_section(sample_dir, self)
+                                            with _sample_page_section_timer(
+                                                "live_data",
+                                                sample_id,
+                                                "classification",
+                                            ):
+                                                add_classification_section(
+                                                    sample_dir, self
+                                                )
                                         except Exception as e:
                                             logging.exception(f"[GUI] Classification section failed: {e}")
                                             try:
@@ -4949,7 +4982,14 @@ class GUILauncher:
                                                     add_igv_viewer,
                                                 )
 
-                                            add_coverage_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data",
+                                                sample_id,
+                                                "coverage",
+                                            ):
+                                                add_coverage_section(
+                                                    self, sample_dir
+                                                )
                                         except Exception as e:
                                             try:
                                                 ui.notify(f"Coverage section failed: {e}", type="warning")
@@ -4964,7 +5004,10 @@ class GUILauncher:
                                             except ImportError:
                                                 from robin.gui.components.mgmt import add_mgmt_section
 
-                                            add_mgmt_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "mgmt"
+                                            ):
+                                                add_mgmt_section(self, sample_dir)
                                         except Exception as e:
                                             logging.exception(f"[GUI] MGMT section failed: {e}")
                                             try:
@@ -4980,7 +5023,10 @@ class GUILauncher:
                                             except ImportError:
                                                 from robin.gui.components.cnv import add_cnv_section
 
-                                            add_cnv_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "cnv"
+                                            ):
+                                                add_cnv_section(self, sample_dir)
                                         except Exception as e:
                                             logging.exception(f"[GUI] CNV section failed: {e}")
                                             try:
@@ -4996,7 +5042,10 @@ class GUILauncher:
                                             except ImportError:
                                                 from robin.gui.components.fusion import add_fusion_section
 
-                                            add_fusion_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "fusion"
+                                            ):
+                                                add_fusion_section(self, sample_dir)
                                         except Exception as e:
                                             logging.exception(f"[GUI] Fusion section failed: {e}")
                                             try:
@@ -5010,13 +5059,26 @@ class GUILauncher:
                                             except ImportError:
                                                 from robin.gui.components.bed_coverage import add_bed_coverage_section
                                             
-                                            add_bed_coverage_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data",
+                                                sample_id,
+                                                "bed_coverage",
+                                            ):
+                                                add_bed_coverage_section(
+                                                    self, sample_dir
+                                                )
                                         except Exception as e:
                                             logging.exception(f"[GUI] BED Coverage section failed: {e}")
                                             try:
                                                 ui.notify(f"BED Coverage section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
+                                    total_elapsed = time.perf_counter() - t_analysis_start
+                                    print(
+                                        f"[SamplePage] page=live_data sample={sample_id} "
+                                        f"section=analysis_sections_total elapsed_s={total_elapsed:.3f}",
+                                        flush=True,
+                                    )
                             except Exception as e:
                                 logging.exception(f"[GUI] Failed to build analysis sections: {e}")
 
@@ -5441,12 +5503,20 @@ class GUILauncher:
                     # IGV Viewer section - moved to top, before tables
                     if sample_dir and sample_dir.exists():
                         from robin.gui.components.coverage import add_igv_viewer
-                        add_igv_viewer(self, sample_dir)
-                    
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "igv_viewer"
+                        ):
+                            add_igv_viewer(self, sample_dir)
+
                     # SNP Analysis section
                     if sample_dir and sample_dir.exists():
                         from robin.gui.components.snp import add_snp_section
-                        add_snp_section(self, sample_dir)
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "snp"
+                        ):
+                            add_snp_section(self, sample_dir)
                     
                     # Fusion Pairs Table section
                     if sample_dir and sample_dir.exists():
@@ -5457,24 +5527,35 @@ class GUILauncher:
                             )
                         except Exception:
                             fusion_should_load = False
+                        _fusion_pairs_t0 = None
                         if not fusion_should_load:
-                            with ui.element("div").classes(
-                                "classification-insight-shell w-full min-w-0"
+                            with _sample_page_section_timer(
+                                "sample_details",
+                                sample_id,
+                                "fusion_pairs_deferred",
                             ):
-                                ui.label("Fusion pairs").classes(
-                                    "classification-insight-heading text-headline-small"
-                                )
-                                ui.label(
-                                    "Fusion pair clustering is loaded on demand to reduce initial CPU/memory."
-                                ).classes("classification-insight-meta w-full mb-2")
-                                ui.button(
-                                    "Show fusion pairs",
-                                    on_click=lambda: (
-                                        ui.storage.browser.update({fusion_lazy_key: True}),
-                                        ui.navigate.to(ui.context.client.page.path),
-                                    ),
-                                ).props("color=primary no-caps")
+                                with ui.element("div").classes(
+                                    "classification-insight-shell w-full min-w-0"
+                                ):
+                                    ui.label("Fusion pairs").classes(
+                                        "classification-insight-heading text-headline-small"
+                                    )
+                                    ui.label(
+                                        "Fusion pair clustering is loaded on demand to reduce initial CPU/memory."
+                                    ).classes("classification-insight-meta w-full mb-2")
+                                    ui.button(
+                                        "Show fusion pairs",
+                                        on_click=lambda: (
+                                            ui.storage.browser.update(
+                                                {fusion_lazy_key: True}
+                                            ),
+                                            ui.navigate.to(
+                                                ui.context.client.page.path
+                                            ),
+                                        ),
+                                    ).props("color=primary no-caps")
                         else:
+                            _fusion_pairs_t0 = time.perf_counter()
                             from robin.gui.components.fusion import (
                                 _load_processed_pickle,
                                 _cluster_fusion_reads
@@ -6001,6 +6082,13 @@ class GUILauncher:
                                     ui.label("Fusion data is empty.").classes(
                                         "classification-insight-meta"
                                     )
+                        if _fusion_pairs_t0 is not None:
+                            fp_elapsed = time.perf_counter() - _fusion_pairs_t0
+                            print(
+                                f"[SamplePage] page=sample_details sample={sample_id} "
+                                f"section=fusion_pairs elapsed_s={fp_elapsed:.3f}",
+                                flush=True,
+                            )
                     # Target Genes Table section
                     if sample_dir and sample_dir.exists():
                         target_coverage_file = sample_dir / "target_coverage.csv"
@@ -6014,6 +6102,7 @@ class GUILauncher:
                             coverage_file = bed_coverage_file
                         
                         if coverage_file:
+                            _t_target_genes = time.perf_counter()
                             # Load coverage data asynchronously to avoid blocking GUI
                             def load_coverage_data():
                                 try:
@@ -6443,6 +6532,12 @@ class GUILauncher:
                                             ).classes("classification-insight-foot")
                             except Exception as e:
                                 logging.warning(f"Could not load target gene table: {e}")
+                            tg_elapsed = time.perf_counter() - _t_target_genes
+                            print(
+                                f"[SamplePage] page=sample_details sample={sample_id} "
+                                f"section=target_genes elapsed_s={tg_elapsed:.3f}",
+                                flush=True,
+                            )
 
     def _create_workflow_monitor(self):
         """Create the main workflow monitoring page."""
