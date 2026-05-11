@@ -5520,55 +5520,130 @@ class GUILauncher:
                     
                     # Fusion Pairs Table section
                     if sample_dir and sample_dir.exists():
-                        fusion_lazy_key = f"fusion_pairs_loaded:{sample_id}"
-                        try:
-                            fusion_should_load = bool(
-                                ui.storage.browser.get(fusion_lazy_key, False)
-                            )
-                        except Exception:
-                            fusion_should_load = False
-                        _fusion_pairs_t0 = None
-                        if not fusion_should_load:
-                            with _sample_page_section_timer(
-                                "sample_details",
-                                sample_id,
-                                "fusion_pairs_deferred",
-                            ):
-                                with ui.element("div").classes(
-                                    "classification-insight-shell w-full min-w-0"
-                                ):
-                                    ui.label("Fusion pairs").classes(
-                                        "classification-insight-heading text-headline-small"
-                                    )
-                                    ui.label(
-                                        "Fusion pair clustering is loaded on demand to reduce initial CPU/memory."
-                                    ).classes("classification-insight-meta w-full mb-2")
-                                    ui.button(
-                                        "Show fusion pairs",
-                                        on_click=lambda: (
-                                            ui.storage.browser.update(
-                                                {fusion_lazy_key: True}
-                                            ),
-                                            ui.navigate.to(
-                                                ui.context.client.page.path
-                                            ),
-                                        ),
-                                    ).props("color=primary no-caps")
-                        else:
-                            _fusion_pairs_t0 = time.perf_counter()
-                            from robin.gui.components.fusion import (
-                                _load_processed_pickle,
-                                _cluster_fusion_reads
-                            )
-                            import pandas as pd
-                        
-                            # Load fusion data
-                            fusion_data_loaded = False
-                            fusion_data = None
+                        _fusion_pairs_t0 = time.perf_counter()
+                        from robin.gui.components.fusion import (
+                            _load_processed_pickle,
+                            _cluster_fusion_reads,
+                        )
+                        import pandas as pd
+
+                        sample_key = str(sample_dir)
+                        fusion_state = getattr(self, "_fusion_state", {})
+                        cache_entry = fusion_state.setdefault(sample_key, {})
+                        target_file = sample_dir / "fusion_candidates_master_processed.pkl"
+                        genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
+                        target_mtime = (
+                            target_file.stat().st_mtime if target_file.exists() else None
+                        )
+                        genome_mtime = (
+                            genome_file.stat().st_mtime if genome_file.exists() else None
+                        )
+                        file_sig = (target_mtime, genome_mtime)
+                        cached_rows = cache_entry.get("details_pairs_rows")
+                        cache_hit = (
+                            isinstance(cached_rows, list)
+                            and cache_entry.get("details_pairs_sig") == file_sig
+                        )
+
+                        def _build_fusion_pairs_rows_sync() -> List[Dict[str, Any]]:
+                            """Load fusion pickle data and build table rows."""
+                            import re
+
+                            fusion_data_local = None
+                            target_file_local = sample_dir / "fusion_candidates_master_processed.pkl"
+                            genome_file_local = sample_dir / "fusion_candidates_all_processed.pkl"
                             try:
-                                target_file = sample_dir / "fusion_candidates_master_processed.pkl"
-                                genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
-                                
+                                if target_file_local.exists():
+                                    fusion_data_local = _load_processed_pickle(target_file_local)
+                                elif genome_file_local.exists():
+                                    fusion_data_local = _load_processed_pickle(genome_file_local)
+                            except Exception as ex:
+                                logging.warning(f"Failed to load fusion data: {ex}")
+                                return []
+
+                            if not fusion_data_local:
+                                return []
+                            annotated_data_local = fusion_data_local.get("annotated_data", pd.DataFrame())
+                            if annotated_data_local is None or annotated_data_local.empty:
+                                return []
+                            goodpairs_local = fusion_data_local.get("goodpairs", pd.Series())
+                            if goodpairs_local is not None and not goodpairs_local.empty and goodpairs_local.sum() > 0:
+                                aligned_goodpairs = goodpairs_local.reindex(
+                                    annotated_data_local.index, fill_value=False
+                                )
+                                filtered_data = annotated_data_local[aligned_goodpairs]
+                            else:
+                                filtered_data = annotated_data_local
+                            clustered_data_local = _cluster_fusion_reads(
+                                filtered_data,
+                                max_distance=10000,
+                                use_breakpoint_validation=True,
+                            )
+                            if clustered_data_local is None or clustered_data_local.empty:
+                                return []
+
+                            built_rows: List[Dict[str, Any]] = []
+                            for _, row in clustered_data_local.iterrows():
+                                if all(col in row for col in ["gene1_start", "gene1_end", "gene2_start", "gene2_end"]):
+                                    start1_raw = int(row["gene1_start"])
+                                    end1_raw = int(row["gene1_end"])
+                                    start2_raw = int(row["gene2_start"])
+                                    end2_raw = int(row["gene2_end"])
+                                else:
+                                    pos1_str = str(row.get("gene1_position", ""))
+                                    pos2_str = str(row.get("gene2_position", ""))
+                                    pos1_match = re.match(r'(\d+)[-–—](\d+)', pos1_str.replace(',', ''))
+                                    pos2_match = re.match(r'(\d+)[-–—](\d+)', pos2_str.replace(',', ''))
+                                    if pos1_match and pos2_match:
+                                        start1_raw = int(pos1_match.group(1))
+                                        end1_raw = int(pos1_match.group(2))
+                                        start2_raw = int(pos2_match.group(1))
+                                        end2_raw = int(pos2_match.group(2))
+                                    else:
+                                        pos1_single = re.search(r'(\d+)', pos1_str.replace(',', ''))
+                                        pos2_single = re.search(r'(\d+)', pos2_str.replace(',', ''))
+                                        if pos1_single and pos2_single:
+                                            start1_raw = end1_raw = int(pos1_single.group(1))
+                                            start2_raw = end2_raw = int(pos2_single.group(1))
+                                        else:
+                                            continue
+                                padding = 10000
+                                min1 = min(start1_raw, end1_raw)
+                                max1 = max(start1_raw, end1_raw)
+                                min2 = min(start2_raw, end2_raw)
+                                max2 = max(start2_raw, end2_raw)
+                                chr1 = str(row.get("chr1", "Unknown"))
+                                chr2 = str(row.get("chr2", "Unknown"))
+                                built_rows.append(
+                                    {
+                                        "fusion_pair": row.get("fusion_pair", ""),
+                                        "chr1": chr1,
+                                        "pos1": f"{min1:,}-{max1:,}" if min1 != max1 else f"{min1:,}",
+                                        "chr2": chr2,
+                                        "pos2": f"{min2:,}-{max2:,}" if min2 != max2 else f"{min2:,}",
+                                        "reads": int(row.get("reads", 0)),
+                                        "region": (
+                                            f"{chr1}:{max(1, min1 - padding)}-{max1 + padding} "
+                                            f"{chr2}:{max(1, min2 - padding)}-{max2 + padding}"
+                                        ),
+                                        "__row_idx": len(built_rows),
+                                        "action": "",
+                                    }
+                                )
+                            return built_rows
+
+                        if not cache_hit:
+                            rebuilt_rows = _build_fusion_pairs_rows_sync()
+                            cache_entry["details_pairs_sig"] = file_sig
+                            cache_entry["details_pairs_rows"] = [dict(r) for r in rebuilt_rows]
+                            cached_rows = cache_entry["details_pairs_rows"]
+                            cache_hit = True
+
+                        # Load fusion data
+                        fusion_data_loaded = False
+                        fusion_data = None
+                        if not cache_hit:
+                            try:
                                 # Try to load target panel data first, then genome-wide
                                 if target_file.exists():
                                     fusion_data = _load_processed_pickle(target_file)
@@ -5580,68 +5655,66 @@ class GUILauncher:
                                         fusion_data_loaded = True
                             except Exception as e:
                                 logging.warning(f"Failed to load fusion data: {e}")
+                    
+                        annotated_data = (
+                            fusion_data.get("annotated_data", pd.DataFrame())
+                            if (fusion_data_loaded and fusion_data)
+                            else pd.DataFrame()
+                        )
+                        goodpairs = (
+                            fusion_data.get("goodpairs", pd.Series())
+                            if (fusion_data_loaded and fusion_data)
+                            else pd.Series()
+                        )
                         
-                            annotated_data = (
-                                fusion_data.get("annotated_data", pd.DataFrame())
-                                if (fusion_data_loaded and fusion_data)
-                                else pd.DataFrame()
-                            )
-                            goodpairs = (
-                                fusion_data.get("goodpairs", pd.Series())
-                                if (fusion_data_loaded and fusion_data)
-                                else pd.Series()
+                        if cache_hit or not annotated_data.empty:
+                            # Filter to good pairs if available
+                            if not goodpairs.empty and goodpairs.sum() > 0:
+                                aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
+                                filtered_data = annotated_data[aligned_goodpairs]
+                            else:
+                                filtered_data = annotated_data
+                            
+                            # Cluster fusion reads
+                            clustered_data = _cluster_fusion_reads(
+                                filtered_data, 
+                                max_distance=10000, 
+                                use_breakpoint_validation=True
                             )
                             
-                            if not annotated_data.empty:
-                                # Filter to good pairs if available
-                                if not goodpairs.empty and goodpairs.sum() > 0:
-                                    aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
-                                    filtered_data = annotated_data[aligned_goodpairs]
-                                else:
-                                    filtered_data = annotated_data
-                                
-                                # Cluster fusion reads
-                                clustered_data = _cluster_fusion_reads(
-                                    filtered_data, 
-                                    max_distance=10000, 
-                                    use_breakpoint_validation=True
-                                )
-                                
-                                if not clustered_data.empty:
-                                    with ui.element("div").classes(
-                                        "classification-insight-shell w-full min-w-0"
-                                    ):
-                                        ui.label("Fusion pairs").classes(
-                                            "classification-insight-heading text-headline-small"
-                                        )
-                                        ui.label(
-                                            "Click a row to open the fusion region in IGV."
-                                        ).classes("classification-insight-meta w-full mb-2")
-                                        
-                                        # Create columns for the table
-                                        from robin.gui.theme import (
-                                            clamp_qtable_server_pagination,
-                                            styled_server_paged_table,
-                                            wire_qtable_server_pagination_handlers,
-                                        )
-                                        
-                                        columns = [
-                                            {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": False},
-                                            {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": False},
-                                            {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": False},
-                                            {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": False},
-                                            {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": False},
-                                            {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": False},
-                                            {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
-                                        ]
-                                        
-                                        # Format rows for display
-                                        rows = []
+                            if cache_hit or not clustered_data.empty:
+                                with ui.element("div").classes(
+                                    "classification-insight-shell w-full min-w-0"
+                                ):
+                                    ui.label("Fusion pairs").classes(
+                                        "classification-insight-heading text-headline-small"
+                                    )
+                                    ui.label(
+                                        "Click a row to open the fusion region in IGV."
+                                    ).classes("classification-insight-meta w-full mb-2")
+                                    
+                                    # Create columns for the table
+                                    from robin.gui.theme import (
+                                        clamp_qtable_server_pagination,
+                                        styled_server_paged_table,
+                                        wire_qtable_server_pagination_handlers,
+                                    )
+                                    
+                                    columns = [
+                                        {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": False},
+                                        {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": False},
+                                        {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": False},
+                                        {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": False},
+                                        {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": False},
+                                        {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": False},
+                                        {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
+                                    ]
+                                    
+                                    # Format rows for display
+                                    rows = [dict(r) for r in cached_rows] if cache_hit else []
+                                    if not cache_hit:
                                         # Keep region in each source row to avoid duplicate mapping storage.
-                                        
-                                        # Import re for position parsing
                                         import re
-                                        
                                         for idx, row in clustered_data.iterrows():
                                             # Try to get start/end coordinates from the row if available
                                             # (e.g., from breakpoint validation)
@@ -5655,11 +5728,9 @@ class GUILauncher:
                                                 # Parse from position strings (format: "start-end")
                                                 pos1_str = str(row.get("gene1_position", ""))
                                                 pos2_str = str(row.get("gene2_position", ""))
-                                                
                                                 # Parse range format "start-end" or just a single number
                                                 pos1_match = re.match(r'(\d+)[-–—](\d+)', pos1_str.replace(',', ''))
                                                 pos2_match = re.match(r'(\d+)[-–—](\d+)', pos2_str.replace(',', ''))
-                                                
                                                 if pos1_match and pos2_match:
                                                     # Extract both start and end from the range
                                                     start1_raw = int(pos1_match.group(1))
@@ -5677,31 +5748,25 @@ class GUILauncher:
                                                     else:
                                                         # Skip this row if we can't parse coordinates
                                                         continue
-                                            
+
                                             # Use the actual range (start to end), then add/subtract 10kb padding
                                             padding = 10000
                                             min1 = min(start1_raw, end1_raw)
                                             max1 = max(start1_raw, end1_raw)
                                             min2 = min(start2_raw, end2_raw)
                                             max2 = max(start2_raw, end2_raw)
-                                            
                                             # Subtract 10kb from min and add 10kb to max
                                             start1 = max(1, min1 - padding)
                                             end1 = max1 + padding
                                             start2 = max(1, min2 - padding)
                                             end2 = max2 + padding
-                                            
                                             chr1 = str(row.get("chr1", "Unknown"))
                                             chr2 = str(row.get("chr2", "Unknown"))
-                                            
                                             # Format region as "chr1:start-end chr2:start-end"
                                             region = f"{chr1}:{start1}-{end1} {chr2}:{start2}-{end2}"
-                                            
                                             # For display, show the breakpoint range (not the padded version)
-                                            # Use a single representative coordinate or the range midpoint
                                             display_pos1 = f"{min1:,}-{max1:,}" if min1 != max1 else f"{min1:,}"
                                             display_pos2 = f"{min2:,}-{max2:,}" if min2 != max2 else f"{min2:,}"
-                                            
                                             formatted_row = {
                                                 "fusion_pair": row.get("fusion_pair", ""),
                                                 "chr1": chr1,
@@ -5713,365 +5778,427 @@ class GUILauncher:
                                                 "__row_idx": len(rows),
                                                 "action": "",
                                             }
-                                            
                                             rows.append(formatted_row)
+
+                                    if rows and not cache_hit:
+                                        cache_entry["details_pairs_sig"] = file_sig
+                                        cache_entry["details_pairs_rows"] = [dict(r) for r in rows]
+                                    
+                                    if rows:
+                                        # Store fusion regions mapped by fusion pair for easy lookup
+                                        fusion_regions_by_pair = {}
+                                        for idx, row_data in enumerate(rows):
+                                            fusion_regions_by_pair[row_data["fusion_pair"]] = row_data.get("region", "")
                                         
-                                        if rows:
-                                            # Store fusion regions mapped by fusion pair for easy lookup
-                                            fusion_regions_by_pair = {}
-                                            for idx, row_data in enumerate(rows):
-                                                fusion_regions_by_pair[row_data["fusion_pair"]] = row_data.get("region", "")
-                                            
-                                            # Create JavaScript map of regions for IGV navigation
-                                            import json
-                                            js_regions_json = json.dumps(fusion_regions_by_pair)
-                                            
-                                            # Function to navigate IGV to a fusion region
-                                            def navigate_to_fusion_region(fusion_pair: str):
-                                                """Navigate IGV browser to the specified fusion pair region."""
-                                                if fusion_pair in fusion_regions_by_pair:
-                                                    region = fusion_regions_by_pair[fusion_pair]
-                                                    # Escape region string for JavaScript
-                                                    escaped_region = region.replace('"', '\\"').replace("'", "\\'")
-                                                    js_navigate = f"""
-                                                        (function() {{
-                                                            try {{
-                                                                if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                    console.log('[IGV] Navigating to fusion region: {escaped_region}');
-                                                                    window.lj_igv.search('{escaped_region}');
-                                                                }} else {{
-                                                                    console.warn('[IGV] Browser not ready yet, will navigate when ready');
-                                                                    setTimeout(function() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                            window.lj_igv.search('{escaped_region}');
-                                                                        }}
-                                                                    }}, 500);
-                                                                }}
-                                                            }} catch (error) {{
-                                                                console.error('[IGV] Navigation error:', error);
+                                        # Create JavaScript map of regions for IGV navigation
+                                        import json
+                                        js_regions_json = json.dumps(fusion_regions_by_pair)
+                                        
+                                        # Function to navigate IGV to a fusion region
+                                        def navigate_to_fusion_region(fusion_pair: str):
+                                            """Navigate IGV browser to the specified fusion pair region."""
+                                            if fusion_pair in fusion_regions_by_pair:
+                                                region = fusion_regions_by_pair[fusion_pair]
+                                                # Escape region string for JavaScript
+                                                escaped_region = region.replace('"', '\\"').replace("'", "\\'")
+                                                js_navigate = f"""
+                                                    (function() {{
+                                                        try {{
+                                                            if (window.lj_igv && window.lj_igv_browser_ready) {{
+                                                                console.log('[IGV] Navigating to fusion region: {escaped_region}');
+                                                                window.lj_igv.search('{escaped_region}');
+                                                            }} else {{
+                                                                console.warn('[IGV] Browser not ready yet, will navigate when ready');
+                                                                setTimeout(function() {{
+                                                                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                                                                        window.lj_igv.search('{escaped_region}');
+                                                                    }}
+                                                                }}, 500);
                                                             }}
-                                                        }})();
-                                                    """
-                                                    ui.run_javascript(js_navigate, timeout=5.0)
-                                            
-                                            # Initialize fusion regions map in window BEFORE creating table
-                                            # This ensures it's available when the slot template renders
-                                            js_init_regions = f"""
-                                                (function() {{
-                                                    window.fusionRegionsMap = window.fusionRegionsMap || {{}};
-                                                    Object.assign(window.fusionRegionsMap, {js_regions_json});
-                                                    console.log('[Fusion] Initialized fusion regions map with', Object.keys(window.fusionRegionsMap).length, 'regions');
-                                                }})();
-                                            """
-                                            ui.run_javascript(js_init_regions, timeout=5.0)
-                                            
-                                            # Render only one page at a time (Quasar server-side paging).
-                                            fusion_preview_mode = len(rows) > 50_000
-                                            fusion_rows_source = rows[:5_000] if fusion_preview_mode else rows
-                                            fusion_total = len(fusion_rows_source)
-                                            fusion_init_pagination = clamp_qtable_server_pagination(
-                                                {
-                                                    "sortBy": None,
-                                                    "descending": False,
-                                                    "page": 1,
-                                                    "rowsPerPage": 100,
-                                                    "rowsNumber": fusion_total,
-                                                },
-                                                rows_number=fusion_total,
+                                                        }} catch (error) {{
+                                                            console.error('[IGV] Navigation error:', error);
+                                                        }}
+                                                    }})();
+                                                """
+                                                ui.run_javascript(js_navigate, timeout=5.0)
+                                        
+                                        # Initialize fusion regions map in window BEFORE creating table
+                                        # This ensures it's available when the slot template renders
+                                        js_init_regions = f"""
+                                            (function() {{
+                                                window.fusionRegionsMap = window.fusionRegionsMap || {{}};
+                                                Object.assign(window.fusionRegionsMap, {js_regions_json});
+                                                console.log('[Fusion] Initialized fusion regions map with', Object.keys(window.fusionRegionsMap).length, 'regions');
+                                            }})();
+                                        """
+                                        ui.run_javascript(js_init_regions, timeout=5.0)
+                                        
+                                        # Render only one page at a time (Quasar server-side paging).
+                                        fusion_preview_mode = len(rows) > 50_000
+                                        fusion_rows_source = rows[:5_000] if fusion_preview_mode else rows
+                                        fusion_total = len(fusion_rows_source)
+                                        fusion_init_pagination = clamp_qtable_server_pagination(
+                                            {
+                                                "sortBy": None,
+                                                "descending": False,
+                                                "page": 1,
+                                                "rowsPerPage": 100,
+                                                "rowsNumber": fusion_total,
+                                            },
+                                            rows_number=fusion_total,
+                                            rows_per_page_default=100,
+                                        )
+                                        table_container, fusion_table = styled_server_paged_table(
+                                            columns=columns,
+                                            rows=[],
+                                            pagination=fusion_init_pagination,
+                                            row_key="__row_idx",
+                                            class_size="table-xs",
+                                        )
+                                        if fusion_preview_mode:
+                                            ui.label(
+                                                f"Preview mode: showing first {len(fusion_rows_source):,} rows of {len(rows):,}. Apply upstream filters to narrow."
+                                            ).classes("classification-insight-level classification-insight-level--low w-full")
+
+                                        def _fill_fusion_from_pagination(pag: Dict[str, Any]) -> None:
+                                            total = len(fusion_rows_source)
+                                            pag = clamp_qtable_server_pagination(
+                                                pag,
+                                                rows_number=total,
                                                 rows_per_page_default=100,
                                             )
-                                            table_container, fusion_table = styled_server_paged_table(
-                                                columns=columns,
-                                                rows=[],
-                                                pagination=fusion_init_pagination,
-                                                row_key="__row_idx",
-                                                class_size="table-xs",
-                                            )
-                                            if fusion_preview_mode:
-                                                ui.label(
-                                                    f"Preview mode: showing first {len(fusion_rows_source):,} rows of {len(rows):,}. Apply upstream filters to narrow."
-                                                ).classes("classification-insight-level classification-insight-level--low w-full")
+                                            rpp = int(pag["rowsPerPage"])
+                                            page = int(pag["page"])
+                                            start = (page - 1) * rpp
+                                            end = start + rpp
+                                            fusion_table.rows = fusion_rows_source[start:end]
+                                            fusion_table.pagination = pag
+                                            fusion_table.update()
 
-                                            def _fill_fusion_from_pagination(pag: Dict[str, Any]) -> None:
-                                                total = len(fusion_rows_source)
-                                                pag = clamp_qtable_server_pagination(
-                                                    pag,
-                                                    rows_number=total,
-                                                    rows_per_page_default=100,
-                                                )
-                                                rpp = int(pag["rowsPerPage"])
-                                                page = int(pag["page"])
-                                                start = (page - 1) * rpp
-                                                end = start + rpp
-                                                fusion_table.rows = fusion_rows_source[start:end]
-                                                fusion_table.pagination = pag
-                                                fusion_table.update()
-
-                                            wire_qtable_server_pagination_handlers(
-                                                fusion_table, _fill_fusion_from_pagination
+                                        wire_qtable_server_pagination_handlers(
+                                            fusion_table, _fill_fusion_from_pagination
+                                        )
+                                        _fill_fusion_from_pagination(fusion_init_pagination)
+                                        
+                                        # Add clickable action button column using slot that emits events to Python
+                                        try:
+                                            # Use Vue event emission which is more reliable than window functions
+                                            fusion_table.add_slot(
+                                                "body-cell-action",
+                                                """
+<q-td key="action" :props="props">
+  <q-btn 
+icon="visibility" 
+size="sm" 
+dense 
+flat 
+color="primary"
+@click="$parent.$emit('fusion-view-igv', props.row.__row_idx)"
+title="View in IGV"
+  />
+</q-td>
+"""
                                             )
-                                            _fill_fusion_from_pagination(fusion_init_pagination)
                                             
-                                            # Add clickable action button column using slot that emits events to Python
+                                            # Handle the event from the slot
+                                            def on_fusion_view_igv(e):
+                                                """Handle fusion view IGV event from table button."""
+                                                try:
+                                                    fusion_pair = ""
+                                                    row_idx = getattr(e, "args", None)
+                                                    if row_idx is not None:
+                                                        row_idx = int(row_idx)
+                                                        if 0 <= row_idx < len(fusion_rows_source):
+                                                            fusion_pair = fusion_rows_source[row_idx].get("fusion_pair", "")
+                                                    if fusion_pair:
+                                                        logging.debug(f"[Fusion] Button clicked for: {fusion_pair}")
+                                                        navigate_to_fusion_region(fusion_pair)
+                                                except Exception as ex:
+                                                    logging.warning(f"Error handling fusion view IGV event: {ex}")
+                                            
+                                            fusion_table.on("fusion-view-igv", on_fusion_view_igv)
+                                            logging.debug("Added action button column slot with event handler")
+                                        except Exception as slot_ex:
+                                            logging.warning(f"Could not add action column slot: {slot_ex}")
+                                            import traceback
+                                            logging.warning(traceback.format_exc())
+                                            
+                                            # Fallback: Use JavaScript with inline region lookup
                                             try:
-                                                # Use Vue event emission which is more reliable than window functions
+                                                # Create a safer inline handler that doesn't rely on window functions
+                                                js_inline_handler = f"""
+                                                    (function() {{
+                                                        // Store regions as a constant in the closure
+                                                        const fusionRegions = {js_regions_json};
+                                                        
+                                                        // Create handler function immediately
+                                                        window.handleFusionNav = function(fusionPair) {{
+                                                            console.log('[Fusion] Navigation handler called for:', fusionPair);
+                                                            const region = fusionRegions[fusionPair];
+                                                            if (region) {{
+                                                                console.log('[Fusion] Navigating to:', region);
+                                                                function nav() {{
+                                                                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                                                                        window.lj_igv.search(region);
+                                                                        return true;
+                                                                    }}
+                                                                    return false;
+                                                                }}
+                                                                if (!nav()) {{
+                                                                    setTimeout(nav, 500);
+                                                                    setTimeout(nav, 1500);
+                                                                }}
+                                                            }}
+                                                        }};
+                                                        console.log('[Fusion] Created navigation handler');
+                                                    }})();
+                                                """
+                                                ui.run_javascript(js_inline_handler, timeout=5.0)
+                                                
                                                 fusion_table.add_slot(
                                                     "body-cell-action",
                                                     """
 <q-td key="action" :props="props">
   <q-btn 
-    icon="visibility" 
-    size="sm" 
-    dense 
-    flat 
-    color="primary"
-    @click="$parent.$emit('fusion-view-igv', props.row.__row_idx)"
-    title="View in IGV"
+icon="visibility" 
+size="sm" 
+dense 
+flat 
+color="primary"
+@click="window.handleFusionNav && window.handleFusionNav(props.row.fusion_pair)"
+title="View in IGV"
   />
 </q-td>
 """
                                                 )
-                                                
-                                                # Handle the event from the slot
-                                                def on_fusion_view_igv(e):
-                                                    """Handle fusion view IGV event from table button."""
-                                                    try:
-                                                        fusion_pair = ""
-                                                        row_idx = getattr(e, "args", None)
-                                                        if row_idx is not None:
-                                                            row_idx = int(row_idx)
-                                                            if 0 <= row_idx < len(fusion_rows_source):
-                                                                fusion_pair = fusion_rows_source[row_idx].get("fusion_pair", "")
-                                                        if fusion_pair:
-                                                            logging.debug(f"[Fusion] Button clicked for: {fusion_pair}")
-                                                            navigate_to_fusion_region(fusion_pair)
-                                                    except Exception as ex:
-                                                        logging.warning(f"Error handling fusion view IGV event: {ex}")
-                                                
-                                                fusion_table.on("fusion-view-igv", on_fusion_view_igv)
-                                                logging.debug("Added action button column slot with event handler")
-                                            except Exception as slot_ex:
-                                                logging.warning(f"Could not add action column slot: {slot_ex}")
-                                                import traceback
-                                                logging.warning(traceback.format_exc())
-                                                
-                                                # Fallback: Use JavaScript with inline region lookup
-                                                try:
-                                                    # Create a safer inline handler that doesn't rely on window functions
-                                                    js_inline_handler = f"""
-                                                        (function() {{
-                                                            // Store regions as a constant in the closure
-                                                            const fusionRegions = {js_regions_json};
-                                                            
-                                                            // Create handler function immediately
-                                                            window.handleFusionNav = function(fusionPair) {{
-                                                                console.log('[Fusion] Navigation handler called for:', fusionPair);
-                                                                const region = fusionRegions[fusionPair];
-                                                                if (region) {{
-                                                                    console.log('[Fusion] Navigating to:', region);
-                                                                    function nav() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                            window.lj_igv.search(region);
-                                                                            return true;
-                                                                        }}
-                                                                        return false;
-                                                                    }}
-                                                                    if (!nav()) {{
-                                                                        setTimeout(nav, 500);
-                                                                        setTimeout(nav, 1500);
-                                                                    }}
-                                                                }}
-                                                            }};
-                                                            console.log('[Fusion] Created navigation handler');
-                                                        }})();
-                                                    """
-                                                    ui.run_javascript(js_inline_handler, timeout=5.0)
-                                                    
-                                                    fusion_table.add_slot(
-                                                        "body-cell-action",
-                                                        """
-<q-td key="action" :props="props">
-  <q-btn 
-    icon="visibility" 
-    size="sm" 
-    dense 
-    flat 
-    color="primary"
-    @click="window.handleFusionNav && window.handleFusionNav(props.row.fusion_pair)"
-    title="View in IGV"
-  />
-</q-td>
-"""
-                                                    )
-                                                except Exception as fallback_ex:
-                                                    logging.warning(f"Fallback approach also failed: {fallback_ex}")
+                                            except Exception as fallback_ex:
+                                                logging.warning(f"Fallback approach also failed: {fallback_ex}")
 
-                                            # Use JavaScript to attach click handlers to rows - improved with event delegation
-                                            js_attach_handlers = f"""
-                                                (function() {{
-                                                    let attached = false;
+                                        # Use JavaScript to attach click handlers to rows - improved with event delegation
+                                        js_attach_handlers = f"""
+                                            (function() {{
+                                                let attached = false;
+                                                
+                                                function attachFusionHandlers() {{
+                                                    if (attached) return;
                                                     
-                                                    function attachFusionHandlers() {{
-                                                        if (attached) return;
+                                                    console.log('[Fusion] Attaching click handlers...');
+                                                    
+                                                    // Use event delegation on the document body for better reliability
+                                                    function handleFusionRowClick(e) {{
+                                                        // Check if click is on a fusion table row
+                                                        let target = e.target;
+                                                        let row = target.closest('tbody tr');
                                                         
-                                                        console.log('[Fusion] Attaching click handlers...');
+                                                        if (!row) return;
                                                         
-                                                        // Use event delegation on the document body for better reliability
-                                                        function handleFusionRowClick(e) {{
-                                                            // Check if click is on a fusion table row
-                                                            let target = e.target;
-                                                            let row = target.closest('tbody tr');
-                                                            
-                                                            if (!row) return;
-                                                            
-                                                            // Check if this row is in a fusion table
-                                                            const table = row.closest('table');
-                                                            if (!table) return;
-                                                            
-                                                            const headers = table.querySelectorAll('thead th');
-                                                            let isFusionTable = false;
-                                                            for (let i = 0; i < headers.length; i++) {{
-                                                                if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
-                                                                    isFusionTable = true;
-                                                                    break;
-                                                                }}
-                                                            }}
-                                                            
-                                                            if (!isFusionTable) return;
-                                                            
-                                                            // Skip if clicking on the action button (let button handle it)
-                                                            if (target.closest('button') || target.closest('.q-btn')) {{
-                                                                return;
-                                                            }}
-                                                            
-                                                            e.preventDefault();
-                                                            e.stopPropagation();
-                                                            
-                                                            console.log('[Fusion] Row clicked');
-                                                            
-                                                            // Get fusion pair from first cell
-                                                            const cells = row.querySelectorAll('td');
-                                                            if (cells.length > 0) {{
-                                                                const fusionPair = cells[0].textContent.trim();
-                                                                console.log('[Fusion] Fusion pair:', fusionPair);
-                                                                
-                                                                if (fusionPair && window.fusionRegionsMap && window.fusionRegionsMap[fusionPair]) {{
-                                                                    const region = window.fusionRegionsMap[fusionPair];
-                                                                    console.log('[Fusion] Navigating to region:', region);
-                                                                    
-                                                                    // Visual feedback
-                                                                    row.style.backgroundColor = '#e3f2fd';
-                                                                    setTimeout(function() {{
-                                                                        row.style.backgroundColor = '';
-                                                                    }}, 400);
-                                                                    
-                                                                    // Navigate IGV
-                                                                    function navIGV() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                            try {{
-                                                                                window.lj_igv.search(region);
-                                                                                console.log('[Fusion] IGV navigation successful');
-                                                                                return true;
-                                                                            }} catch(err) {{
-                                                                                console.error('[Fusion] IGV error:', err);
-                                                                                return false;
-                                                                            }}
-                                                                        }}
-                                                                        return false;
-                                                                    }}
-                                                                    
-                                                                    if (!navIGV()) {{
-                                                                        setTimeout(function() {{ navIGV(); }}, 500);
-                                                                        setTimeout(function() {{ navIGV(); }}, 1500);
-                                                                    }}
-                                                                }}
+                                                        // Check if this row is in a fusion table
+                                                        const table = row.closest('table');
+                                                        if (!table) return;
+                                                        
+                                                        const headers = table.querySelectorAll('thead th');
+                                                        let isFusionTable = false;
+                                                        for (let i = 0; i < headers.length; i++) {{
+                                                            if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
+                                                                isFusionTable = true;
+                                                                break;
                                                             }}
                                                         }}
                                                         
-                                                        // Attach event listener to document (event delegation)
-                                                        document.addEventListener('click', handleFusionRowClick, true);
+                                                        if (!isFusionTable) return;
                                                         
-                                                        // Also make rows visually clickable
-                                                        const tables = document.querySelectorAll('table');
-                                                        tables.forEach(function(table) {{
-                                                            const headers = table.querySelectorAll('thead th');
-                                                            let isFusionTable = false;
-                                                            for (let i = 0; i < headers.length; i++) {{
-                                                                if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
-                                                                    isFusionTable = true;
-                                                                    break;
-                                                                }}
-                                                            }}
+                                                        // Skip if clicking on the action button (let button handle it)
+                                                        if (target.closest('button') || target.closest('.q-btn')) {{
+                                                            return;
+                                                        }}
+                                                        
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+                                                        
+                                                        console.log('[Fusion] Row clicked');
+                                                        
+                                                        // Get fusion pair from first cell
+                                                        const cells = row.querySelectorAll('td');
+                                                        if (cells.length > 0) {{
+                                                            const fusionPair = cells[0].textContent.trim();
+                                                            console.log('[Fusion] Fusion pair:', fusionPair);
                                                             
-                                                            if (isFusionTable) {{
-                                                                const tbody = table.querySelector('tbody');
-                                                                if (tbody) {{
-                                                                    const rows = tbody.querySelectorAll('tr');
-                                                                    rows.forEach(function(row) {{
-                                                                        row.style.cursor = 'pointer';
-                                                                    }});
-                                                                    console.log('[Fusion] Made', rows.length, 'rows clickable');
+                                                            if (fusionPair && window.fusionRegionsMap && window.fusionRegionsMap[fusionPair]) {{
+                                                                const region = window.fusionRegionsMap[fusionPair];
+                                                                console.log('[Fusion] Navigating to region:', region);
+                                                                
+                                                                // Visual feedback
+                                                                row.style.backgroundColor = '#e3f2fd';
+                                                                setTimeout(function() {{
+                                                                    row.style.backgroundColor = '';
+                                                                }}, 400);
+                                                                
+                                                                // Navigate IGV
+                                                                function navIGV() {{
+                                                                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                                                                        try {{
+                                                                            window.lj_igv.search(region);
+                                                                            console.log('[Fusion] IGV navigation successful');
+                                                                            return true;
+                                                                        }} catch(err) {{
+                                                                            console.error('[Fusion] IGV error:', err);
+                                                                            return false;
+                                                                        }}
+                                                                    }}
+                                                                    return false;
+                                                                }}
+                                                                
+                                                                if (!navIGV()) {{
+                                                                    setTimeout(function() {{ navIGV(); }}, 500);
+                                                                    setTimeout(function() {{ navIGV(); }}, 1500);
                                                                 }}
                                                             }}
-                                                        }});
-                                                        
-                                                        attached = true;
-                                                        console.log('[Fusion] Click handlers attached successfully');
+                                                        }}
                                                     }}
                                                     
-                                                    // Try multiple times to ensure table is rendered
-                                                    attachFusionHandlers();
-                                                    setTimeout(attachFusionHandlers, 300);
-                                                    setTimeout(attachFusionHandlers, 800);
-                                                    setTimeout(attachFusionHandlers, 1500);
-                                                    setTimeout(attachFusionHandlers, 2500);
-                                                }})();
-                                            """
-                                            
-                                            # Execute JavaScript after table is created using app-level timers
-                                            # (avoids UI-slot-bound timers firing after navigation).
-                                            def _run_fusion_handlers_js() -> None:
-                                                try:
-                                                    ui.run_javascript(js_attach_handlers, timeout=10.0)
-                                                except Exception:
-                                                    pass
-
-                                            fusion_timer_1 = app.timer(0.5, _run_fusion_handlers_js, once=True)
-                                            fusion_timer_2 = app.timer(2.0, _run_fusion_handlers_js, once=True)
+                                                    // Attach event listener to document (event delegation)
+                                                    document.addEventListener('click', handleFusionRowClick, true);
+                                                    
+                                                    // Also make rows visually clickable
+                                                    const tables = document.querySelectorAll('table');
+                                                    tables.forEach(function(table) {{
+                                                        const headers = table.querySelectorAll('thead th');
+                                                        let isFusionTable = false;
+                                                        for (let i = 0; i < headers.length; i++) {{
+                                                            if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
+                                                                isFusionTable = true;
+                                                                break;
+                                                            }}
+                                                        }}
+                                                        
+                                                        if (isFusionTable) {{
+                                                            const tbody = table.querySelector('tbody');
+                                                            if (tbody) {{
+                                                                const rows = tbody.querySelectorAll('tr');
+                                                                rows.forEach(function(row) {{
+                                                                    row.style.cursor = 'pointer';
+                                                                }});
+                                                                console.log('[Fusion] Made', rows.length, 'rows clickable');
+                                                            }}
+                                                        }}
+                                                    }});
+                                                    
+                                                    attached = true;
+                                                    console.log('[Fusion] Click handlers attached successfully');
+                                                }}
+                                                
+                                                // Try multiple times to ensure table is rendered
+                                                attachFusionHandlers();
+                                                setTimeout(attachFusionHandlers, 300);
+                                                setTimeout(attachFusionHandlers, 800);
+                                                setTimeout(attachFusionHandlers, 1500);
+                                                setTimeout(attachFusionHandlers, 2500);
+                                            }})();
+                                        """
+                                        
+                                        # Execute JavaScript after table is created using app-level timers
+                                        # (avoids UI-slot-bound timers firing after navigation).
+                                        def _run_fusion_handlers_js() -> None:
                                             try:
-                                                def _cleanup_fusion_page() -> None:
-                                                    fusion_rows_source.clear()
-                                                    fusion_table.rows = []
-                                                    for timer in (fusion_timer_1, fusion_timer_2):
-                                                        try:
-                                                            timer.deactivate()
-                                                        except Exception:
-                                                            pass
-                                                ui.context.client.on_disconnect(_cleanup_fusion_page)
+                                                ui.run_javascript(js_attach_handlers, timeout=10.0)
                                             except Exception:
                                                 pass
-                                            
-                                            # Add summary
-                                            total_fusions = len(rows)
-                                            total_reads = sum(r["reads"] for r in rows)
-                                            ui.label(
-                                                f"Total fusions: {total_fusions} | "
-                                                f"Total supporting reads: {total_reads}"
-                                            ).classes("classification-insight-foot")
-                                        else:
-                                            ui.label("No fusion pairs found").classes(
-                                                "classification-insight-meta"
-                                            )
-                                else:
-                                    with ui.element("div").classes(
-                                        "classification-insight-shell w-full min-w-0"
-                                    ):
-                                        ui.label("Fusion pairs").classes(
-                                            "classification-insight-heading text-headline-small"
+
+                                        fusion_timer_1 = app.timer(0.5, _run_fusion_handlers_js, once=True)
+                                        fusion_timer_2 = app.timer(2.0, _run_fusion_handlers_js, once=True)
+                                        fusion_pairs_refresh_timer = None
+                                        try:
+                                            def _cleanup_fusion_page() -> None:
+                                                fusion_rows_source.clear()
+                                                fusion_table.rows = []
+                                                for timer in (
+                                                    fusion_timer_1,
+                                                    fusion_timer_2,
+                                                    fusion_pairs_refresh_timer,
+                                                ):
+                                                    try:
+                                                        timer.deactivate()
+                                                    except Exception:
+                                                        pass
+                                            ui.context.client.on_disconnect(_cleanup_fusion_page)
+                                        except Exception:
+                                            pass
+                                        
+                                        # Add summary
+                                        total_fusions = len(rows)
+                                        total_reads = sum(r["reads"] for r in rows)
+                                        fusion_summary_label = ui.label(
+                                            f"Total fusions: {total_fusions} | "
+                                            f"Total supporting reads: {total_reads}"
+                                        ).classes("classification-insight-foot")
+
+                                        async def _refresh_fusion_pairs_rows_async() -> None:
+                                            try:
+                                                new_sig = (
+                                                    target_file.stat().st_mtime
+                                                    if target_file.exists()
+                                                    else None,
+                                                    genome_file.stat().st_mtime
+                                                    if genome_file.exists()
+                                                    else None,
+                                                )
+                                                if new_sig == cache_entry.get("details_pairs_sig"):
+                                                    return
+                                                updated_rows = await asyncio.to_thread(
+                                                    _build_fusion_pairs_rows_sync
+                                                )
+                                                cache_entry["details_pairs_sig"] = new_sig
+                                                cache_entry["details_pairs_rows"] = [
+                                                    dict(r) for r in updated_rows
+                                                ]
+                                                fusion_rows_source[:] = (
+                                                    updated_rows[:5_000]
+                                                    if len(updated_rows) > 50_000
+                                                    else updated_rows
+                                                )
+                                                fusion_regions_by_pair.clear()
+                                                for row_data in fusion_rows_source:
+                                                    fusion_regions_by_pair[
+                                                        row_data["fusion_pair"]
+                                                    ] = row_data.get("region", "")
+                                                import json
+                                                ui.run_javascript(
+                                                    f"""
+                                                    (function() {{
+                                                        window.fusionRegionsMap = window.fusionRegionsMap || {{}};
+                                                        Object.keys(window.fusionRegionsMap).forEach(function(k) {{ delete window.fusionRegionsMap[k]; }});
+                                                        Object.assign(window.fusionRegionsMap, {json.dumps(fusion_regions_by_pair)});
+                                                    }})();
+                                                    """,
+                                                    timeout=5.0,
+                                                )
+                                                pag = clamp_qtable_server_pagination(
+                                                    dict(fusion_table.pagination),
+                                                    rows_number=len(fusion_rows_source),
+                                                    rows_per_page_default=100,
+                                                )
+                                                if int(pag.get("page", 1)) < 1:
+                                                    pag["page"] = 1
+                                                _fill_fusion_from_pagination(pag)
+                                                fusion_summary_label.set_text(
+                                                    f"Total fusions: {len(updated_rows)} | "
+                                                    f"Total supporting reads: {sum(r.get('reads', 0) for r in updated_rows)}"
+                                                )
+                                            except Exception as refresh_ex:
+                                                logging.warning(
+                                                    f"Fusion pairs background refresh failed: {refresh_ex}"
+                                                )
+
+                                        fusion_pairs_refresh_timer = app.timer(
+                                            30.0,
+                                            _refresh_fusion_pairs_rows_async,
+                                            active=True,
+                                            immediate=False,
                                         )
-                                        ui.label(
-                                            "No validated fusion pairs found in this run."
-                                        ).classes("classification-insight-meta")
+                                    else:
+                                        ui.label("No fusion pairs found").classes(
+                                            "classification-insight-meta"
+                                        )
                             else:
                                 with ui.element("div").classes(
                                     "classification-insight-shell w-full min-w-0"
@@ -6079,9 +6206,19 @@ class GUILauncher:
                                     ui.label("Fusion pairs").classes(
                                         "classification-insight-heading text-headline-small"
                                     )
-                                    ui.label("Fusion data is empty.").classes(
-                                        "classification-insight-meta"
-                                    )
+                                    ui.label(
+                                        "No validated fusion pairs found in this run."
+                                    ).classes("classification-insight-meta")
+                        else:
+                            with ui.element("div").classes(
+                                "classification-insight-shell w-full min-w-0"
+                            ):
+                                ui.label("Fusion pairs").classes(
+                                    "classification-insight-heading text-headline-small"
+                                )
+                                ui.label("Fusion data is empty.").classes(
+                                    "classification-insight-meta"
+                                )
                         if _fusion_pairs_t0 is not None:
                             fp_elapsed = time.perf_counter() - _fusion_pairs_t0
                             print(
@@ -6103,27 +6240,7 @@ class GUILauncher:
                         
                         if coverage_file:
                             _t_target_genes = time.perf_counter()
-                            # Load coverage data asynchronously to avoid blocking GUI
-                            def load_coverage_data():
-                                try:
-                                    import pandas as pd
-                                    return pd.read_csv(coverage_file)
-                                except Exception as e:
-                                    logging.error(f"Failed to load coverage file {coverage_file}: {e}")
-                                    return None
-                            
-                            # Create placeholder table that will be updated when data loads
-                            coverage_table_placeholder = ui.table(
-                                columns=[
-                                    {"name": "gene", "label": "Gene", "field": "gene"},
-                                    {"name": "chrom", "label": "Chrom", "field": "chrom"},
-                                    {"name": "startpos", "label": "Start", "field": "startpos"},
-                                    {"name": "endpos", "label": "End", "field": "endpos"},
-                                    {"name": "coverage", "label": "Coverage", "field": "coverage"},
-                                ],
-                                rows=[],
-                            ).classes("w-full")
-                            
+
                             # Load coverage data synchronously (fast enough for typical file sizes)
                             # Note: This runs during page creation, not during user interaction
                             try:

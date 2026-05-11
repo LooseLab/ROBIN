@@ -230,21 +230,69 @@ GLOBAL_LOG_LEVEL: str = "INFO"
 
 
 # ---------- Batch Configuration ----------
+# Per job-type batching policy. Two timeouts are honoured:
+#   - timeout_seconds:       idle timeout, used when no jobs of this type are
+#                            currently in flight on a worker. Keeps the very
+#                            first batch reactive (small wait → fast feedback).
+#   - timeout_seconds_busy:  busy timeout, used when at least one job of this
+#                            type is in flight. Allows the per-(sample, type)
+#                            batcher to accumulate more files into one batch
+#                            while the worker is occupied, instead of dribbling
+#                            out lots of tiny batches that the worker would
+#                            then process serially.
+# Both can be globally overridden via env vars:
+#   ROBIN_BATCH_TIMEOUT_IDLE_S  (float seconds)
+#   ROBIN_BATCH_TIMEOUT_BUSY_S  (float seconds)
+# A per-type override is also available via:
+#   ROBIN_BATCH_TIMEOUT_BUSY_S_<TYPE>   e.g. ROBIN_BATCH_TIMEOUT_BUSY_S_CNV=45
 BATCH_CONFIG: Dict[str, Dict[str, Any]] = {
     # Preprocessing should NOT be batched - each file needs individual sample ID extraction
-    "preprocessing": {"max_batch_size": 1, "timeout_seconds": 0},  # Force no batching
-    "bed_conversion": {"max_batch_size": 20, "timeout_seconds": 2},
-    "mgmt": {"max_batch_size": 20, "timeout_seconds": 2},
-    "cnv": {"max_batch_size": 20, "timeout_seconds": 2},
-    "target": {"max_batch_size": 20, "timeout_seconds": 2},
-    "fusion": {"max_batch_size": 20, "timeout_seconds": 2},
-    "sturgeon": {"max_batch_size": 20, "timeout_seconds": 2},
-    "nanodx": {"max_batch_size": 20, "timeout_seconds": 2},
-    "pannanodx": {"max_batch_size": 20, "timeout_seconds": 2},
-    "random_forest": {"max_batch_size": 20, "timeout_seconds": 2},
-    "igv_bam": {"max_batch_size": 20, "timeout_seconds": 2},
-    "snp_analysis": {"max_batch_size": 20, "timeout_seconds": 2},
+    "preprocessing": {"max_batch_size": 1, "timeout_seconds": 0, "timeout_seconds_busy": 0},
+    "bed_conversion": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "mgmt": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "cnv": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "target": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "fusion": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "sturgeon": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "nanodx": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "pannanodx": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "random_forest": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "igv_bam": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "snp_analysis": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
 }
+
+
+def _resolved_batch_timeouts(job_type: str) -> Tuple[float, float]:
+    """Return (idle_timeout_s, busy_timeout_s) for a job_type, applying env overrides.
+
+    Env precedence (most specific wins):
+      1. ROBIN_BATCH_TIMEOUT_BUSY_S_<TYPE>   (per-type busy timeout)
+      2. ROBIN_BATCH_TIMEOUT_IDLE_S_<TYPE>   (per-type idle timeout)
+      3. ROBIN_BATCH_TIMEOUT_BUSY_S          (global busy)
+      4. ROBIN_BATCH_TIMEOUT_IDLE_S          (global idle)
+      5. BATCH_CONFIG defaults
+    """
+    cfg = BATCH_CONFIG.get(job_type, {})
+    idle_default = float(cfg.get("timeout_seconds", 2) or 0)
+    busy_default = float(cfg.get("timeout_seconds_busy", idle_default) or idle_default)
+
+    def _f(name: str, fallback: float) -> float:
+        try:
+            v = os.environ.get(name)
+            return float(v) if v is not None and v != "" else fallback
+        except Exception:
+            return fallback
+
+    idle = _f("ROBIN_BATCH_TIMEOUT_IDLE_S", idle_default)
+    busy = _f("ROBIN_BATCH_TIMEOUT_BUSY_S", busy_default)
+    # per-type overrides
+    type_key = job_type.upper()
+    idle = _f(f"ROBIN_BATCH_TIMEOUT_IDLE_S_{type_key}", idle)
+    busy = _f(f"ROBIN_BATCH_TIMEOUT_BUSY_S_{type_key}", busy)
+    # busy must be >= idle (if someone misconfigures, fall back to max)
+    if busy < idle:
+        busy = idle
+    return idle, busy
 
 # ---------- Shared DTOs ----------
 @dataclass
@@ -424,14 +472,38 @@ RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
 
 # ---------- Sample Job Batcher ----------
 class SampleJobBatcher:
-    def __init__(self):
+    def __init__(self, inflight_callback: Optional[Callable[[str], int]] = None):
         # sample_id -> job_type -> List[Job]
         self.pending_jobs: Dict[str, Dict[str, List[Job]]] = {}
         # sample_id -> job_type -> timestamp
         self.last_job_time: Dict[str, Dict[str, float]] = {}
         # Lock created lazily to avoid serialization issues in Ray actors
         self._lock: Optional[asyncio.Lock] = None
-    
+        # Optional callback returning current inflight count for a job_type.
+        # Used to switch between idle and busy timeouts so the batcher can
+        # accumulate more files into a batch while a worker is occupied.
+        self._inflight_callback: Optional[Callable[[str], int]] = inflight_callback
+
+    def set_inflight_callback(self, cb: Optional[Callable[[str], int]]) -> None:
+        """(Re)wire the inflight count callback after construction."""
+        self._inflight_callback = cb
+
+    def _inflight_for(self, job_type: str) -> int:
+        if self._inflight_callback is None:
+            return 0
+        try:
+            return int(self._inflight_callback(job_type) or 0)
+        except Exception:
+            return 0
+
+    def _effective_timeout(self, job_type: str) -> float:
+        """Pick idle vs busy timeout based on whether the type currently has
+        any inflight jobs on a worker. Idle keeps first batches reactive;
+        busy lets us accumulate while the worker is occupied so subsequent
+        batches arrive bigger."""
+        idle, busy = _resolved_batch_timeouts(job_type)
+        return busy if self._inflight_for(job_type) > 0 else idle
+
     def _get_lock(self) -> Optional[asyncio.Lock]:
         """Get or create the asyncio lock lazily."""
         if self._lock is None and asyncio:
@@ -503,8 +575,7 @@ class SampleJobBatcher:
                     if not jobs:
                         continue
                     
-                    config = BATCH_CONFIG.get(job_type, {"timeout_seconds": 10})
-                    timeout_seconds = config["timeout_seconds"]
+                    timeout_seconds = self._effective_timeout(job_type)
                     last_time = self.last_job_time[sample_id][job_type]
                     
                     if (current_time - last_time) >= timeout_seconds:
@@ -520,6 +591,29 @@ class SampleJobBatcher:
             self._cleanup_empty_entries()
         
         return timed_out_batches
+
+    async def force_flush_type(self, job_type: str) -> List[BatchedJob]:
+        """Immediately flush whatever is pending for a given job_type across all
+        samples, regardless of timeout. Called when a worker for that type
+        becomes free so it has something to pick up instead of waiting out the
+        busy timeout."""
+        flushed: List[BatchedJob] = []
+        lock = self._get_lock()
+        async with lock if lock else nullcontext():
+            for sample_id in list(self.pending_jobs.keys()):
+                jobs = self.pending_jobs.get(sample_id, {}).get(job_type, [])
+                if not jobs:
+                    continue
+                batch = self._create_batched_job(jobs, sample_id, job_type)
+                flushed.append(batch)
+                self.pending_jobs[sample_id][job_type] = []
+                if (
+                    sample_id in self.last_job_time
+                    and job_type in self.last_job_time[sample_id]
+                ):
+                    del self.last_job_time[sample_id][job_type]
+            self._cleanup_empty_entries()
+        return flushed
     
     def _create_batched_job(self, jobs: List[Job], sample_id: str, job_type: str) -> BatchedJob:
         """Create a batched job from a list of individual jobs"""
@@ -1141,9 +1235,21 @@ class Coordinator:
         self._stats_cache_time: float = 0.0
         self._stats_cache_ttl: float = 5.0  # Cache stats for 5 seconds
         
-        # Batching support
+        # Batching support. The batcher uses adaptive timeouts driven by current
+        # inflight counts (see SampleJobBatcher._effective_timeout) so we wire a
+        # callback that returns the live per-type inflight count.
         self.enable_batching = enable_batching
-        self.sample_batcher = SampleJobBatcher() if enable_batching else None
+        self.sample_batcher = (
+            SampleJobBatcher(
+                inflight_callback=lambda jt: int(self.inflight_by_type.get(jt, 0))
+            )
+            if enable_batching
+            else None
+        )
+        # Coalesce stats (exposed via stats() for debugging)
+        self.coalesce_events: int = 0
+        self.coalesce_jobs_absorbed: int = 0
+        self.coalesce_contexts_merged: int = 0
 
         # Work directory (set by set_work_dir(); used for failed_jobs log)
         self.work_dir: Optional[str] = None
@@ -1248,6 +1354,203 @@ class Coordinator:
                 sid = "unknown"
             return entry, sid
         return None, None
+
+    # ----- Dispatch-time coalescing -----
+    # When a batched Job is about to be dispatched, scan the waiting lists for
+    # other batched Jobs of the same (sample_id, job_type) and merge their
+    # contexts into this job's _batched_job (capped at max_batch_size). This
+    # mops up small-batch fragmentation that would otherwise occur when files
+    # arrive faster than they accumulate (the batcher fires per-timeout) or
+    # while the worker for the type was busy.
+    @staticmethod
+    def _peek_entry_sample_id(entry: Any) -> Optional[str]:
+        """Cheaply peek the sample_id of a waiting-list entry without unspooling."""
+        if isinstance(entry, dict) and entry.get("spool_path"):
+            return entry.get("sample_id") or "unknown"
+        if isinstance(entry, Job):
+            try:
+                return entry.context.get_sample_id()
+            except Exception:
+                return "unknown"
+        return None
+
+    @staticmethod
+    def _job_is_coalescable_batch(job: Optional[Job]) -> bool:
+        """A job is mergeable iff it carries a _batched_job and none of its
+        contexts opted out via force_individual_batch (e.g. large BAMs)."""
+        if job is None:
+            return False
+        try:
+            bjob = job.context.metadata.get("_batched_job")
+        except Exception:
+            return False
+        if bjob is None:
+            return False
+        try:
+            for ctx in bjob.contexts:
+                if (ctx.metadata or {}).get("force_individual_batch"):
+                    return False
+        except Exception:
+            return False
+        return True
+
+    def _coalesce_with_waiting(
+        self, job: Job, sample_id: str, job_type: str
+    ) -> Job:
+        """Absorb compatible waiting jobs into ``job``'s batch in place.
+
+        The popped/incoming ``job`` keeps its identity (same job_id, primary
+        context). Other waiting Jobs for the same (sample_id, job_type) that
+        also carry a _batched_job are removed from the waiting lists, and
+        their contexts are appended to this job's _batched_job up to
+        ``max_batch_size``. ``samples_by_id[sid]['pending_jobs']`` is
+        decremented by the number of absorbed Jobs (consistent with the
+        existing +1-per-waiting-Job convention in _dispatch_ready_job).
+        """
+        if not self.enable_batching:
+            return job
+        if not self._job_is_coalescable_batch(job):
+            return job
+        if not sample_id or sample_id == "unknown":
+            return job
+
+        bjob: BatchedJob = job.context.metadata.get("_batched_job")
+        cfg = BATCH_CONFIG.get(job_type, {"max_batch_size": 20})
+        try:
+            max_size = int(cfg.get("max_batch_size", 20))
+        except Exception:
+            max_size = 20
+        if max_size <= 1:
+            return job
+        room = max_size - len(bjob.contexts)
+        if room <= 0:
+            return job
+
+        absorbed = 0
+        merged_contexts = 0
+
+        def _scan(waiting_list: List[Any]) -> int:
+            """Scan one waiting list, absorbing compatible siblings. Returns
+            the number of entries removed from this list."""
+            nonlocal absorbed, merged_contexts, room
+            if room <= 0 or not waiting_list:
+                return 0
+            i = 0
+            removed = 0
+            while i < len(waiting_list) and room > 0:
+                entry = waiting_list[i]
+                # Cheap sample_id check before any I/O
+                sid_peek = self._peek_entry_sample_id(entry)
+                if sid_peek != sample_id:
+                    i += 1
+                    continue
+                # Unspool to inspect job_type and _batched_job (this deletes
+                # the spool file if any). If the candidate doesn't qualify we
+                # put the unspooled Job back at position i so nothing is lost.
+                other_job, _sid = self._unspool_job(entry)
+                if other_job is None or other_job.job_type != job_type:
+                    # Drop a corrupt entry, or replace dict with the Job we
+                    # just rehydrated for non-matching type so the queue
+                    # representation stays consistent.
+                    if other_job is None:
+                        waiting_list.pop(i)
+                        removed += 1
+                        # Don't account toward 'absorbed': nothing was merged.
+                        continue
+                    waiting_list[i] = other_job
+                    i += 1
+                    continue
+                if not self._job_is_coalescable_batch(other_job):
+                    waiting_list[i] = other_job
+                    i += 1
+                    continue
+                other_bjob: BatchedJob = other_job.context.metadata.get(
+                    "_batched_job"
+                )
+                take = min(room, len(other_bjob.contexts))
+                if take <= 0:
+                    waiting_list[i] = other_job
+                    i += 1
+                    continue
+                # Absorb up to `take` contexts from the candidate.
+                bjob.contexts.extend(other_bjob.contexts[:take])
+                room -= take
+                merged_contexts += take
+                if take >= len(other_bjob.contexts):
+                    # Whole candidate absorbed; remove from the waiting list.
+                    waiting_list.pop(i)
+                    removed += 1
+                    absorbed += 1
+                    # i stays the same: list shifted left by one.
+                else:
+                    # Only part absorbed; keep the candidate in the queue
+                    # with a slimmer contexts list.
+                    other_bjob.contexts = other_bjob.contexts[take:]
+                    waiting_list[i] = other_job
+                    # No further room — loop will exit on room check.
+                    i += 1
+            return removed
+
+        # Order matters: prefer the per-type list (most likely to hold same
+        # sample/type), then the per-queue list, then the global list.
+        try:
+            type_list = self.waiting_by_type_global.get(job_type)
+            if type_list:
+                _scan(type_list)
+                if not type_list:
+                    self.waiting_by_type_global.pop(job_type, None)
+        except Exception:
+            pass
+        try:
+            queue_name = job_queue_of(job_type)
+            queue_list = self.waiting_by_queue.get(queue_name)
+            if queue_list and room > 0:
+                _scan(queue_list)
+                if not queue_list:
+                    self.waiting_by_queue.pop(queue_name, None)
+        except Exception:
+            pass
+        try:
+            if self.waiting_global and room > 0:
+                _scan(self.waiting_global)
+        except Exception:
+            pass
+
+        if absorbed <= 0:
+            return job
+
+        # Refresh the batched job's id so logs distinguish a coalesced batch
+        # from the original one. The Job's job_id stays the same so existing
+        # active/inflight bookkeeping in _on_finish keeps working.
+        try:
+            bjob.batch_id = (
+                f"{sample_id}_{job_type}_coalesced_{int(time.time() * 1000)}"
+            )
+        except Exception:
+            pass
+
+        # Adjust per-sample pending_jobs: each absorbed waiting entry was +1
+        # in the GUI's pending counter, and we just removed `absorbed` of
+        # them from the waiting lists.
+        try:
+            ent = self.samples_by_id.get(sample_id)
+            if ent and ent.get("pending_jobs", 0) > 0:
+                ent["pending_jobs"] = max(
+                    0, ent.get("pending_jobs", 0) - absorbed
+                )
+                ent["last_seen"] = time.time()
+        except Exception:
+            pass
+
+        # Stats for observability (surfaced in stats()).
+        try:
+            self.coalesce_events += 1
+            self.coalesce_jobs_absorbed += absorbed
+            self.coalesce_contexts_merged += merged_contexts
+        except Exception:
+            pass
+
+        return job
 
     # ----- handler registration API -----
     async def register_handler(self, job_type: str, remote_func) -> None:
@@ -1495,6 +1798,19 @@ class Coordinator:
         # Ensure global waiting does not grow without bound for new submissions
         if not from_waiting:
             await self._wait_for_global_capacity()
+
+        # Try to absorb compatible waiting siblings into this job's batch
+        # before we make any cap decisions. This collapses the
+        # many-small-batches pattern (e.g. files arrived faster than they
+        # accumulated, or while the worker was busy) into one bigger batch.
+        # It's safe both for fresh dispatches and for jobs popped by
+        # _drain_waiting_jobs(from_waiting=True), and is a no-op for jobs
+        # without _batched_job metadata or any context tagged
+        # force_individual_batch.
+        try:
+            job = self._coalesce_with_waiting(job, sample_id, job.job_type)
+        except Exception:
+            pass
 
         # Global inflight cap
         if self._total_inflight() >= self.max_total_inflight:
@@ -2633,6 +2949,13 @@ class Coordinator:
                 self.inflight_by_queue[qn_bp] -= 1
                 if self.inflight_by_queue[qn_bp] == 0:
                     self.inflight_by_queue.pop(qn_bp, None)
+            # A worker for jt_bp just freed up. Force-flush any pending batches
+            # of the same type out of the batcher so the worker (or
+            # _drain_waiting_jobs below) has something to pick up immediately,
+            # rather than waiting out the busy timeout. Coalescing in
+            # _dispatch_ready_job will merge these with anything still sitting
+            # in the waiting lists for the same (sample, type).
+            await self._flush_batcher_for_type(jt_bp)
             await self._drain_waiting_jobs(qn_bp, jt_bp)
         except Exception:
             pass
@@ -3046,6 +3369,45 @@ class Coordinator:
             except Exception:
                 await asyncio.sleep(1.0)
     
+    def _decrement_pending_for_batches(self, batches: List["BatchedJob"]) -> None:
+        """Decrement the per-sample 'pending_jobs' counter by the number of
+        contexts in each batch. Used after the batcher emits batches into the
+        dispatcher (the contexts moved out of the batcher's queue, so they no
+        longer count as 'pending in the batcher')."""
+        try:
+            for batch in batches:
+                sid_batch = batch.sample_id
+                if not sid_batch or sid_batch == "unknown":
+                    continue
+                ent_pending = self.samples_by_id.get(sid_batch)
+                if ent_pending and ent_pending.get("pending_jobs", 0) > 0:
+                    ent_pending["pending_jobs"] = max(
+                        0,
+                        ent_pending.get("pending_jobs", 0) - len(batch.contexts),
+                    )
+                    ent_pending["last_seen"] = time.time()
+        except Exception:
+            pass
+
+    async def _flush_batcher_for_type(self, job_type: str) -> None:
+        """Force-flush whatever the batcher is holding for ``job_type`` and
+        push the resulting batches into the dispatcher. Called when a worker
+        for that type frees up so it has something to pick up immediately
+        without waiting for the busy timeout."""
+        if not (self.enable_batching and self.sample_batcher):
+            return
+        try:
+            flushed = await self.sample_batcher.force_flush_type(job_type)
+        except Exception:
+            return
+        if not flushed:
+            return
+        self._decrement_pending_for_batches(flushed)
+        regular_jobs = self._convert_batched_jobs(flushed)
+        # Defer the actual submit so we don't recurse into _dispatch_ready_job
+        # while still inside _on_finish — keeps the actor responsive.
+        self._defer_submit_after_finish(regular_jobs, internal=True)
+
     def _convert_batched_jobs(self, batched_jobs: List[BatchedJob]) -> List[Job]:
         """Convert BatchedJob objects to regular Job objects for processing"""
         regular_jobs = []
@@ -3355,6 +3717,14 @@ class Coordinator:
             # Failed job tracking: last 500 entries for inspection / OOM diagnosis
             "failed_jobs_list": list(self._failed_jobs_log)[-500:],
             "oom_count": sum(1 for e in self._failed_jobs_log if e.get("is_oom")),
+            # Coalesce metrics (dispatch-time merging of small batches)
+            "coalesce_events": int(getattr(self, "coalesce_events", 0) or 0),
+            "coalesce_jobs_absorbed": int(
+                getattr(self, "coalesce_jobs_absorbed", 0) or 0
+            ),
+            "coalesce_contexts_merged": int(
+                getattr(self, "coalesce_contexts_merged", 0) or 0
+            ),
         }
         if result["active_count"] == 0 and runtime_active_count_by_queue:
             result["active_count"] = int(sum(runtime_active_count_by_queue.values()))

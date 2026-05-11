@@ -7,6 +7,17 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Changed
+- **Job batching (workflow_ray.py & workflow_simple.py):** Reduced fragmentation of analysis jobs into many small batches when BAMs arrive slower than the previous fixed 2 s batcher timeout.
+  - `SampleJobBatcher` now uses an adaptive timeout: an "idle" timeout when no jobs of that type are running on a worker (default **2 s**, keeps the first batch reactive) and a longer "busy" timeout while at least one job of that type is in flight (default **30 s**, lets more files accumulate into the next batch).
+  - When a worker for a given job type frees up, the batcher is force-flushed for that type so the worker has something to pick up immediately rather than waiting out the busy timeout.
+  - The dispatcher now coalesces compatible waiting batched jobs at dispatch time. When a batched job is about to be dispatched (or a worker pulls one from a per-type queue), other waiting batched jobs for the same `(sample_id, job_type)` are merged into it up to `max_batch_size`. Jobs without `_batched_job` metadata or any context tagged `force_individual_batch` (e.g. large BAMs) are never coalesced.
+  - New env vars to tune the per-type adaptive timeouts:
+    - `ROBIN_BATCH_TIMEOUT_IDLE_S` — global idle timeout (seconds)
+    - `ROBIN_BATCH_TIMEOUT_BUSY_S` — global busy timeout (seconds)
+    - `ROBIN_BATCH_TIMEOUT_IDLE_S_<TYPE>` / `ROBIN_BATCH_TIMEOUT_BUSY_S_<TYPE>` — per-type override (e.g. `ROBIN_BATCH_TIMEOUT_BUSY_S_CNV=45`)
+  - Coordinator `stats()` (Ray) and `get_stats()` (simple) now expose `coalesce_events`, `coalesce_jobs_absorbed`, and `coalesce_contexts_merged` for observability.
+
 ## [0.5.2] - 2026-05-05
 
 ### Changed
