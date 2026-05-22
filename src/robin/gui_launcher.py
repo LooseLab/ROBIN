@@ -435,7 +435,7 @@ class GUILauncher:
 
         # Sample status transition timeout (in seconds)
         # Change to 60 for testing (1 minute), 3600 for production (60 minutes)
-        self.completion_timeout_seconds = 60  # Set to 3600 for production
+        self.completion_timeout_seconds = 15 * 60  # 15 minutes
         
         # Message queue for non-blocking communication
         self.update_queue = queue.PriorityQueue()
