@@ -176,10 +176,11 @@ def _load_manifest_encrypted_fields(sample_dir: Optional[Path]) -> Optional[Dict
 
 
 try:
-    from nicegui import ui, app
+    from nicegui import ui, app, background_tasks
 except ImportError:
     ui = None
     app = None
+    background_tasks = None
 
 try:
     from fastapi import Request
@@ -442,7 +443,6 @@ class GUILauncher:
         self.gui_ready = threading.Event()
         self.shutdown_event = threading.Event()
 
-        self.news_feed = None
         # GUI update thread
         self.update_thread = (
             None  # not used anymore; updates processed on UI thread via timer
@@ -477,6 +477,7 @@ class GUILauncher:
         self._last_samples_rows: List[Dict[str, Any]] = []
         self._current_sample_id: Optional[str] = None
         self._selected_sample_id: Optional[str] = None
+        self._selected_sample_ids: set[str] = set()
         self._known_sample_ids: set[str] = set()
         self._preexisting_sample_ids: set[str] = set()
         self._preexisting_scanned: bool = False
@@ -518,6 +519,33 @@ class GUILauncher:
         self._component_state_max_samples = 24
         # Cache last seen queue status so we can populate immediately on page creation
         self._last_queue_status: Dict[str, Any] = {}
+
+    def _get_selected_sample_ids(self) -> set[str]:
+        """Return per-client export selections, with instance fallback for non-UI contexts."""
+        fallback = set(getattr(self, "_selected_sample_ids", set()) or set())
+        if app is None:
+            return fallback
+        try:
+            raw = app.storage.client.get("_selected_sample_ids", [])
+            if isinstance(raw, (list, tuple, set)):
+                selected = {str(item) for item in raw if str(item)}
+            else:
+                selected = set()
+            self._selected_sample_ids = set(selected)
+            return selected
+        except Exception:
+            return fallback
+
+    def _set_selected_sample_ids(self, selected_ids: set[str]) -> set[str]:
+        """Persist per-client export selections."""
+        normalized = {str(item) for item in selected_ids if str(item)}
+        self._selected_sample_ids = set(normalized)
+        if app is not None:
+            try:
+                app.storage.client["_selected_sample_ids"] = sorted(normalized)
+            except Exception:
+                pass
+        return normalized
 
     def _is_authenticated(self) -> bool:
         """Return True when the current browser session is authenticated for this server run.
@@ -788,8 +816,12 @@ class GUILauncher:
     def _background_scan_samples(self) -> None:
         """Schedule a background scan without blocking the UI thread."""
         try:
-            import asyncio
-            asyncio.create_task(self._background_scan_samples_async())
+            if background_tasks is None:
+                raise RuntimeError("NiceGUI background tasks unavailable")
+            background_tasks.create(
+                self._background_scan_samples_async(),
+                name="background-sample-scan",
+            )
         except RuntimeError:
             # Fallback if no event loop is available
             self._background_scan_samples_sync()
@@ -1959,7 +1991,7 @@ class GUILauncher:
                 self._create_workflow_monitor()
 
             # Create the samples overview page
-            @ui.page("/live_data")
+            @ui.page("/live_data", response_timeout=60.0)
             def samples_overview():
                 """Samples overview page showing all tracked samples."""
                 _setup_global_resources()
@@ -1967,7 +1999,7 @@ class GUILauncher:
                 self._create_samples_overview()
 
             # Create individual sample detail pages
-            @ui.page("/live_data/{sample_id}")
+            @ui.page("/live_data/{sample_id}", response_timeout=60.0)
             def sample_detail(sample_id: str):
                 """Individual sample detail page."""
                 _setup_global_resources()
@@ -1998,7 +2030,7 @@ class GUILauncher:
                 self._create_sample_detail_page(sample_id)
 
             # Create sample details page
-            @ui.page("/live_data/{sample_id}/details")
+            @ui.page("/live_data/{sample_id}/details", response_timeout=60.0)
             def sample_details(sample_id: str):
                 """Sample details page with comprehensive information."""
                 _setup_global_resources()
@@ -2231,12 +2263,19 @@ class GUILauncher:
                 # News — card uses same surface treatment as global theme
                 with ui.card().classes("w-full max-w-6xl mx-auto mb-8"):
                     with ui.column().classes("w-full"):
-                        # Initialize news feed only if it hasn't been initialized yet
-                        if self.news_feed is None:
-                            self.news_feed = NewsFeed()
-                            self.news_feed.start_update_timer()
-                        # Create the news element
-                        self.news_feed.create_news_element()
+                        news_feed = None
+                        try:
+                            news_feed = app.storage.client.get("news_feed")
+                        except Exception:
+                            news_feed = None
+                        if news_feed is None:
+                            news_feed = NewsFeed()
+                            news_feed.start_update_timer()
+                            try:
+                                app.storage.client["news_feed"] = news_feed
+                            except Exception:
+                                pass
+                        news_feed.create_news_element()
 
     def _create_samples_overview(self):
         """Create the samples overview page showing all tracked samples (design.md Editorial Bioinformatics)."""
@@ -2769,7 +2808,7 @@ class GUILauncher:
 
                     # Track multi-selection for batch export via custom checkbox column
                     try:
-                        self._selected_sample_ids = set()
+                        self._set_selected_sample_ids(set())
 
                         def _on_export_toggled(event):
                             try:
@@ -2782,16 +2821,18 @@ class GUILauncher:
                                     sid = payload.get("id")
                                     val = bool(payload.get("value"))
                                     if sid:
+                                        selected_ids = self._get_selected_sample_ids()
                                         if val:
-                                            self._selected_sample_ids.add(sid)
+                                            selected_ids.add(str(sid))
                                         else:
-                                            self._selected_sample_ids.discard(sid)
+                                            selected_ids.discard(str(sid))
+                                        selected_ids = self._set_selected_sample_ids(selected_ids)
                                         # reflect state back into rows
                                         try:
                                             for r in self.samples_table.rows or []:
                                                 if r.get("sample_id") == sid:
                                                     r["export"] = (
-                                                        sid in self._selected_sample_ids
+                                                        str(sid) in selected_ids
                                                     )
                                             self.samples_table.update()
                                         except Exception as ue:
@@ -2800,7 +2841,7 @@ class GUILauncher:
                                                 ue,
                                                 exc_info=True,
                                             )
-                                        if self._selected_sample_ids:
+                                        if selected_ids:
                                             self.export_reports_button.enable()
                                         else:
                                             self.export_reports_button.disable()
@@ -2809,7 +2850,7 @@ class GUILauncher:
                                             "selected_count=%s",
                                             sid,
                                             val,
-                                            len(self._selected_sample_ids),
+                                            len(selected_ids),
                                         )
                             except Exception as e:
                                 logging.warning(
@@ -3057,7 +3098,7 @@ class GUILauncher:
                         async def _export_selected_reports(state: Dict[str, Any], progress_dialog, files_to_download, download_complete, progress_callback, progress_updates):
                             try:
                                 selected = list(
-                                    getattr(self, "_selected_sample_ids", set()) or []
+                                    self._get_selected_sample_ids() or []
                                 )
                                 if not selected:
                                     ui.notify("No samples selected", type="warning")
@@ -3203,16 +3244,14 @@ class GUILauncher:
                             logging.info(
                                 "[samples_overview] Export reports clicked "
                                 "selected=%s",
-                                len(
-                                    getattr(self, "_selected_sample_ids", None) or []
-                                ),
+                                len(self._get_selected_sample_ids() or []),
                             )
                             # Ensure there is at least one selection before opening
-                            if not getattr(self, "_selected_sample_ids", None):
+                            if not self._get_selected_sample_ids():
                                 ui.notify("No samples selected", type="warning")
                                 return
 
-                            selected_ids = list(getattr(self, "_selected_sample_ids", set()) or [])
+                            selected_ids = list(self._get_selected_sample_ids() or [])
                             num_selected = len(selected_ids)
 
                             report_types = {
@@ -3479,7 +3518,15 @@ class GUILauncher:
                                             update_timer.deactivate()
                                             is_generating["active"] = False
                                     
-                                    asyncio.create_task(complete_export())
+                                    if background_tasks is not None:
+                                        background_tasks.create(
+                                            complete_export(),
+                                            name="bulk-report-export",
+                                        )
+                                    else:
+                                        raise RuntimeError(
+                                            "NiceGUI background tasks unavailable"
+                                        )
 
                             await progress_dialog
 
@@ -3984,7 +4031,7 @@ class GUILauncher:
 
             # annotate export selection state per row for rightmost checkbox column
             try:
-                selected = getattr(self, "_selected_sample_ids", set()) or set()
+                selected = self._get_selected_sample_ids()
             except Exception:
                 selected = set()
             for r in rows:
@@ -4206,14 +4253,14 @@ class GUILauncher:
         is_page_refresh = False
         try:
             # Check if we have a flag indicating this page was recently loaded
-            if hasattr(ui, 'storage') and hasattr(ui.storage, 'browser'):
-                last_load_time = ui.storage.browser.get(f'sample_{sample_id}_last_load', 0)
+            if app is not None:
+                last_load_time = app.storage.tab.get(f"sample_{sample_id}_last_load", 0)
                 current_time = time.time()
                 # If last load was very recent (< 2 seconds), it's likely a page refresh
                 is_page_refresh = (current_time - last_load_time) < 2.0
                 
                 # Update the last load time
-                ui.storage.browser[f'sample_{sample_id}_last_load'] = current_time
+                app.storage.tab[f"sample_{sample_id}_last_load"] = current_time
         except Exception:
             # If storage is not available, assume it's navigation (show loading)
             is_page_refresh = False
@@ -4535,7 +4582,13 @@ class GUILauncher:
                             is_generating["active"] = False
                             download_complete["done"] = True
                     
-                    asyncio.create_task(complete_generation())
+                    if background_tasks is not None:
+                        background_tasks.create(
+                            complete_generation(),
+                            name="single-report-generation",
+                        )
+                    else:
+                        raise RuntimeError("NiceGUI background tasks unavailable")
 
             await progress_dialog
 
@@ -8332,12 +8385,12 @@ title="View in IGV"
         try:
             rows = getattr(self.samples_table, "rows", None) or []
             visible_ids = {str(r.get("sample_id")) for r in rows if r.get("sample_id")}
-            self._selected_sample_ids = set(visible_ids)
+            selected_ids = self._set_selected_sample_ids(set(visible_ids))
             for r in self._last_samples_rows or []:
                 sid = r.get("sample_id")
                 if sid:
-                    r["export"] = str(sid) in self._selected_sample_ids
-            if self._selected_sample_ids:
+                    r["export"] = str(sid) in selected_ids
+            if selected_ids:
                 self.export_reports_button.enable()
             else:
                 self.export_reports_button.disable()
@@ -8345,7 +8398,7 @@ title="View in IGV"
             logging.info(
                 "[samples_overview] Select all (toolbar): %d sample(s) "
                 "(visible filtered rows=%d)",
-                len(self._selected_sample_ids),
+                len(selected_ids),
                 len(rows),
             )
         except Exception as e:
@@ -8355,7 +8408,7 @@ title="View in IGV"
 
     def _samples_clear_export_selection(self) -> None:
         try:
-            self._selected_sample_ids.clear()
+            self._set_selected_sample_ids(set())
             for r in self._last_samples_rows or []:
                 r["export"] = False
             self.export_reports_button.disable()

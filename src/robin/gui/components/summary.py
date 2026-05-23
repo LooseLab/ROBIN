@@ -13,9 +13,10 @@ import logging
 from collections import OrderedDict
 
 try:
-    from nicegui import ui
+    from nicegui import ui, background_tasks
 except ImportError:  # pragma: no cover
     ui = None
+    background_tasks = None
 
 from robin.classification_config import get_confidence_ui_tier
 from robin.gui.config import (
@@ -368,7 +369,12 @@ def add_summary_section(sample_dir: Path, sample_id: str, launcher: Any = None) 
 
     def _schedule_refresh() -> None:
         try:
-            asyncio.create_task(_refresh_summary_cache_async())
+            if background_tasks is None:
+                raise RuntimeError("NiceGUI background tasks unavailable")
+            background_tasks.create(
+                _refresh_summary_cache_async(),
+                name="summary-refresh",
+            )
         except RuntimeError:
             # If no running loop, fall back to sync refresh (still updates cache)
             data = _refresh_summary_cache_sync(sample_dir, sample_id, launcher)

@@ -36,9 +36,12 @@ except ImportError:
 # chrov ideograms removed - not working properly
 
 try:
-    from nicegui import ui
+    from nicegui import ui, background_tasks
 except ImportError:  # pragma: no cover
     ui = None
+    background_tasks = None
+
+from robin.gui.theme import get_user_dark_mode
 
 
 def _render_paged_df_table(
@@ -166,13 +169,8 @@ def _render_paged_df_table(
 
 
 def _is_dark_mode() -> bool:
-    """Match Quasar ``body--dark`` via app storage (see theme.frame)."""
-    try:
-        from nicegui import app
-
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    """Return normalized per-user dark mode."""
+    return get_user_dark_mode(default=False)
 
 
 def _apply_fusion_figure_theme(fig: Any, dark: bool) -> None:
@@ -2900,7 +2898,13 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                 logging.exception(f"[Fusion] Refresh failed: {e}")
 
         try:
-            asyncio.create_task(_refresh_fusion_async())
+            if background_tasks is not None:
+                background_tasks.create(
+                    _refresh_fusion_async(),
+                    name="fusion-refresh",
+                )
+            else:
+                raise RuntimeError("NiceGUI background tasks unavailable")
         except RuntimeError:
             _refresh_fusion_sync()
 

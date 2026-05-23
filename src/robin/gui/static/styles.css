@@ -638,6 +638,8 @@ pre,
 
 .compact-table .q-table {
   table-layout: auto;
+  color: var(--md-on-surface);
+  background-color: var(--md-surface-container);
 }
 
 .compact-table .q-table th,
@@ -647,6 +649,10 @@ pre,
   border-bottom: 1px solid var(--md-outline);
   font-size: 12px;
   transition: background-color var(--transition-base);
+}
+
+.compact-table .q-table tbody tr > td {
+  color: var(--md-on-surface) !important;
 }
 
 .compact-table .q-table thead tr > th {
@@ -667,6 +673,13 @@ pre,
   min-height: 40px;
   padding: var(--spacing-xs) var(--spacing-sm);
   background-color: var(--md-surface-container);
+}
+
+.compact-table .q-table__bottom,
+.compact-table .q-table__control,
+.compact-table .q-table__bottom .q-field__native,
+.compact-table .q-table__bottom .q-select__dropdown-icon {
+  color: var(--md-on-surface-variant) !important;
 }
 
 .compact-table .q-field--dense {
@@ -949,7 +962,7 @@ a:active:not(.browser-window *) {
 
 /*
  * Run Summary — design.md §7
- * Quasar toggles .body--dark; Tailwind `dark:` utilities do NOT activate unless `html.dark` is set.
+ * Quasar toggles .body--dark; theme.py keeps `html.dark` in sync for Tailwind `dark:*` utilities.
  * These rules mirror §7.2 (light) and §7.3 (dark) with explicit .body--dark selectors.
  */
 .run-summary-shell {
@@ -2038,6 +2051,46 @@ a:active:not(.browser-window *) {
 .body--dark #sample-details-igv .text-gray-600,
 .body--dark #sample-details-igv .text-gray-500 {
   color: rgb(148 163 184) !important;
+}
+
+/*
+ * IGV light island policy: keep IGV panel in light mode for readability.
+ */
+.igv-light-island {
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border: 1px solid rgb(203 213 225);
+  border-radius: 0.75rem;
+  color: #0f172a;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+
+.igv-light-island__viewer {
+  background: #ffffff;
+  border: 1px solid rgb(203 213 225);
+}
+
+.igv-light-island .classification-insight-meta,
+.igv-light-island .classification-insight-foot,
+.igv-light-island .igv-light-island-note {
+  color: #475569 !important;
+}
+
+.body--dark #sample-details-igv .igv-light-island {
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border-color: rgb(148 163 184);
+  color: #0f172a;
+  box-shadow: 0 2px 10px rgba(2, 6, 23, 0.35);
+}
+
+.body--dark #sample-details-igv .igv-light-island__viewer {
+  background: #ffffff;
+  border-color: rgb(148 163 184);
+}
+
+.body--dark #sample-details-igv .igv-light-island .classification-insight-meta,
+.body--dark #sample-details-igv .igv-light-island .classification-insight-foot,
+.body--dark #sample-details-igv .igv-light-island .igv-light-island-note {
+  color: #334155 !important;
 }
 
 /*

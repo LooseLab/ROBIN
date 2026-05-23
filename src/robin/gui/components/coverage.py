@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+import asyncio
 import json
 import time
 import os
@@ -17,7 +18,11 @@ except ImportError:  # pragma: no cover
     ui = None
     app = None
 
-from robin.gui.theme import styled_table, register_theme_sync_callback
+from robin.gui.theme import (
+    styled_table,
+    register_theme_sync_callback,
+    get_user_dark_mode,
+)
 
 # Shared paged table renderer to avoid materializing full row lists for large DataFrames.
 def _render_paged_df_table(
@@ -202,10 +207,7 @@ def _cov_scatter_outlier_style() -> Dict[str, Any]:
 
 
 def _cov_ui_dark() -> bool:
-    try:
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    return get_user_dark_mode(default=False)
 
 
 def _cov_on_off_colors() -> Tuple[str, str]:
@@ -563,18 +565,21 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
         ui.label("Genome: hg38 · Interactive alignment view").classes(
             "classification-insight-meta mb-2"
         )
-        igv_div = ui.element("div").classes(
-            "w-full h-[900px] border border-slate-200/90 rounded-lg overflow-hidden "
-            "dark:border-slate-700/80"
-        )
-        igv_div._props["id"] = "igv-container"
-        igv_status = ui.label("Initializing IGV viewer…").classes(
-            "classification-insight-meta"
-        )
+        with ui.column().classes("igv-light-island w-full min-w-0 gap-2 p-2 md:p-3"):
+            igv_div = ui.element("div").classes(
+                "igv-light-island__viewer w-full h-[900px] rounded-lg overflow-hidden"
+            )
+            igv_div._props["id"] = "igv-container"
+            igv_status = ui.label("Initializing IGV viewer…").classes(
+                "classification-insight-meta"
+            )
 
-        igv_lib_status = ui.label("IGV library: checking…").classes(
-            "classification-insight-foot"
-        )
+            igv_lib_status = ui.label("IGV library: checking…").classes(
+                "classification-insight-foot"
+            )
+            ui.label(
+                "IGV is intentionally displayed in light mode for optimal genomic track readability."
+            ).classes("igv-light-island-note text-xs")
         
         # Initialize IGV browser immediately on page load
         def _initialize_igv_browser():
@@ -714,25 +719,8 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
             state["igv_loading"] = False
 
         # Check for existing IGV BAM files and load them
-        def _check_existing_igv_bam():
+        def _check_existing_igv_bam(attempt: int = 0):
             try:
-                # Wait a bit for browser to be ready
-                js_check_ready = """
-                    return window.lj_igv && window.lj_igv_browser_ready === true && 
-                           typeof window.lj_igv.loadTrack === 'function';
-                """
-                
-                # Poll for browser readiness
-                max_attempts = 10
-                for attempt in range(max_attempts):
-                    try:
-                        result = ui.run_javascript(js_check_ready, timeout=2.0)
-                        if result is True:
-                            break
-                    except Exception:
-                        pass
-                    time.sleep(0.5)
-                
                 # Determine candidate BAMs (prefer standardized IGV path)
                 igv_dir = sample_dir / "igv"
                 clair_dir = sample_dir / "clair3"
@@ -754,10 +742,36 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     igv_status.set_text(f"Found BAM: {bam_path.name}, loading...")
                     # Load the BAM file
                     _load_bam_track_simple(bam_path)
-                else:
-                    igv_status.set_text(
-                        "IGV browser ready. No BAM files found yet."
+                    return
+
+                js_check_ready = """
+                    return window.lj_igv && window.lj_igv_browser_ready === true && 
+                           typeof window.lj_igv.loadTrack === 'function';
+                """
+                max_attempts = 10
+                try:
+                    result = ui.run_javascript(js_check_ready, timeout=2.0)
+                except Exception:
+                    result = False
+                if result is not True and attempt < max_attempts:
+                    if attempt == 0:
+                        igv_status.set_text("Waiting for IGV browser to be ready...")
+                    ui.timer(
+                        0.5,
+                        lambda next_attempt=attempt + 1: _check_existing_igv_bam(
+                            next_attempt
+                        ),
+                        once=True,
                     )
+                else:
+                    if result is True:
+                        igv_status.set_text(
+                            "IGV browser ready. No BAM files found yet."
+                        )
+                    else:
+                        igv_status.set_text(
+                            "IGV browser not ready yet. No BAM files found yet."
+                        )
 
             except Exception as e:
                 igv_status.set_text(f"Error checking for BAM files: {e}")
@@ -995,6 +1009,54 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 bam_url = f"{mount}/{bam_path.name}"
                 bai_url = f"{mount}/{bam_path.name}.bai"
 
+                def _finish_new_browser_setup() -> None:
+                    _set_igv_ready(bam_url)
+                    igv_status.set_text(f"IGV browser ready with {bam_path.name}")
+                    state["igv_loading"] = False
+                    js_add_track = f"""
+                        if (window.lj_igv && window.lj_igv_browser_ready) {{
+                            console.log('[DEBUG] Adding track to newly created browser...');
+                            const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true, colorBy: 'tag', tag: 'SA' }};
+                            window.lj_igv.loadTrack(track).then(() => {{
+                                console.log('[DEBUG] Track loaded successfully');
+                            }}).catch(error => {{
+                                console.error('[DEBUG] Error loading track:', error);
+                            }});
+                        }}
+                    """
+                    ui.run_javascript(js_add_track, timeout=30.0)
+
+                def _poll_new_browser_ready(attempt: int = 0) -> None:
+                    max_poll_attempts = 20
+                    poll_interval = 1.0
+                    js_check_ready = """
+                        return window.lj_igv && window.lj_igv_browser_ready === true && 
+                               typeof window.lj_igv.loadTrack === 'function';
+                    """
+                    try:
+                        result = ui.run_javascript(js_check_ready, timeout=5.0)
+                    except Exception:
+                        result = False
+
+                    if result is True:
+                        _finish_new_browser_setup()
+                        return
+
+                    if attempt >= max_poll_attempts:
+                        igv_status.set_text("IGV browser creation timed out")
+                        state["igv_loading"] = False
+                        ui.timer(2.0, lambda: _retry_igv_creation(bam_path), once=True)
+                        _clear_igv_state()
+                        return
+
+                    ui.timer(
+                        poll_interval,
+                        lambda next_attempt=attempt + 1: _poll_new_browser_ready(
+                            next_attempt
+                        ),
+                        once=True,
+                    )
+
                 # Check if we need to create a new browser or just add tracks
                 if not state.get("igv_initialized") or not state.get(
                     "igv_browser_ready"
@@ -1028,8 +1090,6 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     try:
                         existing = ui.run_javascript(js_check_existing, timeout=5.0)
                         if existing:
-                            # Browser might already exist, check Python state after a delay
-                            time.sleep(0.5)
                             if state.get("igv_initialized") and state.get("igv_browser_ready"):
                                 # Browser is ready, just add the track
                                 pass  # Will fall through to track loading
@@ -1076,53 +1136,9 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     try:
                         ui.run_javascript(js_create, timeout=30.0)
                         igv_status.set_text("Creating IGV browser...")
-                        
-                        # Wait a bit for the async browser creation to start
-                        time.sleep(0.5)
-                        
-                        # Poll for browser readiness
-                        max_poll_attempts = 20
-                        poll_interval = 1.0
-                        browser_ready = False
-                        
-                        for attempt in range(max_poll_attempts):
-                            js_check_ready = """
-                                return window.lj_igv && window.lj_igv_browser_ready === true && 
-                                       typeof window.lj_igv.loadTrack === 'function';
-                            """
-                            try:
-                                result = ui.run_javascript(js_check_ready, timeout=5.0)
-                                if result is True:
-                                    browser_ready = True
-                                    break
-                            except Exception:
-                                pass
-                            
-                            time.sleep(poll_interval)
-                        
-                        if browser_ready:
-                            _set_igv_ready(bam_url)
-                            igv_status.set_text(f"IGV browser ready with {bam_path.name}")
-                            state["igv_loading"] = False
-                            
-                            # Now load the track
-                            js_add_track = f"""
-                                if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                    console.log('[DEBUG] Adding track to newly created browser...');
-                                    const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true, colorBy: 'tag', tag: 'SA' }};
-                                    window.lj_igv.loadTrack(track).then(() => {{
-                                        console.log('[DEBUG] Track loaded successfully');
-                                    }}).catch(error => {{
-                                        console.error('[DEBUG] Error loading track:', error);
-                                    }});
-                                }}
-                            """
-                            ui.run_javascript(js_add_track, timeout=30.0)
-                        else:
-                            igv_status.set_text("IGV browser creation timed out")
-                            state["igv_loading"] = False
-                            ui.timer(2.0, lambda: _retry_igv_creation(bam_path), once=True)
-                            _clear_igv_state()
+                        # Poll with ui.timer to avoid blocking the shared event loop.
+                        ui.timer(0.5, lambda: _poll_new_browser_ready(0), once=True)
+                        return
                             
                     except Exception as e:
                         igv_status.set_text(f"Failed to create IGV browser: {e}")
@@ -1294,7 +1310,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
             return False
 
         # Function to reload BAM data into existing IGV browser
-        def _reload_bam_track():
+        async def _reload_bam_track():
             # Initialize state variable
             state = None
             try:
@@ -1351,7 +1367,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 # Wait for BAM file to be ready if it exists
                 if bam_path and bam_path.exists():
                     igv_status.set_text("Checking if BAM file is ready...")
-                    if not _wait_for_bam_ready(bam_path):
+                    if not await asyncio.to_thread(_wait_for_bam_ready, bam_path):
                         igv_status.set_text("BAM file is still being updated. Please wait and try again.")
                         ui.notify("BAM file is still being updated. Please wait and try again.", type="warning")
                         return
@@ -1359,7 +1375,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     # Also check if BAI file is ready
                     bai_path = bam_path.with_suffix(bam_path.suffix + ".bai")
                     if bai_path.exists():
-                        if not _wait_for_bam_ready(bai_path):
+                        if not await asyncio.to_thread(_wait_for_bam_ready, bai_path):
                             igv_status.set_text("BAM index is still being updated. Please wait and try again.")
                             ui.notify("BAM index is still being updated. Please wait and try again.", type="warning")
                             return
@@ -6864,33 +6880,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     indel_vcf = clair_dir / "snpsift_indel_output.vcf"
 
                     if snp_vcf.exists() and indel_vcf.exists():
-                        # Update SNP results status if it exists
-                        try:
-                            # Find the SNP results status label and update it
-                            snp_results_elements = document.querySelectorAll(
-                                "[data-snp-results-status]"
-                            )
-                            if snp_results_elements.length > 0:
-                                for element in snp_results_elements:
-                                    element.textContent = (
-                                        "SNP analysis completed successfully!"
-                                    )
-                                    element.className = "text-sm text-green-600"
-                        except Exception:
-                            pass
-
-                        # Update button state if it exists
-                        try:
-                            snp_button_elements = document.querySelectorAll(
-                                "[data-snp-analysis-button]"
-                            )
-                            if snp_button_elements.length > 0:
-                                for element in snp_button_elements:
-                                    element.textContent = "Rerun SNP Analysis"
-                                    element.disabled = false
-                                    element.className = "q-btn q-btn--standard q-btn--rectangle q-btn--secondary"
-                        except Exception:
-                            pass
+                        state["snp_results_ready"] = True
 
                     # Also check file availability for SNP analysis
                     try:
@@ -6904,18 +6894,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     bed_content = f.read().strip()
 
                                 if bed_content:
-                                    # Files are available, enable button if not already enabled
-                                    try:
-                                        snp_button_elements = document.querySelectorAll(
-                                            "[data-snp-analysis-button]"
-                                        )
-                                        if snp_button_elements.length > 0:
-                                            for element in snp_button_elements:
-                                                if element.disabled:
-                                                    element.disabled = false
-                                                    element.className = "q-btn q-btn--standard q-btn--rectangle q-btn--primary"
-                                    except Exception:
-                                        pass
+                                    state["snp_inputs_ready"] = True
                             except Exception:
                                 pass
                     except Exception:
@@ -6982,10 +6961,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         behind chart options built at layout time; ``force=True`` reapplies the current
         palette so plots match the visible theme without toggling.
         """
-        try:
-            cur = bool(app.storage.user.get("dark_mode"))
-        except Exception:
-            cur = False
+        cur = get_user_dark_mode(default=False)
         if not force and _last_cov_theme_sig[0] == cur:
             return
         _last_cov_theme_sig[0] = cur

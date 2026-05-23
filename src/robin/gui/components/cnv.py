@@ -15,7 +15,11 @@ try:
 except ImportError:  # pragma: no cover
     ui = None
 
-from robin.gui.theme import styled_table, register_theme_sync_callback
+from robin.gui.theme import (
+    styled_table,
+    register_theme_sync_callback,
+    get_user_dark_mode,
+)
 from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary, CNVEvent
 from robin.classification_config import get_cnv_thresholds
 
@@ -31,13 +35,8 @@ def _cnv_contig_ok(contig: str) -> bool:
 
 
 def _is_dark_mode() -> bool:
-    """Quasar ``body--dark`` via app storage (see theme.frame)."""
-    try:
-        from nicegui import app
-
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    """Return normalized per-user dark mode."""
+    return get_user_dark_mode(default=False)
 
 
 def _cnv_chromosome_scatter_palette(dark: bool) -> List[str]:

@@ -6,12 +6,11 @@ This module handles fetching and caching news from the ROBIN news API.
 
 import json
 import logging
-import asyncio
 import requests
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
-from nicegui import ui, run
+from nicegui import ui, run, background_tasks
 
 
 @dataclass
@@ -315,10 +314,14 @@ class NewsFeed:
         """Start the periodic update timer using ui.timer."""
         # Only create a new timer if one doesn't exist
         if self._update_timer is None:
+            def _schedule_update() -> None:
+                background_tasks.create(
+                    self._check_and_update_news(),
+                    name="news-feed-update",
+                )
+
             # Update immediately on start
-            asyncio.create_task(self._check_and_update_news())
+            _schedule_update()
             # Then set up hourly updates
-            self._update_timer = ui.timer(
-                3600, lambda: asyncio.create_task(self._check_and_update_news())
-            )
+            self._update_timer = ui.timer(3600, _schedule_update)
             logging.info("News feed update timer initialized")

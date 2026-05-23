@@ -45,7 +45,6 @@ import asyncio
 import logging
 import subprocess
 import importlib.metadata
-import weakref
 import time
 from typing import Callable, Optional, Any, Dict, List
 
@@ -70,11 +69,8 @@ is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in ("1", "tru
 # Process large BAMs individually (do not use alongside live runs)
 _process_large_bams_enabled = os.environ.get("ROBIN_PROCESS_LARGE_BAMS", "0").strip().lower() in ("1", "true", "yes", "on")
 
-# Single global theme sync timer state
-_theme_sync_callbacks: Dict[int, Dict[str, Any]] = {}
-_theme_sync_next_id = 0
-_theme_sync_timer_started = False
-_THEME_SYNC_TICK_SECONDS = 0.5
+# Per-client theme sync interval lower bound
+_THEME_SYNC_MIN_INTERVAL_SECONDS = 0.1
 
 
 def ui_element_exists(element: Any) -> bool:
@@ -93,48 +89,6 @@ def ui_element_exists(element: Any) -> bool:
         return False
 
 
-def _run_theme_sync_callbacks() -> None:
-    """Run registered theme sync callbacks from a single global timer."""
-    now = time.monotonic()
-    dead_ids: List[int] = []
-    for callback_id, item in list(_theme_sync_callbacks.items()):
-        element_ref = item.get("element_ref")
-        interval_s = float(item.get("interval_s", 1.0))
-        last_run = float(item.get("last_run", 0.0))
-
-        if now - last_run < interval_s:
-            continue
-
-        target_element = element_ref() if element_ref else None
-        if element_ref and not ui_element_exists(target_element):
-            dead_ids.append(callback_id)
-            continue
-
-        cb = item.get("callback")
-        if cb is None:
-            dead_ids.append(callback_id)
-            continue
-
-        try:
-            cb()
-            item["last_run"] = now
-        except Exception:
-            # Keep UI responsive; callback owners can re-register if needed.
-            pass
-
-    for callback_id in dead_ids:
-        _theme_sync_callbacks.pop(callback_id, None)
-
-
-def ensure_theme_sync_timer() -> None:
-    """Ensure the single global theme sync timer is started."""
-    global _theme_sync_timer_started
-    if _theme_sync_timer_started:
-        return
-    ui.timer(_THEME_SYNC_TICK_SECONDS, _run_theme_sync_callbacks, active=True)
-    _theme_sync_timer_started = True
-
-
 def register_theme_sync_callback(
     callback: Callable[[], None],
     *,
@@ -143,32 +97,108 @@ def register_theme_sync_callback(
     immediate: bool = False,
 ) -> Callable[[], None]:
     """
-    Register a callback to run from the single global theme timer.
+    Register a callback to run from a per-client timer.
 
-    If `element` is provided, callback execution stops automatically once that
-    element no longer exists.
+    If `element` is provided, execution stops automatically once the element
+    no longer exists.
     """
-    global _theme_sync_next_id
-    ensure_theme_sync_timer()
-    _theme_sync_next_id += 1
-    callback_id = _theme_sync_next_id
-    _theme_sync_callbacks[callback_id] = {
-        "callback": callback,
-        "interval_s": max(0.1, float(interval_s)),
-        "last_run": 0.0,
-        "element_ref": weakref.ref(element) if element is not None else None,
-    }
+    interval_s = max(_THEME_SYNC_MIN_INTERVAL_SECONDS, float(interval_s))
+    state: Dict[str, Any] = {"active": True, "timer": None}
 
-    if immediate:
+    def _invoke() -> None:
+        if not state.get("active", False):
+            return
+        if element is not None and not ui_element_exists(element):
+            _unregister()
+            return
         try:
             callback()
         except Exception:
             pass
 
     def _unregister() -> None:
-        _theme_sync_callbacks.pop(callback_id, None)
+        if not state.get("active", False):
+            return
+        state["active"] = False
+        t = state.get("timer")
+        if t is not None:
+            try:
+                t.deactivate()
+            except Exception:
+                pass
+            try:
+                t.cancel()
+            except Exception:
+                pass
+
+    try:
+        state["timer"] = ui.timer(interval_s, _invoke, active=True)
+    except Exception:
+        state["timer"] = None
+
+    if immediate:
+        _invoke()
+
+    try:
+        ui.context.client.on_disconnect(_unregister)
+    except Exception:
+        pass
 
     return _unregister
+
+
+def _coerce_bool(value: Any, *, default: bool = False) -> bool:
+    """Parse booleans from storage/event values."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "on"}:
+            return True
+        if text in {"0", "false", "no", "off", ""}:
+            return False
+    return bool(value)
+
+
+def get_user_dark_mode(default: bool = False) -> bool:
+    """Read dark mode state from per-user storage."""
+    try:
+        return _coerce_bool(app.storage.user.get("dark_mode", default), default=default)
+    except Exception:
+        return default
+
+
+def set_user_dark_mode(enabled: Any) -> bool:
+    """Write normalized dark mode state into per-user storage."""
+    normalized = _coerce_bool(enabled, default=False)
+    try:
+        app.storage.user["dark_mode"] = normalized
+    except Exception:
+        pass
+    return normalized
+
+
+def _sync_dom_dark_classes(is_dark: bool) -> None:
+    """Keep html.dark and body classes aligned with storage-backed theme state."""
+    js_flag = "true" if bool(is_dark) else "false"
+    js = f"""
+        (() => {{
+            const dark = {js_flag};
+            const html = document.documentElement;
+            const body = document.body;
+            if (html) html.classList.toggle('dark', dark);
+            if (body) {{
+                body.classList.toggle('body--dark', dark);
+                body.classList.toggle('body--light', !dark);
+            }}
+        }})();
+    """
+    try:
+        ui.run_javascript(js, timeout=2.0)
+    except Exception:
+        pass
 
 
 def get_imagefile():
@@ -267,6 +297,31 @@ def styled_table(*, columns, rows=None, pagination=20, class_size="table-xs", **
                 table.props("dense flat wrap-cells")
         except Exception:
             pass
+        _last_table_dark_sig: List[Optional[bool]] = [None]
+
+        def _sync_table_theme(force: bool = False) -> None:
+            dark = get_user_dark_mode(default=False)
+            if not force and _last_table_dark_sig[0] == dark:
+                return
+            _last_table_dark_sig[0] = dark
+            try:
+                if dark:
+                    table.props(add="dark")
+                else:
+                    table.props(remove="dark")
+            except Exception:
+                pass
+            try:
+                table.update()
+            except Exception:
+                pass
+
+        register_theme_sync_callback(
+            _sync_table_theme,
+            element=table,
+            interval_s=0.5,
+            immediate=True,
+        )
     return container, table
 
 
@@ -380,6 +435,31 @@ def styled_server_paged_table(
         opts = rows_per_page_options or [25, 50, 100, 250]
         opt_str = json.dumps(opts, separators=(",", ":"))
         table.props(f'dense flat wrap-cells rows-per-page-options="{opt_str}"')
+        _last_table_dark_sig: List[Optional[bool]] = [None]
+
+        def _sync_table_theme(force: bool = False) -> None:
+            dark = get_user_dark_mode(default=False)
+            if not force and _last_table_dark_sig[0] == dark:
+                return
+            _last_table_dark_sig[0] = dark
+            try:
+                if dark:
+                    table.props(add="dark")
+                else:
+                    table.props(remove="dark")
+            except Exception:
+                pass
+            try:
+                table.update()
+            except Exception:
+                pass
+
+        register_theme_sync_callback(
+            _sync_table_theme,
+            element=table,
+            interval_s=0.5,
+            immediate=True,
+        )
     return container, table
 
 
@@ -394,7 +474,7 @@ async def check_version():
         
     # Check if version has already been checked in this app session
     try:
-        if app.storage.general.get("version_checked", False):
+        if app.storage.user.get("version_checked", False):
             return
     except RuntimeError:
         # Storage not available in this context, continue with version check
@@ -504,7 +584,7 @@ async def check_version():
 
     # Mark version as checked for this app session
     try:
-        app.storage.general["version_checked"] = True
+        app.storage.user["version_checked"] = True
     except RuntimeError:
         # Storage not available in this context, skip setting the flag
         pass
@@ -934,7 +1014,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None, center: str = None, se
             return
             
         try:
-            disclaimer_acknowledged = app.storage.general.get("disclaimer_acknowledged", False)
+            disclaimer_acknowledged = app.storage.user.get("disclaimer_acknowledged", False)
         except RuntimeError:
             # Storage not available in this context, show disclaimer
             disclaimer_acknowledged = False
@@ -979,7 +1059,7 @@ def frame(navtitle: str, batphone=False, smalltitle=None, center: str = None, se
 
                 def acknowledge():
                     try:
-                        app.storage.general["disclaimer_acknowledged"] = True
+                        app.storage.user["disclaimer_acknowledged"] = True
                     except RuntimeError:
                         # Storage not available in this context, skip setting the flag
                         pass
@@ -1043,6 +1123,43 @@ def frame(navtitle: str, batphone=False, smalltitle=None, center: str = None, se
                 "color=negative no-caps"
             )
 
+    # Normalize persisted value before bindings to avoid string/bool drift.
+    set_user_dark_mode(get_user_dark_mode(default=False))
+    _last_dark_mode_sig: List[Optional[bool]] = [None]
+
+    def _sync_dark_mode_client_classes(*, force: bool = False) -> None:
+        cur = get_user_dark_mode(default=False)
+        if not force and _last_dark_mode_sig[0] == cur:
+            return
+        _last_dark_mode_sig[0] = cur
+        _sync_dom_dark_classes(cur)
+
+    def _on_dark_mode_toggle(e: Any) -> None:
+        raw_value = getattr(e, "value", None)
+        if raw_value is None:
+            args = getattr(e, "args", None)
+            if isinstance(args, (list, tuple)):
+                raw_value = args[0] if args else None
+            elif isinstance(args, dict):
+                raw_value = args.get("value", args.get("modelValue", None))
+            else:
+                raw_value = args
+        if raw_value is None:
+            # No explicit payload: keep current persisted state.
+            raw_value = get_user_dark_mode(default=False)
+        set_user_dark_mode(raw_value)
+        _sync_dark_mode_client_classes(force=True)
+
+    # One-shot sync after initial paint + low-frequency drift guard.
+    ui.timer(0.1, lambda: _sync_dark_mode_client_classes(force=True), once=True)
+    dark_mode_dom_sync_timer = ui.timer(
+        1.0, _sync_dark_mode_client_classes, active=True
+    )
+    try:
+        ui.context.client.on_disconnect(lambda: dark_mode_dom_sync_timer.deactivate())
+    except Exception:
+        pass
+
     # Create a header with navigation title and menu using M3 styling
     header_classes = "items-center duration-200 p-0 px-2 no-wrap elevation-1"
     if batphone:
@@ -1090,9 +1207,11 @@ def frame(navtitle: str, batphone=False, smalltitle=None, center: str = None, se
                             'color="primary"'
                         ).bind_value(app.storage.general, "use_on_air")
                         ui.separator()
-                        ui.switch("Dark Mode").classes("ml-4 bg-transparent").props(
-                            'color="primary"'
-                        ).bind_value(app.storage.user, "dark_mode")
+                        ui.switch("Dark Mode", on_change=_on_dark_mode_toggle).classes(
+                            "ml-4 bg-transparent"
+                        ).props('color="primary"').bind_value(
+                            app.storage.user, "dark_mode"
+                        )
                         ui.dark_mode().bind_value(app.storage.user, "dark_mode")
                         ui.separator()
                         ui.menu_item("Close", menu.close).classes(

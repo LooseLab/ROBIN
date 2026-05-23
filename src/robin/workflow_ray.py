@@ -447,10 +447,10 @@ CLASSIFICATION_TYPES: Set[str] = {"sturgeon", "nanodx", "pannanodx", "random_for
 # Job types that must be serialized per sample (no overlap across these types)
 ## Removed per-sample cross-type serialization to allow one job per type globally
 
-# Ray memory is in bytes. Default 1 GiB per task; fusion 4 GiB; snp_analysis 8 GiB (Clair3/variant calling).
+# Ray memory is in bytes. Default 1 GiB per task; fusion 8 GiB; snp_analysis 8 GiB (Clair3/variant calling).
 _GB = 1024 * 1024 * 1024
 _DEFAULT_MEMORY = 1 * _GB
-_FUSION_MEMORY = 4 * _GB
+_FUSION_MEMORY = 8 * _GB
 _SNP_ANALYSIS_MEMORY = 8 * _GB
 RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
     # Tune these to your cluster
@@ -459,7 +459,7 @@ RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
     "mgmt": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "cnv": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},  # CNV gets dedicated CPU but only 1 thread
     "target": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
-    "fusion": {"num_cpus": 1, "memory": _FUSION_MEMORY},  # Fusion needs 4 GiB (BAM scan, breakpoint aggregation)
+    "fusion": {"num_cpus": 1, "memory": _FUSION_MEMORY},  # Fusion needs 8 GiB (BAM scan, breakpoint aggregation)
     # Classifiers do not require GPU by default (CPU-only)
     "sturgeon": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "nanodx": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
