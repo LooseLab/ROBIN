@@ -5098,6 +5098,7 @@ async def run(
     gui_port: int = 8081,
     center: str = None,
     enable_batching: bool = True,
+    with_gui: bool = True,
 ):
     global GLOBAL_LOG_LEVEL, _GLOBAL_OBSERVER, _GLOBAL_WATCHER, _GLOBAL_WATCH_CONTEXT, _GLOBAL_WATCHED_PATHS
     GLOBAL_LOG_LEVEL = (log_level or "INFO").upper()
@@ -5181,7 +5182,11 @@ async def run(
     gui_launcher = None
     gui_publish_task = None
     try:
-        if _GUIUpdateType is None:
+        if not with_gui:
+            _print_styled(
+                "GUI disabled: running headless (--no-gui).", level="info"
+            )
+        elif _GUIUpdateType is None:
             print("GUI not launched: GUI modules unavailable on this environment.")
         elif not work_dir:
             print("GUI not launched: --work-dir not provided.")

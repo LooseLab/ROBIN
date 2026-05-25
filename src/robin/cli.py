@@ -2528,6 +2528,7 @@ def workflow(
                         reference=str(reference) if reference else None,
                         gui_host=gui_host,
                         gui_port=gui_port,
+                        with_gui=with_gui,
                         center=center,
                     )
                 )
