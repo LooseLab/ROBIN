@@ -1347,7 +1347,15 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         return analysis_result
 
 
-def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2, reference: Optional[str] = None):
+def process_multiple_bams(
+    bam_paths,
+    metadata_list,
+    work_dir,
+    logger,
+    threads=2,
+    reference: Optional[str] = None,
+    job_id: Optional[int] = None,
+):
     """
     Process multiple BAM files for CNV analysis using aggregated CNV data.
     
@@ -1562,6 +1570,13 @@ def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2,
                 copy_numbers = updated_copy_numbers
                 
                 logger.info(f"Completed BAM file {i+1}/{len(valid_bam_paths)}: {os.path.basename(bam_path)}")
+                if job_id is not None:
+                    try:
+                        from robin.workflow_ray import notify_coordinator_files_completed
+
+                        notify_coordinator_files_completed("cnv", 1, job_id=job_id)
+                    except Exception:
+                        pass
 
             # After processing all BAM files, get the final aggregated results
             # We need to run one final analysis to get the aggregated CNV data
@@ -1815,6 +1830,7 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
             logger=logger,
             threads=threads,
             reference=reference,
+            job_id=job.job_id,
         )
         
         # Store batch results in job context (maintain compatibility with existing structure)
@@ -1832,8 +1848,21 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
         
         if batch_result.get("error_message"):
             logger.error(f"Batch processing completed with errors: {batch_result['error_message']}")
+            job.context.add_error("cnv_analysis", batch_result["error_message"])
         else:
             logger.info("Batch processing completed successfully with aggregated CNV analysis")
+            job.context.add_result(
+                "cnv_analysis",
+                {
+                    "status": "success",
+                    "sample_id": sample_id,
+                    "analysis_time": batch_result.get("analysis_timestamp", 0),
+                    "processing_steps": batch_result.get("processing_steps", []),
+                    "files_processed": batch_result.get("files_processed", batch_size),
+                    "total_files": batch_result.get("total_files", batch_size),
+                    "cnv_data_path": batch_result.get("cnv_data_path", ""),
+                },
+            )
         
         return
         

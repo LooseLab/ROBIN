@@ -513,7 +513,15 @@ class RandomForestAnalysis:
         return random_forest_result
 
 
-def process_multiple_files(parquet_paths, metadata_list, work_dir, logger, threads=4, showerrors=False):
+def process_multiple_files(
+    parquet_paths,
+    metadata_list,
+    work_dir,
+    logger,
+    threads=4,
+    showerrors=False,
+    job_id=None,
+):
     """
     Process multiple parquet files for Random Forest analysis.
     
@@ -609,6 +617,15 @@ def process_multiple_files(parquet_paths, metadata_list, work_dir, logger, threa
                 total_batches += 1
                 logger.debug(f"Successfully processed file {i+1}: {os.path.basename(parquet_path)}")
                 logger.debug(f"Batch number: {rf_result.batch_number}")
+                if job_id is not None:
+                    try:
+                        from robin.workflow_ray import notify_coordinator_files_completed
+
+                        notify_coordinator_files_completed(
+                            "random_forest", 1, job_id=job_id
+                        )
+                    except Exception:
+                        pass
                 
             except Exception as e:
                 logger.warning(f"Error processing {os.path.basename(parquet_path)}: {e}")
@@ -749,7 +766,8 @@ def random_forest_handler(job, work_dir=None):
                 work_dir=batch_work_dir,
                 logger=logger,
                 threads=4,  # Default thread count
-                showerrors=False  # Default error display setting
+                showerrors=False,  # Default error display setting
+                job_id=job.job_id,
             )
             
             # Store batch results in job context (maintain compatibility with existing structure)
@@ -863,6 +881,14 @@ def random_forest_handler(job, work_dir=None):
                 logger.info(
                     f"Random Forest analysis complete for {os.path.basename(parquet_path)}"
                 )
+                try:
+                    from robin.workflow_ray import notify_coordinator_files_completed
+
+                    notify_coordinator_files_completed(
+                        "random_forest", 1, job_id=job.job_id
+                    )
+                except Exception:
+                    pass
                 logger.info(f"Sample ID: {result.sample_id}")
                 logger.info(f"Batch Number: {result.batch_number}")
                 logger.debug(f"Processing steps: {', '.join(result.processing_steps)}")

@@ -9,6 +9,7 @@ if sys.version_info < (3, 12):
     raise RuntimeError("robin matkit utilities require Python 3.12 or newer")
 
 from typing import List, Optional
+import bisect
 import gc
 import os
 import logging
@@ -71,6 +72,8 @@ MIN_PRIMARY_QS = 12
 
 # Cache of opened reference FASTA by real path so the same ref is not re-indexed/re-opened per BAM.
 _ref_fasta_cache: dict[str, pysam.FastaFile] = {}
+# Lazy per-chromosome sorted CpG anchor positions (forward-strand C of each CG dinucleotide).
+_cpg_anchor_index: dict[str, dict[str, list[int]]] = {}
 
 
 def _primary_meets_min_qs(read) -> bool:
@@ -787,18 +790,212 @@ MINUS_STRAND = "-"
 COLOR_VALUE = "255,0,0"
 CANONICAL_CODE = "C"
 COMBINED_MOD_CODE = "m"
+DOT_STRAND = "."
+_REF_CG = b"CG"
 
 
-def run_matkit(sortfile: str, temp: str) -> None:
+def cpg_cytosine_site(
+    ref_fasta_obj: pysam.FastaFile, chrom: str, refpos: int
+) -> Optional[tuple[int, str]]:
+    """Return (refpos, strand) when refpos is a cytosine in a reference CpG motif."""
+    try:
+        if ref_fasta_obj.fetch(chrom, refpos, refpos + 2).upper() == "CG":
+            return refpos, PLUS_STRAND
+        if refpos >= 1 and ref_fasta_obj.fetch(chrom, refpos - 1, refpos + 1).upper() == "CG":
+            return refpos, MINUS_STRAND
+    except ValueError:
+        return None
+    return None
+
+
+def _cpg_cytosine_site_at(
+    seq: bytes, offset: int, refpos: int
+) -> Optional[tuple[int, str]]:
+    """Like ``cpg_cytosine_site`` but against a pre-fetched reference slice."""
+    i = refpos - offset
+    if 0 <= i and i + 2 <= len(seq) and seq[i : i + 2] == _REF_CG:
+        return refpos, PLUS_STRAND
+    if refpos >= 1:
+        i = refpos - 1 - offset
+        if 0 <= i and i + 2 <= len(seq) and seq[i : i + 2] == _REF_CG:
+            return refpos, MINUS_STRAND
+    return None
+
+
+def _read_ref_seq_window(
+    ref_fasta_obj: pysam.FastaFile,
+    chrom: str,
+    ref_map: dict[int, int],
+) -> Optional[tuple[bytes, int]]:
+    """Fetch one reference slice covering all aligned positions on a read."""
+    if not ref_map:
+        return None
+    min_r = min(ref_map.values())
+    max_r = max(ref_map.values())
+    fetch_start = max(0, min_r - 1)
+    fetch_end = max_r + 2
+    try:
+        seq = ref_fasta_obj.fetch(chrom, fetch_start, fetch_end).upper().encode("ascii")
+    except ValueError:
+        return None
+    return seq, fetch_start
+
+
+def _build_cpg_anchors_for_chrom(
+    ref_fasta_obj: pysam.FastaFile, chrom: str
+) -> list[int]:
+    """Return sorted 0-based C coordinates for every reference CpG on ``chrom``."""
+    try:
+        chrom_len = ref_fasta_obj.get_reference_length(chrom)
+    except ValueError:
+        return []
+    if chrom_len < 2:
+        return []
+    seq = ref_fasta_obj.fetch(chrom, 0, chrom_len).upper().encode("ascii")
+    anchors: list[int] = []
+    start = 0
+    while True:
+        idx = seq.find(_REF_CG, start)
+        if idx == -1:
+            break
+        anchors.append(idx)
+        start = idx + 1
+    return anchors
+
+
+def _get_cpg_anchors_for_chrom(
+    ref_fasta_path: str, ref_fasta_obj: pysam.FastaFile, chrom: str
+) -> list[int]:
+    """Lazy, cached CpG anchor list for one chromosome."""
+    by_chrom = _cpg_anchor_index.get(ref_fasta_path)
+    if by_chrom is None:
+        by_chrom = {}
+        _cpg_anchor_index[ref_fasta_path] = by_chrom
+    cached = by_chrom.get(chrom)
+    if cached is not None:
+        return cached
+    logging.info("Building CpG anchor index for %s (%s)", chrom, ref_fasta_path)
+    anchors = _build_cpg_anchors_for_chrom(ref_fasta_obj, chrom)
+    by_chrom[chrom] = anchors
+    logging.info("CpG anchor index for %s: %s sites", chrom, f"{len(anchors):,}")
+    return anchors
+
+
+def _cpg_by_anchor_scan_refpos(
+    ref_map: dict[int, int],
+    read_sites: dict[tuple[int, str], dict[str, int]],
+    ref_fasta_obj: pysam.FastaFile,
+    chrom: str,
+) -> dict[int, tuple[int, str]]:
+    """Scan every aligned ref position (one FASTA slice per read). Reference implementation."""
+    window = _read_ref_seq_window(ref_fasta_obj, chrom, ref_map)
+    if window is None:
+        return {}
+    seq, offset = window
+    cpg_by_anchor: dict[int, tuple[int, str]] = {}
+    for refpos in ref_map.values():
+        cyt = _cpg_cytosine_site_at(seq, offset, refpos)
+        if cyt is None:
+            continue
+        refpos_c, strand = cyt
+        anchor = cpg_anchor_pos(refpos_c, strand)
+        existing = cpg_by_anchor.get(anchor)
+        if existing is None:
+            cpg_by_anchor[anchor] = (refpos_c, strand)
+        elif (refpos_c, strand) in read_sites and existing not in read_sites:
+            cpg_by_anchor[anchor] = (refpos_c, strand)
+    return cpg_by_anchor
+
+
+def _cpg_by_anchor_from_read_coverage(
+    ref_map: dict[int, int],
+    read_sites: dict[tuple[int, str], dict[str, int]],
+    ref_fasta_obj: pysam.FastaFile,
+    chrom: str,
+    ref_fasta_path: str,
+) -> dict[int, tuple[int, str]]:
+    """
+    Collect CpG anchors overlapped by a read using a chromosome CpG index.
+
+    Iterates CpG anchors in the read span (~500 on a typical long read) instead of
+    every aligned reference base (~50k). Strand preference when both C and G of a
+    CpG are covered matches scanning ``ref_map.values()`` in order.
+    """
+    if not ref_map:
+        return {}
+
+    ref_values_list = list(ref_map.values())
+    min_r = max_r = ref_values_list[0]
+    covered: set[int] = set()
+    position_order: dict[int, int] = {}
+    for idx, refpos in enumerate(ref_values_list):
+        if refpos < min_r:
+            min_r = refpos
+        if refpos > max_r:
+            max_r = refpos
+        covered.add(refpos)
+        if refpos not in position_order:
+            position_order[refpos] = idx
+
+    anchors = _get_cpg_anchors_for_chrom(ref_fasta_path, ref_fasta_obj, chrom)
+    lo = bisect.bisect_left(anchors, min_r - 1)
+    hi = bisect.bisect_right(anchors, max_r)
+
+    cpg_by_anchor: dict[int, tuple[int, str]] = {}
+    for anchor in anchors[lo:hi]:
+        visits: list[tuple[int, str]] = []
+        if anchor in covered:
+            visits.append((anchor, PLUS_STRAND))
+        if anchor + 1 in covered:
+            visits.append((anchor + 1, MINUS_STRAND))
+        if not visits:
+            continue
+        if len(visits) > 1:
+            visits.sort(key=lambda item: position_order[item[0]])
+        chosen = visits[0]
+        for refpos_c, strand in visits[1:]:
+            if (refpos_c, strand) in read_sites and chosen not in read_sites:
+                chosen = (refpos_c, strand)
+        cpg_by_anchor[anchor] = chosen
+    return cpg_by_anchor
+
+
+def cpg_anchor_pos(refpos: int, strand: str) -> int:
+    """Forward-strand C coordinate for a CpG cytosine on either strand."""
+    return refpos if strand == PLUS_STRAND else refpos - 1
+
+
+def run_matkit(
+    sortfile: str,
+    temp: str,
+    *,
+    apply_qs_filter: bool = True,
+    ref_fasta: Optional[str] = None,
+    cpg_only: bool = False,
+    combine_strands: bool = False,
+) -> None:
     """
     Executes modkit2-style processing on a bam file and extracts the methylation data.
 
     Args:
         sortfile (str): Path to the sorted BAM file.
         temp (str): Path to the temporary output file.
-        threads (int): Number of threads to use (not used in current implementation).
+        apply_qs_filter: When True, exclude reads whose primary qs tag is below MIN_PRIMARY_QS.
+        ref_fasta: Reference FASTA (required for ``cpg_only``).
+        cpg_only: Restrict pileup to reference CpG motifs (modkit ``--cpg``).
+        combine_strands: Sum both strands onto the forward CpG anchor (modkit ``--combine-strands``).
     """
+    if cpg_only and not ref_fasta:
+        raise ValueError("cpg_only requires ref_fasta")
     logging.info(f"Processing BAM file with modkit2: {sortfile}")
+    if cpg_only:
+        logging.info(
+            f"matkit: CpG-only pileup (combine_strands={combine_strands}, ref={ref_fasta})"
+        )
+    if not apply_qs_filter:
+        logging.info(
+            f"matkit: primary QS filtering disabled (MIN_PRIMARY_QS={MIN_PRIMARY_QS} not applied)"
+        )
 
     # Use the improved approach from modkit2.py with memory efficiency and better classification
     counts, mod_sites, debug_data = process_bam_counts_improved(
@@ -807,7 +1004,10 @@ def run_matkit(sortfile: str, temp: str) -> None:
         combine_mods=True,
         chrom_filter=None,
         ignore_supp=False,
-        ref_fasta=None,
+        ref_fasta=ref_fasta,
+        apply_qs_filter=apply_qs_filter,
+        cpg_only=cpg_only,
+        combine_strands=combine_strands,
     )
 
     # Write parquet (same schema as merge path) or BEDMethyl text
@@ -850,6 +1050,77 @@ def run_modkit(sortfile: str, temp: str, threads: int) -> None:
 
     # Run the command
     subprocess.run(cmd)  # , capture_output=True, text=True)
+
+
+def build_modkit_pileup_cmd(sortfile: str, temp: str, threads: int) -> List[str]:
+    """Return the modkit pileup argv used by run_modkit (for logging and comparisons)."""
+    return [
+        "modkit",
+        "pileup",
+        "-t",
+        str(threads),
+        "--filter-threshold",
+        "0.73",
+        "--queue-size",
+        str(threads),
+        "--interval-size",
+        "25000000",
+        "--combine-mods",
+        sortfile,
+        temp,
+    ]
+
+
+def build_modkit_cpg_pileup_cmd(
+    sortfile: str,
+    temp: str,
+    threads: int,
+    reference_fasta: str,
+) -> List[str]:
+    """Return modkit CpG pileup argv (``--cpg --combine-strands --combine-mods``)."""
+    return [
+        "modkit",
+        "pileup",
+        "-t",
+        str(threads),
+        "--filter-threshold",
+        "0.73",
+        "--queue-size",
+        str(threads),
+        "--interval-size",
+        "25000000",
+        "--modified-bases",
+        "5mC",
+        "5hmC",
+        "--cpg",
+        "--combine-strands",
+        "--combine-mods",
+        "--reference",
+        reference_fasta,
+        sortfile,
+        temp,
+    ]
+
+
+def run_modkit_cmd(cmd: List[str]) -> None:
+    """Run a modkit CLI argv list (used by compare_matkit_modkit)."""
+    subprocess.run(cmd, check=True)
+
+
+def get_modkit_version() -> str:
+    """Return modkit ``--version`` output, or ``unknown`` if not on PATH."""
+    try:
+        result = subprocess.run(
+            ["modkit", "--version"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0:
+            return (result.stdout or result.stderr or "").strip() or "unknown"
+    except (FileNotFoundError, OSError):
+        pass
+    return "unknown"
 
 
 def run_samtools_sort(
@@ -1180,6 +1451,9 @@ def process_bam_counts_improved(
     ignore_supp=False,
     ref_fasta=None,
     debug_positions=None,
+    apply_qs_filter: bool = True,
+    cpg_only: bool = False,
+    combine_strands: bool = False,
 ):
     """
     Process BAM file and return detailed counts for BEDMethyl format with improved memory efficiency.
@@ -1209,6 +1483,9 @@ def process_bam_counts_improved(
         ignore_supp: Whether to ignore supplementary alignments
         ref_fasta: Reference genome file for validation (optional)
         debug_positions: Set of (chrom, pos, strand) tuples to debug
+        apply_qs_filter: When True, exclude reads whose primary qs tag is below MIN_PRIMARY_QS
+        cpg_only: Restrict pileup to reference CpG motifs (requires ref_fasta)
+        combine_strands: Sum both strands onto the forward CpG anchor (requires cpg_only)
 
     Returns:
         tuple: (counts_dict, debug_data) where counts_dict contains classification counts with tuple keys
@@ -1217,6 +1494,10 @@ def process_bam_counts_improved(
         - BEDMethyl column descriptions: https://github.com/nanoporetech/modkit?tab=readme-ov-file#bedmethyl-column-descriptions
         - Modkit classification logic documentation
     """
+    if cpg_only and ref_fasta is None:
+        raise ValueError("cpg_only requires ref_fasta")
+    if combine_strands and not cpg_only:
+        raise ValueError("combine_strands requires cpg_only")
     bam = pysam.AlignmentFile(bam_path, "rb")
     thresh = int(threshold * 255)  # Convert to 8-bit integer threshold
     iterable = (
@@ -1238,6 +1519,7 @@ def process_bam_counts_improved(
     # path is used across calls (e.g. one ref for many BAMs) to avoid re-indexing/re-opening.
     ref_fasta_obj = None
     ref_fasta_cached = False
+    ref_fasta_path: str | None = None
     if ref_fasta:
         ref_fasta_path = os.path.realpath(ref_fasta)
         if ref_fasta_path in _ref_fasta_cache:
@@ -1250,6 +1532,10 @@ def process_bam_counts_improved(
                 _ref_fasta_cache[ref_fasta_path] = ref_fasta_obj
                 ref_fasta_cached = True
             except (RuntimeError, FileNotFoundError) as e:
+                if cpg_only:
+                    raise FileNotFoundError(
+                        f"Reference FASTA required for CpG pileup but could not be opened: {ref_fasta}"
+                    ) from e
                 logging.warning(
                     f"Could not create FASTA index for {ref_fasta}: {e}. "
                     "Continuing without reference genome validation."
@@ -1276,7 +1562,7 @@ def process_bam_counts_improved(
             continue
 
         # Only process alignments for reads whose primary mapping has qs >= MIN_PRIMARY_QS
-        if not read.is_supplementary:
+        if apply_qs_filter and not read.is_supplementary:
             # Inline `_primary_meets_min_qs` to avoid redundant checks and per-read function overhead.
             if read.has_tag("qs") and read.get_tag("qs") < MIN_PRIMARY_QS:
                 primary_qs_excluded.add(read.query_name)
@@ -1326,64 +1612,91 @@ def process_bam_counts_improved(
                     if prev is None or prob > prev:
                         mod_max[mod_code] = prob
 
-            # Track each site once per read (avoid repeated set-add in inner loop)
-            mod_sites_add = mod_sites.add
-            for refpos, strand in seen_sites:
-                mod_sites_add((chrom, refpos, strand, COMBINED_MOD_CODE))
+            cpg_by_anchor: dict[int, tuple[int, str]] = {}
+            if cpg_only and ref_fasta_obj is not None and ref_fasta_path is not None:
+                cpg_by_anchor = _cpg_by_anchor_from_read_coverage(
+                    ref_map, read_sites, ref_fasta_obj, chrom, ref_fasta_path
+                )
 
-            # Process each site for this read
+            if cpg_only:
+                read_site_items: list[tuple[int, str, Optional[dict[str, int]]]] = [
+                    (refpos, strand, read_sites.get((refpos, strand)))
+                    for refpos, strand in cpg_by_anchor.values()
+                ]
+            else:
+                mod_sites_add = mod_sites.add
+                for refpos, strand in seen_sites:
+                    mod_sites_add((chrom, refpos, strand, COMBINED_MOD_CODE))
+                read_site_items = [
+                    (refpos, strand, mod_probs)
+                    for (refpos, strand), mod_probs in read_sites.items()
+                ]
+
             counts_local = counts
-            for (refpos, strand), mod_probs in read_sites.items():
-                # Update counts directly - each read contributes once per site
-                site_key = (chrom, refpos, strand, COMBINED_MOD_CODE)
+            for refpos, strand, mod_probs in read_site_items:
+                if combine_strands and cpg_only:
+                    pos_out = cpg_anchor_pos(refpos, strand)
+                    strand_out = DOT_STRAND
+                else:
+                    pos_out = refpos
+                    strand_out = strand
+                site_key = (chrom, pos_out, strand_out, COMBINED_MOD_CODE)
+                mod_sites.add(site_key)
+
                 c = counts_local.get(site_key)
                 if c is None:
                     c = [0] * COUNT_LEN
                     counts_local[site_key] = c
                 c[COUNT_IDX_TOTAL] += 1
 
-                # Track per-read max probabilities for C, m, h from the original mod_probs
-                sum_max_mod_probs_255 = 0
-                local_max_prob_m = 0
-                local_max_prob_h = 0
-
-                for mod_code, max_mod_prob in mod_probs.items():
-                    if mod_code != CANONICAL_CODE:  # Skip canonical base
-                        sum_max_mod_probs_255 += max_mod_prob
-                        if mod_code == "m":
-                            if max_mod_prob > local_max_prob_m:
-                                local_max_prob_m = max_mod_prob
-                        elif mod_code == "h":
-                            if max_mod_prob > local_max_prob_h:
-                                local_max_prob_h = max_mod_prob
-
-                # Canonical probability is the complement
-                canonical_prob_255 = 255 - sum_max_mod_probs_255
-                if canonical_prob_255 < 0:
-                    canonical_prob_255 = 0
-                if canonical_prob_255 > c[COUNT_IDX_MAX_PROB_C]:
-                    c[COUNT_IDX_MAX_PROB_C] = canonical_prob_255
-                if local_max_prob_m > c[COUNT_IDX_MAX_PROB_M]:
-                    c[COUNT_IDX_MAX_PROB_M] = local_max_prob_m
-                if local_max_prob_h > c[COUNT_IDX_MAX_PROB_H]:
-                    c[COUNT_IDX_MAX_PROB_H] = local_max_prob_h
-
-                # Use the highest probability among canonical, 5mC, and 5hmC for classification
-                max_prob = max(canonical_prob_255, local_max_prob_m, local_max_prob_h)
-
-                # Apply modkit classification logic based on the highest probability
-                if max_prob >= thresh:
-                    if canonical_prob_255 == max_prob:
-                        c[COUNT_IDX_CANONICAL] += 1  # Canonical call
-                    else:
-                        c[COUNT_IDX_MOD] += 1  # Modified call
-                elif max_prob == 0:
-                    c[COUNT_IDX_CANONICAL] += 1  # Canonical call
+                if mod_probs is None:
+                    c[COUNT_IDX_CANONICAL] += 1
+                    if c[COUNT_IDX_MAX_PROB_C] < 255:
+                        c[COUNT_IDX_MAX_PROB_C] = 255
+                    classification = "canonical"
+                    max_prob = 255
+                    canonical_prob_255 = 255
                 else:
-                    c[COUNT_IDX_FAIL] += 1  # Failed call (0 < prob < threshold)
+                    sum_max_mod_probs_255 = 0
+                    local_max_prob_m = 0
+                    local_max_prob_h = 0
 
+                    for mod_code, max_mod_prob in mod_probs.items():
+                        if mod_code != CANONICAL_CODE:
+                            sum_max_mod_probs_255 += max_mod_prob
+                            if mod_code == "m":
+                                if max_mod_prob > local_max_prob_m:
+                                    local_max_prob_m = max_mod_prob
+                            elif mod_code == "h":
+                                if max_mod_prob > local_max_prob_h:
+                                    local_max_prob_h = max_mod_prob
 
-                # Debug tracking for specific positions
+                    canonical_prob_255 = 255 - sum_max_mod_probs_255
+                    if canonical_prob_255 < 0:
+                        canonical_prob_255 = 0
+                    if canonical_prob_255 > c[COUNT_IDX_MAX_PROB_C]:
+                        c[COUNT_IDX_MAX_PROB_C] = canonical_prob_255
+                    if local_max_prob_m > c[COUNT_IDX_MAX_PROB_M]:
+                        c[COUNT_IDX_MAX_PROB_M] = local_max_prob_m
+                    if local_max_prob_h > c[COUNT_IDX_MAX_PROB_H]:
+                        c[COUNT_IDX_MAX_PROB_H] = local_max_prob_h
+
+                    max_prob = max(canonical_prob_255, local_max_prob_m, local_max_prob_h)
+
+                    if max_prob >= thresh:
+                        if canonical_prob_255 == max_prob:
+                            c[COUNT_IDX_CANONICAL] += 1
+                            classification = "canonical"
+                        else:
+                            c[COUNT_IDX_MOD] += 1
+                            classification = "modified"
+                    elif max_prob == 0:
+                        c[COUNT_IDX_CANONICAL] += 1
+                        classification = "canonical"
+                    else:
+                        c[COUNT_IDX_FAIL] += 1
+                        classification = "fail"
+
                 if debug_positions and (chrom, refpos, strand) in debug_positions:
                     debug_key = (chrom, refpos, strand)
                     if debug_key not in debug_data:
@@ -1393,21 +1706,12 @@ def process_bam_counts_improved(
                             "classification": None,
                         }
 
-                    # Store probabilities for this read
-                    for mod_code, max_prob in mod_probs.items():
-                        if mod_code in ["C", "m", "h"]:
-                            debug_data[debug_key]["probs"][mod_code].append(max_prob)
+                    if mod_probs is not None:
+                        for mod_code, mod_prob in mod_probs.items():
+                            if mod_code in ["C", "m", "h"]:
+                                debug_data[debug_key]["probs"][mod_code].append(mod_prob)
 
-                    # Store classification
-                    if max_prob >= thresh:
-                        if canonical_prob_255 == max_prob:
-                            debug_data[debug_key]["classification"] = "canonical"
-                        else:
-                            debug_data[debug_key]["classification"] = "modified"
-                    elif max_prob == 0:
-                        debug_data[debug_key]["classification"] = "canonical"
-                    else:
-                        debug_data[debug_key]["classification"] = "fail"
+                    debug_data[debug_key]["classification"] = classification
         else:
             # Process each modification type separately
             # This preserves the distinction between different modification types
