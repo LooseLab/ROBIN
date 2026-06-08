@@ -2010,9 +2010,16 @@ def _get_pending_count(work_dir: str, sample_id: str) -> int:
                 return int(f.read().strip())
     except (ValueError, IOError) as e:
         logger.debug(f"Could not read pending_count for {sample_id}: {e}")
-    # Fallback to filesystem scan if counter missing/corrupt
-    staging_files = glob.glob(os.path.join(staging_dir, "target_*.parquet"))
-    return len(staging_files)
+    # Fallback to the unique per-BAM counters represented by any sparse
+    # candidate type. Fully empty BAMs still rely on pending_count.txt.
+    counters = set()
+    for pattern in ("target_*.parquet", "genome_*.parquet", "master_bed_*.parquet"):
+        for path in glob.glob(os.path.join(staging_dir, pattern)):
+            try:
+                counters.add(int(os.path.basename(path).rsplit("_", 1)[1].split(".", 1)[0]))
+            except (IndexError, ValueError):
+                continue
+    return len(counters)
 
 
 def _set_pending_count(work_dir: str, sample_id: str, count: int) -> None:
@@ -2027,11 +2034,19 @@ def _increment_pending_count(work_dir: str, sample_id: str, delta: int = 1) -> i
     """Increment the pending staging count and return the new value."""
     staging_dir = _get_staging_dir(work_dir, sample_id)
     count_file = os.path.join(staging_dir, "pending_count.txt")
-    current = _get_pending_count(work_dir, sample_id)
-    new_count = max(0, current + int(delta))
-    with open(count_file, "w") as f:
-        f.write(str(new_count))
-    return new_count
+    lock_file = os.path.join(staging_dir, "pending_count.lock")
+    with FileLock(lock_file, timeout=30.0):
+        current = 0
+        if os.path.exists(count_file):
+            try:
+                with open(count_file, "r") as f:
+                    current = int(f.read().strip())
+            except (ValueError, IOError):
+                current = 0
+        new_count = max(0, current + int(delta))
+        with open(count_file, "w") as f:
+            f.write(str(new_count))
+        return new_count
 
 
 def _atomic_counter_increment(work_dir: str, sample_id: str) -> int:
@@ -2135,9 +2150,8 @@ def process_bam_with_staging(
         if genome_wide_candidates is not None and not genome_wide_candidates.empty:
             genome_wide_candidates = _filter_fusion_candidates(genome_wide_candidates)
         
-        # Save to staging. Always write one file per BAM per type (even if empty) so that
-        # accumulation sees one staging file per BAM and cross-batch fusion support is preserved.
-        # Use snappy compression for smaller files and faster read/write.
+        # Save only non-empty candidate types. The pending counter records processed
+        # BAMs independently, so empty placeholder Parquets are unnecessary.
         staging_dir = _get_staging_dir(work_dir, sample_id)
         _staging_opts = {"index": False, "engine": "pyarrow", "compression": "snappy"}
 
@@ -2148,18 +2162,12 @@ def process_bam_with_staging(
         if target_candidates is not None and not target_candidates.empty:
             target_candidates.to_parquet(target_staging, **_staging_opts)
             logger.info(f"Saved {len(target_candidates)} target candidates to staging")
-        else:
-            pd.DataFrame().to_parquet(target_staging, **_staging_opts)
         if genome_wide_candidates is not None and not genome_wide_candidates.empty:
             genome_wide_candidates.to_parquet(genome_staging, **_staging_opts)
             logger.debug(f"Saved {len(genome_wide_candidates)} genome-wide candidates to staging")
-        else:
-            pd.DataFrame().to_parquet(genome_staging, **_staging_opts)
         if master_bed_candidates is not None and not master_bed_candidates.empty:
             master_bed_candidates.to_parquet(master_bed_staging, **_staging_opts)
             logger.info(f"Saved {len(master_bed_candidates)} master BED candidates to staging")
-        else:
-            pd.DataFrame().to_parquet(master_bed_staging, **_staging_opts)
         
         # Check if accumulation should run
         # Note: This check is not atomic - multiple workers might see threshold reached
@@ -2244,19 +2252,21 @@ def accumulate_fusion_candidates(
         target_files = sorted(glob.glob(os.path.join(staging_dir, "target_*.parquet")))
         genome_files = sorted(glob.glob(os.path.join(staging_dir, "genome_*.parquet")))
         master_bed_files = sorted(glob.glob(os.path.join(staging_dir, "master_bed_*.parquet")))
+        pending_count = _get_pending_count(work_dir, sample_id)
         logger.debug(
-            "Staging file counts - target: %d, genome: %d, master_bed: %d",
+            "Staging file counts - target: %d, genome: %d, master_bed: %d, pending BAMs: %d",
             len(target_files),
             len(genome_files),
             len(master_bed_files),
+            pending_count,
         )
-        _set_pending_count(work_dir, sample_id, len(target_files))
         
         # Track which master_bed staging files are new (for incremental processing)
         # These are the files being accumulated in this batch - all of them are "new" for this accumulation
         new_master_bed_files = set(master_bed_files)
         
-        if not target_files:
+        all_staging_files = target_files + genome_files + master_bed_files
+        if pending_count == 0 and not all_staging_files:
             logger.info(
                 f"No staged fusion files to accumulate for {sample_id} "
                 "(no new data this iteration - skip output generation)."
@@ -2272,19 +2282,19 @@ def accumulate_fusion_candidates(
             }
         
         # Re-check if we should accumulate based on count
-        if not force and len(target_files) < batch_size:
+        if not force and pending_count < batch_size:
             logger.info(
-                f"Skipping fusion accumulation - only {len(target_files)} files staged "
+                f"Skipping fusion accumulation - only {pending_count} BAMs staged "
                 f"(threshold: {batch_size}, force={force}). Another worker may have already accumulated."
             )
             return {
                 "status": "below_threshold",
-                "files_pending": len(target_files),
-                "error": f"Below batch threshold ({len(target_files)} < {batch_size})",
+                "files_pending": pending_count,
+                "error": f"Below batch threshold ({pending_count} < {batch_size})",
             }
         
         logger.info(
-            f"Accumulating {len(target_files)} staged fusion files for {sample_id}"
+            f"Accumulating candidates from {pending_count} staged BAMs for {sample_id}"
         )
         
         # Stream staged files and append to datasets to cap memory usage
@@ -2333,6 +2343,18 @@ def accumulate_fusion_candidates(
                     )
             return total_rows
 
+        # Load the baseline before appending. If fusion_counts.json does not yet
+        # exist, _load_fusion_counts derives it from the current dataset.
+        counts_start = time.time()
+        counts = _load_fusion_counts(work_dir, sample_id)
+        logger.debug(
+            "Loaded fusion counts in %.3fs (current: target=%d, genome=%d, master_bed=%d)",
+            time.time() - counts_start,
+            counts.get("target_candidates", 0),
+            counts.get("genome_wide_candidates", 0),
+            counts.get("master_bed_candidates", 0),
+        )
+
         append_start = time.time()
         batch_target_rows = _append_staged_files(target_files, "target_candidates")
         batch_genome_rows = _append_staged_files(genome_files, "genome_wide_candidates")
@@ -2349,15 +2371,6 @@ def accumulate_fusion_candidates(
             f"{batch_master_bed_rows} master BED candidates"
         )
         
-        counts_start = time.time()
-        counts = _load_fusion_counts(work_dir, sample_id)
-        logger.debug(
-            "Loaded fusion counts in %.3fs (current: target=%d, genome=%d, master_bed=%d)",
-            time.time() - counts_start,
-            counts.get("target_candidates", 0),
-            counts.get("genome_wide_candidates", 0),
-            counts.get("master_bed_candidates", 0),
-        )
         counts["target_candidates"] = counts.get("target_candidates", 0) + batch_target_rows
         counts["genome_wide_candidates"] = counts.get("genome_wide_candidates", 0) + batch_genome_rows
         counts["master_bed_candidates"] = counts.get("master_bed_candidates", 0) + batch_master_bed_rows
@@ -2410,7 +2423,7 @@ def accumulate_fusion_candidates(
         # This avoids expensive groupby operations and CSV generation during intermediate accumulations
         # Output files are only needed at the end, not after every batch
         # However, master BED breakpoint extraction should still run incrementally to build up the BED file
-        if force:
+        if force and all_staging_files:
             logger.info("Final accumulation detected - generating output files (CSV, BED, etc.)")
             output_start = time.time()
             _generate_output_files(
@@ -2435,7 +2448,7 @@ def accumulate_fusion_candidates(
         cleanup_start = time.time()
         removed = 0
         failed = 0
-        for f in target_files + genome_files + master_bed_files:
+        for f in all_staging_files:
             try:
                 os.remove(f)
                 removed += 1
@@ -2453,13 +2466,13 @@ def accumulate_fusion_candidates(
         elapsed = time.time() - start_time
         logger.info(
             f"Fusion batch accumulation complete for {sample_id}: "
-            f"{len(target_files)} files in {elapsed:.2f}s "
-            f"({elapsed/len(target_files):.3f}s per file)"
+            f"{pending_count} BAMs in {elapsed:.2f}s "
+            f"({elapsed/pending_count:.3f}s per BAM)"
         )
         
         return {
             "status": "success",
-            "files_processed": len(target_files),
+            "files_processed": pending_count,
             "target_candidates": counts.get("target_candidates", 0),
             "genome_wide_candidates": counts.get("genome_wide_candidates", 0),
             "master_bed_candidates": counts.get("master_bed_candidates", 0),
