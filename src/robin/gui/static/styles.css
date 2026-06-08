@@ -2025,6 +2025,17 @@ a:active:not(.browser-window *) {
   color: rgb(14 116 144);
 }
 
+.workflow-folder-picker-selected-list {
+  max-height: 9rem;
+  overflow-y: auto;
+}
+
+.workflow-folder-picker-selected-row {
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.5rem;
+  background: rgb(248 250 252);
+}
+
 .body--dark .workflow-folder-picker-help,
 .body--dark .workflow-folder-picker-status--muted,
 .body--dark .workflow-folder-picker-muted,
@@ -2043,6 +2054,11 @@ a:active:not(.browser-window *) {
 
 .body--dark .workflow-folder-picker-row {
   border-bottom-color: rgba(51, 65, 85, 0.65);
+}
+
+.body--dark .workflow-folder-picker-selected-row {
+  background: rgba(15, 23, 42, 0.55);
+  border-color: rgba(71, 85, 105, 0.7);
 }
 
 .body--dark .workflow-folder-picker-row:hover {

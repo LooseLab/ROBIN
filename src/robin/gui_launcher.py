@@ -9659,9 +9659,39 @@ title="View in IGV"
 
                                 ui.separator().classes("mgmt-detail-separator")
 
-                                ui.label("Add folder").classes(
+                                ui.label("Add folders").classes(
                                     "target-coverage-panel__meta-label mt-1 mb-1"
                                 )
+                                pending_paths: list[str] = []
+                                pending_paths_container = ui.column().classes(
+                                    "w-full gap-1"
+                                )
+
+                                def refresh_pending_paths():
+                                    pending_paths_container.clear()
+                                    with pending_paths_container:
+                                        for selected_path in pending_paths:
+                                            with ui.row().classes(
+                                                "w-full items-center gap-2 p-2 rounded "
+                                                "min-w-0 watched-folders-path-row"
+                                            ):
+                                                ui.icon("folder").classes("shrink-0")
+                                                ui.label(selected_path).classes(
+                                                    "text-xs flex-1 break-all font-mono"
+                                                )
+
+                                                def remove_pending(path=selected_path):
+                                                    if path in pending_paths:
+                                                        pending_paths.remove(path)
+                                                    refresh_pending_paths()
+
+                                                ui.button(
+                                                    icon="close",
+                                                    on_click=remove_pending,
+                                                ).props(
+                                                    "flat round dense aria-label=Remove"
+                                                )
+
                                 with ui.row().classes(
                                     "w-full gap-2 items-end flex-wrap"
                                 ):
@@ -9685,14 +9715,17 @@ title="View in IGV"
                                             )
                                         )
                                         picker = local_folder_picker(
-                                            start, upper_limit=None
+                                            start, upper_limit=None, multiple=True
                                         )
                                         result = await picker
-                                        if result and len(result) > 0:
-                                            path_input.value = result[0]
+                                        if result:
+                                            for selected_path in result:
+                                                if selected_path not in pending_paths:
+                                                    pending_paths.append(selected_path)
+                                            refresh_pending_paths()
 
                                     ui.button(
-                                        "Browse",
+                                        "Browse folders",
                                         on_click=pick_folder,
                                         icon="folder_open",
                                     ).props("flat no-caps outline")
@@ -9708,9 +9741,12 @@ title="View in IGV"
 
                                 async def do_add_folder():
                                     path_val = (path_input.value or "").strip()
-                                    if not path_val:
+                                    paths_to_add = list(pending_paths)
+                                    if path_val and path_val not in paths_to_add:
+                                        paths_to_add.append(path_val)
+                                    if not paths_to_add:
                                         ui.notify(
-                                            "Please enter a folder path",
+                                            "Please enter or select at least one folder",
                                             type="warning",
                                         )
                                         return
@@ -9724,24 +9760,31 @@ title="View in IGV"
                                                 "items-center gap-3 min-w-0"
                                             ):
                                                 ui.spinner(size="lg")
-                                                ui.label("Adding folder…").classes(
+                                                ui.label("Adding folders…").classes(
                                                     "classification-insight-model"
                                                 )
                                     add_dialog.open()
                                     # Close modal immediately before long-running add to avoid
                                     # "client has been deleted" when user navigates away during add
                                     add_dialog.close()
-                                    self._safe_notify("Adding folder...", "info")
-                                    await self._do_add_folder(
+                                    self._safe_notify(
+                                        f"Adding {len(paths_to_add)} folder"
+                                        f"{'s' if len(paths_to_add) != 1 else ''}...",
+                                        "info",
+                                    )
+                                    failed_paths = await self._do_add_folders(
+                                        paths=paths_to_add,
                                         path_input=path_input,
                                         add_watch_path=add_watch_path,
                                         watched_container=watched_container,
                                         get_watched_paths=get_watched_paths,
                                         remove_watch_path=remove_watch_path,
                                     )
+                                    pending_paths[:] = failed_paths
+                                    refresh_pending_paths()
 
                                 ui.button(
-                                    "Add folder",
+                                    "Add folders",
                                     on_click=do_add_folder,
                                     icon="add_circle_outline",
                                 ).props("color=primary no-caps").classes("w-full mt-2")
@@ -10001,6 +10044,87 @@ title="View in IGV"
                         raise
         else:
             self._safe_notify(message, "negative")
+
+    async def _do_add_folders(
+        self,
+        paths,
+        path_input,
+        add_watch_path,
+        watched_container=None,
+        get_watched_paths=None,
+        remove_watch_path=None,
+    ):
+        """Add several watch folders and return any paths which failed."""
+        unique_paths = list(dict.fromkeys(str(path).strip() for path in paths if path))
+        if not unique_paths:
+            self._safe_notify("Please select at least one folder", "warning")
+            return []
+
+        try:
+            from nicegui import run as ng_run
+        except ImportError:
+            ng_run = None
+
+        successes = []
+        failures = []
+        failure_messages = []
+        warnings = []
+        for path in unique_paths:
+            if ng_run is not None:
+                success, message = await ng_run.io_bound(add_watch_path, path)
+            else:
+                success, message = add_watch_path(path)
+            if success:
+                successes.append(path)
+                message_lower = (message or "").lower()
+                if (
+                    "skipped previously-analysed" in message_lower
+                    or "skipped previously analyzed" in message_lower
+                ):
+                    warnings.append(message)
+            else:
+                failures.append(path)
+                failure_messages.append(f"{path}: {message}")
+
+        if failures:
+            summary = (
+                f"Added {len(successes)} of {len(unique_paths)} folders. "
+                f"Failed: {'; '.join(failure_messages[:3])}"
+            )
+            if len(failures) > 3:
+                summary += f" (+{len(failures) - 3} more)"
+            self._safe_notify(summary, "warning" if successes else "negative")
+        elif warnings:
+            self._safe_notify(
+                f"Added {len(successes)} folders with warnings: {warnings[0]}",
+                "warning",
+            )
+        else:
+            self._safe_notify(
+                f"Added {len(successes)} folder"
+                f"{'s' if len(successes) != 1 else ''}.",
+                "positive",
+            )
+
+        try:
+            path_input.value = ""
+        except RuntimeError as exc:
+            if "deleted" not in str(exc).lower() and "client" not in str(exc).lower():
+                raise
+
+        if (
+            watched_container is not None
+            and get_watched_paths is not None
+            and remove_watch_path is not None
+        ):
+            try:
+                self._refresh_watched_list(
+                    watched_container, remove_watch_path, get_watched_paths
+                )
+            except RuntimeError as exc:
+                if "deleted" not in str(exc).lower():
+                    raise
+        return failures
 
     def _do_remove_folder(self, path, watched_container, remove_watch_path, get_watched_paths):
         """Remove a folder from the watch list."""

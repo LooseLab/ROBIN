@@ -16,6 +16,7 @@ class local_folder_picker(ui.dialog):
         *,
         upper_limit: Optional[str] = ...,
         show_hidden_files: bool = False,
+        multiple: bool = False,
     ) -> None:
         """Create a folder picker.
 
@@ -34,6 +35,8 @@ class local_folder_picker(ui.dialog):
             if not self._is_within(self.path, self.upper_limit):
                 self.path = self.upper_limit
         self.show_hidden_files = show_hidden_files
+        self.multiple = multiple
+        self.selected_paths: List[str] = []
 
         with self, ui.card().classes(
             "robin-dialog-surface workflow-folder-picker p-4 "
@@ -41,9 +44,15 @@ class local_folder_picker(ui.dialog):
         ):
             with ui.row().classes("w-full items-start gap-3 min-w-0"):
                 with ui.column().classes("gap-0 flex-1 min-w-0"):
-                    ui.label("Choose a folder").classes("text-subtitle1 font-medium")
                     ui.label(
-                        "Open a directory, then select the current folder."
+                        "Choose folders" if self.multiple else "Choose a folder"
+                    ).classes("text-subtitle1 font-medium")
+                    ui.label(
+                        (
+                            "Add folders to the selection, then confirm when ready."
+                            if self.multiple
+                            else "Open a directory, then select the current folder."
+                        )
                     ).classes("workflow-folder-picker-help text-xs")
                 ui.button(icon="close", on_click=self.close).props(
                     "flat round dense aria-label=Close"
@@ -89,21 +98,45 @@ class local_folder_picker(ui.dialog):
                 "workflow-folder-picker-list"
             )
 
+            if self.multiple:
+                with ui.row().classes("w-full items-center gap-2"):
+                    ui.button(
+                        "Add current folder",
+                        on_click=lambda: self.add_selection(self.path),
+                        icon="playlist_add",
+                    ).props("flat no-caps").classes("shrink-0")
+                    self.selection_count_label = ui.label().classes(
+                        "workflow-folder-picker-help text-xs"
+                    )
+                self.selected_container = ui.column().classes(
+                    "w-full gap-1 workflow-folder-picker-selected-list"
+                )
+
             with ui.row().classes(
                 "w-full items-center justify-end gap-2 mt-2 flex-wrap"
             ):
-                self.selection_label = ui.label().classes(
-                    "workflow-folder-picker-selection text-xs font-mono "
-                    "break-all min-w-0 flex-1"
-                )
+                if not self.multiple:
+                    self.selection_label = ui.label().classes(
+                        "workflow-folder-picker-selection text-xs font-mono "
+                        "break-all min-w-0 flex-1"
+                    )
                 ui.button("Cancel", on_click=self.close).props("flat no-caps outline")
-                ui.button(
-                    "Select this folder",
-                    on_click=self.select_current,
-                    icon="check",
-                ).props("color=primary no-caps")
+                if self.multiple:
+                    self.confirm_button = ui.button(
+                        "Use selected folders",
+                        on_click=self.submit_selections,
+                        icon="check",
+                    ).props("color=primary no-caps")
+                else:
+                    ui.button(
+                        "Select this folder",
+                        on_click=self.select_current,
+                        icon="check",
+                    ).props("color=primary no-caps")
 
             self.update_list()
+            if self.multiple:
+                self.update_selections()
 
     @staticmethod
     def _existing_directory(path: Path) -> Path:
@@ -164,6 +197,59 @@ class local_folder_picker(ui.dialog):
             self._show_status(message, error=True)
             return
         self.submit([str(self.path)])
+
+    def add_selection(self, path: Path) -> None:
+        allowed, message = self._can_navigate_to(path)
+        if not allowed:
+            self._show_status(message, error=True)
+            return
+        resolved = str(path.expanduser().resolve())
+        if resolved not in self.selected_paths:
+            self.selected_paths.append(resolved)
+        self.update_selections()
+
+    def remove_selection(self, path: str) -> None:
+        self.selected_paths = [
+            selected for selected in self.selected_paths if selected != path
+        ]
+        self.update_selections()
+
+    def submit_selections(self) -> None:
+        if not self.selected_paths:
+            self._show_status("Select at least one folder.", error=True)
+            return
+        self.submit(list(self.selected_paths))
+
+    def update_selections(self) -> None:
+        if not self.multiple:
+            return
+        count = len(self.selected_paths)
+        self.selection_count_label.set_text(
+            f"{count} folder{'s' if count != 1 else ''} selected"
+        )
+        self.confirm_button.set_enabled(count > 0)
+        self.selected_container.clear()
+        with self.selected_container:
+            if not self.selected_paths:
+                ui.label("No folders selected yet.").classes(
+                    "workflow-folder-picker-muted text-xs italic"
+                )
+                return
+            for path in self.selected_paths:
+                with ui.row().classes(
+                    "w-full items-center gap-2 px-2 py-1 "
+                    "workflow-folder-picker-selected-row"
+                ):
+                    ui.icon("folder").classes(
+                        "workflow-folder-picker-folder-icon shrink-0"
+                    )
+                    ui.label(path).classes("text-xs font-mono break-all flex-1 min-w-0")
+                    ui.button(
+                        icon="close",
+                        on_click=lambda _, selected=path: self.remove_selection(
+                            selected
+                        ),
+                    ).props("flat round dense aria-label=Remove")
 
     def _navigate_from_input(self, _=None) -> None:
         value = str(self.path_input.value or "").strip()
@@ -230,7 +316,8 @@ class local_folder_picker(ui.dialog):
     def update_list(self) -> None:
         """Refresh the folder list and selection summary."""
         self.path_input.value = str(self.path)
-        self.selection_label.set_text(f"Selected: {self.path}")
+        if not self.multiple:
+            self.selection_label.set_text(f"Selected: {self.path}")
 
         at_root = self.path == self.path.parent
         at_limit = (
@@ -268,19 +355,29 @@ class local_folder_picker(ui.dialog):
                 with ui.row().classes(
                     "w-full items-center gap-2 px-3 py-2 cursor-pointer "
                     "workflow-folder-picker-row"
-                ).on(
-                    "click",
-                    lambda _, target=directory: self.navigate_to(target),
                 ):
                     ui.icon("folder").classes(
                         "text-lg shrink-0 workflow-folder-picker-folder-icon"
                     )
                     ui.label(directory.name).classes(
-                        "font-medium flex-1 min-w-0 break-all"
+                        "font-medium flex-1 min-w-0 break-all cursor-pointer"
+                    ).on(
+                        "click",
+                        lambda _, target=directory: self.navigate_to(target),
                     )
-                    ui.icon("chevron_right").classes(
-                        "text-base shrink-0 workflow-folder-picker-muted"
-                    )
+                    if self.multiple:
+                        ui.button(
+                            icon="add",
+                            on_click=lambda _, target=directory: self.add_selection(
+                                target
+                            ),
+                        ).props("flat round dense aria-label=Add-folder").tooltip(
+                            "Add this folder"
+                        )
+                    else:
+                        ui.icon("chevron_right").classes(
+                            "text-base shrink-0 workflow-folder-picker-muted"
+                        )
 
     @staticmethod
     def _empty_state(icon: str, message: str) -> None:
