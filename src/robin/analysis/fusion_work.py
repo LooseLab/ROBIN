@@ -1186,34 +1186,40 @@ def _process_reads_for_fusions(
 
 def _optimize_fusion_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Optimize fusion DataFrame memory usage.
+    Apply inexpensive native dtypes suitable for immediate Parquet staging.
 
-    Args:
-        df: Input DataFrame
-
-    Returns:
-        Memory-optimized DataFrame
+    String columns remain ordinary object columns. Converting small per-BAM
+    tables to categoricals costs CPU and provides little benefit because
+    Parquet performs its own dictionary encoding. Complete integer columns use
+    native NumPy dtypes; columns containing missing values remain regular
+    numeric columns rather than pandas nullable extension arrays.
     """
-    # Use categorical dtypes for string columns
-    string_columns = ["col1", "col4", "reference_id", "strand", "read_id"]
-    for col in string_columns:
-        if col in df.columns:
-            df[col] = df[col].astype("category")
+    integer_dtypes = {
+        "col2": np.int32,
+        "col3": np.int32,
+        "reference_start": np.int32,
+        "reference_end": np.int32,
+        "read_start": np.int32,
+        "read_end": np.int32,
+        "mapping_quality": np.uint8,
+        "mapping_span": np.int32,
+    }
+    conversions = {}
+    for column, dtype in integer_dtypes.items():
+        if column not in df.columns:
+            continue
+        numeric = pd.to_numeric(df[column], errors="coerce")
+        if numeric.notna().all():
+            conversions[column] = dtype
+        else:
+            df[column] = numeric
 
-    # Use appropriate integer types
-    int_columns = [
-        "col2",
-        "col3",
-        "reference_start",
-        "reference_end",
-        "read_start",
-        "read_end",
-        "mapping_quality",
-        "mapping_span",
-    ]
-    for col in int_columns:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+    for column in ("is_secondary", "is_supplementary"):
+        if column in df.columns and not df[column].isna().any():
+            conversions[column] = bool
+
+    if conversions:
+        df = df.astype(conversions, copy=False)
 
     return df
 
