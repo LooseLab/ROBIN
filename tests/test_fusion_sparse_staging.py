@@ -5,6 +5,7 @@ import pandas as pd
 
 from robin.analysis.fusion_work import (
     FusionMetadata,
+    _append_fusion_candidates_parquet_from_file,
     _get_pending_count,
     accumulate_fusion_candidates,
     process_bam_with_staging,
@@ -117,3 +118,79 @@ def test_fully_empty_candidate_result_needs_no_placeholder_parquet(tmp_path: Pat
     assert result["master_bed_candidates"] == 0
     assert _get_pending_count(str(tmp_path), sample_id) == 0
     generate_outputs.assert_not_called()
+
+
+def test_staging_parquet_is_moved_without_recompression(tmp_path: Path):
+    sample_id = "S1"
+    source = tmp_path / sample_id / "_fusion_staging" / "target_000007.parquet"
+    source.parent.mkdir(parents=True)
+    pd.DataFrame({"read_id": ["read-1"], "col4": ["GENE1"]}).to_parquet(
+        source,
+        index=False,
+        engine="pyarrow",
+        compression="snappy",
+    )
+    original_bytes = source.read_bytes()
+
+    with patch(
+        "robin.analysis.fusion_work.pq.write_table",
+        side_effect=AssertionError("staging data must not be recompressed"),
+    ):
+        row_count, destination = _append_fusion_candidates_parquet_from_file(
+            str(source),
+            "target_candidates",
+            str(tmp_path),
+            sample_id,
+            batch_id=7,
+        )
+
+    assert row_count == 1
+    assert destination is not None
+    assert not source.exists()
+    assert Path(destination).read_bytes() == original_bytes
+
+
+def test_master_bed_incremental_processing_receives_moved_dataset_path(
+    tmp_path: Path,
+):
+    sample_id = "S1"
+    master_candidates = pd.DataFrame(
+        {
+            "read_id": ["read-1", "read-1"],
+            "col4": ["master_bed_region", "master_bed_supplementary"],
+            "reference_id": ["chr1", "chr2"],
+            "reference_start": [100, 300],
+            "reference_end": [200, 400],
+        }
+    )
+
+    with patch(
+        "robin.analysis.fusion_work.process_bam_single_pass",
+        return_value=(None, None, master_candidates),
+    ):
+        process_bam_with_staging(
+            "input.bam",
+            str(tmp_path),
+            {},
+            _metadata(sample_id),
+            "rCNS2",
+            has_supplementary=True,
+            work_dir=str(tmp_path),
+            batch_size=1,
+        )
+
+    with patch("robin.analysis.fusion_work._generate_output_files") as generate_outputs:
+        result = accumulate_fusion_candidates(
+            str(tmp_path),
+            sample_id,
+            "rCNS2",
+            force=True,
+            batch_size=1,
+        )
+
+    assert result["status"] == "success"
+    moved_paths = generate_outputs.call_args.kwargs["new_master_bed_files"]
+    assert len(moved_paths) == 1
+    moved_path = Path(next(iter(moved_paths)))
+    assert moved_path.exists()
+    assert moved_path.parent.name == "master_bed_candidates_dataset"

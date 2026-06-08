@@ -2261,10 +2261,6 @@ def accumulate_fusion_candidates(
             pending_count,
         )
         
-        # Track which master_bed staging files are new (for incremental processing)
-        # These are the files being accumulated in this batch - all of them are "new" for this accumulation
-        new_master_bed_files = set(master_bed_files)
-        
         all_staging_files = target_files + genome_files + master_bed_files
         if pending_count == 0 and not all_staging_files:
             logger.info(
@@ -2307,13 +2303,16 @@ def accumulate_fusion_candidates(
             except (IndexError, ValueError):
                 return int(time.time())
 
-        def _append_staged_files(file_list: List[str], candidate_type: str) -> int:
+        def _append_staged_files(
+            file_list: List[str], candidate_type: str
+        ) -> Tuple[int, List[str]]:
             total_rows = 0
+            dataset_paths = []
             for file_path in file_list:
                 try:
                     file_start = time.time()
                     batch_id = _extract_batch_id(file_path)
-                    n = _append_fusion_candidates_parquet_from_file(
+                    n, dataset_path = _append_fusion_candidates_parquet_from_file(
                         file_path,
                         candidate_type,
                         work_dir,
@@ -2322,9 +2321,11 @@ def accumulate_fusion_candidates(
                     )
                     load_elapsed = time.time() - file_start
                     total_rows += n
+                    if dataset_path:
+                        dataset_paths.append(dataset_path)
                     if n:
                         logger.debug(
-                            "Appended %s parquet %s rows=%d in %.3fs",
+                            "Moved %s parquet %s rows=%d in %.3fs",
                             candidate_type,
                             os.path.basename(file_path),
                             n,
@@ -2339,9 +2340,9 @@ def accumulate_fusion_candidates(
                         )
                 except Exception as e:
                     logger.warning(
-                        f"Error loading {candidate_type} staging file {os.path.basename(file_path)}: {e}"
+                        f"Error moving {candidate_type} staging file {os.path.basename(file_path)}: {e}"
                     )
-            return total_rows
+            return total_rows, dataset_paths
 
         # Load the baseline before appending. If fusion_counts.json does not yet
         # exist, _load_fusion_counts derives it from the current dataset.
@@ -2356,11 +2357,17 @@ def accumulate_fusion_candidates(
         )
 
         append_start = time.time()
-        batch_target_rows = _append_staged_files(target_files, "target_candidates")
-        batch_genome_rows = _append_staged_files(genome_files, "genome_wide_candidates")
-        batch_master_bed_rows = _append_staged_files(master_bed_files, "master_bed_candidates")
+        batch_target_rows, _ = _append_staged_files(
+            target_files, "target_candidates"
+        )
+        batch_genome_rows, _ = _append_staged_files(
+            genome_files, "genome_wide_candidates"
+        )
+        batch_master_bed_rows, new_master_bed_dataset_files = _append_staged_files(
+            master_bed_files, "master_bed_candidates"
+        )
         logger.debug(
-            "Appended staging files in %.3fs (target=%d, genome=%d, master_bed=%d)",
+            "Moved staging files in %.3fs (target=%d, genome=%d, master_bed=%d)",
             time.time() - append_start,
             batch_target_rows,
             batch_genome_rows,
@@ -2433,7 +2440,7 @@ def accumulate_fusion_candidates(
                 work_dir, 
                 reference=reference,
                 generate_master_bed=True,  # Generate master BED on final accumulation
-                new_master_bed_files=new_master_bed_files,  # Pass new files for incremental processing
+                new_master_bed_files=set(new_master_bed_dataset_files),
             )
             logger.debug(
                 "Generated output files in %.3fs for %s",
@@ -2449,6 +2456,8 @@ def accumulate_fusion_candidates(
         removed = 0
         failed = 0
         for f in all_staging_files:
+            if not os.path.exists(f):
+                continue
             try:
                 os.remove(f)
                 removed += 1
@@ -5034,12 +5043,13 @@ def _append_fusion_candidates_parquet_from_file(
     work_dir: str,
     sample_id: str,
     batch_id: int,
-) -> int:
+) -> Tuple[int, Optional[str]]:
     """
-    Copy a staging Parquet file into the append-only dataset using PyArrow only
-    (no pandas round-trip). Returns number of rows appended (0 if empty).
+    Move a staging Parquet file into the append-only dataset without reading
+    or recompressing its table data.
 
-    Raises if the file is unreadable (same contract as pd.read_parquet for staging).
+    Returns (number of rows appended, destination path). Empty files are removed.
+    Raises if the Parquet metadata is unreadable.
     """
     pf = pq.ParquetFile(source_path, memory_map=True)
     nrow = int(pf.metadata.num_rows)
@@ -5049,23 +5059,23 @@ def _append_fusion_candidates_parquet_from_file(
             candidate_type,
             os.path.basename(source_path),
         )
-        return 0
-    table = pf.read()
+        os.remove(source_path)
+        return 0, None
     dataset_dir = _get_parquet_dataset_dir(work_dir, sample_id, candidate_type)
     os.makedirs(dataset_dir, exist_ok=True)
     part_path = os.path.join(dataset_dir, f"part_{batch_id:06d}.parquet")
     if os.path.exists(part_path):
         part_path = os.path.join(
-            dataset_dir, f"part_{batch_id:06d}_{int(time.time())}.parquet"
+            dataset_dir, f"part_{batch_id:06d}_{time.time_ns()}.parquet"
         )
-    pq.write_table(table, part_path, compression="snappy")
+    os.replace(source_path, part_path)
     logger.debug(
-        "Appended %d %s rows from staging to %s",
+        "Moved %d %s rows from staging to %s",
         nrow,
         candidate_type,
         part_path,
     )
-    return nrow
+    return nrow, part_path
 
 
 def _append_fusion_candidates_parquet(
