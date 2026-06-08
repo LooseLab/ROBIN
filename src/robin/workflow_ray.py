@@ -474,6 +474,18 @@ TRIGGERS: Dict[str, List[str]] = {
     "target": ["igv_bam"],
 }
 
+
+def _preprocessing_allows_downstream(
+    preprocessing_result: Dict[str, Any], downstream_type: str
+) -> bool:
+    """Return whether a preprocessing result should trigger an analysis."""
+    if preprocessing_result.get("status", "unknown") != "success":
+        return False
+    if downstream_type == "fusion":
+        return bool(preprocessing_result.get("has_supplementary_reads", False))
+    return True
+
+
 # Per-sample de-duplication to avoid output races. Ensure only one job of these types
 # runs concurrently per sample (max 1 running + 1 pending).
 # Only deduplicate selected per-sample jobs; analysis/bed_conversion should queue, not skip.
@@ -3494,15 +3506,14 @@ class Coordinator:
                     if (req_types is None) or (t in req_types):
                         q = job_queue_of(t)
 
-                        # Only create CNV jobs if preprocessing completed successfully
+                        # Only create downstream jobs when preprocessing produced
+                        # the data that analysis type requires.
                         if job.job_type == "preprocessing":
                             if "preprocessing" not in ctx.results:
                                 continue
 
                             prep_result = ctx.results["preprocessing"]
-                            prep_status = prep_result.get("status", "unknown")
-
-                            if prep_status != "success":
+                            if not _preprocessing_allows_downstream(prep_result, t):
                                 continue
 
                         # Every fan-out branch owns its context. Batching stores
