@@ -531,29 +531,6 @@ def process_multiple_files(bam_paths, metadata_list, work_dir, logger, target_pa
         analysis_result["processing_steps"].append("accumulation_complete")
         logger.info(f"Fusion accumulation completed: {accumulation_result}")
         
-        # Generate final master BED file now that all files are processed
-        try:
-            from robin.analysis.master_bed_generator import generate_master_bed
-            from robin.analysis.fusion_work import _load_analysis_counter
-            
-            # Get analysis counter
-            analysis_counter = _load_analysis_counter(sample_id, work_dir)
-            
-            logger.info(f"Generating final master BED file for sample {sample_id} (counter: {analysis_counter})")
-            master_bed_path = generate_master_bed(
-                sample_id=sample_id,
-                work_dir=work_dir,
-                analysis_counter=analysis_counter,
-                target_panel=target_panel,
-                logger_instance=logger,
-                reference=reference,
-            )
-            if master_bed_path:
-                logger.info(f"Final master BED file generated: {master_bed_path}")
-                analysis_result["processing_steps"].append("master_bed_generated")
-        except Exception as e:
-            logger.warning(f"Could not generate final master BED file: {e}")
-
         # Load final accumulated data for result metadata
         sample_output_dir = os.path.join(work_dir, sample_id)
         

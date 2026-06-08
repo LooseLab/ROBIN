@@ -66,6 +66,34 @@ DEBUG_MASTER_BED_INCREMENTAL = os.getenv("ROBIN_DEBUG_MASTER_BED_INCREMENTAL", "
 MIN_PRIMARY_QS = 12
 
 
+def _replace_file_if_changed(temporary_path: str, destination_path: str) -> bool:
+    """
+    Atomically replace destination_path only when temporary_path has different content.
+
+    Returns True when destination_path was created or changed.
+    """
+    try:
+        if os.path.exists(destination_path):
+            if os.path.getsize(temporary_path) == os.path.getsize(destination_path):
+                with open(temporary_path, "rb") as new_file, open(destination_path, "rb") as existing_file:
+                    while True:
+                        new_chunk = new_file.read(1024 * 1024)
+                        existing_chunk = existing_file.read(1024 * 1024)
+                        if new_chunk != existing_chunk:
+                            break
+                        if not new_chunk:
+                            os.remove(temporary_path)
+                            return False
+        os.replace(temporary_path, destination_path)
+        return True
+    except Exception:
+        try:
+            os.remove(temporary_path)
+        except OSError:
+            pass
+        raise
+
+
 @dataclass(slots=True)
 class FusionMetadata:
     """Container for fusion analysis metadata and results."""
@@ -2863,8 +2891,10 @@ def _generate_output_files(
             f.write("0")
 
     
-    # Generate fusion breakpoint BED file
-    _generate_fusion_breakpoint_bed(sample_id, fusion_metadata, work_dir)
+    # Generate fusion breakpoint BED file only when content has changed.
+    fusion_breakpoint_changed = _generate_fusion_breakpoint_bed(
+        sample_id, fusion_metadata, work_dir
+    )
     
     # Generate master BED breakpoint BED file (new target regions from supplementary alignments)
     # This is called incrementally as data accumulates. For large datasets, we use an incremental
@@ -2874,8 +2904,9 @@ def _generate_output_files(
     
     #ToDo: This is the slow code from here.
     
+    master_bed_breakpoint_changed = False
     if master_bed_candidates is not None and not master_bed_candidates.empty:
-        _generate_master_bed_breakpoint_bed(
+        master_bed_breakpoint_changed = _generate_master_bed_breakpoint_bed(
             sample_id, 
             fusion_metadata, 
             work_dir,
@@ -2886,8 +2917,8 @@ def _generate_output_files(
     if ENABLE_MASTER_BED:
         
         
-        # Generate master BED file only if requested (should only be done once per batch at the end)
-        # Use async (non-blocking) generation to avoid blocking the analysis pipeline
+        # Ask the master BED generator to refresh. It is content-signature gated,
+        # so unchanged source BEDs return without doing the expensive merge.
         if generate_master_bed:
             try:
                 from robin.analysis.master_bed_generator import generate_master_bed_async
@@ -2907,6 +2938,13 @@ def _generate_output_files(
                     logger_instance=logger,
                     reference=reference,
                 )
+                if fusion_breakpoint_changed or master_bed_breakpoint_changed:
+                    logger.debug(
+                        "Requested master BED refresh after fusion source BED change "
+                        "(fusion=%s, master_bed=%s)",
+                        fusion_breakpoint_changed,
+                        master_bed_breakpoint_changed,
+                    )
             except Exception as e:
                 logger.warning(f"Could not start async master BED generation: {e}")
 
@@ -4221,7 +4259,7 @@ def _generate_master_bed_breakpoint_bed(
     fusion_metadata: FusionMetadata,
     work_dir: str,
     new_master_bed_files: Optional[Set[str]] = None,
-) -> None:
+) -> bool:
     """
     Generate BED file for master BED breakpoints (new target regions from supplementary alignments).
     Creates regions with +/- 1 bin_width around breakpoints.
@@ -4265,7 +4303,7 @@ def _generate_master_bed_breakpoint_bed(
         
         if not master_bed_breakpoints:
             logger.debug("No master BED breakpoints found - skipping BED file generation")
-            return
+            return False
         # Get bin_width from CNV analysis if available, otherwise use default
         bin_width = _get_cnv_bin_width(work_dir, sample_id)
         
@@ -4314,7 +4352,8 @@ def _generate_master_bed_breakpoint_bed(
         )
 
         write_start = time.time()
-        with open(master_bed_bp_file, "w") as f:
+        temporary_path = f"{master_bed_bp_file}.tmp"
+        with open(temporary_path, "w") as f:
             for bp in sorted_breakpoints:
                 chrom = bp["chromosome"]
                 start = bp["start"]
@@ -4330,10 +4369,12 @@ def _generate_master_bed_breakpoint_bed(
                 # Write BED entry: chrom, start, end, name (master_bed-breakpoint)
                 name = "master_bed-breakpoint"
                 f.write(f"{chrom}\t{region_start}\t{region_end}\t{name}\t0\t.\n")
+        changed = _replace_file_if_changed(temporary_path, master_bed_bp_file)
         logger.debug(
-            "Wrote master BED breakpoint BED in %.3fs (%s)",
+            "Checked master BED breakpoint BED in %.3fs (%s, changed=%s)",
             time.time() - write_start,
             master_bed_bp_file,
+            changed,
         )
         
         # Log summary of read support
@@ -4342,10 +4383,11 @@ def _generate_master_bed_breakpoint_bed(
             min_reads = min(read_counts) if read_counts else 0
             max_reads = max(read_counts) if read_counts else 0
             avg_reads = sum(read_counts) / len(read_counts) if read_counts else 0
-            logger.info(
-                f"Generated master BED breakpoint BED file: {master_bed_bp_file} with {len(master_bed_breakpoints)} breakpoints "
-                f"(read support: min={min_reads}, max={max_reads}, avg={avg_reads:.1f})"
-            )
+            if changed:
+                logger.info(
+                    f"Generated master BED breakpoint BED file: {master_bed_bp_file} with {len(master_bed_breakpoints)} breakpoints "
+                    f"(read support: min={min_reads}, max={max_reads}, avg={avg_reads:.1f})"
+                )
         else:
             logger.info(f"Generated master BED breakpoint BED file: {master_bed_bp_file} with 0 breakpoints")
         
@@ -4360,11 +4402,13 @@ def _generate_master_bed_breakpoint_bed(
             "Master BED breakpoint BED pipeline completed in %.3fs",
             time.time() - step_start,
         )
+        return changed
         
     except Exception as e:
         logger.warning(f"Error generating master BED breakpoint BED file: {e}")
         import traceback
         logger.debug(f"Traceback: {traceback.format_exc()}")
+        return False
 
 
 def _generate_master_bed_events_summary(
@@ -4673,7 +4717,7 @@ def _generate_fusion_breakpoint_bed(
     sample_id: str,
     fusion_metadata: FusionMetadata,
     work_dir: str,
-) -> None:
+) -> bool:
     """
     Generate BED file for fusion breakpoints with +/- 1 bin_width regions.
     Only includes fusions that meet the minimum read support threshold.
@@ -4798,7 +4842,7 @@ def _generate_fusion_breakpoint_bed(
         
         if not fusion_breakpoints:
             logger.debug("No fusion breakpoints found - skipping BED file generation")
-            return
+            return False
         
         # Get bin_width from CNV analysis if available, otherwise use default
         bin_width = _get_cnv_bin_width(work_dir, sample_id)
@@ -4842,7 +4886,8 @@ def _generate_fusion_breakpoint_bed(
         
         sorted_breakpoints = sorted(fusion_breakpoints, key=sort_key)
         
-        with open(fusion_bed_file, "w") as f:
+        temporary_path = f"{fusion_bed_file}.tmp"
+        with open(temporary_path, "w") as f:
             for bp in sorted_breakpoints:
                 chrom = bp["chromosome"]
                 start = bp["start"]
@@ -4860,8 +4905,10 @@ def _generate_fusion_breakpoint_bed(
                 # Write BED entry: chrom, start, end, name (gene-source)
                 name = f"{gene}-{source}"
                 f.write(f"{chrom}\t{region_start}\t{region_end}\t{name}\n")
+        changed = _replace_file_if_changed(temporary_path, fusion_bed_file)
         
-        logger.info(f"Generated fusion breakpoint BED file: {fusion_bed_file} with {len(fusion_breakpoints)} breakpoints")
+        if changed:
+            logger.info(f"Generated fusion breakpoint BED file: {fusion_bed_file} with {len(fusion_breakpoints)} breakpoints")
         try:
             state = {
                 "processed_read_ids": list(processed_read_ids),
@@ -4874,11 +4921,13 @@ def _generate_fusion_breakpoint_bed(
             os.replace(tmp_path, state_path)
         except Exception as e:
             logger.warning(f"Could not save fusion breakpoint state: {e}")
+        return changed
         
     except Exception as e:
         logger.warning(f"Error generating fusion breakpoint BED file: {e}")
         import traceback
         logger.debug(f"Traceback: {traceback.format_exc()}")
+        return False
 
 
 def find_and_process_bam_files(root_dir):
