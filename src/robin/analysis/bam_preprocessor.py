@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import re
+import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
@@ -75,6 +76,37 @@ class BamMetadata:
             self.extracted_data = {}
         if self.processing_steps is None:
             self.processing_steps = []
+
+
+def _persist_supplementary_read_ids(
+    metadata: BamMetadata,
+    bam_path: str,
+    work_dir: str,
+) -> None:
+    """Persist a complete supplementary-read ID set under a BAM-specific path."""
+    supp_ids = metadata.extracted_data.get("supplementary_read_ids", [])
+    metadata.extracted_data["supplementary_read_ids_complete"] = True
+    metadata.extracted_data["supplementary_read_ids_count"] = len(supp_ids)
+    if not supp_ids:
+        metadata.extracted_data.pop("supplementary_read_ids", None)
+        metadata.extracted_data.pop("supplementary_read_ids_path", None)
+        return
+
+    sample_id = metadata.extracted_data.get("sample_id", "unknown")
+    supp_dir = os.path.join(work_dir, sample_id, "_supplementary_read_ids")
+    os.makedirs(supp_dir, exist_ok=True)
+    path_hash = hashlib.sha256(os.path.abspath(bam_path).encode("utf-8")).hexdigest()[:16]
+    supp_path = os.path.join(
+        supp_dir,
+        f"{os.path.basename(bam_path)}.{path_hash}.txt",
+    )
+    tmp_path = f"{supp_path}.tmp"
+    with open(tmp_path, "w") as f:
+        for read_id in sorted(supp_ids):
+            f.write(f"{read_id}\n")
+    os.replace(tmp_path, supp_path)
+    metadata.extracted_data["supplementary_read_ids_path"] = supp_path
+    metadata.extracted_data.pop("supplementary_read_ids", None)
 
 
 # ============================================================================
@@ -419,6 +451,7 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
             # OPTIMIZATION: Only store boolean flag and count, not the actual read IDs by default.
             # However, tests expect the list of unique read IDs; keep the behavior identical.
             bam_read["has_supplementary_reads"] = len(reads_with_supplementary) > 0
+            bam_read["supplementary_read_ids_complete"] = True
             bam_read["supplementary_read_ids"] = (
                 list(reads_with_supplementary) if reads_with_supplementary else []
             )
@@ -531,6 +564,9 @@ def calculate_bam_summary(bam_data: Dict[str, Any]) -> Dict[str, Any]:
         "reads_with_supplementary": bam_data.get("reads_with_supplementary", 0),
         "has_supplementary_reads": bam_data.get("has_supplementary_reads", False),
         # Add supplementary read IDs for fusion analysis
+        "supplementary_read_ids_complete": bam_data.get(
+            "supplementary_read_ids_complete", False
+        ),
         "supplementary_read_ids": bam_data.get("supplementary_read_ids", []),
         # Add MGMT read statistics
         "has_mgmt_reads": bam_data.get("has_mgmt_reads", False),
@@ -837,35 +873,15 @@ def bam_preprocessing_handler(job, center: str = None):
                 # Do not proceed with CSV updates or further processing
                 return
 
-        # Persist supplementary_read_ids to a temp file to avoid retaining large lists in memory
+        # Persist the complete ID set per BAM to avoid retaining large lists in memory.
         try:
-            supp_ids = metadata.extracted_data.get("supplementary_read_ids", [])
-            if supp_ids:
-                sample_id = metadata.extracted_data.get("sample_id", "unknown")
-                # Determine work directory for file storage
-                work_dir = job.context.metadata.get(
-                    "work_dir", os.path.dirname(bam_path)
-                )
-                sample_dir = os.path.join(work_dir, sample_id)
-                os.makedirs(sample_dir, exist_ok=True)
-                supp_path = os.path.join(sample_dir, "supplementary_read_ids.txt")
-                # Write one ID per line (atomic write)
-                tmp_path = supp_path + ".tmp"
-                with open(tmp_path, "w") as f:
-                    for rid in supp_ids:
-                        f.write(f"{rid}\n")
-                os.replace(tmp_path, supp_path)
-                # Record path and count in metadata
-                metadata.extracted_data["supplementary_read_ids_path"] = supp_path
-                metadata.extracted_data["supplementary_read_ids_count"] = len(supp_ids)
-                # Prune the potentially very large in-memory list to keep Ray results small
-                metadata.extracted_data.pop("supplementary_read_ids", None)
-            else:
-                # Ensure list isn't carried forward even if empty
-                metadata.extracted_data.pop("supplementary_read_ids", None)
+            work_dir = job.context.metadata.get(
+                "work_dir", os.path.dirname(bam_path)
+            )
+            _persist_supplementary_read_ids(metadata, bam_path, work_dir)
         except Exception:
-            # Non-fatal if we cannot persist; continue
-            pass
+            # Keep the complete in-memory list as a safe fallback.
+            metadata.extracted_data.pop("supplementary_read_ids_path", None)
 
         # Step 4: Update master.csv if we have comprehensive data
         if metadata.extracted_data and "sample_id" in metadata.extracted_data:
@@ -939,6 +955,15 @@ def bam_preprocessing_handler(job, center: str = None):
                 ),
                 "reads_with_supplementary": metadata.extracted_data.get(
                     "reads_with_supplementary", 0
+                ),
+                "supplementary_read_ids_complete": metadata.extracted_data.get(
+                    "supplementary_read_ids_complete", False
+                ),
+                "supplementary_read_ids_path": metadata.extracted_data.get(
+                    "supplementary_read_ids_path"
+                ),
+                "supplementary_read_ids_count": metadata.extracted_data.get(
+                    "supplementary_read_ids_count", 0
                 ),
                 "supplementary_read_ids": metadata.extracted_data.get(
                     "supplementary_read_ids", []
