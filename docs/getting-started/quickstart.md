@@ -15,7 +15,7 @@ ROBIN consumes **aligned BAMs** from Oxford Nanopore sequencing (typically writt
 | Expectation | Notes |
 |-------------|--------|
 | Basecalling | **HAC** is sufficient; SUP not required. |
-| Methylation | **5hmC / 5mC** calling enabled in MinKNOW if your analyses need methylation. |
+| Methylation | Enable **5mC / 5hmC modified-base calling in CpG contexts only** in MinKNOW if your analyses need methylation. Do **not** use all-context calling. |
 | Alignment | Done **in MinKNOW** — ROBIN does not realign reads. |
 | BAM rollover | **Read-count–based** chunks. **Each BAM must be ≤ 50,000 reads**; we recommend **~50,000 reads per file**. Do **not** rely on **time-only** (e.g. hourly) rollover — see [README — BAM read limit](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings). |
 | POD5 / FASTQ | Not required; you can turn them off if you only need BAM. |
