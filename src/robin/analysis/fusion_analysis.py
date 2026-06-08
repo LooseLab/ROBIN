@@ -535,13 +535,23 @@ def process_multiple_files(bam_paths, metadata_list, work_dir, logger, target_pa
         sample_output_dir = os.path.join(work_dir, sample_id)
         
         # Set output file paths
-        analysis_result["target_fusion_path"] = os.path.join(sample_output_dir, "target_fusion.csv")
-        analysis_result["genome_wide_fusion_path"] = os.path.join(sample_output_dir, "genome_wide_fusion.csv")
+        analysis_result["target_fusion_path"] = os.path.join(
+            sample_output_dir, "fusion_candidates_master.csv"
+        )
+        analysis_result["genome_wide_fusion_path"] = os.path.join(
+            sample_output_dir, "fusion_candidates_all.csv"
+        )
         
         # Store final results
         analysis_result["fusion_data"] = {
-            "target_candidates_count": accumulation_result.get("target_candidates_count", 0),
-            "genome_wide_candidates_count": accumulation_result.get("genome_wide_candidates_count", 0),
+            "target_candidates_count": accumulation_result.get(
+                "target_candidates_count",
+                accumulation_result.get("target_candidates", 0),
+            ),
+            "genome_wide_candidates_count": accumulation_result.get(
+                "genome_wide_candidates_count",
+                accumulation_result.get("genome_wide_candidates", 0),
+            ),
             "files_with_supplementary": analysis_result["files_with_supplementary"],
             "files_processed": processed_files,
         }

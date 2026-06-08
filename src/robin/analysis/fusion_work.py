@@ -26,9 +26,11 @@ import pickle
 import glob
 import time
 import bisect
+import re
 from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
+from itertools import combinations
 from typing import Dict, Any, Optional, List, Tuple, Set, Union
 from dataclasses import dataclass, asdict
 
@@ -335,6 +337,40 @@ def _build_fusion_row_dict(
     ref_end: int,
 ) -> Dict[str, Any]:
     """Build a row dict with the standard fusion columns."""
+    return _build_fusion_row_from_values(
+        ref_name=ref_name,
+        gene_start=gene_start,
+        gene_end=gene_end,
+        gene_name=gene_name,
+        read_id=read.query_name,
+        mapping_quality=read.mapping_quality,
+        strand="-" if read.is_reverse else "+",
+        read_start=read.query_alignment_start,
+        read_end=read.query_alignment_end,
+        is_secondary=read.is_secondary,
+        is_supplementary=read.is_supplementary,
+        ref_start=ref_start,
+        ref_end=ref_end,
+    )
+
+
+def _build_fusion_row_from_values(
+    *,
+    ref_name: str,
+    gene_start: int,
+    gene_end: int,
+    gene_name: str,
+    read_id: str,
+    mapping_quality: int,
+    strand: str,
+    read_start: int,
+    read_end: int,
+    is_secondary: bool,
+    is_supplementary: bool,
+    ref_start: int,
+    ref_end: int,
+) -> Dict[str, Any]:
+    """Build a fusion row from a BAM record or an SA-tag alignment."""
     return {
         "col1": ref_name,
         "col2": gene_start,
@@ -343,13 +379,13 @@ def _build_fusion_row_dict(
         "reference_id": ref_name,
         "reference_start": ref_start,
         "reference_end": ref_end,
-        "read_id": read.query_name,
-        "mapping_quality": read.mapping_quality,
-        "strand": "-" if read.is_reverse else "+",
-        "read_start": read.query_alignment_start,
-        "read_end": read.query_alignment_end,
-        "is_secondary": read.is_secondary,
-        "is_supplementary": read.is_supplementary,
+        "read_id": read_id,
+        "mapping_quality": mapping_quality,
+        "strand": strand,
+        "read_start": read_start,
+        "read_end": read_end,
+        "is_secondary": is_secondary,
+        "is_supplementary": is_supplementary,
         "mapping_span": ref_end - ref_start,
     }
 
@@ -394,8 +430,6 @@ def _append_gene_intersections(
     min_overlap: Optional[int] = None,
 ) -> int:
     """Append gene intersections for a read into columnar storage."""
-    if not read.has_tag("SA"):
-        return 0
     if not gene_regions:
         return 0
 
@@ -460,9 +494,6 @@ def _append_combined_gene_intersections(
     min_overlap: Optional[int] = None,
 ) -> None:
     """Append overlaps from a combined tagged index into target/genome buckets."""
-    if not read.has_tag("SA"):
-        return
-
     if min_overlap is None:
         min_overlap = get_fusion_threshold("gene_overlap")
     ncls_index, tagged_regions = combined_index
@@ -1007,11 +1038,6 @@ def _find_gene_intersections(
     """
     read_rows = []
 
-    # Only process reads that have supplementary alignments (SA tag)
-    # This ensures we only look at reads that actually map to multiple locations
-    if not read.has_tag("SA"):
-        return read_rows
-
     # Early return if no gene regions
     if not gene_regions:
         return read_rows
@@ -1078,6 +1104,81 @@ def _find_gene_intersections(
             )
 
     return read_rows
+
+
+def _sa_alignment_spans(cigar: str) -> Tuple[int, int]:
+    """Return reference and aligned-query spans for an SA-tag CIGAR."""
+    reference_span = 0
+    query_span = 0
+    for length_text, operation in re.findall(r"(\d+)([MIDNSHP=X])", cigar or ""):
+        length = int(length_text)
+        if operation in "MDN=X":
+            reference_span += length
+        if operation in "MI=X":
+            query_span += length
+    return reference_span, query_span
+
+
+def _find_gene_intersections_for_values(
+    *,
+    ref_name: str,
+    ref_start: int,
+    ref_end: int,
+    read_id: str,
+    mapping_quality: int,
+    strand: str,
+    read_start: int,
+    read_end: int,
+    gene_regions: List[GeneRegion],
+    region_starts: Optional[List[int]] = None,
+    region_index: Optional[Tuple["NCLS", List[GeneRegion]]] = None,
+    min_overlap: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Find gene intersections for an alignment represented only by SA values."""
+    if not gene_regions:
+        return []
+    if min_overlap is None:
+        min_overlap = get_fusion_threshold("gene_overlap")
+
+    if region_index and _HAS_NCLS:
+        candidates = (
+            region_index[1][region_id]
+            for _, _, region_id in region_index[0].find_overlap(ref_start, ref_end)
+        )
+    else:
+        if region_starts is None:
+            region_starts = [region.start for region in gene_regions]
+        rightmost_idx = bisect.bisect_right(region_starts, ref_end)
+        candidates = (
+            gene_regions[index]
+            for index in range(rightmost_idx - 1, -1, -1)
+            if gene_regions[index].end >= ref_start
+        )
+
+    rows = []
+    for gene_region in candidates:
+        overlap_start = max(gene_region.start, ref_start)
+        overlap_end = min(gene_region.end, ref_end)
+        if overlap_end <= overlap_start or (overlap_end - overlap_start) <= min_overlap:
+            continue
+        rows.append(
+            _build_fusion_row_from_values(
+                ref_name=ref_name,
+                gene_start=gene_region.start,
+                gene_end=gene_region.end,
+                gene_name=gene_region.name,
+                read_id=read_id,
+                mapping_quality=mapping_quality,
+                strand=strand,
+                read_start=read_start,
+                read_end=read_end,
+                is_secondary=False,
+                is_supplementary=True,
+                ref_start=ref_start,
+                ref_end=ref_end,
+            )
+        )
+    return rows
 
 
 def _process_reads_for_fusions(
@@ -1725,7 +1826,9 @@ def process_bam_single_pass(
                             sa_tag_cached = read.get_tag("SA")
                         except KeyError:
                             sa_tag_cached = None
-                        has_supplementary = sa_tag_cached is not None
+                        has_supplementary = (
+                            sa_tag_cached is not None or read.is_supplementary
+                        )
                         # Optional: if we have a supplementary_read_ids list and the read is not in it,
                         # keep the read only when it still has an SA tag (same as has_tag("SA") before).
                         if supplementary_reads_set is not None and read.query_name not in supplementary_reads_set:
@@ -1832,7 +1935,9 @@ def process_bam_single_pass(
                         _flush_master_bed_rows(master_bed_rows)
                     
                     # Parse SA tag for supplementary master BED rows (one fetch: reuse sa_tag_cached or get once)
-                    if supplementary_reads_set is not None and supplementary_read_ids_complete:
+                    if read.is_supplementary:
+                        sa_tag_to_parse = None
+                    elif supplementary_reads_set is not None and supplementary_read_ids_complete:
                         try:
                             sa_tag_to_parse = read.get_tag("SA")
                         except KeyError:
@@ -1848,18 +1953,14 @@ def process_bam_single_pass(
                                 if not sa_entry:
                                     continue
                                 sa_parts = sa_entry.split(",")
-                                if len(sa_parts) >= 3:
+                                if len(sa_parts) >= 5:
                                     sa_chrom = sa_parts[0]
-                                    sa_pos = int(sa_parts[1])
+                                    sa_pos = max(0, int(sa_parts[1]) - 1)
                                     sa_strand = sa_parts[2]
-                                    sa_mapq = int(sa_parts[4]) if len(sa_parts) > 4 else 0
-                                    
-                                    # Estimate end position from CIGAR if available
-                                    if len(sa_parts) > 3:
-                                        # Simple estimate: use read length as span
-                                        sa_end = sa_pos + read.query_length
-                                    else:
-                                        sa_end = sa_pos + 100  # Default small span
+                                    sa_cigar = sa_parts[3]
+                                    sa_mapq = int(sa_parts[4])
+                                    sa_span, sa_query_span = _sa_alignment_spans(sa_cigar)
+                                    sa_end = sa_pos + sa_span
                                     sa_span = sa_end - sa_pos
                                     
                                     # Apply same quality thresholds to supplementary mappings
@@ -1869,6 +1970,54 @@ def process_bam_single_pass(
                                     # Skip mitochondrial chromosomes
                                     if sa_chrom == "chrM" or sa_chrom == "M":
                                         continue
+
+                                    sa_tokens = re.findall(r"(\d+)([MIDNSHP=X])", sa_cigar)
+                                    sa_read_start = (
+                                        int(sa_tokens[0][0])
+                                        if sa_tokens and sa_tokens[0][1] == "S"
+                                        else 0
+                                    )
+                                    sa_read_end = sa_read_start + sa_query_span
+
+                                    if sa_chrom in target_regions:
+                                        target_rows = _find_gene_intersections_for_values(
+                                            ref_name=sa_chrom,
+                                            ref_start=sa_pos,
+                                            ref_end=sa_end,
+                                            read_id=read_id,
+                                            mapping_quality=sa_mapq,
+                                            strand=sa_strand,
+                                            read_start=sa_read_start,
+                                            read_end=sa_read_end,
+                                            gene_regions=target_regions[sa_chrom],
+                                            region_starts=target_region_starts.get(sa_chrom),
+                                            region_index=target_region_indexes.get(sa_chrom),
+                                            min_overlap=min_overlap,
+                                        )
+                                        if target_rows:
+                                            target_read_alignments.setdefault(
+                                                read_id, []
+                                            ).extend(target_rows)
+
+                                    if sa_chrom in genome_regions:
+                                        genome_rows = _find_gene_intersections_for_values(
+                                            ref_name=sa_chrom,
+                                            ref_start=sa_pos,
+                                            ref_end=sa_end,
+                                            read_id=read_id,
+                                            mapping_quality=sa_mapq,
+                                            strand=sa_strand,
+                                            read_start=sa_read_start,
+                                            read_end=sa_read_end,
+                                            gene_regions=genome_regions[sa_chrom],
+                                            region_starts=genome_region_starts.get(sa_chrom),
+                                            region_index=genome_region_indexes.get(sa_chrom),
+                                            min_overlap=min_overlap,
+                                        )
+                                        if genome_rows:
+                                            genome_read_alignments.setdefault(
+                                                read_id, []
+                                            ).extend(genome_rows)
                                     
                                     # Add supplementary alignment as a row
                                     master_bed_rows.append(
@@ -1883,8 +2032,8 @@ def process_bam_single_pass(
                                             "read_id": read_id,
                                             "mapping_quality": sa_mapq,
                                             "strand": sa_strand,
-                                            "read_start": 0,
-                                            "read_end": read.query_length,
+                                            "read_start": sa_read_start,
+                                            "read_end": sa_read_end,
                                             "is_secondary": False,
                                             "is_supplementary": True,
                                             "mapping_span": sa_end - sa_pos,
@@ -1902,14 +2051,30 @@ def process_bam_single_pass(
         
         logger.info(f"Found {reads_with_supplementary_count} reads with supplementary alignments")
         
+        def _deduplicate_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+            unique = {}
+            for row in rows:
+                key = (
+                    row["read_id"],
+                    row["col4"],
+                    row["reference_id"],
+                    row["reference_start"],
+                    row["reference_end"],
+                    row["read_start"],
+                    row["read_end"],
+                )
+                unique[key] = row
+            return list(unique.values())
+
         # Process target panel candidates (comprehension inlined in 3.12 for speed)
         target_candidates = None
         if target_read_alignments:
             filtered_target_rows = [
                 align
                 for _rid, alignments in target_read_alignments.items()
-                if not _check_read_alignments_overlap(alignments)
-                for align in alignments
+                for deduplicated in [_deduplicate_rows(alignments)]
+                if not _check_read_alignments_overlap(deduplicated)
+                for align in deduplicated
                 if align.get("mapping_quality", 0) > min_mq and align.get("mapping_span", 0) > min_span
             ]
             if filtered_target_rows:
@@ -1923,8 +2088,9 @@ def process_bam_single_pass(
             filtered_genome_rows = [
                 align
                 for _rid, alignments in genome_read_alignments.items()
-                if not _check_read_alignments_overlap(alignments)
-                for align in alignments
+                for deduplicated in [_deduplicate_rows(alignments)]
+                if not _check_read_alignments_overlap(deduplicated)
+                for align in deduplicated
                 if align.get("mapping_quality", 0) > min_mq and align.get("mapping_span", 0) > min_span
             ]
             if filtered_genome_rows:
@@ -2148,13 +2314,6 @@ def process_bam_with_staging(
             supplementary_read_ids,
             supplementary_read_ids_complete,
         )
-        
-        # Apply fusion candidate filtering
-        if target_candidates is not None and not target_candidates.empty:
-            target_candidates = _filter_fusion_candidates(target_candidates)
-            
-        if genome_wide_candidates is not None and not genome_wide_candidates.empty:
-            genome_wide_candidates = _filter_fusion_candidates(genome_wide_candidates)
         
         # Save only non-empty candidate types. The pending counter records processed
         # BAMs independently, so empty placeholder Parquets are unnecessary.
@@ -2491,6 +2650,13 @@ def accumulate_fusion_candidates(
             "target_candidates": counts.get("target_candidates", 0),
             "genome_wide_candidates": counts.get("genome_wide_candidates", 0),
             "master_bed_candidates": counts.get("master_bed_candidates", 0),
+            "target_candidates_count": counts.get("target_candidates", 0),
+            "genome_wide_candidates_count": counts.get(
+                "genome_wide_candidates", 0
+            ),
+            "master_bed_candidates_count": counts.get(
+                "master_bed_candidates", 0
+            ),
             "elapsed_time": elapsed,
         }
     
@@ -2622,6 +2788,118 @@ def process_bam_file(
         }
 
 
+def _rebuild_filtered_fusion_candidates(
+    candidate_type: str,
+    output_csv_name: str,
+    output_pickle_name: str,
+    work_dir: str,
+    sample_id: str,
+) -> None:
+    """Rebuild reported fusion pairs from all accumulated sample candidates."""
+    output_csv_path = os.path.join(work_dir, sample_id, output_csv_name)
+    output_pickle_path = os.path.join(work_dir, sample_id, output_pickle_name)
+
+    def _remove_stale_outputs() -> None:
+        for path in (output_csv_path, output_pickle_path):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError as e:
+                logger.warning("Could not remove stale fusion output %s: %s", path, e)
+
+    dataset_dir = _get_parquet_dataset_dir(work_dir, sample_id, candidate_type)
+    dataset_files = glob.glob(os.path.join(dataset_dir, "*.parquet"))
+    legacy_path = _get_parquet_paths(work_dir, sample_id).get(candidate_type)
+    if not dataset_files and not (legacy_path and os.path.exists(legacy_path)):
+        _remove_stale_outputs()
+        return
+
+    read_to_genes: Dict[str, Set[str]] = defaultdict(set)
+    for batch in _iter_fusion_candidates_parquet_batches(
+        candidate_type, work_dir, sample_id, columns=["read_id", "col4"]
+    ):
+        if batch.empty:
+            continue
+        grouped = batch.groupby("read_id", observed=True)["col4"].unique()
+        for read_id, genes in grouped.items():
+            if pd.isna(read_id):
+                continue
+            read_to_genes[str(read_id)].update(
+                str(gene) for gene in genes if not pd.isna(gene)
+            )
+
+    pair_to_read_ids: Dict[Tuple[str, str], Set[str]] = defaultdict(set)
+    for read_id, genes in read_to_genes.items():
+        for pair in combinations(sorted(genes), 2):
+            pair_to_read_ids[pair].add(read_id)
+
+    min_support = get_fusion_threshold("read_support")
+    valid_pairs = {
+        pair
+        for pair, read_ids in pair_to_read_ids.items()
+        if len(read_ids) >= min_support
+    }
+    if not valid_pairs:
+        _remove_stale_outputs()
+        return
+
+    temp_csv_path = output_csv_path + ".tmp"
+    wrote_rows = False
+    write_header = True
+    try:
+        for batch in _iter_fusion_candidates_parquet_batches(
+            candidate_type, work_dir, sample_id, columns=None
+        ):
+            if batch.empty or "read_id" not in batch.columns:
+                continue
+            batch = batch.copy()
+            batch["read_id"] = batch["read_id"].astype(str)
+            tagged_batches = []
+            for pair in valid_pairs:
+                subset = batch[
+                    batch["read_id"].isin(pair_to_read_ids[pair])
+                    & batch["col4"].astype(str).isin(pair)
+                ]
+                if subset.empty:
+                    continue
+                subset = subset.copy()
+                subset["tag"] = ",".join(pair)
+                tagged_batches.append(subset)
+            if not tagged_batches:
+                continue
+
+            output_batch = pd.concat(tagged_batches, ignore_index=True)
+            output_batch = output_batch.drop_duplicates()
+            output_batch.to_csv(
+                temp_csv_path, mode="a", header=write_header, index=False
+            )
+            write_header = False
+            wrote_rows = True
+
+        if not wrote_rows:
+            _remove_stale_outputs()
+            return
+        os.replace(temp_csv_path, output_csv_path)
+    finally:
+        if os.path.exists(temp_csv_path):
+            try:
+                os.remove(temp_csv_path)
+            except OSError:
+                pass
+
+    try:
+        filtered_df = pd.read_csv(output_csv_path)
+        if not filtered_df.empty:
+            preprocess_fusion_data_standalone(filtered_df, output_pickle_path)
+    except Exception as e:
+        logger.warning(
+            "Could not preprocess %s from %s: %s",
+            candidate_type,
+            output_csv_path,
+            e,
+        )
+
+
 def _generate_output_files(
     sample_id: str,
     analysis_results: Dict[str, Any],
@@ -2651,6 +2929,15 @@ def _generate_output_files(
         output_csv_name: str,
         output_pickle_name: str,
     ) -> None:
+        _rebuild_filtered_fusion_candidates(
+            candidate_type,
+            output_csv_name,
+            output_pickle_name,
+            work_dir,
+            sample_id,
+        )
+        return
+
         state_path = os.path.join(work_dir, sample_id, f"{candidate_type}_filter_state.pkl")
         processed_read_ids: Set[str] = set()
         read_to_genes: Dict[str, Set[str]] = {}
@@ -6124,10 +6411,11 @@ def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
 
     # Group by read_id and aggregate col4 (Gene) values efficiently
     # Use sorted() to ensure deterministic tag generation regardless of input order
-    lookup = result.groupby("read_id", observed=True)["col4"].agg(
-        lambda x: ",".join(sorted(set(x)))
-    )
-    result["tag"] = result["read_id"].map(lookup)
+    if "tag" not in result.columns:
+        lookup = result.groupby("read_id", observed=True)["col4"].agg(
+            lambda x: ",".join(sorted(set(x)))
+        )
+        result["tag"] = result["read_id"].map(lookup)
 
     # Generate colors for each read_id group efficiently
     colors = result.groupby("read_id", observed=True)["col4"].apply(
