@@ -36,6 +36,7 @@ warnings.filterwarnings(
 )
 
 import os
+import copy
 import shutil
 import threading
 import time
@@ -411,6 +412,7 @@ class Job:
     workflow: List[str]
     step: int
     context: WorkflowContext
+    logical_work_count: Optional[int] = None
 
     def next_job(self) -> Optional["Job"]:
         if self.step + 1 >= len(self.workflow):
@@ -426,6 +428,7 @@ class Job:
             self.workflow,
             self.step + 1,
             self.context,
+            self.logical_work_count,
         )
 
 
@@ -819,6 +822,8 @@ def _job_work_count(job: Optional[Job]) -> int:
     """Return logical work items represented by a Job (files for batched jobs)."""
     if job is None:
         return 0
+    if job.logical_work_count is not None:
+        return max(1, int(job.logical_work_count))
     if job.job_type in CLASSIFICATION_TYPES:
         return 1
     try:
@@ -828,6 +833,33 @@ def _job_work_count(job: Optional[Job]) -> int:
     except Exception:
         pass
     return 1
+
+
+def _clone_workflow_context(
+    context: WorkflowContext, *, strip_batch: bool = True
+) -> WorkflowContext:
+    """Copy a context so parallel downstream branches cannot mutate each other."""
+    try:
+        metadata = copy.deepcopy(context.metadata)
+        results = copy.deepcopy(context.results)
+        history = copy.deepcopy(context.history)
+        errors = copy.deepcopy(context.errors)
+    except Exception:
+        metadata = dict(context.metadata)
+        results = dict(context.results)
+        history = list(context.history)
+        errors = list(context.errors)
+    if strip_batch:
+        metadata.pop("_batched_job", None)
+    return WorkflowContext(
+        filepath=context.filepath,
+        metadata=metadata,
+        results=results,
+        history=history,
+        errors=errors,
+        batch_id=context.batch_id,
+        batch_index=context.batch_index,
+    )
 
 
 # ---------- Real handler wrappers as Ray tasks ----------
@@ -1606,15 +1638,7 @@ class Coordinator:
     @staticmethod
     def _classifier_refresh_job(job: Job) -> Job:
         """Collapse a classifier trigger to one latest-state refresh."""
-        metadata = dict(job.context.metadata)
-        metadata.pop("_batched_job", None)
-        context = WorkflowContext(
-            filepath=job.context.filepath,
-            metadata=metadata,
-            results=dict(job.context.results),
-            history=list(job.context.history),
-            errors=list(job.context.errors),
-        )
+        context = _clone_workflow_context(job.context)
         return Job(
             job.job_id,
             job.job_type,
@@ -1622,6 +1646,7 @@ class Coordinator:
             job.workflow,
             job.step,
             context,
+            1,
         )
 
     def _queue_cumulative_classifier_job(self, job: Job) -> None:
@@ -1765,6 +1790,7 @@ class Coordinator:
                     # Only part absorbed; keep the candidate in the queue
                     # with a slimmer contexts list.
                     other_bjob.contexts = other_bjob.contexts[take:]
+                    other_job.logical_work_count = len(other_bjob.contexts)
                     waiting_list[i] = other_job
                     # No further room — loop will exit on room check.
                     i += 1
@@ -1795,8 +1821,10 @@ class Coordinator:
         except Exception:
             pass
 
-        if absorbed <= 0:
+        if merged_contexts <= 0:
             return job
+
+        job.logical_work_count = len(bjob.contexts)
 
         # Refresh the batched job's id so logs distinguish a coalesced batch
         # from the original one. The Job's job_id stays the same so existing
@@ -3477,10 +3505,20 @@ class Coordinator:
                             if prep_status != "success":
                                 continue
 
-                        # Use the updated context from the worker (which has the extracted sample ID) instead of the original context
-                        cnv_job = Job(next(_job_id_counter), t, q, [f"{q}:{t}"], 0, ctx)
-
-                        triggered_jobs.append(cnv_job)
+                        # Every fan-out branch owns its context. Batching stores
+                        # branch-specific metadata on that object.
+                        downstream_context = _clone_workflow_context(ctx)
+                        triggered_jobs.append(
+                            Job(
+                                next(_job_id_counter),
+                                t,
+                                q,
+                                [f"{q}:{t}"],
+                                0,
+                                downstream_context,
+                                1,
+                            )
+                        )
                 if (not is_skipped) and triggered_jobs:
                     # For CNV jobs, use batching if enabled
                     if self.enable_batching and self.sample_batcher:
@@ -3865,7 +3903,10 @@ class Coordinator:
                 origin=batched_job.origin,
                 workflow=batched_job.workflow,
                 step=batched_job.step,
-                context=batched_job.contexts[0],  # Use first context as primary
+                context=_clone_workflow_context(
+                    batched_job.contexts[0]
+                ),  # Use an isolated primary context
+                logical_work_count=len(batched_job.contexts),
             )
             # Store batch information in metadata
             regular_job.context.metadata["_batched_job"] = batched_job
