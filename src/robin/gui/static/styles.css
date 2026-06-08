@@ -1987,11 +1987,48 @@ a:active:not(.browser-window *) {
 }
 
 /* Folder picker (local_folder_picker dialog) */
-.workflow-folder-picker-path {
+.workflow-folder-picker-help,
+.workflow-folder-picker-status--muted,
+.workflow-folder-picker-muted {
   color: rgb(71 85 105);
 }
 
-.body--dark .workflow-folder-picker-path {
+.workflow-folder-picker-status {
+  min-height: 1.25rem;
+}
+
+.workflow-folder-picker-status--error {
+  color: rgb(185 28 28);
+}
+
+.workflow-folder-picker-selection {
+  color: rgb(51 65 85);
+}
+
+.workflow-folder-picker-list {
+  min-height: 12rem;
+  border: 1px solid rgb(226 232 240);
+  border-radius: 0.625rem;
+  background: rgb(255 255 255);
+}
+
+.workflow-folder-picker-row {
+  border-bottom: 1px solid rgb(241 245 249);
+  transition: background-color 120ms ease;
+}
+
+.workflow-folder-picker-row:last-child {
+  border-bottom: 0;
+}
+
+.workflow-folder-picker-folder-icon {
+  color: rgb(14 116 144);
+}
+
+.body--dark .workflow-folder-picker-help,
+.body--dark .workflow-folder-picker-status--muted,
+.body--dark .workflow-folder-picker-muted,
+.body--dark .workflow-folder-picker-selection {
   color: rgb(148 163 184);
 }
 
@@ -1999,16 +2036,25 @@ a:active:not(.browser-window *) {
   background: rgb(241 245 249);
 }
 
+.body--dark .workflow-folder-picker-list {
+  background: rgba(15, 23, 42, 0.45);
+  border-color: rgba(71, 85, 105, 0.7);
+}
+
+.body--dark .workflow-folder-picker-row {
+  border-bottom-color: rgba(51, 65, 85, 0.65);
+}
+
 .body--dark .workflow-folder-picker-row:hover {
   background: rgba(51, 65, 85, 0.4);
 }
 
-.workflow-folder-picker-file {
-  color: rgb(100 116 139);
+.body--dark .workflow-folder-picker-folder-icon {
+  color: rgb(103 232 249);
 }
 
-.body--dark .workflow-folder-picker-file {
-  color: rgb(148 163 184);
+.body--dark .workflow-folder-picker-status--error {
+  color: rgb(252 165 165);
 }
 
 /*
