@@ -158,7 +158,7 @@ You can add that to your shell config (after conda init).
 ### What ROBIN expects from your sequencing setup
 
 - BAMs from an Oxford Nanopore sequencer; **real-time HAC** basecalling (SUP not required).
-- **5hmC / 5mC** methylation calling enabled in MinKNOW.
+- **5mC / 5hmC modified-base calling in CpG contexts only** enabled in MinKNOW. Do **not** use all-context 5mC / 5hmC calling.
 - **Real-time alignment in MinKNOW** — ROBIN does not realign reads.
 - BAMs must respect the **[50,000-read limit](#bam-read-limit-and-minknow-settings)** and MinKNOW read-count output settings above.
 - ROBIN does **not** consume POD5 or FASTQ; you can disable those outputs in MinKNOW if you wish.

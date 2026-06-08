@@ -13,7 +13,7 @@ ROBIN expects:
 
 ## Basecalling
 
-Use **high-accuracy** basecalling with **5hmC / 5mc** methylation calling where ROBIN requires it. **Do not** disable methylation for off-target reads if your pipeline uses those signals.
+Use **high-accuracy (HAC)** basecalling with **5mC / 5hmC modified-base calling in CpG contexts only** where ROBIN requires methylation. Do **not** select an all-context 5mC / 5hmC model. Do not disable CpG methylation calling for off-target reads if your pipeline uses those signals.
 
 Example basecalling config (verify against your MinKNOW / kit release):
 
