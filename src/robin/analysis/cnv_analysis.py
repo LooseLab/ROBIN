@@ -1578,38 +1578,11 @@ def process_multiple_bams(
                     except Exception:
                         pass
 
-            # After processing all BAM files, get the final aggregated results
-            # We need to run one final analysis to get the aggregated CNV data
+            # The last loop result already reflects all BAMs accumulated in
+            # copy_numbers. Re-running the final BAM here would add its reads
+            # twice and waste a complete sample/reference analysis pass.
             logger.info("Generating final aggregated CNV results...")
-            
-            # Use the last BAM file to generate final results (copy_numbers now contains aggregated data)
-            final_bam_path = valid_bam_paths[-1]
-            
-            if USE_CNV_SUBPROCESS:
-                # For subprocess mode, we need to run one more analysis to get final results
-                final_result = run_cnv_analysis_subprocess(
-                    final_bam_path,
-                    {},
-                    ref_cnv_path,
-                    temp_dir,
-                    logger,
-                    threads=threads,
-                    mapq_filter=60,
-                    sample_id=sample_id,
-                    copy_numbers_path=copy_numbers_path,
-                    timeout=adaptive_timeout,
-                )
-            else:
-                # For direct mode, run one final analysis to get aggregated results
-                final_result = run_cnv_analysis_direct(
-                    final_bam_path,
-                    copy_numbers,  # This now contains aggregated data from all BAM files
-                    ref_cnv_dict_loaded,
-                    logger,
-                    threads=threads,
-                    mapq_filter=60,
-                    sample_id=sample_id,
-                )
+            final_result = subprocess_result
 
             if final_result is None or not final_result.get("success", False):
                 error_msg = (

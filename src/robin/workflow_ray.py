@@ -3971,6 +3971,12 @@ class Coordinator:
         if job_id is not None:
             jid = int(job_id)
             info = self.active.get(jid)
+            # Progress callbacks are fire-and-forget from worker processes and
+            # can arrive after _on_finish. The terminal callback has already
+            # credited the whole immutable work count, so a late update must
+            # not create additional completed work.
+            if info is None:
+                return
             work_count = int((info or {}).get("work_count", 1) or 1)
             already = self._file_progress_by_job.get(jid, 0)
             n = min(n, max(0, work_count - already))
