@@ -235,16 +235,18 @@ Some sites show an **MNP-Flex results** block in the sample page. It may include
 
 A toolbar may show whether the integration is **idle**, **busy**, or **running**. If you never see this block, your deployment may not use MNP-Flex, or credentials may not be configured.
 
-**Applying your Epignostix credentials in ROBIN:** The ROBIN process that runs the workflow and web UI reads **environment variables** on the **server** (not in the browser). Set the username and password Epignostix gave you before starting ROBIN, for example:
+**Applying your Epignostix credentials in ROBIN:** The ROBIN process that runs the workflow and web UI reads **environment variables** on the **server** (not in the browser). Set the username and password Epignostix gave you before starting ROBIN:
 
-- **`MNPFLEX_USERNAME`** — your Epignostix user name  
-- **`MNPFLEX_PASSWORD`** — your Epignostix password  
+```bash
+export MNPFLEX_USERNAME="your-epignostix-username"
+export MNPFLEX_PASSWORD="your-epignostix-password"
+```
 
 If either variable is missing, ROBIN does not show the MNP-Flex block and will not run the integration.
 
-How you set them depends on your setup: typically export them in the shell before `robin …` - whoever operates the sequencing machine or server should make them **persistent** and **secure** (never commit them to git).
-
-Your administrator may also tune optional settings (for example **`MNPFLEX_BASE_URL`**, **`MNPFLEX_WORKFLOW_ID`**, OAuth **`MNPFLEX_CLIENT_ID`** / **`MNPFLEX_CLIENT_SECRET`**, **`MNPFLEX_SCOPE`**) if Epignostix instructs you to; defaults match the standard Epignostix app integration.
+For the complete operator guide, including secure persistent configuration,
+optional API settings, data-transfer considerations, bulk operation, output
+files, and troubleshooting, see [MNP-Flex setup](../getting-started/mnpflex.md).
 
 ---
 

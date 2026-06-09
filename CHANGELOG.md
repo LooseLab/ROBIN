@@ -58,7 +58,7 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - IGV-ready BAM creation for consistent genome browser loading.
 - Workflow support for `igv_bam` and `snp_analysis` job types.
 - SNP analysis queueing from the GUI with concurrency control.
-- MNP-FLEX upload support for bedMethyl outputs for beta users with Epignostix credentials (https://epignostix.com/). Supply credentials via `MNPFLEX_USER` and `MNPFLEX_PASS` environment variables.
+- MNP-FLEX upload support for bedMethyl outputs for beta users with Epignostix credentials (https://epignostix.com/). The initial implementation used `MNPFLEX_USER` and `MNPFLEX_PASS`; current GUI and batch integrations use `MNPFLEX_USERNAME` and `MNPFLEX_PASSWORD`.
 - `robin utils mgmt` command to summarize MGMT CpG site methylation counts from `mgmt_sorted.bam` outputs.
 
 ### Changed

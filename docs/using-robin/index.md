@@ -35,6 +35,11 @@ Sign in, use the **menu**, **Dark mode**, **Links**, **Log out**, and read the t
 </div>
 
 <div class="robin-feature-card" markdown>
+### [MNP-Flex setup](../getting-started/mnpflex.md)
+Configure Epignostix credentials, submit samples, and troubleshoot the optional MNP-Flex integration.
+</div>
+
+<div class="robin-feature-card" markdown>
 ### [Troubleshooting](troubleshooting.md)
 Connection, sign-in, unknown sample, dark mode, reports.
 </div>
