@@ -27,6 +27,7 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **GUI responsiveness:** More sample-page loading and refresh work runs asynchronously, expensive coverage plots are deferred until after first paint, and per-sample component caches are bounded.
 - **Theme and IGV:** Stabilized per-user dark-mode persistence and table theme synchronization. IGV remains a deliberately light panel in either app theme and reports clearer loading/ready states.
 - **Documentation:** MinKNOW and quickstart guidance now explicitly requires 5mC/5hmC modified-base calling in **CpG contexts only** and warns against all-context models.
+- **Dependencies:** Raised the PyArrow requirement from `16.1` to `>=23.0.1` for the updated Parquet processing paths.
 - **Version:** Package and application metadata are aligned to `0.5.3`.
 
 ### Fixed
@@ -37,6 +38,7 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - Fixed workflow tracking inconsistencies for batched, skipped, finalized, and downstream-triggered jobs.
 - Fixed `--no-gui` workflows starting the GUI.
 - Replaced additional noisy diagnostic `print` output with structured logging.
+- Moved `[SamplePage]` section timing messages to debug logging so they are hidden during normal operation.
 
 ## [0.5.2] - 2026-05-05
 
