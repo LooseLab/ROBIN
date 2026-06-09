@@ -1005,6 +1005,34 @@ def _check_read_alignments_overlap(read_rows: List[Dict]) -> bool:
     return False
 
 
+def _canonicalize_gene_alignment_rows(
+    rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Collapse BAM and SA-tag representations of the same gene alignment."""
+    unique: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            row["read_id"],
+            row["col4"],
+            row["reference_id"],
+            row["reference_start"],
+            row["reference_end"],
+            row["strand"],
+        )
+        existing = unique.get(key)
+        if existing is None or (
+            existing.get("_from_sa_tag", False)
+            and not row.get("_from_sa_tag", False)
+        ):
+            unique[key] = row
+
+    result = []
+    for row in unique.values():
+        row.pop("_from_sa_tag", None)
+        result.append(row)
+    return result
+
+
 def _find_gene_intersections(
     read: pysam.AlignedSegment,
     ref_name: str,
@@ -1178,6 +1206,7 @@ def _find_gene_intersections_for_values(
                 ref_end=ref_end,
             )
         )
+        rows[-1]["_from_sa_tag"] = True
     return rows
 
 
@@ -2051,28 +2080,13 @@ def process_bam_single_pass(
         
         logger.info(f"Found {reads_with_supplementary_count} reads with supplementary alignments")
         
-        def _deduplicate_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-            unique = {}
-            for row in rows:
-                key = (
-                    row["read_id"],
-                    row["col4"],
-                    row["reference_id"],
-                    row["reference_start"],
-                    row["reference_end"],
-                    row["read_start"],
-                    row["read_end"],
-                )
-                unique[key] = row
-            return list(unique.values())
-
         # Process target panel candidates (comprehension inlined in 3.12 for speed)
         target_candidates = None
         if target_read_alignments:
             filtered_target_rows = [
                 align
                 for _rid, alignments in target_read_alignments.items()
-                for deduplicated in [_deduplicate_rows(alignments)]
+                for deduplicated in [_canonicalize_gene_alignment_rows(alignments)]
                 if not _check_read_alignments_overlap(deduplicated)
                 for align in deduplicated
                 if align.get("mapping_quality", 0) > min_mq and align.get("mapping_span", 0) > min_span
@@ -2088,7 +2102,7 @@ def process_bam_single_pass(
             filtered_genome_rows = [
                 align
                 for _rid, alignments in genome_read_alignments.items()
-                for deduplicated in [_deduplicate_rows(alignments)]
+                for deduplicated in [_canonicalize_gene_alignment_rows(alignments)]
                 if not _check_read_alignments_overlap(deduplicated)
                 for align in deduplicated
                 if align.get("mapping_quality", 0) > min_mq and align.get("mapping_span", 0) > min_span
