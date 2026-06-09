@@ -108,7 +108,7 @@ class MasterCSVManager:
                     # Ensure string fields are properly converted to strings
                     # to prevent float objects from being passed to split() methods
                     string_fields = [
-                        "devices", "basecall_models", "run_time", "flowcell_ids",
+                        "devices", "basecall_models", "modbase_models", "run_time", "flowcell_ids",
                         "run_info_run_time", "run_info_device", "run_info_model", 
                         "run_info_flow_cell", "samples_overview_job_types", "analysis_panel"
                     ]
@@ -147,6 +147,7 @@ class MasterCSVManager:
             "counter_fail_unmapped_bases": 0,
             "devices": "",
             "basecall_models": "",
+            "modbase_models": "",
             "run_time": "",
             "flowcell_ids": "",
             "run_info_run_time": "",
@@ -233,6 +234,14 @@ class MasterCSVManager:
                 models.append(model_str)
             data["basecall_models"] = ",".join(models)
             data["run_info_model"] = model_str
+
+        if bam_info.get("modbase_models"):
+            modbase_model = str(bam_info["modbase_models"])
+            existing_str = str(data.get("modbase_models", ""))
+            existing = existing_str.split(",") if existing_str else []
+            if modbase_model not in existing:
+                existing.append(modbase_model)
+            data["modbase_models"] = ",".join(existing)
 
         # Update flow cell IDs
         if bam_info.get("flow_cell_id"):

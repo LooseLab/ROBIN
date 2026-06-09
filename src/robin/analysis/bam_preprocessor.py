@@ -36,6 +36,9 @@ _RG_TAG = "RG"
 _ST_TAG = "st"
 _BASECALL_MODEL_PREFIX = "basecall_model="
 _RUNID_PREFIX = "runid="
+_MODBASE_MODELS_KEY = "modbase_models"
+_CPG_MODBASE_MARKER = "5mCG_5hmCG"
+_ALL_CONTEXT_MODBASE_MARKER = "5mC_5hmC"
 
 # Optional: configure BAM read threads via environment variable (pysam/htslib BGZF threads)
 # Set LJ_BAM_THREADS=4 (or higher) to enable multi-threaded decompression when reading BAMs.
@@ -139,17 +142,14 @@ def get_rg_tags_from_bam(sam_file) -> Optional[Tuple[Optional[str], ...]]:
     dt_tag = rg_tag.get("DT")
     ds_tag = rg_tag.get("DS", "")
 
-    # Optimize string splitting and processing
-    if ds_tag:
-        ds_tags = ds_tag.split(" ")
-        ds_tags_len = len(ds_tags)
-        basecall_model_tag = (
-            ds_tags[1].removeprefix(_BASECALL_MODEL_PREFIX) if ds_tags_len > 1 else None
-        )
-        runid_tag = ds_tags[0].removeprefix(_RUNID_PREFIX) if ds_tags else None
-    else:
-        basecall_model_tag = None
-        runid_tag = None
+    ds_fields = {}
+    for token in ds_tag.split():
+        key, separator, value = token.partition("=")
+        if separator:
+            ds_fields[key] = value
+    basecall_model_tag = ds_fields.get(_BASECALL_MODEL_PREFIX.removesuffix("="))
+    runid_tag = ds_fields.get(_RUNID_PREFIX.removesuffix("="))
+    modbase_models_tag = ds_fields.get(_MODBASE_MODELS_KEY)
 
     lb_tag = rg_tag.get("LB")
     pl_tag = rg_tag.get("PL")
@@ -167,6 +167,30 @@ def get_rg_tags_from_bam(sam_file) -> Optional[Tuple[Optional[str], ...]]:
         pm_tag,
         pu_tag,
         al_tag,
+        modbase_models_tag,
+    )
+
+
+def _get_modbase_model_warning(modbase_models: Optional[str]) -> Optional[str]:
+    """Return a user-facing warning for unsupported methylation model settings."""
+    if modbase_models and _CPG_MODBASE_MARKER in modbase_models:
+        return None
+    if modbase_models and _ALL_CONTEXT_MODBASE_MARKER in modbase_models:
+        return (
+            f"BAM uses all-context methylation calling ({modbase_models}). "
+            "Methylation classifications may be incorrect and slower than expected. "
+            "Use 5mCG_5hmCG modbase calling, which restricts methylation calling "
+            "to CpG contexts."
+        )
+    if modbase_models:
+        return (
+            f"BAM reports modbase models without 5mCG_5hmCG ({modbase_models}). "
+            "Methylation classifications may be incorrect. Use 5mCG_5hmCG "
+            "modbase calling in CpG contexts."
+        )
+    return (
+        "BAM header does not report modbase_models. Methylation classifications "
+        "may be incorrect. Use 5mCG_5hmCG modbase calling in CpG contexts."
     )
 
 
@@ -307,6 +331,7 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
                 "flow_cell_id": rg_tags[7],
                 "device_position": rg_tags[6],
                 "al": rg_tags[8],
+                "modbase_models": rg_tags[9],
                 "state": state,
                 "last_start": None,
                 "elapsed_time": None,
@@ -643,6 +668,7 @@ def extract_bam_metadata(bam_path: str) -> BamMetadata:
             "platform": bam_info.get("platform"),
             "device_position": bam_info.get("device_position"),
             "basecall_model": bam_info.get("basecall_model"),
+            "modbase_models": bam_info.get("modbase_models"),
             "flow_cell_id": bam_info.get("flow_cell_id"),
             "time_of_run": bam_info.get("time_of_run"),
             "file_path": bam_path,
@@ -693,6 +719,28 @@ def _send_alignment_warning_notification(
         )
     except Exception:
         # Fail silently if GUI is not available - logging already happened
+        pass
+
+
+def _send_modbase_warning_notification(
+    warning_msg: str, sample_id: str, filename: str
+) -> None:
+    """Send a methylation model warning to the GUI when available."""
+    try:
+        from robin.gui.app import send_gui_update
+        from robin.gui_launcher import UpdateType
+
+        send_gui_update(
+            UpdateType.WARNING_NOTIFICATION,
+            {
+                "message": warning_msg,
+                "sample_id": sample_id,
+                "filename": filename,
+                "title": "Methylation Model Warning",
+            },
+            priority=5,
+        )
+    except Exception:
         pass
 
 
@@ -761,6 +809,17 @@ def bam_preprocessing_handler(job, center: str = None):
         unmapped_reads = metadata.extracted_data.get("unmapped_reads", 0)
         total_reads = mapped_reads + unmapped_reads
         sample_id = metadata.extracted_data.get("sample_id", "unknown")
+
+        modbase_warning = _get_modbase_model_warning(
+            metadata.extracted_data.get("modbase_models")
+        )
+        if modbase_warning:
+            logger.warning(f"WARNING: {modbase_warning}")
+            metadata.extracted_data["modbase_warning"] = modbase_warning
+            job.context.add_metadata("modbase_warning", modbase_warning)
+            _send_modbase_warning_notification(
+                modbase_warning, sample_id, os.path.basename(bam_path)
+            )
         
         if total_reads > 0:
             # Check if BAM file has no mapped reads (no alignment data)
@@ -970,6 +1029,8 @@ def bam_preprocessing_handler(job, center: str = None):
                 ),
                 "has_mgmt_reads": metadata.extracted_data.get("has_mgmt_reads", False),
                 "mgmt_read_count": metadata.extracted_data.get("mgmt_read_count", 0),
+                "modbase_models": metadata.extracted_data.get("modbase_models"),
+                "modbase_warning": metadata.extracted_data.get("modbase_warning"),
             },
         )
 
@@ -1048,6 +1109,9 @@ def bam_preprocessing_handler(job, center: str = None):
             basecall_model = extracted_data.get("basecall_model")
             if basecall_model:
                 logger.debug(f"Basecall model: {basecall_model}")
+            modbase_models = extracted_data.get("modbase_models")
+            if modbase_models:
+                logger.debug(f"Modbase models: {modbase_models}")
             time_of_run = extracted_data.get("time_of_run")
             if time_of_run:
                 logger.debug(f"Run time: {time_of_run}")

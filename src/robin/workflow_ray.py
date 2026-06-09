@@ -1426,6 +1426,7 @@ class Coordinator:
         self._spool_counter: int = 0
         # per-sample tracking for GUI
         self.samples_by_id: Dict[str, Dict[str, Any]] = {}
+        self._gui_notifications: List[Dict[str, Any]] = []
         # Sample cleanup tracking to prevent unbounded memory growth
         self._sample_cleanup_interval: int = (
             5000  # Clean up every N jobs (conservative)
@@ -3209,6 +3210,26 @@ class Coordinator:
             else ("skipped" if is_skipped else "failed")
         )
 
+        if job.job_type == "preprocessing":
+            for metadata_key, title in (
+                ("modbase_warning", "Methylation Model Warning"),
+                ("alignment_warning", "BAM Alignment Warning"),
+            ):
+                warning_message = ctx.metadata.get(metadata_key)
+                if not warning_message:
+                    continue
+                self._gui_notifications.append(
+                    {
+                        "message": str(warning_message),
+                        "sample_id": ctx.get_sample_id(),
+                        "filename": os.path.basename(ctx.filepath),
+                        "title": title,
+                        "level": "warning",
+                    }
+                )
+            if len(self._gui_notifications) > 1000:
+                del self._gui_notifications[:-1000]
+
         # Append per-job duration entry to buffer (for batched writes)
         try:
             end_time = time.time()
@@ -4347,6 +4368,12 @@ class Coordinator:
         self._stats_cache_time = now
 
         return result
+
+    async def drain_gui_notifications(self) -> List[Dict[str, Any]]:
+        """Return pending worker-originated GUI notifications exactly once."""
+        notifications = self._gui_notifications
+        self._gui_notifications = []
+        return notifications
 
     async def get_cnv_cache_stats(self) -> Dict[str, Any]:
         """
@@ -6085,6 +6112,13 @@ async def run(
                             {"samples": samples},
                             priority=1,
                         )
+
+                        for notification in await coord.drain_gui_notifications.remote():
+                            _gui_send_update(
+                                _GUIUpdateType.WARNING_NOTIFICATION,
+                                notification,
+                                priority=5,
+                            )
 
                         await asyncio.sleep(1.0)
                     except asyncio.CancelledError:
