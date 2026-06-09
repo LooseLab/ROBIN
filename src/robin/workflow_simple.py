@@ -35,21 +35,63 @@ from robin.analysis.target_analysis import (
 )
 
 # ---------- Batch Configuration ----------
+# See workflow_ray.py for the full description. Two timeouts are honoured:
+#   - timeout_seconds:       used when no jobs of this type are in flight on
+#                            a worker (idle). Keeps the first batch reactive.
+#   - timeout_seconds_busy:  used when at least one job of this type is in
+#                            flight, so the batcher accumulates more files
+#                            into the next batch instead of dribbling out
+#                            many tiny batches.
+# Both can be globally overridden via env vars:
+#   ROBIN_BATCH_TIMEOUT_IDLE_S, ROBIN_BATCH_TIMEOUT_BUSY_S
+# Per-type override:
+#   ROBIN_BATCH_TIMEOUT_BUSY_S_<TYPE>   e.g. ROBIN_BATCH_TIMEOUT_BUSY_S_CNV=45
 BATCH_CONFIG: Dict[str, Dict[str, Any]] = {
     # Preprocessing should NOT be batched - each file needs individual sample ID extraction
-    "preprocessing": {"max_batch_size": 1, "timeout_seconds": 0},  # Force no batching
-    "bed_conversion": {"max_batch_size": 20, "timeout_seconds": 2},
-    "mgmt": {"max_batch_size": 20, "timeout_seconds": 2},
-    "cnv": {"max_batch_size": 50, "timeout_seconds": 2},
-    "target": {"max_batch_size": 20, "timeout_seconds": 2},
-    "fusion": {"max_batch_size": 20, "timeout_seconds": 2},
-    "sturgeon": {"max_batch_size": 20, "timeout_seconds": 2},
-    "nanodx": {"max_batch_size": 20, "timeout_seconds": 2},
-    "pannanodx": {"max_batch_size": 20, "timeout_seconds": 2},
-    "random_forest": {"max_batch_size": 20, "timeout_seconds": 2},
-    "igv_bam": {"max_batch_size": 20, "timeout_seconds": 2},
-    "snp_analysis": {"max_batch_size": 20, "timeout_seconds": 2},
+    "preprocessing": {"max_batch_size": 1, "timeout_seconds": 0, "timeout_seconds_busy": 0},
+    "bed_conversion": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "mgmt": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "cnv": {"max_batch_size": 50, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "target": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "fusion": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "sturgeon": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "nanodx": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "pannanodx": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "random_forest": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "igv_bam": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "snp_analysis": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
 }
+
+
+def _resolved_batch_timeouts(job_type: str) -> "tuple[float, float]":
+    """Return (idle_timeout_s, busy_timeout_s) for a job_type, applying env overrides.
+
+    Env precedence (most specific wins):
+      1. ROBIN_BATCH_TIMEOUT_BUSY_S_<TYPE>
+      2. ROBIN_BATCH_TIMEOUT_IDLE_S_<TYPE>
+      3. ROBIN_BATCH_TIMEOUT_BUSY_S
+      4. ROBIN_BATCH_TIMEOUT_IDLE_S
+      5. BATCH_CONFIG defaults
+    """
+    cfg = BATCH_CONFIG.get(job_type, {})
+    idle_default = float(cfg.get("timeout_seconds", 2) or 0)
+    busy_default = float(cfg.get("timeout_seconds_busy", idle_default) or idle_default)
+
+    def _f(name: str, fallback: float) -> float:
+        try:
+            v = os.environ.get(name)
+            return float(v) if v is not None and v != "" else fallback
+        except Exception:
+            return fallback
+
+    idle = _f("ROBIN_BATCH_TIMEOUT_IDLE_S", idle_default)
+    busy = _f("ROBIN_BATCH_TIMEOUT_BUSY_S", busy_default)
+    type_key = job_type.upper()
+    idle = _f(f"ROBIN_BATCH_TIMEOUT_IDLE_S_{type_key}", idle)
+    busy = _f(f"ROBIN_BATCH_TIMEOUT_BUSY_S_{type_key}", busy)
+    if busy < idle:
+        busy = idle
+    return idle, busy
 
 
 # === Shared Context for Each File ===
@@ -273,13 +315,35 @@ class BatchedJob:
 
 # === Sample Job Batcher ===
 class SampleJobBatcher:
-    def __init__(self):
+    def __init__(self, inflight_callback: Optional[Callable[[str], int]] = None):
         # sample_id -> job_type -> List[Job]
         self.pending_jobs: Dict[str, Dict[str, List[Job]]] = {}
         # sample_id -> job_type -> timestamp
         self.last_job_time: Dict[str, Dict[str, float]] = {}
         self.lock = threading.Lock()
-    
+        # Optional callback returning current inflight count for a job_type.
+        # When > 0, the batcher uses the longer "busy" timeout so it
+        # accumulates more files into one batch while the worker is occupied.
+        self._inflight_callback: Optional[Callable[[str], int]] = inflight_callback
+
+    def set_inflight_callback(self, cb: Optional[Callable[[str], int]]) -> None:
+        """(Re)wire the inflight count callback after construction."""
+        self._inflight_callback = cb
+
+    def _inflight_for(self, job_type: str) -> int:
+        if self._inflight_callback is None:
+            return 0
+        try:
+            return int(self._inflight_callback(job_type) or 0)
+        except Exception:
+            return 0
+
+    def _effective_timeout(self, job_type: str) -> float:
+        """Pick idle vs busy timeout based on whether the type currently has
+        any inflight jobs on a worker."""
+        idle, busy = _resolved_batch_timeouts(job_type)
+        return busy if self._inflight_for(job_type) > 0 else idle
+
     def add_job(self, job: Job) -> List[BatchedJob]:
         """Add a job and return any completed batches"""
         sample_id = job.get_sample_id()
@@ -342,8 +406,7 @@ class SampleJobBatcher:
                     if not jobs:
                         continue
                     
-                    config = BATCH_CONFIG.get(job_type, {"timeout_seconds": 10})
-                    timeout_seconds = config["timeout_seconds"]
+                    timeout_seconds = self._effective_timeout(job_type)
                     last_time = self.last_job_time[sample_id][job_type]
                     
                     if (current_time - last_time) >= timeout_seconds:
@@ -359,6 +422,28 @@ class SampleJobBatcher:
             self._cleanup_empty_entries()
         
         return timed_out_batches
+
+    def force_flush_type(self, job_type: str) -> List[BatchedJob]:
+        """Immediately flush whatever is pending for a given job_type across
+        all samples, regardless of timeout. Called when a worker for that type
+        becomes free so it has something to pick up instead of waiting out the
+        busy timeout."""
+        flushed: List[BatchedJob] = []
+        with self.lock:
+            for sample_id in list(self.pending_jobs.keys()):
+                jobs = self.pending_jobs.get(sample_id, {}).get(job_type, [])
+                if not jobs:
+                    continue
+                batch = self._create_batched_job(jobs, sample_id, job_type)
+                flushed.append(batch)
+                self.pending_jobs[sample_id][job_type] = []
+                if (
+                    sample_id in self.last_job_time
+                    and job_type in self.last_job_time[sample_id]
+                ):
+                    del self.last_job_time[sample_id][job_type]
+            self._cleanup_empty_entries()
+        return flushed
     
     def _create_batched_job(self, jobs: List[Job], sample_id: str, job_type: str) -> BatchedJob:
         """Create a batched job from a list of individual jobs"""
@@ -549,9 +634,22 @@ class WorkflowManager:
         # }
         self.samples_by_id: Dict[str, Dict[str, Any]] = {}
         
-        # Batching support
+        # Batching support. The batcher uses adaptive timeouts driven by
+        # the live per-type inflight count from self.active_jobs. When a
+        # type is idle, fire batches quickly; when busy, accumulate longer.
         self.enable_batching = enable_batching
-        self.sample_batcher = SampleJobBatcher() if enable_batching else None
+        self.sample_batcher = (
+            SampleJobBatcher(
+                inflight_callback=self._inflight_count_for_type
+            )
+            if enable_batching
+            else None
+        )
+
+        # Coalesce stats (exposed via get_stats() for debugging)
+        self.coalesce_events: int = 0
+        self.coalesce_jobs_absorbed: int = 0
+        self.coalesce_contexts_merged: int = 0
 
         # Define job type mappings to queues
         if use_separate_analysis_queues:
@@ -853,6 +951,28 @@ class WorkflowManager:
             try:
                 job = job_queue.get(timeout=1.0)
 
+                # Try to absorb compatible waiting siblings into this job's
+                # batch before processing. Mops up small-batch fragmentation
+                # caused by the per-(sample, type) batcher firing on its
+                # busy/idle timeout while the worker was occupied. No-op for
+                # non-batched jobs and for jobs tagged force_individual_batch.
+                if self.enable_batching:
+                    try:
+                        sid_for_coalesce = (
+                            job.get_sample_id()
+                            if hasattr(job, "get_sample_id")
+                            else "unknown"
+                        )
+                        if sid_for_coalesce and sid_for_coalesce != "unknown":
+                            self._coalesce_from_queue(
+                                job,
+                                job_queue,
+                                sid_for_coalesce,
+                                job.job_type,
+                            )
+                    except Exception:
+                        pass
+
                 # Track job start time and active status (this includes queue waiting time)
                 self.job_start_times[job.job_id] = time.time()
                 self.active_jobs[job.job_id] = {
@@ -967,7 +1087,9 @@ class WorkflowManager:
                             sid_finish, job.job_type, job.job_id in self.completed_jobs
                         )
 
-                    # Remove from active jobs
+                    # Remove from active jobs (this lowers our inflight count
+                    # for this type, so the batcher will start using the idle
+                    # timeout for it again).
                     if job.job_id in self.active_jobs:
                         del self.active_jobs[job.job_id]
                     if job.job_id in self.job_start_times:
@@ -980,6 +1102,15 @@ class WorkflowManager:
                         logger.debug(
                             f"Unmarked {job.job_type} job as running for sample {sample_id}"
                         )
+
+                    # A worker for this type just freed up. Force-flush any
+                    # batches the batcher is sitting on so this worker (or
+                    # another idle worker) has something to pick up
+                    # immediately, without waiting out the busy timeout.
+                    try:
+                        self._flush_batcher_for_type(job.job_type)
+                    except Exception:
+                        pass
 
                 job_queue.task_done()
 
@@ -1240,6 +1371,160 @@ class WorkflowManager:
                 
             except Exception:
                 time.sleep(1.0)
+
+    # --- Adaptive timeout / coalesce helpers ---
+    def _inflight_count_for_type(self, job_type: str) -> int:
+        """Return the number of jobs of ``job_type`` currently being processed
+        on a worker. Used by SampleJobBatcher to switch between idle and busy
+        timeouts."""
+        try:
+            return sum(
+                1 for info in self.active_jobs.values()
+                if info.get("job_type") == job_type
+            )
+        except Exception:
+            return 0
+
+    def _flush_batcher_for_type(self, job_type: str) -> None:
+        """Force-flush whatever the batcher is holding for ``job_type`` and
+        push the resulting batches into the relevant queue. Called when a
+        worker for that type frees up so it has something to pick up
+        immediately without waiting out the busy timeout."""
+        if not (self.enable_batching and self.sample_batcher):
+            return
+        try:
+            flushed = self.sample_batcher.force_flush_type(job_type)
+        except Exception:
+            return
+        if not flushed:
+            return
+        regular_jobs = self._convert_batched_jobs(flushed)
+        try:
+            self._enqueue_jobs_internal(regular_jobs)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _job_is_coalescable_batch(job: Optional[Job]) -> bool:
+        """A job is mergeable iff it carries a _batched_job and none of its
+        contexts opted out via force_individual_batch."""
+        if job is None:
+            return False
+        try:
+            bjob = job.context.metadata.get("_batched_job")
+        except Exception:
+            return False
+        if bjob is None:
+            return False
+        try:
+            for ctx in bjob.contexts:
+                if (ctx.metadata or {}).get("force_individual_batch"):
+                    return False
+        except Exception:
+            return False
+        return True
+
+    def _coalesce_from_queue(
+        self,
+        job: Job,
+        job_queue: queue.Queue,
+        sample_id: str,
+        job_type: str,
+    ) -> int:
+        """Absorb compatible siblings from ``job_queue`` into ``job``'s batch.
+
+        Scans the queue for other Jobs with the same ``sample_id`` and
+        ``job_type`` that also carry a _batched_job and aren't tagged
+        force_individual_batch, and merges their contexts into this job's
+        _batched_job up to ``max_batch_size``. Absorbed entries are removed
+        from the queue. Returns the number of waiting Jobs absorbed.
+        """
+        if not self._job_is_coalescable_batch(job):
+            return 0
+        if not sample_id or sample_id == "unknown":
+            return 0
+
+        bjob: BatchedJob = job.context.metadata.get("_batched_job")
+        cfg = BATCH_CONFIG.get(job_type, {"max_batch_size": 20})
+        try:
+            max_size = int(cfg.get("max_batch_size", 20))
+        except Exception:
+            max_size = 20
+        if max_size <= 1:
+            return 0
+        room = max_size - len(bjob.contexts)
+        if room <= 0:
+            return 0
+
+        absorbed = 0
+        merged_contexts = 0
+
+        # Manipulate the underlying deque under the queue's mutex. We adjust
+        # unfinished_tasks for each removed entry so q.task_done() / q.join()
+        # accounting stays balanced.
+        with job_queue.mutex:
+            dq = job_queue.queue
+            i = 0
+            while i < len(dq) and room > 0:
+                entry = dq[i]
+                if not isinstance(entry, Job) or entry.job_type != job_type:
+                    i += 1
+                    continue
+                try:
+                    entry_sid = entry.get_sample_id()
+                except Exception:
+                    i += 1
+                    continue
+                if entry_sid != sample_id:
+                    i += 1
+                    continue
+                if not self._job_is_coalescable_batch(entry):
+                    i += 1
+                    continue
+                other_bjob: BatchedJob = entry.context.metadata.get(
+                    "_batched_job"
+                )
+                take = min(room, len(other_bjob.contexts))
+                if take <= 0:
+                    i += 1
+                    continue
+                bjob.contexts.extend(other_bjob.contexts[:take])
+                room -= take
+                merged_contexts += take
+                if take >= len(other_bjob.contexts):
+                    # Whole entry absorbed; remove from the queue and balance
+                    # unfinished_tasks (which was incremented by put()).
+                    del dq[i]
+                    try:
+                        if job_queue.unfinished_tasks > 0:
+                            job_queue.unfinished_tasks -= 1
+                            if (
+                                job_queue.unfinished_tasks == 0
+                                and hasattr(job_queue, "all_tasks_done")
+                            ):
+                                job_queue.all_tasks_done.notify_all()
+                    except Exception:
+                        pass
+                    absorbed += 1
+                else:
+                    other_bjob.contexts = other_bjob.contexts[take:]
+                    i += 1
+                    # Loop will exit on room == 0.
+
+        if absorbed > 0:
+            try:
+                bjob.batch_id = (
+                    f"{sample_id}_{job_type}_coalesced_{int(time.time() * 1000)}"
+                )
+            except Exception:
+                pass
+            try:
+                self.coalesce_events += 1
+                self.coalesce_jobs_absorbed += absorbed
+                self.coalesce_contexts_merged += merged_contexts
+            except Exception:
+                pass
+        return absorbed
     
     def _convert_batched_jobs(self, batched_jobs: List[BatchedJob]) -> List[Job]:
         """Convert BatchedJob objects to regular Job objects for processing"""
@@ -1412,6 +1697,14 @@ class WorkflowManager:
                 "slow": slow_queue_size,
             },
             "active_by_worker": active_by_worker,
+            # Coalesce metrics (dispatch-time merging of small batches)
+            "coalesce_events": int(getattr(self, "coalesce_events", 0) or 0),
+            "coalesce_jobs_absorbed": int(
+                getattr(self, "coalesce_jobs_absorbed", 0) or 0
+            ),
+            "coalesce_contexts_merged": int(
+                getattr(self, "coalesce_contexts_merged", 0) or 0
+            ),
         }
 
     # === Per-sample tracking helpers ===

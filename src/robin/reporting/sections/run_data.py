@@ -10,6 +10,7 @@ from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle
 from .base import ReportSection
+from robin.analysis.bam_preprocessor import _get_modbase_model_warning
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,22 @@ class RunDataSection(ReportSection):
             return " ".join(f"{k}:{v}" for k, v in value.items())
         else:
             return str(value)
+
+    @staticmethod
+    def _master_value(master_data, key):
+        """Return a displayable master.csv value, including for older files."""
+        if key not in master_data.index:
+            return "Missing"
+        value = master_data.get(key)
+        if value is None:
+            return "Missing"
+        try:
+            if value != value:
+                return "Missing"
+        except Exception:
+            pass
+        text = str(value).strip()
+        return text if text else "Missing"
 
     def _create_info_table(self, data, title):
         """Create a formatted table for information display."""
@@ -115,6 +132,23 @@ class RunDataSection(ReportSection):
 
             # Get the first row of data (since master.csv has all data in one row)
             master_data = masterdf.iloc[0]
+            modbase_model = self._master_value(master_data, "modbase_models")
+            modbase_warning = _get_modbase_model_warning(
+                None if modbase_model == "Missing" else modbase_model
+            )
+
+            if modbase_warning:
+                warning_text = (
+                    f"<b>Methylation model warning:</b> {modbase_warning}"
+                )
+                self.summary_elements.append(
+                    Paragraph(warning_text, self.styles.styles["Warning"])
+                )
+                self.summary_elements.append(Spacer(1, 8))
+                self.elements.append(
+                    Paragraph(warning_text, self.styles.styles["Warning"])
+                )
+                self.elements.append(Spacer(1, 6))
 
             # Sample Information
             sample_info = [
@@ -122,7 +156,11 @@ class RunDataSection(ReportSection):
                 ("Run Start", self._format_timestamp(master_data["run_time"])),
                 ("Sequencing Device", master_data["devices"]),
                 ("Flowcell ID", master_data["flowcell_ids"]),
-                ("Basecalling Model", master_data["basecall_models"]),
+                (
+                    "Basecalling Model",
+                    self._master_value(master_data, "basecall_models"),
+                ),
+                ("Modbase Model", modbase_model),
             ]
             self.elements.append(
                 self._create_info_table(sample_info, "Sample Information")

@@ -8,6 +8,7 @@ import os
 import sys
 import time
 import re
+import hashlib
 from dataclasses import dataclass, field
 from typing import Dict, Any, Optional, List, Tuple
 from pathlib import Path
@@ -35,6 +36,9 @@ _RG_TAG = "RG"
 _ST_TAG = "st"
 _BASECALL_MODEL_PREFIX = "basecall_model="
 _RUNID_PREFIX = "runid="
+_MODBASE_MODELS_KEY = "modbase_models"
+_CPG_MODBASE_MARKER = "5mCG_5hmCG"
+_ALL_CONTEXT_MODBASE_MARKER = "5mC_5hmC"
 
 # Optional: configure BAM read threads via environment variable (pysam/htslib BGZF threads)
 # Set LJ_BAM_THREADS=4 (or higher) to enable multi-threaded decompression when reading BAMs.
@@ -77,6 +81,37 @@ class BamMetadata:
             self.processing_steps = []
 
 
+def _persist_supplementary_read_ids(
+    metadata: BamMetadata,
+    bam_path: str,
+    work_dir: str,
+) -> None:
+    """Persist a complete supplementary-read ID set under a BAM-specific path."""
+    supp_ids = metadata.extracted_data.get("supplementary_read_ids", [])
+    metadata.extracted_data["supplementary_read_ids_complete"] = True
+    metadata.extracted_data["supplementary_read_ids_count"] = len(supp_ids)
+    if not supp_ids:
+        metadata.extracted_data.pop("supplementary_read_ids", None)
+        metadata.extracted_data.pop("supplementary_read_ids_path", None)
+        return
+
+    sample_id = metadata.extracted_data.get("sample_id", "unknown")
+    supp_dir = os.path.join(work_dir, sample_id, "_supplementary_read_ids")
+    os.makedirs(supp_dir, exist_ok=True)
+    path_hash = hashlib.sha256(os.path.abspath(bam_path).encode("utf-8")).hexdigest()[:16]
+    supp_path = os.path.join(
+        supp_dir,
+        f"{os.path.basename(bam_path)}.{path_hash}.txt",
+    )
+    tmp_path = f"{supp_path}.tmp"
+    with open(tmp_path, "w") as f:
+        for read_id in sorted(supp_ids):
+            f.write(f"{read_id}\n")
+    os.replace(tmp_path, supp_path)
+    metadata.extracted_data["supplementary_read_ids_path"] = supp_path
+    metadata.extracted_data.pop("supplementary_read_ids", None)
+
+
 # ============================================================================
 # CORE EXTRACTION FUNCTIONS
 # ============================================================================
@@ -107,17 +142,14 @@ def get_rg_tags_from_bam(sam_file) -> Optional[Tuple[Optional[str], ...]]:
     dt_tag = rg_tag.get("DT")
     ds_tag = rg_tag.get("DS", "")
 
-    # Optimize string splitting and processing
-    if ds_tag:
-        ds_tags = ds_tag.split(" ")
-        ds_tags_len = len(ds_tags)
-        basecall_model_tag = (
-            ds_tags[1].removeprefix(_BASECALL_MODEL_PREFIX) if ds_tags_len > 1 else None
-        )
-        runid_tag = ds_tags[0].removeprefix(_RUNID_PREFIX) if ds_tags else None
-    else:
-        basecall_model_tag = None
-        runid_tag = None
+    ds_fields = {}
+    for token in ds_tag.split():
+        key, separator, value = token.partition("=")
+        if separator:
+            ds_fields[key] = value
+    basecall_model_tag = ds_fields.get(_BASECALL_MODEL_PREFIX.removesuffix("="))
+    runid_tag = ds_fields.get(_RUNID_PREFIX.removesuffix("="))
+    modbase_models_tag = ds_fields.get(_MODBASE_MODELS_KEY)
 
     lb_tag = rg_tag.get("LB")
     pl_tag = rg_tag.get("PL")
@@ -135,6 +167,30 @@ def get_rg_tags_from_bam(sam_file) -> Optional[Tuple[Optional[str], ...]]:
         pm_tag,
         pu_tag,
         al_tag,
+        modbase_models_tag,
+    )
+
+
+def _get_modbase_model_warning(modbase_models: Optional[str]) -> Optional[str]:
+    """Return a user-facing warning for unsupported methylation model settings."""
+    if modbase_models and _CPG_MODBASE_MARKER in modbase_models:
+        return None
+    if modbase_models and _ALL_CONTEXT_MODBASE_MARKER in modbase_models:
+        return (
+            f"BAM uses all-context methylation calling ({modbase_models}). "
+            "Methylation classifications may be incorrect and slower than expected. "
+            "Use 5mCG_5hmCG modbase calling, which restricts methylation calling "
+            "to CpG contexts."
+        )
+    if modbase_models:
+        return (
+            f"BAM reports modbase models without 5mCG_5hmCG ({modbase_models}). "
+            "Methylation classifications may be incorrect. Use 5mCG_5hmCG "
+            "modbase calling in CpG contexts."
+        )
+    return (
+        "BAM header does not report modbase_models. Methylation classifications "
+        "may be incorrect. Use 5mCG_5hmCG modbase calling in CpG contexts."
     )
 
 
@@ -275,6 +331,7 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
                 "flow_cell_id": rg_tags[7],
                 "device_position": rg_tags[6],
                 "al": rg_tags[8],
+                "modbase_models": rg_tags[9],
                 "state": state,
                 "last_start": None,
                 "elapsed_time": None,
@@ -419,6 +476,7 @@ def process_bam_reads(bam_file: str) -> Optional[Dict[str, Any]]:
             # OPTIMIZATION: Only store boolean flag and count, not the actual read IDs by default.
             # However, tests expect the list of unique read IDs; keep the behavior identical.
             bam_read["has_supplementary_reads"] = len(reads_with_supplementary) > 0
+            bam_read["supplementary_read_ids_complete"] = True
             bam_read["supplementary_read_ids"] = (
                 list(reads_with_supplementary) if reads_with_supplementary else []
             )
@@ -531,6 +589,9 @@ def calculate_bam_summary(bam_data: Dict[str, Any]) -> Dict[str, Any]:
         "reads_with_supplementary": bam_data.get("reads_with_supplementary", 0),
         "has_supplementary_reads": bam_data.get("has_supplementary_reads", False),
         # Add supplementary read IDs for fusion analysis
+        "supplementary_read_ids_complete": bam_data.get(
+            "supplementary_read_ids_complete", False
+        ),
         "supplementary_read_ids": bam_data.get("supplementary_read_ids", []),
         # Add MGMT read statistics
         "has_mgmt_reads": bam_data.get("has_mgmt_reads", False),
@@ -607,6 +668,7 @@ def extract_bam_metadata(bam_path: str) -> BamMetadata:
             "platform": bam_info.get("platform"),
             "device_position": bam_info.get("device_position"),
             "basecall_model": bam_info.get("basecall_model"),
+            "modbase_models": bam_info.get("modbase_models"),
             "flow_cell_id": bam_info.get("flow_cell_id"),
             "time_of_run": bam_info.get("time_of_run"),
             "file_path": bam_path,
@@ -657,6 +719,28 @@ def _send_alignment_warning_notification(
         )
     except Exception:
         # Fail silently if GUI is not available - logging already happened
+        pass
+
+
+def _send_modbase_warning_notification(
+    warning_msg: str, sample_id: str, filename: str
+) -> None:
+    """Send a methylation model warning to the GUI when available."""
+    try:
+        from robin.gui.app import send_gui_update
+        from robin.gui_launcher import UpdateType
+
+        send_gui_update(
+            UpdateType.WARNING_NOTIFICATION,
+            {
+                "message": warning_msg,
+                "sample_id": sample_id,
+                "filename": filename,
+                "title": "Methylation Model Warning",
+            },
+            priority=5,
+        )
+    except Exception:
         pass
 
 
@@ -725,6 +809,17 @@ def bam_preprocessing_handler(job, center: str = None):
         unmapped_reads = metadata.extracted_data.get("unmapped_reads", 0)
         total_reads = mapped_reads + unmapped_reads
         sample_id = metadata.extracted_data.get("sample_id", "unknown")
+
+        modbase_warning = _get_modbase_model_warning(
+            metadata.extracted_data.get("modbase_models")
+        )
+        if modbase_warning:
+            logger.warning(f"WARNING: {modbase_warning}")
+            metadata.extracted_data["modbase_warning"] = modbase_warning
+            job.context.add_metadata("modbase_warning", modbase_warning)
+            _send_modbase_warning_notification(
+                modbase_warning, sample_id, os.path.basename(bam_path)
+            )
         
         if total_reads > 0:
             # Check if BAM file has no mapped reads (no alignment data)
@@ -837,35 +932,15 @@ def bam_preprocessing_handler(job, center: str = None):
                 # Do not proceed with CSV updates or further processing
                 return
 
-        # Persist supplementary_read_ids to a temp file to avoid retaining large lists in memory
+        # Persist the complete ID set per BAM to avoid retaining large lists in memory.
         try:
-            supp_ids = metadata.extracted_data.get("supplementary_read_ids", [])
-            if supp_ids:
-                sample_id = metadata.extracted_data.get("sample_id", "unknown")
-                # Determine work directory for file storage
-                work_dir = job.context.metadata.get(
-                    "work_dir", os.path.dirname(bam_path)
-                )
-                sample_dir = os.path.join(work_dir, sample_id)
-                os.makedirs(sample_dir, exist_ok=True)
-                supp_path = os.path.join(sample_dir, "supplementary_read_ids.txt")
-                # Write one ID per line (atomic write)
-                tmp_path = supp_path + ".tmp"
-                with open(tmp_path, "w") as f:
-                    for rid in supp_ids:
-                        f.write(f"{rid}\n")
-                os.replace(tmp_path, supp_path)
-                # Record path and count in metadata
-                metadata.extracted_data["supplementary_read_ids_path"] = supp_path
-                metadata.extracted_data["supplementary_read_ids_count"] = len(supp_ids)
-                # Prune the potentially very large in-memory list to keep Ray results small
-                metadata.extracted_data.pop("supplementary_read_ids", None)
-            else:
-                # Ensure list isn't carried forward even if empty
-                metadata.extracted_data.pop("supplementary_read_ids", None)
+            work_dir = job.context.metadata.get(
+                "work_dir", os.path.dirname(bam_path)
+            )
+            _persist_supplementary_read_ids(metadata, bam_path, work_dir)
         except Exception:
-            # Non-fatal if we cannot persist; continue
-            pass
+            # Keep the complete in-memory list as a safe fallback.
+            metadata.extracted_data.pop("supplementary_read_ids_path", None)
 
         # Step 4: Update master.csv if we have comprehensive data
         if metadata.extracted_data and "sample_id" in metadata.extracted_data:
@@ -940,11 +1015,22 @@ def bam_preprocessing_handler(job, center: str = None):
                 "reads_with_supplementary": metadata.extracted_data.get(
                     "reads_with_supplementary", 0
                 ),
+                "supplementary_read_ids_complete": metadata.extracted_data.get(
+                    "supplementary_read_ids_complete", False
+                ),
+                "supplementary_read_ids_path": metadata.extracted_data.get(
+                    "supplementary_read_ids_path"
+                ),
+                "supplementary_read_ids_count": metadata.extracted_data.get(
+                    "supplementary_read_ids_count", 0
+                ),
                 "supplementary_read_ids": metadata.extracted_data.get(
                     "supplementary_read_ids", []
                 ),
                 "has_mgmt_reads": metadata.extracted_data.get("has_mgmt_reads", False),
                 "mgmt_read_count": metadata.extracted_data.get("mgmt_read_count", 0),
+                "modbase_models": metadata.extracted_data.get("modbase_models"),
+                "modbase_warning": metadata.extracted_data.get("modbase_warning"),
             },
         )
 
@@ -1023,6 +1109,9 @@ def bam_preprocessing_handler(job, center: str = None):
             basecall_model = extracted_data.get("basecall_model")
             if basecall_model:
                 logger.debug(f"Basecall model: {basecall_model}")
+            modbase_models = extracted_data.get("modbase_models")
+            if modbase_models:
+                logger.debug(f"Modbase models: {modbase_models}")
             time_of_run = extracted_data.get("time_of_run")
             if time_of_run:
                 logger.debug(f"Run time: {time_of_run}")

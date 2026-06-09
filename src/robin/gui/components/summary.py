@@ -6,16 +6,20 @@ import asyncio
 import threading
 import json
 import csv
+import time
 from datetime import datetime
 import hashlib
 import logging
+from collections import OrderedDict
 
 try:
-    from nicegui import ui
+    from nicegui import ui, background_tasks
 except ImportError:  # pragma: no cover
     ui = None
+    background_tasks = None
 
 from robin.classification_config import get_confidence_ui_tier
+from robin.analysis.bam_preprocessor import _get_modbase_model_warning
 from robin.gui.config import (
     get_confidence_level as get_classifier_confidence_level,
     is_section_enabled,
@@ -24,20 +28,53 @@ from robin.gui.config import (
 )
 
 
-_SUMMARY_CACHE: Dict[str, Dict[str, Any]] = {}
+_SUMMARY_CACHE: "OrderedDict[str, Dict[str, Any]]" = OrderedDict()
 _SUMMARY_CACHE_LOCK = threading.Lock()
+_SUMMARY_CACHE_MAX_SAMPLES = 64
+_SUMMARY_CACHE_MAX_AGE_SECONDS = 15 * 60
+
+
+def _evict_summary_cache_locked(now_ts: Optional[float] = None) -> None:
+    now_ts = now_ts or time.time()
+    stale_keys = [
+        key
+        for key, payload in _SUMMARY_CACHE.items()
+        if (now_ts - float(payload.get("_cached_at", 0.0))) > _SUMMARY_CACHE_MAX_AGE_SECONDS
+    ]
+    for key in stale_keys:
+        _SUMMARY_CACHE.pop(key, None)
+    while len(_SUMMARY_CACHE) > _SUMMARY_CACHE_MAX_SAMPLES:
+        _SUMMARY_CACHE.popitem(last=False)
 
 
 def _get_summary_cache(sample_dir: Path) -> Dict[str, Any]:
     key = str(sample_dir)
     with _SUMMARY_CACHE_LOCK:
-        return dict(_SUMMARY_CACHE.get(key, {}))
+        payload = _SUMMARY_CACHE.get(key)
+        if not payload:
+            return {}
+        now_ts = time.time()
+        if (now_ts - float(payload.get("_cached_at", 0.0))) > _SUMMARY_CACHE_MAX_AGE_SECONDS:
+            _SUMMARY_CACHE.pop(key, None)
+            return {}
+        _SUMMARY_CACHE.move_to_end(key)
+        return {k: v for k, v in payload.items() if k != "_cached_at"}
 
 
 def _set_summary_cache(sample_dir: Path, data: Dict[str, Any]) -> None:
     key = str(sample_dir)
     with _SUMMARY_CACHE_LOCK:
-        _SUMMARY_CACHE[key] = data
+        payload = dict(data)
+        payload["_cached_at"] = time.time()
+        _SUMMARY_CACHE[key] = payload
+        _SUMMARY_CACHE.move_to_end(key)
+        _evict_summary_cache_locked()
+
+
+def _clear_summary_cache(sample_dir: Path) -> None:
+    key = str(sample_dir)
+    with _SUMMARY_CACHE_LOCK:
+        _SUMMARY_CACHE.pop(key, None)
 
 
 def _run_summary_cell(
@@ -70,6 +107,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         {
             "run_time": "Loading...",
             "model": "Loading...",
+            "modbase_model": "Loading...",
             "device": "Loading...",
             "flow_cell": "Loading...",
             "panel": "Loading...",
@@ -83,7 +121,8 @@ def _run_info_section(sample_dir: Path, sample_id: str):
     )
 
     rt = run_info.get("run_time", "Not available")
-    model = run_info.get("model", "Not available")
+    model = run_info.get("model", "Missing")
+    modbase_model = run_info.get("modbase_model", "Missing")
     device = run_info.get("device", "Not available")
     flow = run_info.get("flow_cell", "Not available")
     panel = run_info.get("panel", "Not available")
@@ -95,6 +134,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         "Flow cell": "run_info_flow_cell",
         "Analysis panel": "analysis_panel",
         "Basecall model": "run_info_model",
+        "Modbase model": "modbase_models",
         "Sample ID": "Unique sample identifier",
         "BAM passed": "counter_bam_passed",
         "BAM failed": "counter_bam_failed",
@@ -109,6 +149,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         ("tag", "Flow cell", flow, ""),
         ("science", "Analysis panel", panel, ""),
         ("settings", "Basecall model", model, "run-summary-cell--basecall"),
+        ("biotech", "Modbase model", modbase_model, "run-summary-cell--basecall"),
         ("pin", "Sample ID", sample_id, "run-summary-cell--sample"),
     ]
     for icn, lab, key in (
@@ -132,6 +173,18 @@ def _run_info_section(sample_dir: Path, sample_id: str):
                 _run_summary_cell(
                     icn, lab, val, col_class=span, hint=ht
                 )
+        modbase_warning = _get_modbase_model_warning(
+            None if modbase_model == "Missing" else modbase_model
+        )
+        if modbase_warning:
+            with ui.element("div").classes(
+                "w-full flex items-start gap-2 rounded-lg border border-amber-400 "
+                "bg-amber-50 px-4 py-3 text-amber-900"
+            ):
+                ui.icon("warning").classes("text-amber-700 mt-0.5")
+                with ui.column().classes("gap-0"):
+                    ui.label("Methylation model warning").classes("font-semibold")
+                    ui.label(modbase_warning).classes("text-sm")
 
 
 @ui.refreshable
@@ -333,7 +386,12 @@ def add_summary_section(sample_dir: Path, sample_id: str, launcher: Any = None) 
 
     def _schedule_refresh() -> None:
         try:
-            asyncio.create_task(_refresh_summary_cache_async())
+            if background_tasks is None:
+                raise RuntimeError("NiceGUI background tasks unavailable")
+            background_tasks.create(
+                _refresh_summary_cache_async(),
+                name="summary-refresh",
+            )
         except RuntimeError:
             # If no running loop, fall back to sync refresh (still updates cache)
             data = _refresh_summary_cache_sync(sample_dir, sample_id, launcher)
@@ -349,7 +407,11 @@ def add_summary_section(sample_dir: Path, sample_id: str, launcher: Any = None) 
         30.0, _refresh_summary_cache_async, active=True, immediate=False
     )
     try:
-        ui.context.client.on_disconnect(lambda: refresh_timer.deactivate())
+        def _on_disconnect_cleanup() -> None:
+            refresh_timer.deactivate()
+            _clear_summary_cache(sample_dir)
+
+        ui.context.client.on_disconnect(_on_disconnect_cleanup)
     except Exception:
         pass
 
@@ -937,10 +999,11 @@ def _get_analysis_panel(sample_dir: Path) -> str:
     try:
         master_csv_path = sample_dir / "master.csv"
         if master_csv_path.exists():
-            import pandas as pd
-            df = pd.read_csv(master_csv_path)
-            if not df.empty and "analysis_panel" in df.columns:
-                panel = df.iloc[0]["analysis_panel"]
+            with master_csv_path.open("r", newline="") as fh:
+                reader = csv.DictReader(fh)
+                row = next(reader, None)
+            if row:
+                panel = row.get("analysis_panel", "")
                 if panel and str(panel).strip() != "":
                     return str(panel).strip()
         # No fallback to rCNS2 - return empty string if not found
@@ -958,6 +1021,7 @@ def _apply_master_csv_to_run_info(sample_dir: Path, run_info: Dict[str, str]) ->
     - ``run_info_run_time`` → run time (local clock, with seconds)
     - ``run_info_device`` / ``devices`` → Device
     - ``run_info_model`` / ``basecall_models`` → Basecall model
+    - ``modbase_models`` → Modbase model
     - ``run_info_flow_cell`` / ``flowcell_ids`` → Flow cell
     - ``analysis_panel`` → Analysis panel
     - ``counter_bam_passed`` / ``counter_bam_failed`` / ``counter_bases_count`` /
@@ -984,6 +1048,10 @@ def _apply_master_csv_to_run_info(sample_dir: Path, run_info: Dict[str, str]) ->
         model_val = get_ci(row, "run_info_model") or get_ci(row, "basecall_models")
         if model_val and str(model_val).strip():
             run_info["model"] = str(model_val).strip()
+
+        modbase_model_val = get_ci(row, "modbase_models")
+        if modbase_model_val and str(modbase_model_val).strip():
+            run_info["modbase_model"] = str(modbase_model_val).strip()
 
         device_val = get_ci(row, "run_info_device") or get_ci(row, "devices")
         if device_val and str(device_val).strip():
@@ -1043,6 +1111,7 @@ def _extract_run_information(sample_dir: Path, sample_id: str) -> Dict[str, str]
     run_info = {
         "run_time": "Not available",
         "model": "Not available",
+        "modbase_model": "Not available",
         "device": "Not available",
         "flow_cell": "Not available",
         "panel": "Not available",
@@ -1112,6 +1181,10 @@ def _extract_run_information(sample_dir: Path, sample_id: str) -> Dict[str, str]
         pass
 
     _apply_master_csv_to_run_info(sample_dir, run_info)
+    if run_info["model"] == "Not available":
+        run_info["model"] = "Missing"
+    if run_info["modbase_model"] == "Not available":
+        run_info["modbase_model"] = "Missing"
 
     return run_info
 
@@ -1139,7 +1212,11 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
             try:
                 import pandas as pd
 
-                cov_df = pd.read_csv(cov_main)
+                cov_df = pd.read_csv(
+                    cov_main,
+                    usecols=lambda c: c in {"covbases", "endpos"},
+                    dtype={"covbases": "float64", "endpos": "float64"},
+                )
 
                 # Calculate global coverage using the same formula as coverage component
                 if (
@@ -1160,7 +1237,16 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
             try:
                 import pandas as pd
 
-                bed_df = pd.read_csv(bed_cov)
+                bed_df = pd.read_csv(
+                    bed_cov,
+                    usecols=lambda c: c in {"bases", "length", "endpos", "startpos"},
+                    dtype={
+                        "bases": "float64",
+                        "length": "float64",
+                        "endpos": "float64",
+                        "startpos": "float64",
+                    },
+                )
 
                 # Calculate target coverage using the same formula as coverage component
                 if "bases" in bed_df.columns:
@@ -1333,7 +1419,13 @@ def _extract_mgmt_data(sample_dir: Path) -> Dict[str, Any]:
         try:
             import pandas as pd
 
-            df = pd.read_csv(latest_csv)
+            required_cols = {"status", "pred", "average"}
+            df = pd.read_csv(
+                latest_csv,
+                usecols=lambda c: c in required_cols,
+                nrows=1,
+                dtype=str,
+            )
 
             # Extract data using the same column names as the MGMT component
             if "status" in df.columns:
@@ -1793,5 +1885,3 @@ def _get_methylation_badge_color(methylation: str) -> str:
     except Exception as e:
         logging.debug(f"   Methylation: <access denied>: {e}")
         return "grey"
-
-

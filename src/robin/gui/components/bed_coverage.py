@@ -9,6 +9,8 @@ from datetime import datetime
 import threading
 import queue
 
+from robin.gui.theme import get_user_dark_mode
+
 try:
     from nicegui import ui
 except ImportError:  # pragma: no cover
@@ -18,13 +20,8 @@ logger = logging.getLogger("robin.gui.bed_coverage")
 
 
 def _is_dark_mode() -> bool:
-    """Quasar ``body--dark`` via app storage (see theme.frame)."""
-    try:
-        from nicegui import app
-
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    """Return normalized per-user dark mode."""
+    return get_user_dark_mode(default=False)
 
 
 def _bed_cov_echart_palette(dark: bool) -> Dict[str, str]:

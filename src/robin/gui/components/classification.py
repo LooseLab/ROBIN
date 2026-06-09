@@ -53,15 +53,12 @@ try:
 except ImportError:  # pragma: no cover
     ui = None
 
+from robin.gui.theme import get_user_dark_mode
+
 
 def _is_dark_mode() -> bool:
-    """Quasar body--dark is driven by app storage (see theme.frame)."""
-    try:
-        from nicegui import app
-
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    """Return normalized per-user dark mode."""
+    return get_user_dark_mode(default=False)
 
 
 def _echart_surface_palette() -> Dict[str, str]:
@@ -602,12 +599,7 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
 
         ``force=True`` reapplies after client/storage settle so first paint matches theme.
         """
-        try:
-            from nicegui import app
-
-            cur = bool(app.storage.user.get("dark_mode"))
-        except Exception:
-            cur = False
+        cur = get_user_dark_mode(default=False)
         if not force and _last_dark_sig[0] == cur:
             return
         _last_dark_sig[0] = cur

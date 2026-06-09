@@ -41,6 +41,48 @@ _LOGGER = logging.getLogger("robin.analysis.bed_conversion")
 # Cache CPGs master file path across instances
 _CPGS_MASTER_FILE_CACHE: Optional[str] = None
 
+_CPG_MODE_ENV = "ROBIN_MATKIT_CPG_MODE"
+
+
+def matkit_cpg_mode_enabled() -> bool:
+    """True when production should use reference CpG pileup (modkit --cpg --combine-strands)."""
+    return os.environ.get(_CPG_MODE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def resolve_reference_fasta(
+    *,
+    reference: Optional[str] = None,
+    job_metadata: Optional[Dict[str, Any]] = None,
+    work_dir: Optional[str] = None,
+    sample_id: Optional[str] = None,
+) -> Optional[str]:
+    """Resolve an indexed reference FASTA from handler args, job metadata, or sample dir."""
+    candidates: List[str] = []
+    if reference:
+        candidates.append(reference)
+    if job_metadata:
+        meta_ref = job_metadata.get("reference")
+        if meta_ref:
+            candidates.append(str(meta_ref))
+    if work_dir:
+        if sample_id:
+            candidates.append(os.path.join(work_dir, sample_id, "reference.fasta"))
+        candidates.append(os.path.join(work_dir, "reference.fasta"))
+    seen: set[str] = set()
+    for path in candidates:
+        real = os.path.realpath(path)
+        if real in seen:
+            continue
+        seen.add(real)
+        if os.path.isfile(real):
+            return real
+    return None
+
 
 def _is_fail_only_expected(job) -> bool:
     """True when conversion 'failures' are expected for fail-only BAM submissions."""
@@ -76,10 +118,25 @@ class BedConversionMetadata:
 class BedConversionAnalysis:
     """BAM to parquet conversion analysis worker"""
 
-    def __init__(self, work_dir=None, threads=1):
+    def __init__(
+        self,
+        work_dir=None,
+        threads=1,
+        *,
+        reference_fasta: Optional[str] = None,
+        cpg_mode: bool = False,
+    ):
         self.work_dir = work_dir or os.getcwd()
         self.threads = threads
-        
+        self.cpg_mode = cpg_mode
+        self.reference_fasta = reference_fasta
+
+        if self.cpg_mode and not self.reference_fasta:
+            raise ValueError(
+                "CpG matkit mode requires a reference FASTA "
+                f"(set {_CPG_MODE_ENV}=1 and pass --reference)"
+            )
+
         # Find required files and paths
         self.cpgs_master_file = self._find_cpgs_master_file()
 
@@ -89,6 +146,10 @@ class BedConversionAnalysis:
         # Use logger for initialization
         self.logger = _LOGGER
         self.logger.info("BAM to parquet conversion analysis initialized")
+        if self.cpg_mode:
+            self.logger.info(
+                f"matkit CpG pileup enabled (combine-strands, ref={self.reference_fasta})"
+            )
         self.logger.debug(f"Work directory: {self.work_dir}")
         self.logger.debug(f"CPGs master file: {self.cpgs_master_file}")
         self.logger.debug(f"Threads: {self.threads}")
@@ -202,6 +263,14 @@ class BedConversionAnalysis:
                 except OSError as e:
                     logger.warning(f"Failed to delete temporary file {file_path}: {e}")
 
+        matkit_kwargs: Dict[str, Any] = {}
+        if self.cpg_mode:
+            matkit_kwargs = {
+                "ref_fasta": self.reference_fasta,
+                "cpg_only": True,
+                "combine_strands": True,
+            }
+
         def process_single_bam(bam: str) -> str:
             logger.debug(f"Processing BAM file: {bam}")
             # Temporary parquet path: matkit writes 8-column parquet so merge_modkit_files can read directly (no CSV parse).
@@ -214,7 +283,7 @@ class BedConversionAnalysis:
                 # Run matkit on the BAM file (writes parquet when path ends in .parquet)
                 if run_matkit_callable is not None:
                     logger.debug("Running matkit callable")
-                    run_matkit_callable(bam, temp_file.name)
+                    run_matkit_callable(bam, temp_file.name, **matkit_kwargs)
                 else:
                     # Fallback if robin is not available (write empty parquet not used in real runs)
                     import pyarrow as pa
@@ -267,7 +336,11 @@ class BedConversionAnalysis:
     def _update_state(
         self, state: str, data: List[str], sample_id: str, file_number: int
     ) -> str:
-        """Update the state with new data from BAM processing - creates parquet file directly"""
+        """Update the state with new data from BAM processing - creates parquet file directly.
+
+        ``file_number`` is retained for callers (incremental naming); merge uses ``len(data)``
+        as the number of BAM-derived matkit inputs.
+        """
         logger = _LOGGER
 
         if merge_modkit_files is None:
@@ -285,8 +358,14 @@ class BedConversionAnalysis:
         }
 
         logger.debug(f"Creating parquet file: {state}")
-        logger.debug(f"Processing {len(data)} matkit files")
+        logger.debug(
+            "Processing %s matkit files (file_number=%s)",
+            len(data),
+            file_number,
+        )
 
+        # One matkit output file per BAM; merge needs the true count for metadata/cumulative stats
+        num_bam_files = len(data)
         # Use merge_modkit_files exactly like the working code
         # This function is designed to create binary parquet files, not text files
         merge_modkit_files(
@@ -297,7 +376,7 @@ class BedConversionAnalysis:
             sample_id,
             self.work_dir,
             mnpflex_config,
-            1,  # Number of BAM files that contributed
+            num_bam_files,
         )
 
         # When no reads passed the QS filter, all per-BAM parquets are empty and merge
@@ -331,7 +410,15 @@ class BedConversionAnalysis:
         return state
 
 def process_multiple_files(
-    bam_paths, metadata_list, work_dir, logger, threads=4, expected_fail_only: bool = False
+    bam_paths,
+    metadata_list,
+    work_dir,
+    logger,
+    threads=4,
+    expected_fail_only: bool = False,
+    *,
+    reference_fasta: Optional[str] = None,
+    cpg_mode: bool = False,
 ):
     """
     Process multiple BAM files for bed conversion analysis.
@@ -387,15 +474,22 @@ def process_multiple_files(
         analysis_result["processing_steps"].append("directory_created")
 
         # Initialize bed conversion analysis
-        bed_analyzer = BedConversionAnalysis(work_dir=work_dir, threads=threads)
+        bed_analyzer = BedConversionAnalysis(
+            work_dir=work_dir,
+            threads=threads,
+            reference_fasta=reference_fasta,
+            cpg_mode=cpg_mode,
+        )
         
         logger.info("Initialized bed conversion analyzer")
         analysis_result["processing_steps"].append("analyzer_initialized")
 
-        # Process all BAMs in one call so _process_bams can run them in parallel (threads)
-        valid_bam_paths = [p for p in bam_paths if os.path.exists(p)]
+        # Single pass: collect existing paths and warn on misses
+        valid_bam_paths: List[str] = []
         for p in bam_paths:
-            if not os.path.exists(p):
+            if os.path.exists(p):
+                valid_bam_paths.append(p)
+            else:
                 logger.warning(f"BAM file not found: {p}")
         if not valid_bam_paths:
             analysis_result["error_message"] = "No BAM files found or all paths missing"
@@ -465,7 +559,31 @@ def process_multiple_files(
         return analysis_result
 
 
-def bed_conversion_handler(job, work_dir=None):
+def _bed_conversion_matkit_options(
+    job,
+    work_dir: Optional[str],
+    reference: Optional[str],
+    sample_id: Optional[str],
+) -> tuple[Optional[str], bool]:
+    """Return (reference_fasta, cpg_mode) for matkit extraction."""
+    cpg_mode = matkit_cpg_mode_enabled()
+    if not cpg_mode:
+        return None, False
+    ref_path = resolve_reference_fasta(
+        reference=reference,
+        job_metadata=job.context.metadata,
+        work_dir=work_dir,
+        sample_id=sample_id,
+    )
+    if not ref_path:
+        raise FileNotFoundError(
+            f"{_CPG_MODE_ENV} is enabled but no reference FASTA was found. "
+            "Pass --reference to robin, or place reference.fasta in the sample/work directory."
+        )
+    return ref_path, True
+
+
+def bed_conversion_handler(job, work_dir=None, reference=None):
     """
     Handler function for BAM to parquet conversion jobs.
     This function processes BAM files for parquet conversion analysis.
@@ -473,6 +591,7 @@ def bed_conversion_handler(job, work_dir=None):
     Args:
         job: The workflow job containing file and metadata
         work_dir: Optional base directory for output (defaults to BAM file directory)
+        reference: Optional reference FASTA (required when ROBIN_MATKIT_CPG_MODE is enabled)
     """
     try:
         # Get job-specific logger
@@ -511,6 +630,14 @@ def bed_conversion_handler(job, work_dir=None):
                 batch_work_dir = work_dir
                 logger.debug(f"Using specified work directory: {batch_work_dir}")
             
+            ref_fasta, cpg_mode = _bed_conversion_matkit_options(
+                job, batch_work_dir, reference, sample_id
+            )
+            if cpg_mode:
+                logger.info(
+                    f"Using matkit CpG pileup for bed conversion (ref={ref_fasta})"
+                )
+
             # Process all BAM files in the batch using the new aggregated function
             logger.info(f"Processing {batch_size} BAM files as aggregated batch for sample '{sample_id}'")
             batch_result = process_multiple_files(
@@ -520,6 +647,8 @@ def bed_conversion_handler(job, work_dir=None):
                 logger=logger,
                 threads=1,  # Default thread count
                 expected_fail_only=bool(suppress_expected),
+                reference_fasta=ref_fasta,
+                cpg_mode=cpg_mode,
             )
             
             # Store batch results in job context (maintain compatibility with existing structure)
@@ -566,6 +695,8 @@ def bed_conversion_handler(job, work_dir=None):
                         "processing_steps": batch_result.get("processing_steps", []),
                         "files_processed": batch_result.get("files_processed", batch_size),
                         "total_files": batch_result.get("total_files", batch_size),
+                        "matkit_cpg_mode": cpg_mode,
+                        "reference_fasta": ref_fasta,
                     },
                 )
             
@@ -591,8 +722,21 @@ def bed_conversion_handler(job, work_dir=None):
                 os.makedirs(work_dir, exist_ok=True)
                 logger.debug(f"Using specified work directory: {work_dir}")
 
+            sample_id = bam_metadata.get("sample_id", job.context.get_sample_id())
+            ref_fasta, cpg_mode = _bed_conversion_matkit_options(
+                job, work_dir, reference, sample_id
+            )
+            if cpg_mode:
+                logger.info(
+                    f"Using matkit CpG pileup for bed conversion (ref={ref_fasta})"
+                )
+
             # Create BAM to parquet conversion analysis instance
-            bed_analyzer = BedConversionAnalysis(work_dir=work_dir)
+            bed_analyzer = BedConversionAnalysis(
+                work_dir=work_dir,
+                reference_fasta=ref_fasta,
+                cpg_mode=cpg_mode,
+            )
 
             # Process the BAM file
             bed_result = bed_analyzer.process_bam_file(bam_path, bam_metadata)
@@ -629,6 +773,8 @@ def bed_conversion_handler(job, work_dir=None):
                         "analysis_time": bed_result.analysis_timestamp,
                         "parquet_path": bed_result.parquet_path,
                         "processing_steps": bed_result.processing_steps,
+                        "matkit_cpg_mode": cpg_mode,
+                        "reference_fasta": ref_fasta,
                     },
                 )
                 logger.info(

@@ -7,6 +7,42 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 
 ## [Unreleased]
 
+### Added
+- **MNP-Flex setup and use:** Added a dedicated setup guide covering Epignostix credentials, optional API settings, data transfer, generated files, bulk operation, and troubleshooting. The GUI and documentation now recommend running MNP-Flex only after at least **12 hours of sequencing data** have been generated.
+- **Methylation model safeguards:** ROBIN now reads `modbase_models` from BAM headers, records it in sample metadata, displays it in the run summary and reports, and warns when all-context, unknown, or missing modified-base models are detected. CpG-only `5mCG_5hmCG` calling remains the recommended configuration.
+- **Reference-based CpG extraction:** Added optional `ROBIN_MATKIT_CPG_MODE=1` support for CpG-only pileup with strand combination; this mode requires the workflow reference FASTA.
+- **Report exports:** Individual and bulk report dialogs can produce PDF reports, CSV ZIP bundles, and sample-tracking TSV exports. MNP-Flex summary, hierarchy, and score data are included in export artifacts when available.
+- **Watched folders:** The folder picker supports selecting and adding multiple watch directories in one operation.
+- **Large result tables:** Added server-side pagination, search, and filtering for large SNP, coverage, and fusion tables to reduce browser memory use.
+
+### Changed
+- **Job batching:** Reduced small-batch fragmentation with adaptive idle/busy timeouts, worker-release flushing, and dispatch-time coalescing. Global and per-job-type timeouts can be configured with `ROBIN_BATCH_TIMEOUT_IDLE_S`, `ROBIN_BATCH_TIMEOUT_BUSY_S`, and their `_<TYPE>` variants; coordinator statistics now expose coalescing activity.
+- **Workflow scheduling:** Added separate preprocessing and bed-conversion concurrency, cumulative classifier trigger coalescing, per-file progress for batched jobs, improved pending/completed counters, and richer per-queue activity statistics.
+- **Large-dataset reliability:** Refined Ray queue admission and backpressure handling, including configurable waiting caps and burst slack, so completion callbacks continue to drain work under heavy load.
+- **Sample finalization:** Improved shutdown-time `target.bam` finalization and the SNP finalize-first path, including clearer progress and failure reporting.
+- **Fusion processing:** Fusion jobs are skipped when preprocessing finds no supplementary alignments. Supplementary-read IDs are persisted per BAM, staging data uses append-only Parquet datasets, empty staging files are avoided, and compact native dtypes reduce conversion overhead.
+- **Fusion calling:** SA-tag alignments are incorporated directly, duplicate BAM/SA representations are collapsed, supported fusion pairs are rebuilt from accumulated candidates, and unchanged breakpoint BED files are not rewritten.
+- **Master BED generation:** Master BED files are regenerated only when their target, CNV, or fusion source content changes.
+- **Target analysis:** Target accumulation now claims only complete staging sets, uses faster Parquet merging, and counts primary alignments for target read metrics.
+- **GUI responsiveness:** More sample-page loading and refresh work runs asynchronously, expensive coverage plots are deferred until after first paint, and per-sample component caches are bounded.
+- **Theme and IGV:** Stabilized per-user dark-mode persistence and table theme synchronization. IGV remains a deliberately light panel in either app theme and reports clearer loading/ready states.
+- **Documentation:** MinKNOW and quickstart guidance now explicitly requires 5mC/5hmC modified-base calling in **CpG contexts only** and warns against all-context models.
+- **Version:** Package and application metadata are aligned to `0.5.2`.
+
+### Fixed
+- Fixed Ray coordinator deadlocks and frozen completion counters when waiting queues reached or briefly exceeded their configured capacity.
+- Fixed CNV double-counting caused by processing the final BAM twice during batched analysis.
+- Fixed target read counts including secondary or supplementary alignments and prevented incomplete staging sets from being merged.
+- Fixed duplicate fusion alignments and missed supplementary alignments that were represented only in SA tags.
+- Fixed workflow tracking inconsistencies for batched, skipped, finalized, and downstream-triggered jobs.
+- Fixed `--no-gui` workflows starting the GUI.
+- Replaced additional noisy diagnostic `print` output with structured logging.
+
+## [0.5.2] - 2026-05-05
+
+### Changed
+- Improved workflow throughput for very large datasets by refining queue backpressure and job-admission behavior so the pipeline sustains progress more reliably under heavy load.
+
 ## [0.5.1] - 2026-04-30
 
 ### Changed

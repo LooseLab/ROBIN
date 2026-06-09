@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
+import asyncio
 import json
 import time
 import os
@@ -18,7 +19,135 @@ except ImportError:  # pragma: no cover
     ui = None
     app = None
 
-from robin.gui.theme import styled_table, register_theme_sync_callback
+from robin.gui.theme import (
+    styled_table,
+    register_theme_sync_callback,
+    get_user_dark_mode,
+)
+
+# Shared paged table renderer to avoid materializing full row lists for large DataFrames.
+def _render_paged_df_table(
+    df: pd.DataFrame,
+    columns: List[Dict[str, Any]],
+    *,
+    pagination_default: int = 100,
+    class_size: str = "table-xs",
+    search_placeholder: str = "Search...",
+) -> Any:
+    """Quasar server-side pagination over a bounded ``source_df`` slice (Python is source of truth)."""
+    from robin.gui.theme import (
+        clamp_qtable_server_pagination,
+        styled_server_paged_table,
+        wire_qtable_server_pagination_handlers,
+    )
+
+    preview_mode = len(df) > 50_000
+    source_df = df.iloc[:5_000].copy() if preview_mode else df
+    n_rows = len(source_df)
+    page_state: Dict[str, Any] = {
+        "filtered_positions": list(range(n_rows)),
+    }
+
+    total0 = len(page_state["filtered_positions"])
+    pd_default = int(pagination_default)
+    init_pagination = clamp_qtable_server_pagination(
+        {
+            "sortBy": None,
+            "descending": False,
+            "page": 1,
+            "rowsPerPage": pd_default,
+            "rowsNumber": total0,
+        },
+        rows_number=total0,
+        rows_per_page_default=pd_default,
+    )
+    _, table = styled_server_paged_table(
+        columns=columns,
+        rows=[],
+        pagination=init_pagination,
+        row_key="__row_idx",
+        class_size=class_size,
+        rows_per_page_options=[25, 50, 100, 250],
+    )
+
+    count_label = ui.label("").classes("text-xs text-gray-500")
+    if preview_mode:
+        ui.label(
+            f"Preview mode: showing first {len(source_df):,} rows of {len(df):,}."
+        ).classes("text-xs text-amber-600")
+
+    def _fill_from_pagination(pag: Dict[str, Any]) -> None:
+        total = len(page_state["filtered_positions"])
+        pag = clamp_qtable_server_pagination(
+            pag,
+            rows_number=total,
+            rows_per_page_default=pd_default,
+        )
+        rpp = int(pag["rowsPerPage"])
+        page = int(pag["page"])
+        start = (page - 1) * rpp
+        end = start + rpp
+        positions = page_state["filtered_positions"]
+        slice_pos = positions[start:end]
+        page_rows = (
+            source_df.iloc[slice_pos].reset_index(drop=True).to_dict("records")
+            if slice_pos
+            else []
+        )
+        for i, pos in enumerate(slice_pos):
+            page_rows[i]["__row_idx"] = int(pos)
+        table.rows = page_rows
+        table.pagination = pag
+        count_label.text = (
+            f"{total} rows match search ({len(df)} total in source)"
+            if total
+            else f"0 rows match ({len(df)} total in source)"
+        )
+        table.update()
+
+    wire_qtable_server_pagination_handlers(table, _fill_from_pagination)
+
+    def _apply_search(term: str) -> None:
+        txt = str(term or "").strip().lower()
+        if not txt:
+            page_state["filtered_positions"] = list(range(n_rows))
+        else:
+            filtered: List[int] = []
+            for pos in range(n_rows):
+                row = source_df.iloc[pos]
+                for col in source_df.columns:
+                    value = row.get(col)
+                    if value is not None and txt in str(value).lower():
+                        filtered.append(pos)
+                        break
+            page_state["filtered_positions"] = filtered
+        pag = clamp_qtable_server_pagination(
+            dict(table.pagination),
+            rows_number=len(page_state["filtered_positions"]),
+            rows_per_page_default=pd_default,
+        )
+        pag["page"] = 1
+        _fill_from_pagination(pag)
+
+    with table.add_slot("top-right"):
+        search_input = ui.input(placeholder=search_placeholder).props(
+            "type=search dense clearable"
+        )
+        search_input.on("update:model-value", lambda e: _apply_search(getattr(e, "value", "")))
+
+    for col in table.columns:
+        col["sortable"] = False
+
+    _fill_from_pagination(init_pagination)
+    try:
+        def _cleanup_table_state() -> None:
+            page_state["filtered_positions"] = []
+            table.rows = []
+
+        ui.context.client.on_disconnect(_cleanup_table_state)
+    except Exception:
+        pass
+    return table
 
 # --- Coverage charts (design.md §9.5): on/off colours, mean line, outlier palette ---
 _COV_OUTLIER_LINE_PALETTE_LIGHT = [
@@ -154,10 +283,7 @@ def _cov_scatter_outlier_style() -> Dict[str, Any]:
 
 
 def _cov_ui_dark() -> bool:
-    try:
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    return get_user_dark_mode(default=False)
 
 
 def _cov_on_off_colors() -> Tuple[str, str]:
@@ -530,7 +656,7 @@ def _apply_lga_gene_bar_chrome(ec: Any) -> None:
 
 def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
     """Add the IGV viewer section to a page.
-    
+
     Args:
         launcher: The GUI launcher instance for state management
         sample_dir: Path to the sample directory
@@ -565,19 +691,22 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
         ui.label("Genome: hg38 · Interactive alignment view").classes(
             "classification-insight-meta mb-2"
         )
-        igv_div = ui.element("div").classes(
-            "w-full h-[900px] border border-slate-200/90 rounded-lg overflow-hidden "
-            "dark:border-slate-700/80"
-        )
-        igv_div._props["id"] = "igv-container"
-        igv_status = ui.label("Initializing IGV viewer…").classes(
-            "classification-insight-meta"
-        )
+        with ui.column().classes("igv-light-island w-full min-w-0 gap-2 p-2 md:p-3"):
+            igv_div = ui.element("div").classes(
+                "igv-light-island__viewer w-full h-[900px] rounded-lg overflow-hidden"
+            )
+            igv_div._props["id"] = "igv-container"
+            igv_status = ui.label("Initializing IGV viewer…").classes(
+                "classification-insight-meta"
+            )
 
-        igv_lib_status = ui.label("IGV library: checking…").classes(
-            "classification-insight-foot"
-        )
-        
+            igv_lib_status = ui.label("IGV library: checking…").classes(
+                "classification-insight-foot"
+            )
+            ui.label(
+                "IGV is intentionally displayed in light mode for optimal genomic track readability."
+            ).classes("igv-light-island-note text-xs")
+
         # Initialize IGV browser immediately on page load
         def _initialize_igv_browser():
             """Initialize the IGV browser immediately."""
@@ -665,10 +794,10 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
             except Exception as e:
                 print(f"Error initializing IGV browser: {e}")
                 igv_status.set_text(f"Error initializing IGV: {e}")
-        
+
         # Add data attribute for status updates
         igv_status._props["data-igv-status"] = True
-        
+
         # Initialize browser after a short delay to ensure DOM is ready
         ui.timer(0.5, _initialize_igv_browser, once=True)
 
@@ -716,25 +845,8 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
             state["igv_loading"] = False
 
         # Check for existing IGV BAM files and load them
-        def _check_existing_igv_bam():
+        def _check_existing_igv_bam(attempt: int = 0):
             try:
-                # Wait a bit for browser to be ready
-                js_check_ready = """
-                    return window.lj_igv && window.lj_igv_browser_ready === true && 
-                           typeof window.lj_igv.loadTrack === 'function';
-                """
-                
-                # Poll for browser readiness
-                max_attempts = 10
-                for attempt in range(max_attempts):
-                    try:
-                        result = ui.run_javascript(js_check_ready, timeout=2.0)
-                        if result is True:
-                            break
-                    except Exception:
-                        pass
-                    time.sleep(0.5)
-                
                 # Determine candidate BAMs (prefer standardized IGV path)
                 igv_dir = sample_dir / "igv"
                 clair_dir = sample_dir / "clair3"
@@ -756,14 +868,40 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     igv_status.set_text(f"Found BAM: {bam_path.name}, loading...")
                     # Load the BAM file
                     _load_bam_track_simple(bam_path)
-                else:
-                    igv_status.set_text(
-                        "IGV browser ready. No BAM files found yet."
+                    return
+
+                js_check_ready = """
+                    return window.lj_igv && window.lj_igv_browser_ready === true &&
+                           typeof window.lj_igv.loadTrack === 'function';
+                """
+                max_attempts = 10
+                try:
+                    result = ui.run_javascript(js_check_ready, timeout=2.0)
+                except Exception:
+                    result = False
+                if result is not True and attempt < max_attempts:
+                    if attempt == 0:
+                        igv_status.set_text("Waiting for IGV browser to be ready...")
+                    ui.timer(
+                        0.5,
+                        lambda next_attempt=attempt + 1: _check_existing_igv_bam(
+                            next_attempt
+                        ),
+                        once=True,
                     )
+                else:
+                    if result is True:
+                        igv_status.set_text(
+                            "IGV browser ready. No BAM files found yet."
+                        )
+                    else:
+                        igv_status.set_text(
+                            "IGV browser not ready yet. No BAM files found yet."
+                        )
 
             except Exception as e:
                 igv_status.set_text(f"Error checking for BAM files: {e}")
-        
+
         # Simple function to load BAM track
         def _load_bam_track_simple(bam_path: Path):
             """Simple function to load a BAM track into IGV."""
@@ -784,7 +922,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
 
                 bam_url = f"{mount}/{bam_path.name}"
                 bai_url = f"{mount}/{bam_path.name}.bai"
-                
+
                 js_load = f"""
                     (function loadBamTrack() {{
                         try {{
@@ -793,7 +931,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                 setTimeout(loadBamTrack, 500);
                                 return;
                             }}
-                            
+
                             // Verify browser has loadTrack method
                             if (typeof window.lj_igv.loadTrack !== 'function') {{
                                 console.error('[IGV] Browser does not have loadTrack method');
@@ -803,11 +941,11 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                 }}
                                 return;
                             }}
-                            
+
                             console.log('[IGV] Loading BAM track:', '{bam_path.name}');
                             console.log('[IGV] BAM URL:', '{bam_url}');
                             console.log('[IGV] BAI URL:', '{bai_url}');
-                            
+
                             const trackConfig = {{
                                 name: '{sample_dir.name}',
                                 url: '{bam_url}',
@@ -821,13 +959,13 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                 colorBy: 'tag',
                                 tag: 'SA'
                             }};
-                            
+
                             console.log('[IGV] Track config:', trackConfig);
-                            
+
                             window.lj_igv.loadTrack(trackConfig)
                                 .then(function(trackView) {{
                                     console.log('[IGV] Track loaded successfully:', trackView);
-                                    
+
                                     // Navigate to a region to make data visible (IGV needs to be zoomed in)
                                     // Navigate to chr1:1-500000 to match visibility window
                                     try {{
@@ -836,7 +974,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                     }} catch (navError) {{
                                         console.log('[IGV] Could not navigate, user can zoom manually');
                                     }}
-                                    
+
                                     const statusEl = document.querySelector('[data-igv-status]');
                                     if (statusEl) {{
                                         statusEl.textContent = 'BAM loaded: {bam_path.name} - Zoom in to see alignments';
@@ -845,7 +983,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                 .catch(function(error) {{
                                     console.error('[IGV] Track load failed:', error);
                                     console.error('[IGV] Error details:', error.message, error.stack);
-                                    
+
                                     const statusEl = document.querySelector('[data-igv-status]');
                                     if (statusEl) {{
                                         statusEl.textContent = 'Failed to load BAM: ' + (error.message || String(error));
@@ -861,7 +999,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     }})();
                 """
                 ui.run_javascript(js_load, timeout=60.0)
-                
+
             except Exception as e:
                 igv_status.set_text(f"Error loading BAM: {e}")
                 print(f"Error in _load_bam_track_simple: {e}")
@@ -876,13 +1014,13 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             console.error('IGV library not loaded');
                             return false;
                         }
-                
+
                         // Check if IGV is fully initialized
                         if (typeof igv.createBrowser !== 'function') {
                             console.error('IGV library not fully initialized');
                             return false;
                         }
-                
+
                         console.log('IGV library is available and ready');
                         return true;
                     } catch (e) {
@@ -929,12 +1067,12 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         reject(new Error('Element not found'));
                         return;
                     }
-            
+
                     if (el.offsetWidth > 0 && el.offsetHeight > 0) {
                         resolve(true);
                         return;
                     }
-            
+
                     // Wait for element to be ready
                     const checkReady = () => {
                         if (el.offsetWidth > 0 && el.offsetHeight > 0) {
@@ -997,6 +1135,54 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 bam_url = f"{mount}/{bam_path.name}"
                 bai_url = f"{mount}/{bam_path.name}.bai"
 
+                def _finish_new_browser_setup() -> None:
+                    _set_igv_ready(bam_url)
+                    igv_status.set_text(f"IGV browser ready with {bam_path.name}")
+                    state["igv_loading"] = False
+                    js_add_track = f"""
+                        if (window.lj_igv && window.lj_igv_browser_ready) {{
+                            console.log('[DEBUG] Adding track to newly created browser...');
+                            const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true, colorBy: 'tag', tag: 'SA' }};
+                            window.lj_igv.loadTrack(track).then(() => {{
+                                console.log('[DEBUG] Track loaded successfully');
+                            }}).catch(error => {{
+                                console.error('[DEBUG] Error loading track:', error);
+                            }});
+                        }}
+                    """
+                    ui.run_javascript(js_add_track, timeout=30.0)
+
+                def _poll_new_browser_ready(attempt: int = 0) -> None:
+                    max_poll_attempts = 20
+                    poll_interval = 1.0
+                    js_check_ready = """
+                        return window.lj_igv && window.lj_igv_browser_ready === true &&
+                               typeof window.lj_igv.loadTrack === 'function';
+                    """
+                    try:
+                        result = ui.run_javascript(js_check_ready, timeout=5.0)
+                    except Exception:
+                        result = False
+
+                    if result is True:
+                        _finish_new_browser_setup()
+                        return
+
+                    if attempt >= max_poll_attempts:
+                        igv_status.set_text("IGV browser creation timed out")
+                        state["igv_loading"] = False
+                        ui.timer(2.0, lambda: _retry_igv_creation(bam_path), once=True)
+                        _clear_igv_state()
+                        return
+
+                    ui.timer(
+                        poll_interval,
+                        lambda next_attempt=attempt + 1: _poll_new_browser_ready(
+                            next_attempt
+                        ),
+                        once=True,
+                    )
+
                 # Check if we need to create a new browser or just add tracks
                 if not state.get("igv_initialized") or not state.get(
                     "igv_browser_ready"
@@ -1030,8 +1216,6 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     try:
                         existing = ui.run_javascript(js_check_existing, timeout=5.0)
                         if existing:
-                            # Browser might already exist, check Python state after a delay
-                            time.sleep(0.5)
                             if state.get("igv_initialized") and state.get("igv_browser_ready"):
                                 # Browser is ready, just add the track
                                 pass  # Will fall through to track loading
@@ -1050,19 +1234,19 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             if (!el) {
                                 throw new Error('Target element not found');
                             }
-                            
+
                             // Check again if browser already exists
                             if (window.lj_igv && window.lj_igv_browser_ready === true) {
                                 console.log('[DEBUG] Browser already exists, skipping creation');
                                 return;
                             }
-                            
+
                             const options = { genome: 'hg38' };
                             console.log('[DEBUG] IGV options:', options);
-                            
+
                             window.lj_igv_browser_ready = false;
                             igv.createBrowser(el, options).then(b => {
-                                window.lj_igv = b; 
+                                window.lj_igv = b;
                                 window.lj_igv_browser_ready = true;
                                 console.log('[DEBUG] IGV browser created successfully');
                             }).catch(error => {
@@ -1078,54 +1262,10 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     try:
                         ui.run_javascript(js_create, timeout=30.0)
                         igv_status.set_text("Creating IGV browser...")
-                        
-                        # Wait a bit for the async browser creation to start
-                        time.sleep(0.5)
-                        
-                        # Poll for browser readiness
-                        max_poll_attempts = 20
-                        poll_interval = 1.0
-                        browser_ready = False
-                        
-                        for attempt in range(max_poll_attempts):
-                            js_check_ready = """
-                                return window.lj_igv && window.lj_igv_browser_ready === true && 
-                                       typeof window.lj_igv.loadTrack === 'function';
-                            """
-                            try:
-                                result = ui.run_javascript(js_check_ready, timeout=5.0)
-                                if result is True:
-                                    browser_ready = True
-                                    break
-                            except Exception:
-                                pass
-                            
-                            time.sleep(poll_interval)
-                        
-                        if browser_ready:
-                            _set_igv_ready(bam_url)
-                            igv_status.set_text(f"IGV browser ready with {bam_path.name}")
-                            state["igv_loading"] = False
-                            
-                            # Now load the track
-                            js_add_track = f"""
-                                if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                    console.log('[DEBUG] Adding track to newly created browser...');
-                                    const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true, colorBy: 'tag', tag: 'SA' }};
-                                    window.lj_igv.loadTrack(track).then(() => {{
-                                        console.log('[DEBUG] Track loaded successfully');
-                                    }}).catch(error => {{
-                                        console.error('[DEBUG] Error loading track:', error);
-                                    }});
-                                }}
-                            """
-                            ui.run_javascript(js_add_track, timeout=30.0)
-                        else:
-                            igv_status.set_text("IGV browser creation timed out")
-                            state["igv_loading"] = False
-                            ui.timer(2.0, lambda: _retry_igv_creation(bam_path), once=True)
-                            _clear_igv_state()
-                            
+                        # Poll with ui.timer to avoid blocking the shared event loop.
+                        ui.timer(0.5, lambda: _poll_new_browser_ready(0), once=True)
+                        return
+
                     except Exception as e:
                         igv_status.set_text(f"Failed to create IGV browser: {e}")
                         print(f"IGV browser creation error: {e}")
@@ -1137,10 +1277,10 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     js_add_track = f"""
                         if (window.lj_igv && window.lj_igv_browser_ready) {{
                             console.log('Adding track to existing IGV browser...');
-                    
+
                             const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true }};
                             console.log('Track to load:', track);
-                    
+
                             try {{
                             window.lj_igv.loadTrack(track);
                             console.log('Track loaded successfully');
@@ -1212,11 +1352,11 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 js_clear = """
                     try {
                         console.log('Attempting to clear IGV tracks...');
-                
+
                         if (window.lj_igv && typeof window.lj_igv.getTracks === 'function') {
                             const tracks = window.lj_igv.getTracks();
                             console.log('Found tracks:', tracks.length);
-                    
+
                             if (tracks.length > 0) {
                             tracks.forEach((track, index) => {
                                 try {
@@ -1261,20 +1401,20 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
             Returns True if file is ready, False if timeout.
             """
             import time
-    
+
             start_time = time.time()
             last_size = -1
             stable_count = 0
             required_stable_checks = 2  # Need 2 consecutive checks with same size
-    
+
             while time.time() - start_time < max_wait_time:
                 try:
                     if not bam_path.exists():
                         time.sleep(0.5)
                         continue
-                
+
                     current_size = bam_path.stat().st_size
-                
+
                     # Check if file size has changed
                     if current_size == last_size:
                         stable_count += 1
@@ -1283,20 +1423,20 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             return True
                     else:
                         stable_count = 0  # Reset counter if size changed
-                
+
                     last_size = current_size
                     time.sleep(0.5)
-                
+
                 except (OSError, IOError):
                     # File might be temporarily unavailable
                     time.sleep(0.5)
                     continue
-        
+
             # Timeout reached
             return False
 
         # Function to reload BAM data into existing IGV browser
-        def _reload_bam_track():
+        async def _reload_bam_track():
             # Initialize state variable
             state = None
             try:
@@ -1311,14 +1451,14 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         clair_dir / "sorted_targets_exceeding.bam",
                         sample_dir / "target.bam",
                     ]
-                    
+
                     bam_path = None
                     for p in candidates:
                         bai = Path(f"{p}.bai")
                         if p.exists() and bai.exists():
                             bam_path = p
                             break
-                    
+
                     if bam_path:
                         igv_status.set_text("IGV not ready, initializing...")
                         _load_igv_bam(bam_path)
@@ -1339,7 +1479,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
 
                 # Extract BAM name for display
                 bam_name = current_bam_url.split("/")[-1]
-        
+
                 # Determine the actual BAM file path
                 bam_path = None
                 if current_bam_url.startswith("/samples/"):
@@ -1349,19 +1489,19 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         sample_dir_name = parts[2]
                         bam_file_name = parts[3]
                         bam_path = sample_dir / bam_file_name
-        
+
                 # Wait for BAM file to be ready if it exists
                 if bam_path and bam_path.exists():
                     igv_status.set_text("Checking if BAM file is ready...")
-                    if not _wait_for_bam_ready(bam_path):
+                    if not await asyncio.to_thread(_wait_for_bam_ready, bam_path):
                         igv_status.set_text("BAM file is still being updated. Please wait and try again.")
                         ui.notify("BAM file is still being updated. Please wait and try again.", type="warning")
                         return
-                
+
                     # Also check if BAI file is ready
                     bai_path = bam_path.with_suffix(bam_path.suffix + ".bai")
                     if bai_path.exists():
-                        if not _wait_for_bam_ready(bai_path):
+                        if not await asyncio.to_thread(_wait_for_bam_ready, bai_path):
                             igv_status.set_text("BAM index is still being updated. Please wait and try again.")
                             ui.notify("BAM index is still being updated. Please wait and try again.", type="warning")
                             return
@@ -1392,7 +1532,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             }}
                         }}
                     }}
-                
+
                     // Remove alignment tracks
                     for (let track of tracks) {{
                         try {{
@@ -1412,7 +1552,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     }} catch (e) {{
                     // Ignore errors
                     }}
-            
+
                     // Create the track configuration
                     const trackConfig = {{
                     name: '{bam_name}',
@@ -1426,7 +1566,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                     colorBy: 'tag',
                     tag: 'SA'
                     }};
-            
+
                     // Add the track to the browser
                     if (typeof window.lj_igv.loadTrack === 'function') {{
                     window.lj_igv.loadTrack(trackConfig);
@@ -1436,7 +1576,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         window.lj_igv.addTrack(trackConfig);
                     }}
                     }}
-            
+
                     // Force a redraw
                     if (typeof window.lj_igv.redraw === 'function') {{
                     window.lj_igv.redraw();
@@ -1453,14 +1593,14 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
 
                 # Update status
                 igv_status.set_text(f"Loading BAM track: {bam_name}")
-        
+
                 # Change button text to "Reload BAM" after first load
                 reload_bam_button.set_text("Reload BAM")
 
                 # Mark that data tracks are no longer cleared
                 if state:
                     state["data_tracks_cleared"] = False
-                
+
                 # Auto-load the BED file after BAM is loaded
                 _load_target_bed()
 
@@ -1479,11 +1619,11 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
 
                 # Get the target panel information
                 state = _get_igv_state()
-        
+
                 # Check if BED file has already been loaded
                 if state.get("bed_file_loaded", False):
                     return  # BED file already loaded, don't load again
-        
+
                 # Try to read the panel from master.csv
                 target_panel = None
                 bed_file_path = None
@@ -1494,16 +1634,16 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                         df = pd.read_csv(master_csv_path)
                         if not df.empty and "analysis_panel" in df.columns:
                             target_panel = str(df.iloc[0]["analysis_panel"]).strip()
-                    
+
                             # Map panel to BED filename
                             bed_file_mapping = {
                             "rCNS2": "rCNS2_panel_name_uniq.bed",
                             "AML": "AML_panel_name_uniq.bed",
                             "Sarcoma": "Sarcoma_panel_name_uniq.bed"
                             }
-                    
+
                             bed_filename = bed_file_mapping.get(target_panel, f"{target_panel}_panel_name_uniq.bed")
-                    
+
                             # Try to find the BED file in robin resources
                             try:
                                 from robin import resources
@@ -1515,7 +1655,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                                     bed_file_path = None
                             except Exception:
                                 pass
-                    
+
                             # Fallback paths
                             if not bed_file_path:
                                 possible_paths = [
@@ -1539,7 +1679,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 bed_dir = os.path.dirname(bed_file_path)
                 bed_name = os.path.basename(bed_file_path)
                 bed_url = f"/robin_resources/{bed_name}"
-        
+
                 try:
                     if app is not None:
                         app.add_static_files("/robin_resources", bed_dir)
@@ -1561,7 +1701,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             height: 40,
                             color: '#0072B2'
                             }};
-                    
+
                             // Load the track into IGV
                             if (typeof window.lj_igv.loadTrack === 'function') {{
                             window.lj_igv.loadTrack(trackConfig);
@@ -1578,10 +1718,10 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 """
 
                 ui.run_javascript(js_load_bed, timeout=20.0)
-        
+
                 # Mark that BED file has been loaded
                 state["bed_file_loaded"] = True
-        
+
                 # Update status
                 igv_status.set_text(f"Loaded BED file: {bed_name}")
                 ui.notify(f"Target BED file loaded: {bed_name}", type="positive")
@@ -1605,7 +1745,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 } else {
                     errors.push(`IGV version: ${igv.version || 'unknown'}`);
                 }
-        
+
                 return errors;
             } catch (e) {
                 return ['Error checking console: ' + e.message];
@@ -1635,11 +1775,11 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 js_find_element = """
                     console.log('Looking for IGV div element...');
                     console.log('Expected ID: igv-container');
-            
+
                     // List all divs on the page
                     const allDivs = document.querySelectorAll('div');
                     console.log('Total divs found:', allDivs.length);
-            
+
                     allDivs.forEach((div, i) => {
                         console.log(`Div ${i}:`, {
                             id: div.id,
@@ -1649,7 +1789,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             offsetHeight: div.offsetHeight
                         });
                     });
-            
+
                     // Try to find our specific element
                     let el = document.getElementById('igv-container');
                     if (!el) {
@@ -1661,7 +1801,7 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                             console.log('Using first candidate by class');
                         }
                     }
-            
+
                     if (el) {
                         console.log('Element found:', el);
                         console.log('Element dimensions:', el.offsetWidth, 'x', el.offsetHeight);
@@ -1685,22 +1825,22 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 js_empty = """
                     try {
                         console.log('Creating empty IGV browser...');
-                
+
                         // Find the element again
                         let el = document.getElementById('igv-container');
                         if (!el) {
                             el = document.querySelector('.w-full.h-\\[600px\\].border');
                         }
-                
+
                         if (!el) {
                             throw new Error('Element still not found');
                         }
-                
+
                         const options = { genome: 'hg38' };
                         console.log('Creating empty IGV browser with options:', options);
-                
+
                         igv.createBrowser(el, options).then(b => {
-                            window.lj_igv = b; 
+                            window.lj_igv = b;
                             window.lj_igv_browser_ready = true;
                             console.log('Empty IGV browser created successfully');
                         }).catch(error => {
@@ -1726,14 +1866,14 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
                 console.log('=== IGV Debug Info ===');
                 console.log('window.lj_igv:', window.lj_igv);
                 console.log('window.lj_igv_browser_ready:', window.lj_igv_browser_ready);
-        
+
                 if (window.lj_igv) {
                     console.log('IGV browser exists');
                     console.log('Available methods:', Object.getOwnPropertyNames(window.lj_igv));
                 } else {
                     console.log('No IGV browser found');
                 }
-        
+
                 console.log('Python state check requested');
                 """
 
@@ -1752,12 +1892,12 @@ def add_igv_viewer(launcher: Any, sample_dir: Path) -> None:
         def _simple_reload_bam():
             """Simple reload function."""
             _check_existing_igv_bam()
-        
+
         reload_bam_button = ui.button("Load BAM", on_click=_simple_reload_bam)
 
         # Add IGV library status check timer once after a delay
         ui.timer(3.0, _check_igv_library, once=True)
-        
+
         # Check for existing BAM files after browser is initialized (give it time to create)
         ui.timer(3.0, _check_existing_igv_bam, once=True)
 
@@ -2332,7 +2472,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
     """
     # Check for development environment variable to show/hide testing features
     is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in ("1", "true", "yes", "on")
-    
+
     with ui.card().classes("w-full").props("id=analysis-detail-coverage"):
         ui.label("Coverage").classes("text-lg font-semibold mb-2")
         # Summary row (quality + metrics)
@@ -2484,7 +2624,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 "ghosted in-range targets, and highlighted outliers. Outliers are points where a target’s "
                 "coverage is more than 2 SD from the cross-gene mean at that timestamp."
             ).classes("text-sm text-gray-600 mb-4")
-            
+
             def _get_coverage_state():
                 key = str(sample_dir)
                 if hasattr(launcher, "_coverage_state"):
@@ -2494,7 +2634,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 launcher._coverage_state = {}
                 launcher._coverage_state[key] = {}
                 return launcher._coverage_state[key]
-            
+
             coverage_state = _get_coverage_state()
             stored_outlier_limit = coverage_state.get("target_cov_outlier_limit", 10)
             try:
@@ -2505,7 +2645,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             # Chart container
             target_coverage_time_chart_state = {"container": None, "chart": None}
             outlier_limit_state = {"value": max(1, stored_outlier_limit)}
-            
+
             def _plot_target_coverage_over_time():
                 """Load target_coverage_time.csv and plot mean coverage with outlier detection"""
                 try:
@@ -2515,7 +2655,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             with target_coverage_time_chart_state["container"]:
                                 ui.label("No target_coverage_time.csv file found.").classes("text-gray-600")
                         return
-                    
+
                     # Load data
                     df = pd.read_csv(time_coverage_file)
                     if df.empty:
@@ -2528,77 +2668,80 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             with target_coverage_time_chart_state["container"]:
                                 ui.label("target_coverage_time.csv missing chrom/startpos/endpos/name columns").classes("text-gray-600")
                         return
-                    
+
                     # Convert timestamp to datetime (milliseconds to datetime)
                     df['datetime'] = pd.to_datetime(df['timestamp'], unit='ms')
-                    
-                    # Create unique target identifier (chrom, startpos, endpos) - distinguishes multiple regions with same gene name
-                    df['target_key'] = df.apply(
-                        lambda r: (str(r['chrom']), int(r['startpos']), int(r['endpos'])),
-                        axis=1
+
+                    # Create unique target identifier (chrom, startpos, endpos) — vectorized
+                    df["target_key"] = list(
+                        zip(
+                            df["chrom"].astype(str),
+                            df["startpos"].astype(np.int64),
+                            df["endpos"].astype(np.int64),
+                        )
                     )
-                    # Build display labels: include chromosome and position (Mb) when gene name appears multiple times
-                    name_counts = df.groupby('name').size()
-                    def _target_label(row):
-                        name = row['name']
-                        chrom = str(row['chrom'])
-                        start_mb = row['startpos'] / 1e6
-                        if name_counts.get(name, 0) > 1:
-                            return f"{name} ({chrom} {start_mb:.2f} Mb)"
-                        return f"{name} ({chrom} {start_mb:.2f} Mb)"
-                    df['target_label'] = df.apply(_target_label, axis=1)
-                    
+                    # Display labels (same format for all rows; avoids slow df.apply)
+                    _start_mb = (df["startpos"].astype(np.float64) / 1e6).round(2)
+                    df["target_label"] = (
+                        df["name"].astype(str)
+                        + " ("
+                        + df["chrom"].astype(str)
+                        + " "
+                        + _start_mb.astype(str)
+                        + " Mb)"
+                    )
+
                     # Calculate mean coverage per timepoint
                     mean_coverage = df.groupby('timestamp')['coverage'].mean().reset_index()
                     mean_coverage['datetime'] = pd.to_datetime(mean_coverage['timestamp'], unit='ms')
-                    
+
                     # Detect outliers using standard deviation method (Z-score)
                     def detect_outliers_sd(series, num_sd=2.0):
                         """Detect outliers using standard deviation method (Z-score)
-                        
+
                         Args:
                             series: Pandas Series of values
                             num_sd: Number of standard deviations from mean (default: 2.0)
-                        
+
                         Returns:
                             Boolean Series indicating which values are outliers
                         """
                         mean = series.mean()
                         std = series.std()
-                        
+
                         # Handle case where std is 0 (all values are the same)
                         if std == 0:
                             return pd.Series([False] * len(series), index=series.index)
-                        
+
                         lower_bound = mean - num_sd * std
                         upper_bound = mean + num_sd * std
                         return (series < lower_bound) | (series > upper_bound)
-                    
+
                     # Detect outliers: compare each gene's coverage to the distribution of ALL genes
                     # This detects genes that are outliers compared to other genes, not just timepoints
                     outliers = []
-                    
+
                     # Calculate global statistics across all genes at each timepoint
                     # This allows us to detect genes that are outliers relative to the population
                     for timestamp in df['timestamp'].unique():
                         timepoint_data = df[df['timestamp'] == timestamp].copy()
                         if len(timepoint_data) < 3:  # Need at least 3 genes to calculate SD
                             continue
-                        
+
                         # Calculate mean and SD across all genes at this timepoint
                         global_mean = timepoint_data['coverage'].mean()
                         global_std = timepoint_data['coverage'].std()
-                        
+
                         if global_std == 0:  # All genes have same coverage
                             continue
-                        
+
                         # Detect outliers: genes > 2 SD from global mean at this timepoint
                         lower_bound = global_mean - 2.0 * global_std
                         upper_bound = global_mean + 2.0 * global_std
-                        
+
                         outlier_mask = (timepoint_data['coverage'] < lower_bound) | (timepoint_data['coverage'] > upper_bound)
                         outlier_points = timepoint_data[outlier_mask]
-                        
+
                         for _, row in outlier_points.iterrows():
                             tk = row['target_key']
                             tk = (str(tk[0]), int(tk[1]), int(tk[2])) if isinstance(tk, (list, tuple)) else (str(row['chrom']), int(row['startpos']), int(row['endpos']))
@@ -2615,9 +2758,9 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 'global_mean': global_mean,
                                 'global_std': global_std
                             })
-                    
+
                     outliers_df = pd.DataFrame(outliers) if outliers else pd.DataFrame()
-                    
+
                     # Identify unique outlier targets (regions that are outliers at any timepoint)
                     outlier_targets = []
                     if not outliers_df.empty:
@@ -2630,13 +2773,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             if key not in seen:
                                 seen.add(key)
                                 outlier_targets.append((key, row['target_label']))
-                    
+
                     try:
                         outlier_limit = int(outlier_limit_state["value"])
                     except (TypeError, ValueError):
                         outlier_limit = 10
                     outlier_limit = max(1, outlier_limit)
-                    
+
                     # Prepare data for ECharts (design.md §9.5 — mean, ±2 SD band, dim in-range, outliers)
                     outlier_key_set = set()
                     for k, _ in outlier_targets:
@@ -2855,17 +2998,17 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     # Create/update chart
                     if target_coverage_time_chart_state["container"] is None:
                         target_coverage_time_chart_state["container"] = ui.column().classes("w-full")
-                    
+
                     with target_coverage_time_chart_state["container"]:
                         # Clear existing content
                         target_coverage_time_chart_state["container"].clear()
-                        
+
                         # Summary statistics
                         with ui.row().classes("w-full mb-4 gap-3"):
                             ui.label(f"Total timepoints: {len(mean_coverage)}").classes("text-sm")
                             ui.label(f"Total targets: {len(df['target_key'].unique())}").classes("text-sm")
                             ui.label(f"Outliers detected: {len(outliers_df)}").classes("text-sm")
-                        
+
                         # Chart (design.md §9.5.C — signal-first trend, vertical scrubber, right legend)
                         _cp_t = _cov_chrome_palette()
                         _split_tt = _cov_target_time_split()
@@ -2957,21 +3100,21 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             + outlier_gene_series
                             + [mean_series],
                         }
-                        
+
                         target_coverage_time_chart_state["chart"] = ui.echart(
                             chart_config
                         ).classes("w-full min-h-[420px] h-[480px]")
                         _apply_target_coverage_time_analysis_chrome(
                             target_coverage_time_chart_state["chart"]
                         )
-                        
+
                         # Show summary of outlier targets
                         if outlier_targets:
                             outlier_count = len(outlier_targets)
                             ui.label(f"Showing profiles for {min(outlier_count, outlier_limit)} outlier targets (out of {outlier_count} total)").classes("text-sm text-gray-600 mt-2")
                         else:
                             ui.label("No significant outliers detected.").classes("text-gray-600 mt-2")
-                
+
                 except Exception as e:
                     logging.error(f"Error plotting target coverage over time: {e}")
                     import traceback
@@ -2979,10 +3122,9 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     if target_coverage_time_chart_state["container"]:
                         with target_coverage_time_chart_state["container"]:
                             ui.label(f"Error: {str(e)}").classes("text-red-600")
-            
-            # Immediate paint; ongoing updates when target_coverage_time.csv changes
-            # (see _coverage_load_refresh_data + _refresh_coverage_apply).
-            _plot_target_coverage_over_time()
+
+            # Defer plot work so the sample page shell and websocket can finish first
+            ui.timer(0.05, _plot_target_coverage_over_time, once=True)
 
             def _set_outlier_limit(e) -> None:
                 try:
@@ -2992,7 +3134,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 outlier_limit_state["value"] = max(1, outlier_limit_state["value"])
                 coverage_state["target_cov_outlier_limit"] = outlier_limit_state["value"]
                 _plot_target_coverage_over_time()
-            
+
             # Outlier limit (plot updates automatically when target_coverage_time.csv changes)
             with ui.row().classes("w-full mt-4 items-center gap-3"):
                 ui.label("Outliers to show").classes("text-sm text-gray-600")
@@ -3021,7 +3163,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             panel = df.iloc[0]["analysis_panel"]
                             if panel and str(panel).strip() != "" and str(panel).strip().lower() != "nan":
                                 return str(panel).strip()
-                    
+
                     # Fallback 1: Try to detect panel from BED files in the sample directory
                     bed_files = list(sample_dir.glob("*.bed"))
                     if bed_files:
@@ -3034,29 +3176,29 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 return "AML"
                             elif "sarcoma" in bed_name:
                                 return "Sarcoma"
-                    
+
                     # Fallback 2: Try to detect from target analysis output files
                     target_files = list(sample_dir.glob("*target*.csv")) + list(sample_dir.glob("*coverage*.csv"))
                     if target_files:
-                        # This is a heuristic - if we have target analysis files, 
+                        # This is a heuristic - if we have target analysis files,
                         # we can assume it's likely a known panel
                         return "Unknown Panel"
-                    
+
                     return ""  # No panel found
                 except Exception as e:
                     _log_notify(f"Exception in _get_target_panel_info: {e}", level="error", notify=False)
                     return ""  # No default fallback
-            
+
             target_panel = _get_target_panel_info()
-            
+
             # Panel legend with color coding
             panel_colors = {
                 "rCNS2": ("bg-blue-100", "text-blue-800", "rCNS2 Panel"),
-                "AML": ("bg-green-100", "text-green-800", "AML Panel"), 
+                "AML": ("bg-green-100", "text-green-800", "AML Panel"),
                 "Sarcoma": ("bg-orange-100", "text-orange-800", "Sarcoma Panel"),
                 "Unknown Panel": ("bg-yellow-100", "text-yellow-800", "Unknown Panel")
             }
-            
+
             if not target_panel:
                 # No panel found - show warning
                 panel_color_classes, panel_text_classes, panel_display_name = ("bg-red-100", "text-red-800", "Panel Not Found")
@@ -3064,7 +3206,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 panel_color_classes, panel_text_classes, panel_display_name = panel_colors.get(
                     target_panel, ("bg-gray-100", "text-gray-800", f"{target_panel} Panel")
                 )
-            
+
             # Store panel information in state for use by other functions
             key = str(sample_dir)
             if key not in launcher._coverage_state:
@@ -3085,11 +3227,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 ui.label(panel_display_name).classes(f"px-2 py-1 rounded text-sm font-medium {panel_color_classes} {panel_text_classes}")
                 ui.label("•").classes("text-gray-400")
                 ui.label("Target regions defined by gene panel").classes("text-xs text-gray-500")
-            
+
             # Add detailed panel information in an expansion
             with ui.expansion().classes("w-full mb-2").props("icon=info dense"):
                 ui.label("Panel Details").classes("text-sm font-medium mb-2")
-                
+
                 # Get the BED file name for the current panel
                 # Use the same logic as target_analysis._find_target_bed to determine BED filename
                 bed_filename = None
@@ -3102,7 +3244,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     bed_filename = f"{target_panel}_panel_name_uniq.bed"
                 else:
                     bed_filename = "Unknown"
-                
+
                 # Verify the BED file exists in robin.resources
                 if bed_filename and bed_filename != "Unknown":
                     try:
@@ -3116,26 +3258,26 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     except Exception:
                         # If we can't verify, still show the expected filename
                         pass
-                
+
                 with ui.column().classes("gap-1 text-sm"):
                     with ui.row().classes("items-center gap-2"):
                         ui.label("Panel:").classes("font-medium w-20")
                         ui.label(target_panel).classes("font-mono")
-                    
+
                     with ui.row().classes("items-center gap-2"):
                         ui.label("BED File:").classes("font-medium w-20")
                         ui.label(bed_filename).classes("font-mono text-xs")
-                    
+
                     with ui.row().classes("items-center gap-2"):
                         ui.label("Description:").classes("font-medium w-20")
                         panel_descriptions = {
                             "rCNS2": "Central Nervous System genes (244 regions)",
-                            "AML": "Acute Myeloid Leukemia genes (1,181 regions)", 
+                            "AML": "Acute Myeloid Leukemia genes (1,181 regions)",
                             "Sarcoma": "Sarcoma-specific gene panel",
                             "Unknown Panel": "Panel type could not be determined"
                         }
                         ui.label(panel_descriptions.get(target_panel, "Custom gene panel")).classes("text-xs")
-            
+
             # Define helper functions before chart creation
             def _show_chromosome_scatter(chromosome: str) -> None:
                 """Show scatter plot for individual genes on a specific chromosome"""
@@ -3145,23 +3287,23 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     if not bed_cov.exists():
                         ui.notify("No coverage data available", type="warning")
                         return
-                    
+
                     # Read the data
                     df = pd.read_csv(bed_cov)
                     if "coverage" not in df.columns:
                         df["length"] = (df["endpos"] - df["startpos"] + 1).astype(float)
                         df["coverage"] = df["bases"] / df["length"]
-                    
+
                     # Filter for the selected chromosome
                     chrom_data = df[df["chrom"].astype(str) == chromosome].copy()
-                    
+
                     if chrom_data.empty:
                         ui.notify(f"No data found for chromosome {chromosome}", type="warning")
                         return
-                    
+
                     # Sort by position for better visualization
                     chrom_data = chrom_data.sort_values("startpos")
-                    
+
                     # Build unique display labels for genes that appear multiple times (same name, different regions)
                     name_counts = chrom_data["name"].value_counts()
                     scatter_data = []
@@ -3178,11 +3320,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         else:
                             label = name
                         scatter_data.append([label, row["coverage"], row["startpos"], row["endpos"]])
-                    
+
                     # Update chart to show scatter plot
                     target_boxplot.options["title"]["text"] = f"Gene Coverage - {chromosome}"
                     target_boxplot.options["title"]["subtext"] = f"{len(scatter_data)} targets"
-                    
+
                     # Update x-axis to show gene names (with position when duplicated)
                     gene_names = [d[0] for d in scatter_data]
                     target_boxplot.options["xAxis"]["data"] = gene_names
@@ -3191,7 +3333,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     target_boxplot.options["xAxis"]["name"] = "Gene / region"
                     target_boxplot.options["xAxis"]["nameLocation"] = "middle"
                     target_boxplot.options["xAxis"]["nameGap"] = 44
-                    
+
                     # Update series to show scatter plot
                     _cp_sc = _cov_chrome_palette()
                     target_boxplot.options["series"] = [
@@ -3227,23 +3369,23 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             }
                         }
                     ]
-                    
+
                     # Hide legend for scatter view
                     target_boxplot.options["legend"]["show"] = False
                     _apply_coverage_boxplot_chrome(target_boxplot)
                     target_boxplot.update()
-                    
+
                     # Show back button (remove Tailwind hidden — classes("", replace="") is unreliable)
                     try:
                         target_coverage_back_button.classes(remove="hidden")
                     except Exception:
                         target_coverage_back_button.set_visibility(True)
-                    
+
                     _log_notify(f"Showing gene coverage for {chromosome}", level="info", notify=False)
-                    
+
                 except Exception as e:
                     _log_notify(f"Failed to show chromosome scatter: {e}", level="error", notify=True)
-            
+
             async def _show_target_coverage_overview_async() -> None:
                 """Return to the original box plot overview (CSV + chart off event loop)."""
                 try:
@@ -3296,7 +3438,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         )
                     return
                 asyncio.create_task(_show_target_coverage_overview_async())
-            
+
             # Define click handler function before chart creation
             def handle_boxplot_click(params):
                 """Handle clicks on the ECharts box plot and show chromosome scatter"""
@@ -3308,7 +3450,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         _show_chromosome_scatter(chromosome)
                 except Exception as e:
                     _log_notify(f"Error handling chart click: {e}", level="warning", notify=False)
-            
+
             _cp_bp = _cov_chrome_palette()
             target_boxplot = ui.echart(
                 {
@@ -3615,13 +3757,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     console.error('IGV library not loaded');
                                     return false;
                                 }
-                        
+
                                 // Check if IGV is fully initialized
                                 if (typeof igv.createBrowser !== 'function') {
                                     console.error('IGV library not fully initialized');
                                     return false;
                                 }
-                        
+
                                 console.log('IGV library is available and ready');
                                 return true;
                             } catch (e) {
@@ -3668,12 +3810,12 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             reject(new Error('Element not found'));
                             return;
                         }
-                
+
                         if (el.offsetWidth > 0 && el.offsetHeight > 0) {
                             resolve(true);
                             return;
                         }
-                
+
                         // Wait for element to be ready
                         const checkReady = () => {
                             if (el.offsetWidth > 0 && el.offsetHeight > 0) {
@@ -3754,12 +3896,12 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     if (!el) {
                                     throw new Error('Target element not found');
                                     }
-                            
+
                                     const options = { genome: 'hg38' };
                                     console.log('IGV options:', options);
-                            
+
                                     igv.createBrowser(el, options).then(b => {
-                                    window.lj_igv = b; 
+                                    window.lj_igv = b;
                                     window.lj_igv_browser_ready = true;
                                     console.log('IGV browser created successfully');
                                     }).catch(error => {
@@ -3791,10 +3933,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                             js_add_track = f"""
                                 if (window.lj_igv && window.lj_igv_browser_ready) {{
                                     console.log('Adding track to existing IGV browser...');
-                            
+
                                     const track = {{ name: '{sample_dir.name}', url: '{bam_url}', indexURL: '{bai_url}', format: 'bam', type: 'alignment', height: 600, autoScale: true, colorBy: 'tag', tag: 'SA' }};
                                     console.log('Track to load:', track);
-                            
+
                                     try {{
                                     window.lj_igv.loadTrack(track);
                                     console.log('Track loaded successfully');
@@ -3869,11 +4011,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         js_clear = """
                             try {
                                 console.log('Attempting to clear IGV tracks...');
-                        
+
                                 if (window.lj_igv && typeof window.lj_igv.getTracks === 'function') {
                                     const tracks = window.lj_igv.getTracks();
                                     console.log('Found tracks:', tracks.length);
-                            
+
                                     if (tracks.length > 0) {
                                     tracks.forEach((track, index) => {
                                         try {
@@ -3918,20 +4060,20 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     Returns True if file is ready, False if timeout.
                     """
                     import time
-            
+
                     start_time = time.time()
                     last_size = -1
                     stable_count = 0
                     required_stable_checks = 2  # Need 2 consecutive checks with same size
-            
+
                     while time.time() - start_time < max_wait_time:
                         try:
                             if not bam_path.exists():
                                 time.sleep(0.5)
                                 continue
-                    
+
                             current_size = bam_path.stat().st_size
-                    
+
                             # Check if file size has changed
                             if current_size == last_size:
                                 stable_count += 1
@@ -3940,18 +4082,18 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     return True
                             else:
                                 stable_count = 0  # Reset counter if size changed
-                    
+
                             last_size = current_size
                             time.sleep(0.5)
-                    
+
                         except (OSError, IOError):
                             # File might be temporarily unavailable
                             time.sleep(0.5)
                             continue
-            
+
                     # Timeout reached
                     return False
-        
+
                 # Function to reload BAM data into existing IGV browser
                 def _reload_bam_track():
                     # Initialize state variable
@@ -3972,7 +4114,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                         # Extract BAM name for display
                         bam_name = current_bam_url.split("/")[-1]
-                
+
                         # Determine the actual BAM file path
                         bam_path = None
                         if current_bam_url.startswith("/samples/"):
@@ -3982,7 +4124,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 sample_dir_name = parts[2]
                                 bam_file_name = parts[3]
                                 bam_path = sample_dir / bam_file_name
-                
+
                         # Wait for BAM file to be ready if it exists
                         if bam_path and bam_path.exists():
                             igv_status.set_text("Checking if BAM file is ready...")
@@ -3990,7 +4132,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 igv_status.set_text("BAM file is still being updated. Please wait and try again.")
                                 ui.notify("BAM file is still being updated. Please wait and try again.", type="warning")
                                 return
-                    
+
                             # Also check if BAI file is ready
                             bai_path = bam_path.with_suffix(bam_path.suffix + ".bai")
                             if bai_path.exists():
@@ -4025,7 +4167,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             }}
                                         }}
                                     }}
-                                
+
                                     // Remove alignment tracks
                                     for (let track of tracks) {{
                                         try {{
@@ -4045,7 +4187,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     }} catch (e) {{
                                     // Ignore errors
                                     }}
-                            
+
                                     // Create the track configuration
                                     const trackConfig = {{
                                     name: '{bam_name}',
@@ -4057,7 +4199,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     height: 600,
                                     autoScale: true
                                     }};
-                            
+
                                     // Add the track to the browser
                                     if (typeof window.lj_igv.loadTrack === 'function') {{
                                     window.lj_igv.loadTrack(trackConfig);
@@ -4067,7 +4209,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                         window.lj_igv.addTrack(trackConfig);
                                     }}
                                     }}
-                            
+
                                     // Force a redraw
                                     if (typeof window.lj_igv.redraw === 'function') {{
                                     window.lj_igv.redraw();
@@ -4084,14 +4226,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                         # Update status
                         igv_status.set_text(f"Loading BAM track: {bam_name}")
-                
+
                         # Change button text to "Reload BAM" after first load
                         reload_bam_button.set_text("Reload BAM")
 
                         # Mark that data tracks are no longer cleared
                         if state:
                             state["data_tracks_cleared"] = False
-                    
+
                         # Auto-load the BED file after BAM is loaded
                         _load_target_bed()
 
@@ -4110,11 +4252,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                         # Get the target panel information
                         state = _get_igv_state()
-                
+
                         # Check if BED file has already been loaded
                         if state.get("bed_file_loaded", False):
                             return  # BED file already loaded, don't load again
-                
+
                         # Try to read the panel from master.csv
                         target_panel = None
                         bed_file_path = None
@@ -4125,16 +4267,16 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 df = pd.read_csv(master_csv_path)
                                 if not df.empty and "analysis_panel" in df.columns:
                                     target_panel = str(df.iloc[0]["analysis_panel"]).strip()
-                            
+
                                     # Map panel to BED filename
                                     bed_file_mapping = {
                                     "rCNS2": "rCNS2_panel_name_uniq.bed",
                                     "AML": "AML_panel_name_uniq.bed",
                                     "Sarcoma": "Sarcoma_panel_name_uniq.bed"
                                     }
-                            
+
                                     bed_filename = bed_file_mapping.get(target_panel, f"{target_panel}_panel_name_uniq.bed")
-                            
+
                                     # Try to find the BED file in robin resources
                                     try:
                                         from robin import resources
@@ -4146,7 +4288,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             bed_file_path = None
                                     except Exception:
                                         pass
-                            
+
                                     # Fallback paths
                                     if not bed_file_path:
                                         possible_paths = [
@@ -4170,7 +4312,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         bed_dir = os.path.dirname(bed_file_path)
                         bed_name = os.path.basename(bed_file_path)
                         bed_url = f"/robin_resources/{bed_name}"
-                
+
                         try:
                             if app is not None:
                                 app.add_static_files("/robin_resources", bed_dir)
@@ -4192,7 +4334,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     height: 40,
                                     color: '#0072B2'
                                     }};
-                            
+
                                     // Load the track into IGV
                                     if (typeof window.lj_igv.loadTrack === 'function') {{
                                     window.lj_igv.loadTrack(trackConfig);
@@ -4209,10 +4351,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         """
 
                         ui.run_javascript(js_load_bed, timeout=20.0)
-                
+
                         # Mark that BED file has been loaded
                         state["bed_file_loaded"] = True
-                
+
                         # Update status
                         igv_status.set_text(f"Loaded BED file: {bed_name}")
                         ui.notify(f"Target BED file loaded: {bed_name}", type="positive")
@@ -4236,7 +4378,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         } else {
                             errors.push(`IGV version: ${igv.version || 'unknown'}`);
                         }
-                
+
                         return errors;
                     } catch (e) {
                         return ['Error checking console: ' + e.message];
@@ -4266,11 +4408,11 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         js_find_element = """
                             console.log('Looking for IGV div element...');
                             console.log('Expected ID: igv-container');
-                    
+
                             // List all divs on the page
                             const allDivs = document.querySelectorAll('div');
                             console.log('Total divs found:', allDivs.length);
-                    
+
                             allDivs.forEach((div, i) => {
                                 console.log(`Div ${i}:`, {
                                     id: div.id,
@@ -4280,7 +4422,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     offsetHeight: div.offsetHeight
                                 });
                             });
-                    
+
                             // Try to find our specific element
                             let el = document.getElementById('igv-container');
                             if (!el) {
@@ -4292,7 +4434,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     console.log('Using first candidate by class');
                                 }
                             }
-                    
+
                             if (el) {
                                 console.log('Element found:', el);
                                 console.log('Element dimensions:', el.offsetWidth, 'x', el.offsetHeight);
@@ -4316,22 +4458,22 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         js_empty = """
                             try {
                                 console.log('Creating empty IGV browser...');
-                        
+
                                 // Find the element again
                                 let el = document.getElementById('igv-container');
                                 if (!el) {
                                     el = document.querySelector('.w-full.h-\\[600px\\].border');
                                 }
-                        
+
                                 if (!el) {
                                     throw new Error('Element still not found');
                                 }
-                        
+
                                 const options = { genome: 'hg38' };
                                 console.log('Creating empty IGV browser with options:', options);
-                        
+
                                 igv.createBrowser(el, options).then(b => {
-                                    window.lj_igv = b; 
+                                    window.lj_igv = b;
                                     window.lj_igv_browser_ready = true;
                                     console.log('Empty IGV browser created successfully');
                                 }).catch(error => {
@@ -4357,14 +4499,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         console.log('=== IGV Debug Info ===');
                         console.log('window.lj_igv:', window.lj_igv);
                         console.log('window.lj_igv_browser_ready:', window.lj_igv_browser_ready);
-                
+
                         if (window.lj_igv) {
                             console.log('IGV browser exists');
                             console.log('Available methods:', Object.getOwnPropertyNames(window.lj_igv));
                         } else {
                             console.log('No IGV browser found');
                         }
-                
+
                         console.log('Python state check requested');
                         """
 
@@ -4543,21 +4685,32 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         "Note: Both target.bam and targets_exceeding_threshold.bed are automatically generated when you run target analysis. You don't need to create them manually."
                     ).classes("text-sm text-blue-800")
 
-            # SNP Analysis results display
-            with ui.expansion().classes("w-full").props("icon=assessment"):
-                ui.label("Results").classes("text-sm font-medium mb-2")
+            # Lazy-load SNP/INDEL UI when Results expansion opens (avoids full VCF parse on page load)
+            snp_results_lazy_state: Dict[str, Any] = {"sig": None}
 
-                # Results status
+            def _snp_results_file_signature() -> Tuple[Optional[int], Optional[int]]:
+                clair_dir = sample_dir / "clair3"
+                snp_vcf = clair_dir / "snpsift_output.vcf"
+                indel_vcf = clair_dir / "snpsift_indel_output.vcf"
+
+                def _mt(p: Path) -> Optional[int]:
+                    try:
+                        return p.stat().st_mtime_ns if p.exists() else None
+                    except OSError:
+                        return None
+
+                return (_mt(snp_vcf), _mt(indel_vcf))
+
+            snp_results_expansion = ui.expansion("Results", icon="assessment").classes(
+                "w-full"
+            )
+            with snp_results_expansion:
                 snp_results_status = (
-                    ui.label("No SNP analysis results yet")
+                    ui.label("Expand this section to load variant results.")
                     .classes("text-sm text-gray-600")
                     .props("data-snp-results-status")
                 )
-
-                # Results table placeholder
                 snp_results_container = ui.column().classes("w-full")
-
-                # Function to check and display SNP results
 
             def _check_snp_results():
                 try:
@@ -4631,6 +4784,17 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                 except Exception as e:
                     snp_results_status.set_text(f"Error checking results: {e}")
+
+            def _on_snp_results_expansion_change(e) -> None:
+                if not e.value:
+                    return
+                sig = _snp_results_file_signature()
+                if sig == snp_results_lazy_state["sig"]:
+                    return
+                _check_snp_results()
+                snp_results_lazy_state["sig"] = sig
+
+            snp_results_expansion.on_value_change(_on_snp_results_expansion_change)
 
             # Helper function to detect gzipped files
             def _is_gzipped(file_path):
@@ -4915,17 +5079,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 "field": col,
                                 "sortable": True
                             })
-                        
-                        # Create rows from DataFrame
-                        rows = display_df.to_dict('records')
-                        
-                        # Create styled table for consistency
-                        from robin.gui.theme import styled_table
-                        table_container, variant_table = styled_table(
-                            columns=columns,
-                            rows=rows,
-                            pagination=25,
-                            class_size="table-xs"
+
+                        # Create paged table (slice rows per page, avoid full row materialization).
+                        variant_table = _render_paged_df_table(
+                            display_df,
+                            columns,
+                            pagination_default=100,
+                            class_size="table-xs",
+                            search_placeholder=f"Search {v_type}s...",
                         )
 
                         # Make all columns sortable
@@ -4960,13 +5121,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                                 column, e.value
                                             ),
                                         )
-
-                        # Add search functionality
-                        with variant_table.add_slot("top-right"):
-                            with ui.input(placeholder=f"Search {v_type}s...").props(
-                                "type=search"
-                            ).bind_value(variant_table, "filter").add_slot("append"):
-                                ui.icon("search")
 
                         # Column toggle function
                         def toggle_column(column: dict, visible: bool) -> None:
@@ -5050,9 +5204,6 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                 except Exception as e:
                     ui.notify(f"Export failed: {e}", type="error")
-
-            # Check for existing results (after all functions are defined)
-            _check_snp_results()
 
             # Function to check file availability
             def _check_snp_file_availability():
@@ -5154,6 +5305,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     # The reference genome is passed via CLI and stored in workflow_runner.reference
 
                     # Update UI state
+                    snp_results_lazy_state["sig"] = None
                     snp_analysis_button.disable()
                     snp_status_label.set_text("Starting SNP analysis...")
                     snp_status_label.classes(replace="text-sm text-blue-600")
@@ -5368,7 +5520,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             statusElement.textContent = "SNP analysis failed: " + "{str(e)}";
                                             statusElement.className = "text-sm text-red-600";
                                         }}
-                                        
+
                                         // Re-enable button
                                         var buttonElement = document.querySelector('{snp_analysis_button.id}');
                                         if (buttonElement) {{
@@ -5986,7 +6138,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                             # Create table using styled_table for consistency
                             from robin.gui.theme import styled_table
-                            
+
                             # Create columns definition
                             columns = []
                             for col in gene_table_data[0].keys():
@@ -5996,7 +6148,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     "field": col,
                                     "sortable": True
                                 })
-                            
+
                             # Create styled table
                             table_container, gene_table = styled_table(
                                 columns=columns,
@@ -6160,7 +6312,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                         df = pd.DataFrame(variant_data)
                                         # Create styled table for consistency
                                         from robin.gui.theme import styled_table
-                                        
+
                                         # Create columns definition
                                         columns = []
                                         for col in df.columns:
@@ -6170,16 +6322,13 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                                 "field": col,
                                                 "sortable": True
                                             })
-                                        
-                                        # Create rows from DataFrame
-                                        rows = df.to_dict('records')
-                                        
-                                        # Create styled table
-                                        table_container, variant_table = styled_table(
-                                            columns=columns,
-                                            rows=rows,
-                                            pagination=10,
-                                            class_size="table-xs"
+
+                                        variant_table = _render_paged_df_table(
+                                            df,
+                                            columns,
+                                            pagination_default=100,
+                                            class_size="table-xs",
+                                            search_placeholder="Search variants...",
                                         )
 
                                         # Make columns sortable
@@ -6251,7 +6400,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                         # Create table using styled_table for consistency
                         from robin.gui.theme import styled_table
-                        
+
                         # Create columns definition
                         columns = []
                         for col in low_cov_data[0].keys():
@@ -6261,7 +6410,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                 "field": col,
                                 "sortable": True
                             })
-                        
+
                         # Create styled table
                         table_container, low_cov_table = styled_table(
                             columns=columns,
@@ -6455,7 +6604,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     df = pd.DataFrame(variant_data)
                                     # Create styled table for consistency
                                     from robin.gui.theme import styled_table
-                                    
+
                                     # Create columns definition
                                     columns = []
                                     for col in df.columns:
@@ -6465,28 +6614,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                             "field": col,
                                             "sortable": True
                                         })
-                                    
-                                    # Create rows from DataFrame
-                                    rows = df.to_dict('records')
-                                    
-                                    # Create styled table
-                                    table_container, detailed_variant_table = styled_table(
-                                        columns=columns,
-                                        rows=rows,
-                                        pagination=20,
-                                        class_size="table-xs"
-                                    )
 
-                                    # Add search functionality
-                                    with detailed_variant_table.add_slot("top-right"):
-                                        with ui.input(
-                                            placeholder="Search variants..."
-                                        ).props("type=search").bind_value(
-                                            detailed_variant_table, "filter"
-                                        ).add_slot(
-                                            "append"
-                                        ):
-                                            ui.icon("search")
+                                    detailed_variant_table = _render_paged_df_table(
+                                        df,
+                                        columns,
+                                        pagination_default=100,
+                                        class_size="table-xs",
+                                        search_placeholder="Search variants...",
+                                    )
 
                                     # Make columns sortable
                                     for col in detailed_variant_table.columns:
@@ -7211,33 +7346,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                     indel_vcf = clair_dir / "snpsift_indel_output.vcf"
 
                     if snp_vcf.exists() and indel_vcf.exists():
-                        # Update SNP results status if it exists
-                        try:
-                            # Find the SNP results status label and update it
-                            snp_results_elements = document.querySelectorAll(
-                                "[data-snp-results-status]"
-                            )
-                            if snp_results_elements.length > 0:
-                                for element in snp_results_elements:
-                                    element.textContent = (
-                                        "SNP analysis completed successfully!"
-                                    )
-                                    element.className = "text-sm text-green-600"
-                        except Exception:
-                            pass
-
-                        # Update button state if it exists
-                        try:
-                            snp_button_elements = document.querySelectorAll(
-                                "[data-snp-analysis-button]"
-                            )
-                            if snp_button_elements.length > 0:
-                                for element in snp_button_elements:
-                                    element.textContent = "Rerun SNP Analysis"
-                                    element.disabled = false
-                                    element.className = "q-btn q-btn--standard q-btn--rectangle q-btn--secondary"
-                        except Exception:
-                            pass
+                        state["snp_results_ready"] = True
 
                     # Also check file availability for SNP analysis
                     try:
@@ -7251,18 +7360,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     bed_content = f.read().strip()
 
                                 if bed_content:
-                                    # Files are available, enable button if not already enabled
-                                    try:
-                                        snp_button_elements = document.querySelectorAll(
-                                            "[data-snp-analysis-button]"
-                                        )
-                                        if snp_button_elements.length > 0:
-                                            for element in snp_button_elements:
-                                                if element.disabled:
-                                                    element.disabled = false
-                                                    element.className = "q-btn q-btn--standard q-btn--rectangle q-btn--primary"
-                                    except Exception:
-                                        pass
+                                    state["snp_inputs_ready"] = True
                             except Exception:
                                 pass
                     except Exception:
@@ -7283,7 +7381,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         target_bam = sample_dir / "target.bam"
                         targets_bed = sample_dir / "targets_exceeding_threshold.bed"
 
-                    
+
                     except Exception as e:
                         logging.debug(f"   LGA: <access denied>: {e}")
                         pass
@@ -7329,10 +7427,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         behind chart options built at layout time; ``force=True`` reapplies the current
         palette so plots match the visible theme without toggling.
         """
-        try:
-            cur = bool(app.storage.user.get("dark_mode"))
-        except Exception:
-            cur = False
+        cur = get_user_dark_mode(default=False)
         if not force and _last_cov_theme_sig[0] == cur:
             return
         _last_cov_theme_sig[0] = cur

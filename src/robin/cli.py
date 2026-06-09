@@ -1444,6 +1444,9 @@ def _create_ray_workflow_runner(
                     try:
                         final_result = ray.get(result, timeout=30.0)
                         return final_result
+                    except ray.exceptions.GetTimeoutError:
+                        # Submission may still have reached the coordinator; avoid false-negative UI status.
+                        return True
                     except Exception:
                         return False
 
@@ -1514,6 +1517,12 @@ def _create_ray_workflow_runner(
                                 err=True,
                             )
                         return final_result
+                    except ray.exceptions.GetTimeoutError:
+                        click.echo(
+                            f"[SNP] Submit confirmation timed out for sample '{sid_for_log}', treating as queued.",
+                            err=True,
+                        )
+                        return True
                     except Exception as e:
                         click.echo(
                             f"[SNP] Failed waiting for submit confirmation for sample '{sid_for_log}': {e}",
@@ -1586,6 +1595,12 @@ def _create_ray_workflow_runner(
                                 err=True,
                             )
                         return final_result
+                    except ray.exceptions.GetTimeoutError:
+                        click.echo(
+                            f"[Finalize] Submit confirmation timed out for sample '{sid_for_log}', treating as queued.",
+                            err=True,
+                        )
+                        return True
                     except Exception as e:
                         click.echo(
                             f"[Finalize] Failed waiting for submit confirmation for sample '{sid_for_log}': {e}",
@@ -1639,6 +1654,8 @@ def _create_ray_workflow_runner(
                         paths=[str(path)],
                         target_panel=target_panel,
                         analysis_workers=analysis_workers_local,
+                        preprocessing_workers=preprocessing_workers,
+                        bed_workers=bed_workers,
                         process_existing=not no_process_existing,
                         monitor=not no_progress,
                         watch=(not no_watch),
@@ -1909,6 +1926,17 @@ def _register_handlers(
                 final_handler = create_mgmt_handler_with_work_dir_and_ref(
                     handler_func, work_dir, reference
                 )
+            elif reference and job_type == "bed_conversion":
+                def create_bed_conversion_handler_with_work_dir_and_ref(
+                    handler, work_dir_path, ref_path
+                ):
+                    return lambda job: handler(
+                        job, work_dir=str(work_dir_path), reference=str(ref_path)
+                    )
+
+                final_handler = create_bed_conversion_handler_with_work_dir_and_ref(
+                    handler_func, work_dir, reference
+                )
             elif job_type == "fusion":
                 # Special handling for fusion analysis with target panel
                 def create_fusion_handler_with_work_dir(
@@ -2070,6 +2098,8 @@ def _display_workflow_config(
     deduplicate_jobs: tuple,
     legacy_analysis_queue: bool,
     analysis_workers: int,
+    preprocessing_workers: int,
+    bed_workers: int,
     no_process_existing: bool,
     uses_simplified_format: bool = False,
     original_workflow: str = "",
@@ -2131,9 +2161,9 @@ def _display_workflow_config(
             click.echo(f"  - Ray CPUs: {ray_num_cpus}")
         else:
             click.echo("  - Ray CPUs: auto-detect")
-        click.echo(
-            f"  - Analysis workers per type: {analysis_workers} (distributed across Ray cluster)"
-        )
+        click.echo(f"  - Analysis pool concurrency: {analysis_workers}")
+        click.echo(f"  - Preprocessing pool concurrency: {preprocessing_workers}")
+        click.echo(f"  - Bed conversion pool concurrency: {bed_workers}")
         click.echo(f"  - Log level: {log_level} (applied to all Ray actors)")
 
         # Display priority configuration
@@ -2298,7 +2328,7 @@ def _display_workflow_config(
     "--preset",
     type=click.Choice(["p2i", "standard", "high"]),
     default="standard",
-    help="Execution preset for Ray Core: 'p2i' (2 CPUs cap, 4 grouped actors, concurrency 1), 'standard' (default; 6 CPUs cap, grouped actors, analysis uses analysis_workers), 'high' (per-job-type actors).",
+    help="Execution preset for Ray Core: 'p2i' (2 CPU cap, grouped pools, concurrency 1), 'standard' (default; 6 CPU cap, grouped pools), 'high' (per-job-type actors).",
 )
 @click.option(
     "--ray-dashboard/--no-ray-dashboard",
@@ -2467,6 +2497,8 @@ def workflow(
                 deduplicate_jobs=deduplicate_jobs,
                 legacy_analysis_queue=legacy_analysis_queue,
                 analysis_workers=analysis_workers,
+                preprocessing_workers=preprocessing_workers,
+                bed_workers=bed_workers,
                 no_process_existing=no_process_existing,
                 uses_simplified_format=uses_simplified_format,
                 original_workflow=workflow,
@@ -2500,6 +2532,8 @@ def workflow(
                         paths=[str(path)],
                         target_panel=target_panel,
                         analysis_workers=analysis_workers,
+                        preprocessing_workers=preprocessing_workers,
+                        bed_workers=bed_workers,
                         process_existing=not no_process_existing,
                         monitor=not no_progress,
                         watch=(not no_watch),
@@ -2513,6 +2547,7 @@ def workflow(
                         reference=str(reference) if reference else None,
                         gui_host=gui_host,
                         gui_port=gui_port,
+                        with_gui=with_gui,
                         center=center,
                     )
                 )
@@ -2635,6 +2670,8 @@ def workflow(
             deduplicate_jobs=deduplicate_jobs,
             legacy_analysis_queue=legacy_analysis_queue,
             analysis_workers=analysis_workers,
+            preprocessing_workers=preprocessing_workers,
+            bed_workers=bed_workers,
             no_process_existing=no_process_existing,
             uses_simplified_format=uses_simplified_format,
             original_workflow=original_workflow_string,

@@ -10,7 +10,7 @@ warnings.filterwarnings(
     "ignore", message="The figure layout has changed to tight", category=UserWarning
 )
 
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 __author__ = "Matt Loose"
 __email__ = "matt.loose@nottingham.ac.uk"
 

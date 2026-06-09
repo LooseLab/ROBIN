@@ -14,17 +14,16 @@ try:
 except ImportError:  # pragma: no cover
     ui = None
 
-from robin.gui.theme import styled_table, register_theme_sync_callback
+from robin.gui.theme import (
+    styled_table,
+    register_theme_sync_callback,
+    get_user_dark_mode,
+)
 
 
 def _is_dark_mode() -> bool:
-    """Match Quasar ``body--dark`` via app storage (see theme.frame)."""
-    try:
-        from nicegui import app
-
-        return bool(app.storage.user.get("dark_mode"))
-    except Exception:
-        return False
+    """Return normalized per-user dark mode."""
+    return get_user_dark_mode(default=False)
 
 
 def _apply_mgmt_figure_theme(fig: Any, dark: bool) -> None:

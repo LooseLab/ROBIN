@@ -26,6 +26,7 @@ import logging
 
 # Suppress pkg_resources deprecation warnings from sorted_nearest
 import warnings
+
 warnings.filterwarnings(
     "ignore", message="pkg_resources is deprecated", category=UserWarning
 )
@@ -35,6 +36,8 @@ warnings.filterwarnings(
 )
 
 import os
+import copy
+import shutil
 import threading
 import time
 import tempfile
@@ -91,6 +94,25 @@ def _print_styled(message: str, level: str = "info") -> None:
     style = styles.get(level, "white")
     _RICH_CONSOLE.print(message, style=style)
 
+
+def _warn_if_ray_temp_disk_is_full() -> None:
+    """Surface Ray spill/temp disk pressure before it becomes a silent stall."""
+    ray_temp_root = os.environ.get("RAY_TMPDIR") or tempfile.gettempdir()
+    try:
+        usage = shutil.disk_usage(ray_temp_root)
+        used_ratio = usage.used / usage.total if usage.total else 0.0
+        if used_ratio >= 0.95:
+            free_gib = usage.free / (1024**3)
+            _print_styled(
+                f"Warning: Ray temporary storage filesystem is {used_ratio:.1%} full "
+                f"({free_gib:.1f} GiB free at {ray_temp_root}). "
+                "Ray object spilling may fail or stall.",
+                level="warn",
+            )
+    except Exception:
+        pass
+
+
 # Import memory management
 try:
     from robin.memory_manager import MemoryManager
@@ -98,7 +120,7 @@ except ImportError:
     MemoryManager = None
 
 # Disable memory manager for testing via env flag
-DISABLE_MEMORY_MANAGER = True #os.getenv("ROBIN_DISABLE_MEMORY_MANAGER", "0") == "1"
+DISABLE_MEMORY_MANAGER = True  # os.getenv("ROBIN_DISABLE_MEMORY_MANAGER", "0") == "1"
 _HANDLER_IMPORT_ERRORS: Dict[str, str] = {}
 
 # Optional GUI hook integration
@@ -145,7 +167,7 @@ try:
         cnv_handler as _cnv_handler,
         clear_sample_cache,
         get_sample_cache_stats,
-        cleanup_sample_cache_on_completion
+        cleanup_sample_cache_on_completion,
     )
 except Exception as exc:
     _cnv_handler = None
@@ -230,21 +252,94 @@ GLOBAL_LOG_LEVEL: str = "INFO"
 
 
 # ---------- Batch Configuration ----------
+# Per job-type batching policy. Two timeouts are honoured:
+#   - timeout_seconds:       idle timeout, used when no jobs of this type are
+#                            currently in flight on a worker. Keeps the very
+#                            first batch reactive (small wait → fast feedback).
+#   - timeout_seconds_busy:  busy timeout, used when at least one job of this
+#                            type is in flight. Allows the per-(sample, type)
+#                            batcher to accumulate more files into one batch
+#                            while the worker is occupied, instead of dribbling
+#                            out lots of tiny batches that the worker would
+#                            then process serially.
+# Both can be globally overridden via env vars:
+#   ROBIN_BATCH_TIMEOUT_IDLE_S  (float seconds)
+#   ROBIN_BATCH_TIMEOUT_BUSY_S  (float seconds)
+# A per-type override is also available via:
+#   ROBIN_BATCH_TIMEOUT_BUSY_S_<TYPE>   e.g. ROBIN_BATCH_TIMEOUT_BUSY_S_CNV=45
 BATCH_CONFIG: Dict[str, Dict[str, Any]] = {
     # Preprocessing should NOT be batched - each file needs individual sample ID extraction
-    "preprocessing": {"max_batch_size": 1, "timeout_seconds": 0},  # Force no batching
-    "bed_conversion": {"max_batch_size": 20, "timeout_seconds": 2},
-    "mgmt": {"max_batch_size": 20, "timeout_seconds": 2},
-    "cnv": {"max_batch_size": 20, "timeout_seconds": 2},
-    "target": {"max_batch_size": 20, "timeout_seconds": 2},
-    "fusion": {"max_batch_size": 20, "timeout_seconds": 2},
-    "sturgeon": {"max_batch_size": 20, "timeout_seconds": 2},
-    "nanodx": {"max_batch_size": 20, "timeout_seconds": 2},
-    "pannanodx": {"max_batch_size": 20, "timeout_seconds": 2},
-    "random_forest": {"max_batch_size": 20, "timeout_seconds": 2},
-    "igv_bam": {"max_batch_size": 20, "timeout_seconds": 2},
-    "snp_analysis": {"max_batch_size": 20, "timeout_seconds": 2},
+    "preprocessing": {
+        "max_batch_size": 1,
+        "timeout_seconds": 0,
+        "timeout_seconds_busy": 0,
+    },
+    "bed_conversion": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
+    "mgmt": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "cnv": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "target": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "fusion": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "sturgeon": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
+    "nanodx": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "pannanodx": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
+    "random_forest": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
+    "igv_bam": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "snp_analysis": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
 }
+
+
+def _resolved_batch_timeouts(job_type: str) -> Tuple[float, float]:
+    """Return (idle_timeout_s, busy_timeout_s) for a job_type, applying env overrides.
+
+    Env precedence (most specific wins):
+      1. ROBIN_BATCH_TIMEOUT_BUSY_S_<TYPE>   (per-type busy timeout)
+      2. ROBIN_BATCH_TIMEOUT_IDLE_S_<TYPE>   (per-type idle timeout)
+      3. ROBIN_BATCH_TIMEOUT_BUSY_S          (global busy)
+      4. ROBIN_BATCH_TIMEOUT_IDLE_S          (global idle)
+      5. BATCH_CONFIG defaults
+    """
+    cfg = BATCH_CONFIG.get(job_type, {})
+    idle_default = float(cfg.get("timeout_seconds", 2) or 0)
+    busy_default = float(cfg.get("timeout_seconds_busy", idle_default) or idle_default)
+
+    def _f(name: str, fallback: float) -> float:
+        try:
+            v = os.environ.get(name)
+            return float(v) if v is not None and v != "" else fallback
+        except Exception:
+            return fallback
+
+    idle = _f("ROBIN_BATCH_TIMEOUT_IDLE_S", idle_default)
+    busy = _f("ROBIN_BATCH_TIMEOUT_BUSY_S", busy_default)
+    # per-type overrides
+    type_key = job_type.upper()
+    idle = _f(f"ROBIN_BATCH_TIMEOUT_IDLE_S_{type_key}", idle)
+    busy = _f(f"ROBIN_BATCH_TIMEOUT_BUSY_S_{type_key}", busy)
+    # busy must be >= idle (if someone misconfigures, fall back to max)
+    if busy < idle:
+        busy = idle
+    return idle, busy
+
 
 # ---------- Shared DTOs ----------
 @dataclass
@@ -254,7 +349,7 @@ class WorkflowContext:
     results: Dict[str, Any] = field(default_factory=dict)
     history: List[str] = field(default_factory=list)
     errors: List[Dict[str, Any]] = field(default_factory=list)
-    
+
     # NEW: Simple batch metadata
     batch_id: Optional[str] = None
     batch_index: Optional[int] = None
@@ -275,21 +370,21 @@ class WorkflowContext:
         # First try to get from bam_metadata (for backward compatibility)
         bam_md = self.metadata.get("bam_metadata", {})
         sample_id = bam_md.get("sample_id", "unknown")
-        
+
         # If not found or "unknown", try to get from preprocessing results
         if sample_id == "unknown":
             preprocessing_result = self.results.get("preprocessing", {})
             sample_id = preprocessing_result.get("sample_id", "unknown")
-        
+
         return sample_id
-    
+
     def set_batch_info(self, batch_id: str, batch_index: int) -> None:
         """Set batch information for this context"""
         self.batch_id = batch_id
         self.batch_index = batch_index
         self.metadata["batch_id"] = batch_id
         self.metadata["batch_index"] = batch_index
-    
+
     def cleanup_intermediate_data(self) -> None:
         """
         Clean up intermediate data from context to reduce memory usage.
@@ -303,7 +398,7 @@ class WorkflowContext:
                 if job_type == "preprocessing" and "supplementary_read_ids" in result:
                     result["supplementary_read_ids"] = []  # Clear large list
                     result["supplementary_read_ids_cleared"] = True
-        
+
         # Keep history but limit errors list to last 10 errors
         if len(self.errors) > 10:
             self.errors = self.errors[-10:]
@@ -317,6 +412,7 @@ class Job:
     workflow: List[str]
     step: int
     context: WorkflowContext
+    logical_work_count: Optional[int] = None
 
     def next_job(self) -> Optional["Job"]:
         if self.step + 1 >= len(self.workflow):
@@ -332,6 +428,7 @@ class Job:
             self.workflow,
             self.step + 1,
             self.context,
+            self.logical_work_count,
         )
 
 
@@ -345,13 +442,13 @@ class BatchedJob:
     contexts: List[WorkflowContext]  # Multiple contexts for batched processing
     batch_id: str
     sample_id: str
-    
+
     def get_sample_id(self) -> str:
         return self.sample_id
-    
+
     def get_file_count(self) -> int:
         return len(self.contexts)
-    
+
     def get_filepaths(self) -> List[str]:
         return [ctx.filepath for ctx in self.contexts]
 
@@ -377,6 +474,18 @@ TRIGGERS: Dict[str, List[str]] = {
     "target": ["igv_bam"],
 }
 
+
+def _preprocessing_allows_downstream(
+    preprocessing_result: Dict[str, Any], downstream_type: str
+) -> bool:
+    """Return whether a preprocessing result should trigger an analysis."""
+    if preprocessing_result.get("status", "unknown") != "success":
+        return False
+    if downstream_type == "fusion":
+        return bool(preprocessing_result.get("has_supplementary_reads", False))
+    return True
+
+
 # Per-sample de-duplication to avoid output races. Ensure only one job of these types
 # runs concurrently per sample (max 1 running + 1 pending).
 # Only deduplicate selected per-sample jobs; analysis/bed_conversion should queue, not skip.
@@ -396,105 +505,163 @@ SERIALIZE_BY_TYPE_PER_SAMPLE: Set[str] = set()
 # Classification job types (single global pipeline per type)
 CLASSIFICATION_TYPES: Set[str] = {"sturgeon", "nanodx", "pannanodx", "random_forest"}
 
+# Handlers record errors under analysis-specific keys; Pool must treat those as failures.
+_HANDLER_ERROR_ALIASES: Dict[str, Tuple[str, ...]] = {
+    "sturgeon": ("sturgeon_analysis",),
+    "nanodx": ("nanodx_analysis",),
+    "pannanodx": ("pannanodx_analysis",),
+    "cnv": ("cnv_analysis",),
+    "mgmt": ("mgmt_analysis",),
+    "target": ("target_analysis",),
+    "fusion": ("fusion_analysis",),
+    "random_forest": ("random_forest_analysis",),
+}
+
 # Job types that must be serialized per sample (no overlap across these types)
 ## Removed per-sample cross-type serialization to allow one job per type globally
 
-# Ray memory is in bytes. Default 1 GiB per task; fusion 4 GiB; snp_analysis 8 GiB (Clair3/variant calling).
+# Ray memory is in bytes. Default 1 GiB per task; fusion 8 GiB; snp_analysis 8 GiB (Clair3/variant calling).
 _GB = 1024 * 1024 * 1024
 _DEFAULT_MEMORY = 1 * _GB
-_FUSION_MEMORY = 4 * _GB
+_FUSION_MEMORY = 8 * _GB
 _SNP_ANALYSIS_MEMORY = 8 * _GB
 RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
     # Tune these to your cluster
     "preprocessing": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "bed_conversion": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "mgmt": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
-    "cnv": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},  # CNV gets dedicated CPU but only 1 thread
+    "cnv": {
+        "num_cpus": 1,
+        "memory": _DEFAULT_MEMORY,
+    },  # CNV gets dedicated CPU but only 1 thread
     "target": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
-    "fusion": {"num_cpus": 1, "memory": _FUSION_MEMORY},  # Fusion needs 4 GiB (BAM scan, breakpoint aggregation)
+    "fusion": {
+        "num_cpus": 1,
+        "memory": _FUSION_MEMORY,
+    },  # Fusion needs 8 GiB (BAM scan, breakpoint aggregation)
     # Classifiers do not require GPU by default (CPU-only)
     "sturgeon": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "nanodx": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "pannanodx": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "random_forest": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "igv_bam": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
-    "snp_analysis": {"num_cpus": 1, "memory": _SNP_ANALYSIS_MEMORY},  # Clair3/variant calling needs 8 GiB
+    "snp_analysis": {
+        "num_cpus": 1,
+        "memory": _SNP_ANALYSIS_MEMORY,
+    },  # Clair3/variant calling needs 8 GiB
     "target_bam_finalize": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
 }
 
+
 # ---------- Sample Job Batcher ----------
 class SampleJobBatcher:
-    def __init__(self):
+    def __init__(self, inflight_callback: Optional[Callable[[str], int]] = None):
         # sample_id -> job_type -> List[Job]
         self.pending_jobs: Dict[str, Dict[str, List[Job]]] = {}
         # sample_id -> job_type -> timestamp
         self.last_job_time: Dict[str, Dict[str, float]] = {}
         # Lock created lazily to avoid serialization issues in Ray actors
         self._lock: Optional[asyncio.Lock] = None
-    
+        # Optional callback returning current inflight count for a job_type.
+        # Used to switch between idle and busy timeouts so the batcher can
+        # accumulate more files into a batch while a worker is occupied.
+        self._inflight_callback: Optional[Callable[[str], int]] = inflight_callback
+
+    def set_inflight_callback(self, cb: Optional[Callable[[str], int]]) -> None:
+        """(Re)wire the inflight count callback after construction."""
+        self._inflight_callback = cb
+
+    def _inflight_for(self, job_type: str) -> int:
+        if self._inflight_callback is None:
+            return 0
+        try:
+            return int(self._inflight_callback(job_type) or 0)
+        except Exception:
+            return 0
+
+    def _effective_timeout(self, job_type: str) -> float:
+        """Pick idle vs busy timeout based on whether the type currently has
+        any inflight jobs on a worker. Idle keeps first batches reactive;
+        busy lets us accumulate while the worker is occupied so subsequent
+        batches arrive bigger."""
+        idle, busy = _resolved_batch_timeouts(job_type)
+        return busy if self._inflight_for(job_type) > 0 else idle
+
     def _get_lock(self) -> Optional[asyncio.Lock]:
         """Get or create the asyncio lock lazily."""
         if self._lock is None and asyncio:
             self._lock = asyncio.Lock()
         return self._lock
-    
+
     async def add_job(self, job: Job) -> List[BatchedJob]:
         """Add a job and return any completed batches"""
         sample_id = job.context.get_sample_id()
         job_type = job.job_type
-        
+
         lock = self._get_lock()
         async with lock if lock else nullcontext():
             # Initialize if needed
             if sample_id not in self.pending_jobs:
                 self.pending_jobs[sample_id] = {}
                 self.last_job_time[sample_id] = {}
-            
+
             if job_type not in self.pending_jobs[sample_id]:
                 self.pending_jobs[sample_id][job_type] = []
                 self.last_job_time[sample_id][job_type] = time.time()
-            
+
             # Add job to pending list
             self.pending_jobs[sample_id][job_type].append(job)
             self.last_job_time[sample_id][job_type] = time.time()
-            
+
             # Check for completed batches
             batches = self._check_and_create_batches(sample_id, job_type)
             return batches
-    
-    def _check_and_create_batches(self, sample_id: str, job_type: str) -> List[BatchedJob]:
+
+    def _check_and_create_batches(
+        self, sample_id: str, job_type: str
+    ) -> List[BatchedJob]:
         """Check if we should create batches for a sample/job_type combination.
         Jobs with force_individual_batch (e.g. large BAMs) are emitted as single-file batches.
         """
-        config = BATCH_CONFIG.get(job_type, {"max_batch_size": 20, "timeout_seconds": 10})
+        config = BATCH_CONFIG.get(
+            job_type, {"max_batch_size": 20, "timeout_seconds": 10}
+        )
         max_batch_size = config["max_batch_size"]
-        
+
         pending = self.pending_jobs[sample_id][job_type]
         batches = []
-        
+
         # Emit single-file batches for jobs marked force_individual_batch (e.g. large BAMs)
-        individual = [j for j in pending if (j.context.metadata or {}).get("force_individual_batch")]
-        rest = [j for j in pending if not (j.context.metadata or {}).get("force_individual_batch")]
+        individual = [
+            j
+            for j in pending
+            if (j.context.metadata or {}).get("force_individual_batch")
+        ]
+        rest = [
+            j
+            for j in pending
+            if not (j.context.metadata or {}).get("force_individual_batch")
+        ]
         for job in individual:
             batches.append(self._create_batched_job([job], sample_id, job_type))
-        
+
         # Create batches of max_batch_size from the rest
         while len(rest) >= max_batch_size:
             batch_jobs = rest[:max_batch_size]
             rest = rest[max_batch_size:]
             batched_job = self._create_batched_job(batch_jobs, sample_id, job_type)
             batches.append(batched_job)
-        
+
         # Update pending list (only unbatched jobs remain)
         self.pending_jobs[sample_id][job_type] = rest
-        
+
         return batches
-    
+
     async def check_timeouts(self) -> List[BatchedJob]:
         """Check for timed-out batches and return them"""
         current_time = time.time()
         timed_out_batches = []
-        
+
         lock = self._get_lock()
         async with lock if lock else nullcontext():
             for sample_id in list(self.pending_jobs.keys()):
@@ -502,44 +669,72 @@ class SampleJobBatcher:
                     jobs = self.pending_jobs[sample_id][job_type]
                     if not jobs:
                         continue
-                    
-                    config = BATCH_CONFIG.get(job_type, {"timeout_seconds": 10})
-                    timeout_seconds = config["timeout_seconds"]
+
+                    timeout_seconds = self._effective_timeout(job_type)
                     last_time = self.last_job_time[sample_id][job_type]
-                    
+
                     if (current_time - last_time) >= timeout_seconds:
                         # Create batch with remaining jobs
                         batch = self._create_batched_job(jobs, sample_id, job_type)
                         timed_out_batches.append(batch)
-                        
+
                         # Clear the pending jobs
                         self.pending_jobs[sample_id][job_type] = []
                         del self.last_job_time[sample_id][job_type]
-            
+
             # Clean up empty entries
             self._cleanup_empty_entries()
-        
+
         return timed_out_batches
-    
-    def _create_batched_job(self, jobs: List[Job], sample_id: str, job_type: str) -> BatchedJob:
+
+    async def force_flush_type(self, job_type: str) -> List[BatchedJob]:
+        """Immediately flush whatever is pending for a given job_type across all
+        samples, regardless of timeout. Called when a worker for that type
+        becomes free so it has something to pick up instead of waiting out the
+        busy timeout."""
+        flushed: List[BatchedJob] = []
+        lock = self._get_lock()
+        async with lock if lock else nullcontext():
+            for sample_id in list(self.pending_jobs.keys()):
+                jobs = self.pending_jobs.get(sample_id, {}).get(job_type, [])
+                if not jobs:
+                    continue
+                batch = self._create_batched_job(jobs, sample_id, job_type)
+                flushed.append(batch)
+                self.pending_jobs[sample_id][job_type] = []
+                if (
+                    sample_id in self.last_job_time
+                    and job_type in self.last_job_time[sample_id]
+                ):
+                    del self.last_job_time[sample_id][job_type]
+            self._cleanup_empty_entries()
+        return flushed
+
+    def _create_batched_job(
+        self, jobs: List[Job], sample_id: str, job_type: str
+    ) -> BatchedJob:
         """Create a batched job from a list of individual jobs"""
         if not jobs:
             raise ValueError("Cannot create batched job from empty job list")
-        
+
         # Validate all jobs have same sample_id and job_type
         for job in jobs:
             if job.context.get_sample_id() != sample_id:
-                raise ValueError(f"Mixed sample IDs in batch: {sample_id} vs {job.context.get_sample_id()}")
+                raise ValueError(
+                    f"Mixed sample IDs in batch: {sample_id} vs {job.context.get_sample_id()}"
+                )
             if job.job_type != job_type:
-                raise ValueError(f"Mixed job types in batch: {job_type} vs {job.job_type}")
-        
+                raise ValueError(
+                    f"Mixed job types in batch: {job_type} vs {job.job_type}"
+                )
+
         # Use the first job as template
         template_job = jobs[0]
         batch_id = f"{sample_id}_{job_type}_{int(time.time() * 1000)}"
-        
+
         # Extract contexts from all jobs
         contexts = [job.context for job in jobs]
-        
+
         return BatchedJob(
             job_id=next(_job_id_counter),
             job_type=job_type,
@@ -548,9 +743,9 @@ class SampleJobBatcher:
             step=template_job.step,
             contexts=contexts,
             batch_id=batch_id,
-            sample_id=sample_id
+            sample_id=sample_id,
         )
-    
+
     def _cleanup_empty_entries(self):
         """Remove empty entries from pending jobs and timestamps"""
         # Remove empty job type entries
@@ -560,7 +755,7 @@ class SampleJobBatcher:
                     del self.pending_jobs[sample_id][job_type]
                     if job_type in self.last_job_time[sample_id]:
                         del self.last_job_time[sample_id][job_type]
-            
+
             # Remove empty sample entries
             if not self.pending_jobs[sample_id]:
                 del self.pending_jobs[sample_id]
@@ -577,6 +772,33 @@ def job_queue_of(job_type: str) -> str:
         if job_type in types:
             return q
     return "slow"
+
+
+_ROBIN_NAMED_ACTORS: Tuple[str, ...] = (
+    "robin_coordinator",
+    "pool_prep",
+    "pool_bed_conversion",
+    "pool_cnv",
+    "pool_analysis",
+    "pool_classif",
+    "pool_rf",
+    "pool_slow",
+)
+
+
+def _kill_stale_robin_actors() -> None:
+    """Kill leftover ROBIN actors so Pool workers resolve a fresh Coordinator."""
+    try:
+        import ray
+    except Exception:
+        return
+    if not ray.is_initialized():
+        return
+    for name in _ROBIN_NAMED_ACTORS:
+        try:
+            ray.kill(ray.get_actor(name))
+        except Exception:
+            pass
 
 
 def _get_ray_runtime_ids() -> Tuple[Optional[str], Optional[str], Optional[str]]:
@@ -608,6 +830,50 @@ def _get_sample_id(job: Job) -> Optional[str]:
         return None
 
 
+def _job_work_count(job: Optional[Job]) -> int:
+    """Return logical work items represented by a Job (files for batched jobs)."""
+    if job is None:
+        return 0
+    if job.logical_work_count is not None:
+        return max(1, int(job.logical_work_count))
+    if job.job_type in CLASSIFICATION_TYPES:
+        return 1
+    try:
+        batched_job = job.context.metadata.get("_batched_job")
+        if batched_job is not None:
+            return max(1, int(batched_job.get_file_count()))
+    except Exception:
+        pass
+    return 1
+
+
+def _clone_workflow_context(
+    context: WorkflowContext, *, strip_batch: bool = True
+) -> WorkflowContext:
+    """Copy a context so parallel downstream branches cannot mutate each other."""
+    try:
+        metadata = copy.deepcopy(context.metadata)
+        results = copy.deepcopy(context.results)
+        history = copy.deepcopy(context.history)
+        errors = copy.deepcopy(context.errors)
+    except Exception:
+        metadata = dict(context.metadata)
+        results = dict(context.results)
+        history = list(context.history)
+        errors = list(context.errors)
+    if strip_batch:
+        metadata.pop("_batched_job", None)
+    return WorkflowContext(
+        filepath=context.filepath,
+        metadata=metadata,
+        results=results,
+        history=history,
+        errors=errors,
+        batch_id=context.batch_id,
+        batch_index=context.batch_index,
+    )
+
+
 # ---------- Real handler wrappers as Ray tasks ----------
 # Each wrapper returns an updated WorkflowContext.
 
@@ -632,6 +898,18 @@ def _notify_coordinator_handler_started(job_id: int) -> None:
         pass
 
 
+def notify_coordinator_files_completed(
+    job_type: str, count: int = 1, job_id: Optional[int] = None
+) -> None:
+    """Increment per-file progress for long batched jobs (CNV/RF); display only."""
+    try:
+        ray.get_actor("robin_coordinator").increment_completed_files.remote(
+            job_type, int(count), job_id
+        )
+    except Exception:
+        pass
+
+
 def _wrap_real_handler(
     py_handler: Optional[Callable[[Job], None]], job_type: str
 ) -> Callable[[Job], WorkflowContext]:
@@ -642,16 +920,18 @@ def _wrap_real_handler(
             try:
                 # Configure memory management based on job type
                 gc_every = 10 if job_type in {"mgmt", "cnv", "target", "fusion"} else 25
-                rss_trigger = 1024 if job_type in {"mgmt", "cnv", "target", "fusion"} else 1024
+                rss_trigger = (
+                    1024 if job_type in {"mgmt", "cnv", "target", "fusion"} else 1024
+                )
                 memory_manager = MemoryManager(
                     gc_every=gc_every,
                     rss_trigger_mb=rss_trigger,
-                    enable_malloc_trim=True
+                    enable_malloc_trim=True,
                 )
             except Exception:
                 # Fallback if memory manager fails to initialize
                 pass
-        
+
         # Ensure per-process logging honors global level
         try:
             _configure_logging(global_level=GLOBAL_LOG_LEVEL)
@@ -713,7 +993,9 @@ def _wrap_real_handler(
                 reference = job.context.metadata.get("reference")
                 target_panel = job.context.metadata.get("target_panel")
                 if not target_panel:
-                    raise ValueError(f"No target_panel found in job metadata for {job_type} handler")
+                    raise ValueError(
+                        f"No target_panel found in job metadata for {job_type} handler"
+                    )
 
                 # Call handler with appropriate parameters
                 if (
@@ -721,15 +1003,38 @@ def _wrap_real_handler(
                     and work_dir
                     and (job_type in NEEDS_WORK_DIR)
                 ):
-                    if accepts_reference and reference and accepts_target_panel and job_type in ["fusion", "target", "cnv"]:
-                        py_handler(job, work_dir=work_dir, reference=reference, target_panel=target_panel)
-                    elif accepts_reference and reference and job_type in ["mgmt", "target"]:
+                    if (
+                        accepts_reference
+                        and reference
+                        and accepts_target_panel
+                        and job_type in ["fusion", "target", "cnv"]
+                    ):
+                        py_handler(
+                            job,
+                            work_dir=work_dir,
+                            reference=reference,
+                            target_panel=target_panel,
+                        )
+                    elif (
+                        accepts_reference
+                        and reference
+                        and job_type in ["mgmt", "target"]
+                    ):
                         py_handler(job, work_dir=work_dir, reference=reference)
-                    elif accepts_target_panel and job_type in ["fusion", "target", "cnv"]:
+                    elif accepts_target_panel and job_type in [
+                        "fusion",
+                        "target",
+                        "cnv",
+                    ]:
                         py_handler(job, work_dir=work_dir, target_panel=target_panel)
                     else:
                         py_handler(job, work_dir=work_dir)
-                elif accepts_reference and reference and accepts_target_panel and job_type in ["fusion", "target", "cnv"]:
+                elif (
+                    accepts_reference
+                    and reference
+                    and accepts_target_panel
+                    and job_type in ["fusion", "target", "cnv"]
+                ):
                     py_handler(job, reference=reference, target_panel=target_panel)
                 elif accepts_reference and reference and job_type in ["mgmt", "target"]:
                     py_handler(job, reference=reference)
@@ -770,7 +1075,9 @@ def _wrap_real_handler(
             suppress = False
             try:
                 if job_type in (CLASSIFICATION_TYPES | {"bed_conversion"}):
-                    if bool(job.context.metadata.get("fail_only_bam_submission", False)):
+                    if bool(
+                        job.context.metadata.get("fail_only_bam_submission", False)
+                    ):
                         fp = getattr(job.context, "filepath", "") or ""
                         if _bam_filename_kind(fp) == "fail":
                             suppress = True
@@ -803,23 +1110,26 @@ def _wrap_real_handler(
             # Keep a dict payload so downstream code can safely call .get(...).
             if job_type not in job.context.results:
                 had_error = any(
-                    (err.get("job_type") == job_type) for err in (job.context.errors or [])
+                    (err.get("job_type") == job_type)
+                    for err in (job.context.errors or [])
                 )
-                fallback_result = {"status": "failed"} if had_error else {"status": "success"}
+                fallback_result = (
+                    {"status": "failed"} if had_error else {"status": "success"}
+                )
                 job.context.add_result(job_type, fallback_result)
-            
+
             # Trigger memory cleanup after handler execution
             # Let memory manager decide if cleanup is needed based on its heuristics
             if memory_manager is not None:
                 try:
                     cleanup_stats = memory_manager.check_and_cleanup(is_idle=True)
                     # Log memory cleanup if it was triggered
-                    if cleanup_stats.get('gc_triggered', False):
+                    if cleanup_stats.get("gc_triggered", False):
                         logger.debug(f"Memory cleanup: {cleanup_stats}")
                 except Exception:
                     # Silently continue if memory management fails
                     pass
-        
+
         return job.context
 
     return _impl
@@ -827,32 +1137,35 @@ def _wrap_real_handler(
 
 def enhanced_handler(job: BatchedJob) -> None:
     """Enhanced handler that processes batched jobs sequentially"""
-    
+
     sample_id = job.get_sample_id()
     job_type = job.job_type
     batch_size = job.get_file_count()
-    
+
     # Process each context sequentially
     for i, context in enumerate(job.contexts):
         context.set_batch_info(job.batch_id, i)
-        
+
         try:
             # Process individual file within batch
             process_single_file_in_batch(context, job_type, i, batch_size)
             context.add_result(job_type, {"status": "success"})
-            
+
         except Exception as e:
             # Fail entire batch if any file fails
             error_msg = f"File {i+1}/{batch_size} failed: {str(e)}"
             for ctx in job.contexts:
                 ctx.add_error(job_type, error_msg)
             raise  # Re-raise to fail the entire batch
-    
+
     # Mark batch as completed
     for context in job.contexts:
         context.add_result(job_type, {"status": "batch_completed"})
 
-def process_single_file_in_batch(context: WorkflowContext, job_type: str, index: int, total: int) -> None:
+
+def process_single_file_in_batch(
+    context: WorkflowContext, job_type: str, index: int, total: int
+) -> None:
     """Process a single file within a batch - to be implemented per job type"""
     # This would call the existing single-file processing logic
     pass
@@ -889,22 +1202,28 @@ class TypeProcessor:
         self.job_type = job_type
         self.remote_func = remote_func
         self.resource_options = resource_options or {}
-        
+
         # Initialize memory manager for long-running actor
         self.memory_manager = None
         if MemoryManager is not None and not DISABLE_MEMORY_MANAGER:
             try:
                 # Configure memory management based on job type
                 gc_every = 25 if job_type in {"mgmt", "cnv", "target", "fusion"} else 50
-                rss_trigger = 1024 if job_type in {"mgmt", "cnv", "target", "fusion"} else 2048
-                restart_every = 5000 if job_type in {"mgmt", "cnv", "target", "fusion"} else 10000
-                restart_rss_trigger = 2048 if job_type in {"mgmt", "cnv", "target", "fusion"} else 4096
+                rss_trigger = (
+                    1024 if job_type in {"mgmt", "cnv", "target", "fusion"} else 2048
+                )
+                restart_every = (
+                    5000 if job_type in {"mgmt", "cnv", "target", "fusion"} else 10000
+                )
+                restart_rss_trigger = (
+                    2048 if job_type in {"mgmt", "cnv", "target", "fusion"} else 4096
+                )
                 self.memory_manager = MemoryManager(
                     gc_every=gc_every,
                     rss_trigger_mb=rss_trigger,
                     enable_malloc_trim=True,
                     restart_every=restart_every,
-                    restart_rss_trigger_mb=restart_rss_trigger
+                    restart_rss_trigger_mb=restart_rss_trigger,
                 )
             except Exception as e:
                 # Fallback if memory manager fails to initialize
@@ -913,13 +1232,13 @@ class TypeProcessor:
     def update_handler(self, remote_func, resource_options: Dict[str, Any]):
         self.remote_func = remote_func
         self.resource_options = resource_options or {}
-    
+
     def should_restart(self) -> bool:
         """Check if actor should restart due to memory management."""
         if self.memory_manager is not None:
             return self.memory_manager.is_restart_requested()
         return False
-    
+
     def get_restart_reason(self) -> Optional[str]:
         """Get the reason for restart request."""
         if self.memory_manager is not None:
@@ -934,20 +1253,20 @@ class TypeProcessor:
         except Exception:
             # Propagate error to coordinator; it will handle ok=False
             raise
-        
+
         # Trigger memory cleanup after processing (actor is idle after job completion)
         if self.memory_manager is not None:
             try:
                 cleanup_stats = self.memory_manager.check_and_cleanup(is_idle=True)
                 # Log memory cleanup if it was triggered
-                if cleanup_stats.get('gc_triggered', False):
+                if cleanup_stats.get("gc_triggered", False):
                     pass  # Memory cleanup performed
-                
+
                 # Actor restart mechanism disabled - no restart checks
             except Exception as e:
                 # Silently continue if memory management fails
                 pass
-        
+
         return ctx
 
 
@@ -966,6 +1285,8 @@ class Coordinator:
         self,
         target_panel: str,
         analysis_workers: int = 1,
+        preprocessing_workers: int = 1,
+        bed_workers: int = 1,
         preset: Optional[str] = None,
         reference: Optional[str] = None,
         enable_batching: bool = True,
@@ -985,6 +1306,8 @@ class Coordinator:
         self.active: Dict[int, Dict[str, Any]] = {}
 
         self.analysis_workers = analysis_workers
+        self.preprocessing_workers = max(1, int(preprocessing_workers))
+        self.bed_workers = max(1, int(bed_workers))
         self.target_panel = target_panel
 
         # Per-sample per-type serialization tracking
@@ -995,9 +1318,10 @@ class Coordinator:
         # Per-sample one-shot scheduling for classifiers/slow
         self.scheduled_by_sample: Dict[str, Set[str]] = {}
 
-        # Global one-in-flight (plus at most one waiting) per classification type
+        # Global one-in-flight per classification type. Extra triggers coalesce
+        # into one pending rerun per (sample, type).
         self.classif_pending_by_type: Dict[str, int] = {}
-        self.classif_waiting_by_type: Dict[str, Optional[Job]] = {}
+        self.classif_waiting_by_type: Dict[str, Dict[str, Job]] = {}
 
         # create one TypeProcessor actor per job type
         self.processors: Dict[str, Any] = {}
@@ -1011,10 +1335,62 @@ class Coordinator:
         # backpressure: global and per-queue caps to prevent queue explosions
         queue_count = max(1, len(QUEUE_TO_TYPES))
         self.max_total_inflight: int = self.max_inflight_per_type * queue_count
-        # Backpressure cap for total waiting jobs.
-        # Test change: temporarily allow 2x waiting capacity to see if we
-        # simply stall because the queue limit is reached.
-        self.max_total_waiting: int = self.max_total_inflight * 40
+        # Backpressure cap for total waiting jobs (sum of waiting_by_type_global,
+        # waiting_by_queue, and waiting_global — see _total_waiting()).
+        # One submit_jobs() burst can append several waiting entries while only
+        # re-checking capacity at the start of each _dispatch_ready_job, so the
+        # total can land a few slots above (max_inflight * 40). Add slack so
+        # _wait_for_global_capacity() does not wedge at max+1/max+2. Optional:
+        #   ROBIN_MAX_TOTAL_WAITING_SLACK=int  (default: 2 * max_total_inflight)
+        #   ROBIN_MAX_TOTAL_WAITING=int        (if set, overrides cap for testing, e.g. 1280)
+        _env_waiting_cap = os.getenv("ROBIN_MAX_TOTAL_WAITING", "").strip()
+        if _env_waiting_cap:
+            try:
+                self.max_total_waiting: int = max(64, int(_env_waiting_cap))
+            except Exception:
+                try:
+                    _slack = int(
+                        os.getenv(
+                            "ROBIN_MAX_TOTAL_WAITING_SLACK",
+                            str(self.max_total_inflight * 2),
+                        )
+                    )
+                except Exception:
+                    _slack = self.max_total_inflight * 2
+                self.max_total_waiting = self.max_total_inflight * 40 + max(0, _slack)
+        else:
+            try:
+                _slack = int(
+                    os.getenv(
+                        "ROBIN_MAX_TOTAL_WAITING_SLACK",
+                        str(self.max_total_inflight * 2),
+                    )
+                )
+            except Exception:
+                _slack = self.max_total_inflight * 2
+            self.max_total_waiting: int = self.max_total_inflight * 40 + max(0, _slack)
+        # _wait_for_global_capacity blocks when total > max + this slack (not when > max).
+        # Sequential _dispatch_ready_job calls in one submit burst can land a few slots
+        # above max_total_waiting before the next check; without slack, Wait shows max+1
+        # and the coordinator wedges (e.g. 1281 vs ROBIN_MAX_TOTAL_WAITING=1280).
+        # Optional: ROBIN_GLOBAL_WAIT_SOFT_SLACK=int (overrides auto slack below)
+        try:
+            self._global_wait_soft_slack = int(
+                os.getenv("ROBIN_GLOBAL_WAIT_SOFT_SLACK", "0") or "0"
+            )
+        except Exception:
+            self._global_wait_soft_slack = 0
+        if self._global_wait_soft_slack <= 0:
+            # Auto slack: small test caps (ROBIN_MAX_TOTAL_WAITING) need a large *relative*
+            # cushion. One preprocessing finish can fan out to many downstream jobs in one
+            # coordinator turn; each may append to waiting lists before the next capacity
+            # check, so total waiting can jump tens or hundreds above the nominal cap (e.g.
+            # 1313 vs cap 1280). Production caps are already large + ROBIN_MAX_TOTAL_WAITING_SLACK.
+            mtw = int(self.max_total_waiting)
+            if mtw < 10000:
+                self._global_wait_soft_slack = max(384, mtw // 2 + 128)
+            else:
+                self._global_wait_soft_slack = max(128, int(queue_count) * 16)
         self.max_inflight_per_queue: Dict[str, int] = {
             q: self.max_inflight_per_type for q in QUEUE_TO_TYPES
         }
@@ -1025,7 +1401,9 @@ class Coordinator:
         # Enable with:
         #   ROBIN_DEBUG_BACKPRESSURE=1
         #   ROBIN_DEBUG_BACKPRESSURE_INTERVAL_S=10
-        self._debug_backpressure: bool = os.getenv("ROBIN_DEBUG_BACKPRESSURE", "0") == "1"
+        self._debug_backpressure: bool = (
+            os.getenv("ROBIN_DEBUG_BACKPRESSURE", "0") == "1"
+        )
         try:
             self._debug_backpressure_interval_s: float = float(
                 os.getenv("ROBIN_DEBUG_BACKPRESSURE_INTERVAL_S", "10")
@@ -1048,16 +1426,21 @@ class Coordinator:
         self._spool_counter: int = 0
         # per-sample tracking for GUI
         self.samples_by_id: Dict[str, Dict[str, Any]] = {}
+        self._gui_notifications: List[Dict[str, Any]] = []
         # Sample cleanup tracking to prevent unbounded memory growth
-        self._sample_cleanup_interval: int = 5000  # Clean up every N jobs (conservative)
+        self._sample_cleanup_interval: int = (
+            5000  # Clean up every N jobs (conservative)
+        )
         self._jobs_since_last_cleanup: int = 0
         # shutdown flag for graceful termination
         self._shutdown_requested = False
-        
+
         # CNV sample cache management
         self._cnv_cache_cleanup_interval: int = 1000  # Clean up CNV cache every N jobs
         self._jobs_since_cnv_cleanup: int = 0
-        self._completed_samples: Set[str] = set()  # Track samples that have completed CNV analysis
+        self._completed_samples: Set[str] = (
+            set()
+        )  # Track samples that have completed CNV analysis
         # defer setup/registration to async setup()
 
         # Preset controls how processing actors are created and their concurrency
@@ -1076,22 +1459,35 @@ class Coordinator:
 
         # Keep references to any CPU limiter actors
         self._cpu_limiters: List[Any] = []
-        
+
         # CSV buffering for performance (write in batches instead of per-job)
         self._csv_buffer: List[Dict[str, Any]] = []
         self._csv_buffer_size: int = 100  # Flush every 100 jobs
         self._csv_buffer_max_size: int = 500  # Maximum buffer size before forced flush
         # Lock created lazily to avoid serialization issues in Ray actors
         self._csv_buffer_lock: Optional[asyncio.Lock] = None
-        
+
         # Stats caching for performance (avoid recomputing stats on every GUI update)
         self._stats_cache: Optional[Dict[str, Any]] = None
         self._stats_cache_time: float = 0.0
-        self._stats_cache_ttl: float = 5.0  # Cache stats for 5 seconds
-        
-        # Batching support
+        self._stats_cache_ttl: float = 0.25
+        self._file_progress_by_job: Dict[int, int] = {}
+
+        # Batching support. The batcher uses adaptive timeouts driven by current
+        # inflight counts (see SampleJobBatcher._effective_timeout) so we wire a
+        # callback that returns the live per-type inflight count.
         self.enable_batching = enable_batching
-        self.sample_batcher = SampleJobBatcher() if enable_batching else None
+        self.sample_batcher = (
+            SampleJobBatcher(
+                inflight_callback=lambda jt: int(self.inflight_by_type.get(jt, 0))
+            )
+            if enable_batching
+            else None
+        )
+        # Coalesce stats (exposed via stats() for debugging)
+        self.coalesce_events: int = 0
+        self.coalesce_jobs_absorbed: int = 0
+        self.coalesce_contexts_merged: int = 0
 
         # Work directory (set by set_work_dir(); used for failed_jobs log)
         self.work_dir: Optional[str] = None
@@ -1099,7 +1495,7 @@ class Coordinator:
         self._failed_jobs_log: deque = deque(maxlen=5000)
         # Per-job timeout: cancel jobs running longer than this (0 = disabled)
         self.job_timeout_seconds: int = max(0, int(job_timeout_seconds))
-    
+
     def _get_csv_buffer_lock(self) -> Optional[asyncio.Lock]:
         """Get or create the CSV buffer lock lazily."""
         if self._csv_buffer_lock is None and asyncio:
@@ -1113,7 +1509,7 @@ class Coordinator:
     def get_target_panel(self) -> str:
         """Get the target panel for fusion analysis."""
         return self.target_panel
-    
+
     def set_work_dir(self, work_dir: Optional[str]) -> None:
         """Set the work directory for the coordinator."""
         self.work_dir = work_dir
@@ -1128,24 +1524,42 @@ class Coordinator:
 
     def _write_failed_jobs_file(self) -> Optional[str]:
         """Write failed jobs log to work_dir/failed_jobs.csv for inspection. Returns path or None."""
-        if not self._failed_jobs_log or not getattr(self, "work_dir", None) or not self.work_dir:
+        if (
+            not self._failed_jobs_log
+            or not getattr(self, "work_dir", None)
+            or not self.work_dir
+        ):
             return None
         try:
             import csv
+
             path = os.path.join(self.work_dir, "failed_jobs.csv")
             os.makedirs(self.work_dir, exist_ok=True)
             with open(path, "w", newline="", encoding="utf-8") as f:
                 w = csv.writer(f)
-                w.writerow(["sample_id", "filepath", "job_type", "failure_kind", "is_oom", "error"])
+                w.writerow(
+                    [
+                        "sample_id",
+                        "filepath",
+                        "job_type",
+                        "failure_kind",
+                        "is_oom",
+                        "error",
+                    ]
+                )
                 for e in self._failed_jobs_log:
-                    w.writerow([
-                        e.get("sample_id", ""),
-                        e.get("filepath", ""),
-                        e.get("job_type", ""),
-                        e.get("failure_kind", ""),
-                        "yes" if e.get("is_oom") else "no",
-                        (e.get("error") or "").replace("\r", " ").replace("\n", " "),
-                    ])
+                    w.writerow(
+                        [
+                            e.get("sample_id", ""),
+                            e.get("filepath", ""),
+                            e.get("job_type", ""),
+                            e.get("failure_kind", ""),
+                            "yes" if e.get("is_oom") else "no",
+                            (e.get("error") or "")
+                            .replace("\r", " ")
+                            .replace("\n", " "),
+                        ]
+                    )
             return path
         except Exception as e:
             logging.warning(f"Could not write failed_jobs.csv: {e}")
@@ -1171,7 +1585,12 @@ class Coordinator:
         try:
             with open(path, "wb") as fh:
                 pickle.dump(job, fh, protocol=pickle.HIGHEST_PROTOCOL)
-            return {"spool_path": path, "sample_id": sample_id or "unknown"}
+            return {
+                "spool_path": path,
+                "sample_id": sample_id or "unknown",
+                "job_type": job.job_type,
+                "work_count": _job_work_count(job),
+            }
         except Exception:
             return job
 
@@ -1196,6 +1615,260 @@ class Coordinator:
                 sid = "unknown"
             return entry, sid
         return None, None
+
+    @staticmethod
+    def _entry_work_count(entry: Any) -> int:
+        if isinstance(entry, dict):
+            try:
+                return max(1, int(entry.get("work_count", 1)))
+            except Exception:
+                return 1
+        return _job_work_count(entry if isinstance(entry, Job) else None)
+
+    @staticmethod
+    def _entry_job_type(entry: Any) -> Optional[str]:
+        if isinstance(entry, dict):
+            return entry.get("job_type")
+        if isinstance(entry, Job):
+            return entry.job_type
+        return None
+
+    def _batcher_waiting_counts(self) -> Tuple[int, Dict[str, int]]:
+        total = 0
+        by_type: Dict[str, int] = {}
+        if not self.sample_batcher:
+            return total, by_type
+        try:
+            for jobs_by_type in self.sample_batcher.pending_jobs.values():
+                for job_type, jobs in jobs_by_type.items():
+                    count = len(jobs)
+                    total += count
+                    by_type[job_type] = by_type.get(job_type, 0) + count
+        except Exception:
+            pass
+        return total, by_type
+
+    @staticmethod
+    def _classifier_refresh_job(job: Job) -> Job:
+        """Collapse a classifier trigger to one latest-state refresh."""
+        context = _clone_workflow_context(job.context)
+        return Job(
+            job.job_id,
+            job.job_type,
+            job.origin,
+            job.workflow,
+            job.step,
+            context,
+            1,
+        )
+
+    def _queue_cumulative_classifier_job(self, job: Job) -> None:
+        job = self._classifier_refresh_job(job)
+        sample_id = job.context.get_sample_id() or "unknown"
+        waiting_by_sample = self.classif_waiting_by_type.setdefault(job.job_type, {})
+        existing = waiting_by_sample.get(sample_id)
+        if existing is None:
+            waiting_by_sample[sample_id] = job
+            return
+        job.job_id = existing.job_id
+        waiting_by_sample[sample_id] = job
+        self.coalesce_events += 1
+        self.coalesce_jobs_absorbed += 1
+        self.coalesce_contexts_merged += 1
+
+    # ----- Dispatch-time coalescing -----
+    # When a batched Job is about to be dispatched, scan the waiting lists for
+    # other batched Jobs of the same (sample_id, job_type) and merge their
+    # contexts into this job's _batched_job (capped at max_batch_size). This
+    # mops up small-batch fragmentation that would otherwise occur when files
+    # arrive faster than they accumulate (the batcher fires per-timeout) or
+    # while the worker for the type was busy.
+    @staticmethod
+    def _peek_entry_sample_id(entry: Any) -> Optional[str]:
+        """Cheaply peek the sample_id of a waiting-list entry without unspooling."""
+        if isinstance(entry, dict) and entry.get("spool_path"):
+            return entry.get("sample_id") or "unknown"
+        if isinstance(entry, Job):
+            try:
+                return entry.context.get_sample_id()
+            except Exception:
+                return "unknown"
+        return None
+
+    @staticmethod
+    def _job_is_coalescable_batch(job: Optional[Job]) -> bool:
+        """A job is mergeable iff it carries a _batched_job and none of its
+        contexts opted out via force_individual_batch (e.g. large BAMs)."""
+        if job is None:
+            return False
+        try:
+            bjob = job.context.metadata.get("_batched_job")
+        except Exception:
+            return False
+        if bjob is None:
+            return False
+        try:
+            for ctx in bjob.contexts:
+                if (ctx.metadata or {}).get("force_individual_batch"):
+                    return False
+        except Exception:
+            return False
+        return True
+
+    def _coalesce_with_waiting(self, job: Job, sample_id: str, job_type: str) -> Job:
+        """Absorb compatible waiting jobs into ``job``'s batch in place.
+
+        The popped/incoming ``job`` keeps its identity (same job_id, primary
+        context). Other waiting Jobs for the same (sample_id, job_type) that
+        also carry a _batched_job are removed from the waiting lists, and
+        their contexts are appended to this job's _batched_job up to
+        ``max_batch_size``. ``samples_by_id[sid]['pending_jobs']`` is
+        decremented by the number of absorbed Jobs (consistent with the
+        existing +1-per-waiting-Job convention in _dispatch_ready_job).
+        """
+        if not self.enable_batching:
+            return job
+        if not self._job_is_coalescable_batch(job):
+            return job
+        if not sample_id or sample_id == "unknown":
+            return job
+
+        bjob: BatchedJob = job.context.metadata.get("_batched_job")
+        cfg = BATCH_CONFIG.get(job_type, {"max_batch_size": 20})
+        try:
+            max_size = int(cfg.get("max_batch_size", 20))
+        except Exception:
+            max_size = 20
+        if max_size <= 1:
+            return job
+        room = max_size - len(bjob.contexts)
+        if room <= 0:
+            return job
+
+        absorbed = 0
+        merged_contexts = 0
+
+        def _scan(waiting_list: List[Any]) -> int:
+            """Scan one waiting list, absorbing compatible siblings. Returns
+            the number of entries removed from this list."""
+            nonlocal absorbed, merged_contexts, room
+            if room <= 0 or not waiting_list:
+                return 0
+            i = 0
+            removed = 0
+            while i < len(waiting_list) and room > 0:
+                entry = waiting_list[i]
+                # Cheap sample_id check before any I/O
+                sid_peek = self._peek_entry_sample_id(entry)
+                if sid_peek != sample_id:
+                    i += 1
+                    continue
+                # Unspool to inspect job_type and _batched_job (this deletes
+                # the spool file if any). If the candidate doesn't qualify we
+                # put the unspooled Job back at position i so nothing is lost.
+                other_job, _sid = self._unspool_job(entry)
+                if other_job is None or other_job.job_type != job_type:
+                    # Drop a corrupt entry, or replace dict with the Job we
+                    # just rehydrated for non-matching type so the queue
+                    # representation stays consistent.
+                    if other_job is None:
+                        waiting_list.pop(i)
+                        removed += 1
+                        # Don't account toward 'absorbed': nothing was merged.
+                        continue
+                    waiting_list[i] = other_job
+                    i += 1
+                    continue
+                if not self._job_is_coalescable_batch(other_job):
+                    waiting_list[i] = other_job
+                    i += 1
+                    continue
+                other_bjob: BatchedJob = other_job.context.metadata.get("_batched_job")
+                take = min(room, len(other_bjob.contexts))
+                if take <= 0:
+                    waiting_list[i] = other_job
+                    i += 1
+                    continue
+                # Absorb up to `take` contexts from the candidate.
+                bjob.contexts.extend(other_bjob.contexts[:take])
+                room -= take
+                merged_contexts += take
+                if take >= len(other_bjob.contexts):
+                    # Whole candidate absorbed; remove from the waiting list.
+                    waiting_list.pop(i)
+                    removed += 1
+                    absorbed += 1
+                    # i stays the same: list shifted left by one.
+                else:
+                    # Only part absorbed; keep the candidate in the queue
+                    # with a slimmer contexts list.
+                    other_bjob.contexts = other_bjob.contexts[take:]
+                    other_job.logical_work_count = len(other_bjob.contexts)
+                    waiting_list[i] = other_job
+                    # No further room — loop will exit on room check.
+                    i += 1
+            return removed
+
+        # Order matters: prefer the per-type list (most likely to hold same
+        # sample/type), then the per-queue list, then the global list.
+        try:
+            type_list = self.waiting_by_type_global.get(job_type)
+            if type_list:
+                _scan(type_list)
+                if not type_list:
+                    self.waiting_by_type_global.pop(job_type, None)
+        except Exception:
+            pass
+        try:
+            queue_name = job_queue_of(job_type)
+            queue_list = self.waiting_by_queue.get(queue_name)
+            if queue_list and room > 0:
+                _scan(queue_list)
+                if not queue_list:
+                    self.waiting_by_queue.pop(queue_name, None)
+        except Exception:
+            pass
+        try:
+            if self.waiting_global and room > 0:
+                _scan(self.waiting_global)
+        except Exception:
+            pass
+
+        if merged_contexts <= 0:
+            return job
+
+        job.logical_work_count = len(bjob.contexts)
+
+        # Refresh the batched job's id so logs distinguish a coalesced batch
+        # from the original one. The Job's job_id stays the same so existing
+        # active/inflight bookkeeping in _on_finish keeps working.
+        try:
+            bjob.batch_id = (
+                f"{sample_id}_{job_type}_coalesced_{int(time.time() * 1000)}"
+            )
+        except Exception:
+            pass
+
+        # Adjust per-sample pending_jobs: each absorbed waiting entry was +1
+        # in the GUI's pending counter, and we just removed `absorbed` of
+        # them from the waiting lists.
+        try:
+            ent = self.samples_by_id.get(sample_id)
+            if ent and ent.get("pending_jobs", 0) > 0:
+                ent["pending_jobs"] = max(0, ent.get("pending_jobs", 0) - absorbed)
+                ent["last_seen"] = time.time()
+        except Exception:
+            pass
+
+        # Stats for observability (surfaced in stats()).
+        try:
+            self.coalesce_events += 1
+            self.coalesce_jobs_absorbed += absorbed
+            self.coalesce_contexts_merged += merged_contexts
+        except Exception:
+            pass
+
+        return job
 
     # ----- handler registration API -----
     async def register_handler(self, job_type: str, remote_func) -> None:
@@ -1240,7 +1913,9 @@ class Coordinator:
                 total_cpus = float((ray.cluster_resources() or {}).get("CPU", 0))
             except Exception:
                 total_cpus = 0.0
-            desired_cap = 2.0 if preset == "p2i" else 6.0  # Increased from 4.0 to 6.0 for additional pools
+            desired_cap = (
+                2.0 if preset == "p2i" else 6.0
+            )  # Increased from 4.0 to 6.0 for additional pools
             reserve = max(0.0, total_cpus - desired_cap)
             try:
                 if reserve >= 1.0:
@@ -1264,11 +1939,23 @@ class Coordinator:
             # Grouped Pool actors - optimized resource allocation
             groups = {
                 "prep": ["preprocessing"],  # Separate preprocessing for independence
-                "bed_conversion": ["bed_conversion"],  # Separate bed_conversion for independence
+                "bed_conversion": [
+                    "bed_conversion"
+                ],  # Separate bed_conversion for independence
                 "cnv": ["cnv"],  # CNV gets its own CPU (most CPU-intensive)
-                "analysis": ["mgmt", "target", "fusion"],  # Lightweight analysis types share a CPU
-                "classif": ["sturgeon", "nanodx", "pannanodx"],  # Fast classification jobs
-                "rf": ["random_forest"],  # Random forest needs its own actor (slow/blocking)
+                "analysis": [
+                    "mgmt",
+                    "target",
+                    "fusion",
+                ],  # Lightweight analysis types share a CPU
+                "classif": [
+                    "sturgeon",
+                    "nanodx",
+                    "pannanodx",
+                ],  # Fast classification jobs
+                "rf": [
+                    "random_forest"
+                ],  # Random forest needs its own actor (slow/blocking)
                 "slow": [
                     "igv_bam",
                     "snp_analysis",
@@ -1294,9 +1981,10 @@ class Coordinator:
                 if name == "rf":
                     # Random forest gets its own concurrency (slow/blocking)
                     return max(1, int(self.analysis_workers))
-                # Give preprocessing and bed_conversion pools moderate concurrency
-                if name in {"prep", "bed_conversion"}:
-                    return max(1, int(self.analysis_workers))
+                if name == "prep":
+                    return self.preprocessing_workers
+                if name == "bed_conversion":
+                    return self.bed_workers
                 return 1
 
             # Create pools and register handlers
@@ -1345,6 +2033,10 @@ class Coordinator:
                 max_conc = 1
                 if jt in {"mgmt", "cnv", "target", "fusion"}:
                     max_conc = max(1, int(self.analysis_workers))
+                elif jt == "preprocessing":
+                    max_conc = self.preprocessing_workers
+                elif jt == "bed_conversion":
+                    max_conc = self.bed_workers
                 name = f"typeproc_{jt}"
                 try:
                     proc = TypeProcessor.options(
@@ -1364,6 +2056,10 @@ class Coordinator:
                 max_conc = 1
                 if jt in {"mgmt", "cnv", "target", "fusion"}:
                     max_conc = max(1, int(self.analysis_workers))
+                elif jt == "preprocessing":
+                    max_conc = self.preprocessing_workers
+                elif jt == "bed_conversion":
+                    max_conc = self.bed_workers
                 name = f"typeproc_{jt}"
                 try:
                     proc = TypeProcessor.options(
@@ -1380,7 +2076,7 @@ class Coordinator:
             asyncio.create_task(self._drain_loop())
         except Exception:
             pass
-        
+
         # Start batch timeout loop if batching is enabled
         if self.enable_batching and self.sample_batcher:
             try:
@@ -1410,17 +2106,32 @@ class Coordinator:
         return waiting_types + waiting_queues + waiting_global
 
     def _queue_inflight_cap(self, queue_name: str) -> int:
-        return int(self.max_inflight_per_queue.get(queue_name, self.max_inflight_per_type))
+        return int(
+            self.max_inflight_per_queue.get(queue_name, self.max_inflight_per_type)
+        )
 
     def _queue_waiting_cap(self, queue_name: str) -> int:
-        return int(self.max_waiting_per_queue.get(queue_name, self.max_inflight_per_type * 20))
+        return int(
+            self.max_waiting_per_queue.get(queue_name, self.max_inflight_per_type * 20)
+        )
+
+    def _global_waiting_relief_threshold(self) -> int:
+        """Soft ceiling for _wait_for_global_capacity (policy cap + burst slack)."""
+        return int(self.max_total_waiting) + int(
+            getattr(self, "_global_wait_soft_slack", 32) or 0
+        )
 
     async def _wait_for_global_capacity(self) -> None:
-        while self._total_waiting() >= self.max_total_waiting:
+        # Block new work until total is strictly below relief threshold. Policy
+        # admission stays at max_total_waiting (see can_accept_jobs); this threshold
+        # is slightly higher so brief burst overshoot cannot wedge the coordinator.
+        while self._total_waiting() > self._global_waiting_relief_threshold():
             await asyncio.sleep(0.05)
 
     async def _wait_for_queue_capacity(self, queue_name: str) -> None:
-        while len(self.waiting_by_queue.get(queue_name, [])) >= self._queue_waiting_cap(queue_name):
+        while len(self.waiting_by_queue.get(queue_name, [])) >= self._queue_waiting_cap(
+            queue_name
+        ):
             await asyncio.sleep(0.05)
 
     async def can_accept_jobs(self, n: int = 1) -> bool:
@@ -1428,18 +2139,35 @@ class Coordinator:
             n = int(n or 0)
         except Exception:
             n = 0
-        return (self._total_waiting() + n) < self.max_total_waiting
+        return (self._total_waiting() + n) <= self.max_total_waiting
 
-    async def _dispatch_ready_job(self, job: Job, sample_id: str, from_waiting: bool = False) -> None:
+    async def _dispatch_ready_job(
+        self, job: Job, sample_id: str, from_waiting: bool = False
+    ) -> None:
         # Ensure global waiting does not grow without bound for new submissions
         if not from_waiting:
             await self._wait_for_global_capacity()
+
+        # Try to absorb compatible waiting siblings into this job's batch
+        # before we make any cap decisions. This collapses the
+        # many-small-batches pattern (e.g. files arrived faster than they
+        # accumulated, or while the worker was busy) into one bigger batch.
+        # It's safe both for fresh dispatches and for jobs popped by
+        # _drain_waiting_jobs(from_waiting=True), and is a no-op for jobs
+        # without _batched_job metadata or any context tagged
+        # force_individual_batch.
+        try:
+            job = self._coalesce_with_waiting(job, sample_id, job.job_type)
+        except Exception:
+            pass
 
         # Global inflight cap
         if self._total_inflight() >= self.max_total_inflight:
             if self._debug_backpressure:
                 now = time.time()
-                if (now - self._last_backpressure_log_ts) >= self._debug_backpressure_interval_s:
+                if (
+                    now - self._last_backpressure_log_ts
+                ) >= self._debug_backpressure_interval_s:
                     self._last_backpressure_log_ts = now
                     logging.info(
                         "[ROBIN][backpressure] global inflight cap hit: "
@@ -1476,7 +2204,9 @@ class Coordinator:
             await self._wait_for_queue_capacity(q)
             if self._debug_backpressure:
                 now = time.time()
-                if (now - self._last_backpressure_log_ts) >= self._debug_backpressure_interval_s:
+                if (
+                    now - self._last_backpressure_log_ts
+                ) >= self._debug_backpressure_interval_s:
                     self._last_backpressure_log_ts = now
                     logging.info(
                         "[ROBIN][backpressure] queue inflight cap hit: "
@@ -1513,7 +2243,9 @@ class Coordinator:
         if inflight_for_type >= self.max_inflight_per_type:
             if self._debug_backpressure:
                 now = time.time()
-                if (now - self._last_backpressure_log_ts) >= self._debug_backpressure_interval_s:
+                if (
+                    now - self._last_backpressure_log_ts
+                ) >= self._debug_backpressure_interval_s:
                     self._last_backpressure_log_ts = now
                     logging.info(
                         "[ROBIN][backpressure] per-type inflight cap hit: "
@@ -1551,10 +2283,11 @@ class Coordinator:
             return  # Skip jobs without processors
 
         # Mark submission only when actually dispatching to a processor
-        self.total_enqueued += 1
+        work_count = _job_work_count(job)
+        self.total_enqueued += work_count
         try:
             self.submitted_by_type[job.job_type] = (
-                self.submitted_by_type.get(job.job_type, 0) + 1
+                self.submitted_by_type.get(job.job_type, 0) + work_count
             )
         except Exception:
             pass
@@ -1563,6 +2296,8 @@ class Coordinator:
             "filepath": job.context.filepath,
             "queue": q,
             "start_time": time.time(),
+            "sample_id": sample_id,
+            "work_count": work_count,
         }
         # Update per-sample totals/active only when a real sample_id is known
         try:
@@ -1601,7 +2336,9 @@ class Coordinator:
         self.inflight_by_type[job.job_type] = inflight_for_type + 1
         self.inflight_by_queue[q] = int(self.inflight_by_queue.get(q, 0)) + 1
 
-    async def _drain_waiting_jobs(self, queue_name: Optional[str], job_type: str) -> None:
+    async def _drain_waiting_jobs(
+        self, queue_name: Optional[str], job_type: str
+    ) -> None:
         # Try one global waiting job first to avoid starvation
         if self.waiting_global and self._total_inflight() < self.max_total_inflight:
             entry = self.waiting_global.pop(0)
@@ -1621,7 +2358,9 @@ class Coordinator:
         # Then try one queued-by-queue job
         if queue_name:
             queue_jobs = self.waiting_by_queue.get(queue_name, [])
-            if queue_jobs and int(self.inflight_by_queue.get(queue_name, 0)) < self._queue_inflight_cap(queue_name):
+            if queue_jobs and int(
+                self.inflight_by_queue.get(queue_name, 0)
+            ) < self._queue_inflight_cap(queue_name):
                 entry = queue_jobs.pop(0)
                 if not queue_jobs:
                     self.waiting_by_queue.pop(queue_name, None)
@@ -1640,7 +2379,10 @@ class Coordinator:
 
         # Finally, release one per-type waiting job
         queue_global = self.waiting_by_type_global.get(job_type, [])
-        if queue_global and int(self.inflight_by_type.get(job_type, 0)) < self.max_inflight_per_type:
+        if (
+            queue_global
+            and int(self.inflight_by_type.get(job_type, 0)) < self.max_inflight_per_type
+        ):
             entry = queue_global.pop(0)
             if not queue_global:
                 self.waiting_by_type_global.pop(job_type, None)
@@ -1657,29 +2399,67 @@ class Coordinator:
                 pass
             await self._dispatch_ready_job(nxt_job_g, sid, from_waiting=True)
 
+    def _defer_submit_after_finish(
+        self, jobs: List[Job], *, internal: bool = False
+    ) -> None:
+        """Schedule submit_jobs / _submit_jobs_internal without blocking _on_finish.
+
+        Ray may run only one Coordinator handler at a time when sync+async methods
+        mix, or nested awaits (_drain → _wait_for_queue_capacity, submit →
+        _wait_for_global_capacity) can otherwise prevent further _on_finish calls
+        from workers — then nothing drains, Done freezes, and Wait stays high.
+        """
+        if not jobs:
+            return
+        snapshot = list(jobs)
+
+        async def _run() -> None:
+            try:
+                if internal:
+                    await self._submit_jobs_internal(snapshot)
+                else:
+                    await self.submit_jobs(snapshot)
+            except Exception:
+                logging.getLogger("robin.workflow").exception(
+                    "Deferred submit after completion failed (internal=%s, n=%s)",
+                    internal,
+                    len(snapshot),
+                )
+
+        try:
+            asyncio.create_task(_run())
+        except Exception:
+            logging.getLogger("robin.workflow").exception(
+                "Could not schedule deferred submit after completion"
+            )
+
     # ----- submission & lifecycle -----
     async def submit_jobs(self, jobs: List[Job]) -> None:
         # Check if shutdown has been requested
         if self._shutdown_requested:
             return
-        
+
         # Invalidate stats cache since we're submitting new jobs
         self._stats_cache = None
-        
+
         # Process jobs through batcher if batching is enabled
         if self.enable_batching and self.sample_batcher:
             # Separate preprocessing jobs from other jobs
-            preprocessing_jobs = [job for job in jobs if job.job_type == "preprocessing"]
+            preprocessing_jobs = [
+                job for job in jobs if job.job_type == "preprocessing"
+            ]
             other_jobs = [job for job in jobs if job.job_type != "preprocessing"]
-            
+
             # Submit preprocessing jobs directly (no batching)
             if preprocessing_jobs:
                 await self._submit_jobs_internal(preprocessing_jobs)
-            
+
             # Process other jobs through batcher
             for job in other_jobs:
                 try:
-                    sid_pending = job.context.get_sample_id() if job.context else "unknown"
+                    sid_pending = (
+                        job.context.get_sample_id() if job.context else "unknown"
+                    )
                 except Exception:
                     sid_pending = "unknown"
                 try:
@@ -1697,7 +2477,9 @@ class Coordinator:
                                 "last_seen": time.time(),
                             }
                             self.samples_by_id[sid_pending] = ent_pending
-                        ent_pending["pending_jobs"] = ent_pending.get("pending_jobs", 0) + 1
+                        ent_pending["pending_jobs"] = (
+                            ent_pending.get("pending_jobs", 0) + 1
+                        )
                         ent_pending["last_seen"] = time.time()
                 except Exception:
                     pass
@@ -1708,10 +2490,14 @@ class Coordinator:
                             sid_batch = batch.sample_id
                             if sid_batch != "unknown":
                                 ent_pending = self.samples_by_id.get(sid_batch)
-                                if ent_pending and ent_pending.get("pending_jobs", 0) > 0:
+                                if (
+                                    ent_pending
+                                    and ent_pending.get("pending_jobs", 0) > 0
+                                ):
                                     ent_pending["pending_jobs"] = max(
                                         0,
-                                        ent_pending.get("pending_jobs", 0) - len(batch.contexts),
+                                        ent_pending.get("pending_jobs", 0)
+                                        - len(batch.contexts),
                                     )
                                     ent_pending["last_seen"] = time.time()
                     except Exception:
@@ -1722,7 +2508,7 @@ class Coordinator:
                 # If no batches were created, the job is waiting in the batcher
         else:
             await self._submit_jobs_internal(jobs)
-    
+
     async def _submit_jobs_internal(self, jobs: List[Job]) -> None:
         """Internal job submission logic"""
         for job in jobs:
@@ -1732,7 +2518,7 @@ class Coordinator:
                 run = self.running.get(key, 0)
                 pend = self.pending.get(key, 0)
                 if run + pend >= 2 or pend >= 1:
-                    self.total_skipped += 1
+                    self.total_skipped += _job_work_count(job)
                     continue
                 self.pending[key] = pend + 1
             # Per-sample per-type serialization; queue instead of overlapping
@@ -1759,7 +2545,9 @@ class Coordinator:
                                     "last_seen": time.time(),
                                 }
                                 self.samples_by_id[sid] = ent_pending
-                            ent_pending["pending_jobs"] = ent_pending.get("pending_jobs", 0) + 1
+                            ent_pending["pending_jobs"] = (
+                                ent_pending.get("pending_jobs", 0) + 1
+                            )
                             ent_pending["last_seen"] = time.time()
                     except Exception:
                         pass
@@ -1919,7 +2707,9 @@ class Coordinator:
 
             # Submit the job
             await self.submit_jobs([job])
-            logger.info("SNP analysis job queued: sample_id=%s job_id=%s", sample_id, job.job_id)
+            logger.info(
+                "SNP analysis job queued: sample_id=%s job_id=%s", sample_id, job.job_id
+            )
 
             return True
 
@@ -1957,6 +2747,7 @@ class Coordinator:
             if target_panel is None:
                 try:
                     import csv
+
                     master_csv = Path(sample_dir) / "master.csv"
                     if master_csv.exists():
                         with master_csv.open("r", newline="") as fh:
@@ -2040,32 +2831,32 @@ class Coordinator:
         """
         if clear_sample_cache is None:
             return  # CNV module not available
-        
+
         try:
             # Get current cache stats
             cache_stats = get_sample_cache_stats() if get_sample_cache_stats else {}
             current_time = time.time()
-            
+
             # Clean up cache for samples that haven't been accessed recently (10 minutes)
             samples_to_cleanup = []
-            for sample_id, details in cache_stats.get('sample_details', {}).items():
-                last_accessed = details.get('last_accessed', 0)
+            for sample_id, details in cache_stats.get("sample_details", {}).items():
+                last_accessed = details.get("last_accessed", 0)
                 if current_time - last_accessed > 600:  # 10 minutes
                     samples_to_cleanup.append(sample_id)
-            
+
             # Limit cleanup to 5 samples at a time to avoid disruption
             samples_to_cleanup = samples_to_cleanup[:5]
-            
+
             # Clean up old samples
             for sample_id in samples_to_cleanup:
                 try:
                     clear_sample_cache(sample_id)
                 except Exception:
                     pass
-            
+
             if samples_to_cleanup:
                 pass  # Cache cleanup completed
-                
+
         except Exception:
             pass  # Silently continue on cache cleanup errors
 
@@ -2073,38 +2864,38 @@ class Coordinator:
         """
         Clean up samples that have completed all their jobs.
         This prevents unbounded memory growth in samples_by_id dictionary.
-        
+
         Conservative cleanup: only removes samples that have been idle for 5+ minutes.
         """
         if not self.samples_by_id:
             return
-        
+
         # Only cleanup if we have a large number of samples (> 1000)
         if len(self.samples_by_id) < 1000:
             return
-        
+
         # Identify samples with no active jobs and that haven't been seen recently
         current_time = time.time()
         samples_to_remove = []
-        
+
         for sid, ent in self.samples_by_id.items():
             # Keep samples with active jobs
             if ent.get("active_jobs", 0) > 0:
                 continue
-            
+
             # Remove samples that completed all jobs and haven't been active for 5 minutes
             # This is very conservative to avoid removing data that might still be needed
             last_seen = ent.get("last_seen", 0)
             if current_time - last_seen > 300:  # 5 minutes
                 samples_to_remove.append(sid)
-        
+
         # Limit cleanup to 100 samples at a time to avoid disruption
         samples_to_remove = samples_to_remove[:100]
-        
+
         # Remove completed samples
         for sid in samples_to_remove:
             self.samples_by_id.pop(sid, None)
-    
+
     async def _finalize_target_bams(self) -> None:
         """
         Finalize target BAM accumulation for all samples that have batch BAMs pending merge.
@@ -2112,8 +2903,8 @@ class Coordinator:
         Uses Ray tasks to offload the blocking I/O work to separate workers.
         """
         # Try to get work_dir from Coordinator attribute first
-        work_dir = getattr(self, 'work_dir', None)
-        
+        work_dir = getattr(self, "work_dir", None)
+
         # If not set, try to extract from active jobs' metadata
         if not work_dir:
             for job in self._inflight.values():
@@ -2123,7 +2914,7 @@ class Coordinator:
                         break
                 except Exception:
                     continue
-        
+
         # If still not found, try to extract from samples_by_id if they have work_dir stored
         if not work_dir:
             for sample_data in self.samples_by_id.values():
@@ -2133,34 +2924,39 @@ class Coordinator:
                         break
                 except Exception:
                     continue
-        
+
         if not work_dir:
-            print("[SHUTDOWN] No work directory found - skipping target BAM finalization")
-            print("[SHUTDOWN] Work directory may not be set on Coordinator or available in job metadata")
+            print(
+                "[SHUTDOWN] No work directory found - skipping target BAM finalization"
+            )
+            print(
+                "[SHUTDOWN] Work directory may not be set on Coordinator or available in job metadata"
+            )
             return
-        
+
         try:
             # Create a Ray remote function for the blocking work
             @ray.remote
             def finalize_sample_task(sample_id: str, work_dir: str, target_panel: str):
                 """Ray task wrapper for finalize_accumulation_for_sample."""
-                from robin.analysis.target_analysis import finalize_accumulation_for_sample
-                return finalize_accumulation_for_sample(
-                    sample_id=sample_id,
-                    work_dir=work_dir,
-                    target_panel=target_panel
+                from robin.analysis.target_analysis import (
+                    finalize_accumulation_for_sample,
                 )
-            
+
+                return finalize_accumulation_for_sample(
+                    sample_id=sample_id, work_dir=work_dir, target_panel=target_panel
+                )
+
             # Get all samples that have been processed
             samples_to_finalize = set()
             for sid in self.samples_by_id.keys():
                 if sid and sid != "unknown":
                     samples_to_finalize.add(sid)
-            
+
             if not samples_to_finalize:
                 print("[SHUTDOWN] No samples to finalize")
                 return
-            
+
             total = len(samples_to_finalize)
             start_time = time.time()
             heartbeat_seconds = 10
@@ -2174,42 +2970,58 @@ class Coordinator:
                 "[SHUTDOWN] Progress updates will appear as each sample finalization completes.",
                 flush=True,
             )
-            
+
             # Submit all finalization tasks to Ray workers in parallel
             tasks = []
             max_queue_print = 10
             for i, sample_id in enumerate(samples_to_finalize):
                 if i < max_queue_print:
-                    print(f"[SHUTDOWN] Queued finalization for sample: {sample_id}", flush=True)
+                    print(
+                        f"[SHUTDOWN] Queued finalization for sample: {sample_id}",
+                        flush=True,
+                    )
                 elif i == max_queue_print:
                     remaining_to_queue = total - max_queue_print
                     if remaining_to_queue > 0:
-                        print(f"[SHUTDOWN] Queued additional {remaining_to_queue} sample(s)...", flush=True)
+                        print(
+                            f"[SHUTDOWN] Queued additional {remaining_to_queue} sample(s)...",
+                            flush=True,
+                        )
                 task_ref = finalize_sample_task.remote(
                     sample_id=sample_id,
                     work_dir=work_dir,
-                    target_panel=self.target_panel
+                    target_panel=self.target_panel,
                 )
                 tasks.append((sample_id, task_ref))
 
             # Wait for tasks to complete with periodic progress output.
             # (Avoids an apparently "stuck" period while asyncio.gather() waits silently.)
             completed = 0
-            task_ref_to_sample_id = {task_ref: sample_id for sample_id, task_ref in tasks}
+            task_ref_to_sample_id = {
+                task_ref: sample_id for sample_id, task_ref in tasks
+            }
             remaining_refs = [task_ref for _, task_ref in tasks]
 
             while remaining_refs:
                 # Wait briefly for at least one task to become ready.
                 try:
+                    # ray.wait requires num_returns / timeout as keyword-only args (Ray 2.x).
                     ready_refs, remaining_refs = await asyncio.to_thread(
-                        ray.wait,
+                        lambda refs: ray.wait(
+                            refs,
+                            num_returns=1,
+                            timeout=5.0,  # keeps the shutdown console responsive
+                        ),
                         remaining_refs,
-                        1,
-                        5.0,  # timeout seconds; keeps the shutdown console responsive
                     )
                 except Exception as e:
-                    print(f"[SHUTDOWN] Warning: Error while waiting for target.bam finalization tasks: {e}", flush=True)
-                    logging.warning(f"Error while waiting for target.bam finalization tasks: {e}")
+                    print(
+                        f"[SHUTDOWN] Warning: Error while waiting for target.bam finalization tasks: {e}",
+                        flush=True,
+                    )
+                    logging.warning(
+                        f"Error while waiting for target.bam finalization tasks: {e}"
+                    )
                     break
 
                 if ready_refs:
@@ -2224,10 +3036,15 @@ class Coordinator:
                                     f"[SHUTDOWN] Warning: Failed to finalize target.bam for {sample_id}: {result}",
                                     flush=True,
                                 )
-                                logging.warning(f"Failed to finalize target.bam for {sample_id}: {result}")
+                                logging.warning(
+                                    f"Failed to finalize target.bam for {sample_id}: {result}"
+                                )
                                 continue
 
-                            if isinstance(result, dict) and result.get("status") == "error":
+                            if (
+                                isinstance(result, dict)
+                                and result.get("status") == "error"
+                            ):
                                 print(
                                     f"[SHUTDOWN] Warning: Finalization error for {sample_id}: {result.get('error', 'Unknown')}",
                                     flush=True,
@@ -2238,20 +3055,26 @@ class Coordinator:
                             else:
                                 batch_count = 0
                                 if isinstance(result, dict):
-                                    batch_count = result.get("batch_files_merged", 0) or 0
+                                    batch_count = (
+                                        result.get("batch_files_merged", 0) or 0
+                                    )
                                 if batch_count > 0:
                                     print(
                                         f"[SHUTDOWN] Completed: {sample_id} (merged {batch_count} batch files)",
                                         flush=True,
                                     )
                                 else:
-                                    print(f"[SHUTDOWN] Completed: {sample_id}", flush=True)
+                                    print(
+                                        f"[SHUTDOWN] Completed: {sample_id}", flush=True
+                                    )
                         except Exception as e:
                             print(
                                 f"[SHUTDOWN] Warning: Failed to finalize target.bam for {sample_id}: {e}",
                                 flush=True,
                             )
-                            logging.warning(f"Failed to finalize target.bam for {sample_id}: {e}")
+                            logging.warning(
+                                f"Failed to finalize target.bam for {sample_id}: {e}"
+                            )
 
                 # Heartbeat: user-friendly output during long waits.
                 now = time.time()
@@ -2264,16 +3087,19 @@ class Coordinator:
                     )
                     last_heartbeat = now
 
-            print(f"[SHUTDOWN] Target BAM finalization: {completed}/{total} samples completed", flush=True)
+            print(
+                f"[SHUTDOWN] Target BAM finalization: {completed}/{total} samples completed",
+                flush=True,
+            )
         except Exception as e:
             print(f"[SHUTDOWN] Error during target BAM finalization: {e}")
             logging.warning(f"Error during target BAM finalization: {e}")
-    
+
     async def _flush_csv_buffer(self) -> None:
         """Flush buffered CSV entries to disk."""
         if not self._csv_buffer:
             return
-        
+
         # Use lock to prevent concurrent flushes
         lock = self._get_csv_buffer_lock()
         if lock:
@@ -2283,18 +3109,18 @@ class Coordinator:
         else:
             buffer_to_write = self._csv_buffer[:]
             self._csv_buffer.clear()
-        
+
         if not buffer_to_write:
             return
-        
+
         # Group entries by work_dir to minimize file operations
         entries_by_dir: Dict[str, List[Dict[str, Any]]] = {}
         for entry in buffer_to_write:
-            work_dir = entry.get('work_dir', '')
+            work_dir = entry.get("work_dir", "")
             if work_dir not in entries_by_dir:
                 entries_by_dir[work_dir] = []
             entries_by_dir[work_dir].append(entry)
-        
+
         # Write each group to its respective file
         for work_dir, entries in entries_by_dir.items():
             try:
@@ -2303,7 +3129,7 @@ class Coordinator:
                     if work_dir
                     else "job_durations.csv"
                 )
-                
+
                 # Create parent directory if needed
                 try:
                     parent = os.path.dirname(out_path)
@@ -2311,16 +3137,16 @@ class Coordinator:
                         os.makedirs(parent, exist_ok=True)
                 except Exception:
                     pass
-                
+
                 # Check if we need to write header
                 new_file = not os.path.exists(out_path)
-                
+
                 with open(out_path, "a", encoding="utf-8") as fh:
                     if new_file:
                         fh.write(
                             "timestamp_iso,sample_id,job_id,job_type,queue,filepath,duration_seconds,status,error\n"
                         )
-                    
+
                     for entry in entries:
                         fh.write(
                             f"{entry['timestamp_iso']},{entry['sample_id']},{entry['job_id']},"
@@ -2341,9 +3167,7 @@ class Coordinator:
         # Infer structured failure kind when not provided (for filtering/alerting)
         if not ok and failure_kind is None and err:
             failure_kind = (
-                "timed_out"
-                if "timed out" in (err or "").lower()
-                else "exception"
+                "timed_out" if "timed out" in (err or "").lower() else "exception"
             )
         elif ok:
             failure_kind = None
@@ -2362,9 +3186,14 @@ class Coordinator:
         # update dedup maps
         if job.job_type in DEDUP_TYPES:
             key = (job.context.get_sample_id(), job.job_type)
-            self.running[key] = max(0, self.running.get(key, 0) - 1)
-            if self.running[key] == 0:
-                self.running.pop(key, None)
+            if active_info and active_info.get("handler_start_time") is not None:
+                self.running[key] = max(0, self.running.get(key, 0) - 1)
+                if self.running[key] == 0:
+                    self.running.pop(key, None)
+            else:
+                self.pending[key] = max(0, self.pending.get(key, 0) - 1)
+                if self.pending[key] == 0:
+                    self.pending.pop(key, None)
 
         # update stats
         # Detect deliberate skip (large BAM)
@@ -2380,6 +3209,26 @@ class Coordinator:
             if (ok and not is_skipped)
             else ("skipped" if is_skipped else "failed")
         )
+
+        if job.job_type == "preprocessing":
+            for metadata_key, title in (
+                ("modbase_warning", "Methylation Model Warning"),
+                ("alignment_warning", "BAM Alignment Warning"),
+            ):
+                warning_message = ctx.metadata.get(metadata_key)
+                if not warning_message:
+                    continue
+                self._gui_notifications.append(
+                    {
+                        "message": str(warning_message),
+                        "sample_id": ctx.get_sample_id(),
+                        "filename": os.path.basename(ctx.filepath),
+                        "title": title,
+                        "level": "warning",
+                    }
+                )
+            if len(self._gui_notifications) > 1000:
+                del self._gui_notifications[:-1000]
 
         # Append per-job duration entry to buffer (for batched writes)
         try:
@@ -2399,28 +3248,28 @@ class Coordinator:
                 )
             except Exception:
                 work_dir = None
-            
+
             ts_iso = time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(end_time))
-            dur_str = (
-                f"{duration:.3f}" if isinstance(duration, (int, float)) else ""
-            )
+            dur_str = f"{duration:.3f}" if isinstance(duration, (int, float)) else ""
             fp = filepath or (ctx.filepath if hasattr(ctx, "filepath") else "")
             err_short = (err or "").replace("\n", " ").replace(",", " ")[:500]
-            
+
             # Add entry to buffer
-            self._csv_buffer.append({
-                'timestamp_iso': ts_iso,
-                'sample_id': sample_id,
-                'job_id': job.job_id,
-                'job_type': job.job_type,
-                'queue': queue_name or '',
-                'filepath': os.path.basename(fp),
-                'duration_seconds': dur_str,
-                'status': status,
-                'error': err_short,
-                'work_dir': work_dir or ''
-            })
-            
+            self._csv_buffer.append(
+                {
+                    "timestamp_iso": ts_iso,
+                    "sample_id": sample_id,
+                    "job_id": job.job_id,
+                    "job_type": job.job_type,
+                    "queue": queue_name or "",
+                    "filepath": os.path.basename(fp),
+                    "duration_seconds": dur_str,
+                    "status": status,
+                    "error": err_short,
+                    "work_dir": work_dir or "",
+                }
+            )
+
             # Flush buffer if it reaches threshold (always async to avoid blocking)
             if len(self._csv_buffer) >= self._csv_buffer_size:
                 try:
@@ -2436,22 +3285,143 @@ class Coordinator:
                     pass
         except Exception:
             pass
-        
+
         # Invalidate stats cache since we're updating stats
         self._stats_cache = None
-        
+
+        # Terminal counts + per-sample rollup BEFORE any await that can block this actor
+        # (_drain_waiting_jobs → _wait_for_queue_capacity, submit_jobs → _wait_*). If those
+        # run first, _on_finish never reaches completed_count / failed_count and the GUI
+        # "Done" line freezes even while workers complete jobs (same observed Wait/Act).
         if ok:
             if not is_skipped:
-                self.completed_count += 1
-                self.completed_by_type[job.job_type] = (
-                    self.completed_by_type.get(job.job_type, 0) + 1
-                )
+                work_count = _job_work_count(job)
+                reported = self._file_progress_by_job.pop(job.job_id, 0)
+                bump = max(0, work_count - reported)
+                if bump:
+                    self.completed_count += bump
+                    self.completed_by_type[job.job_type] = (
+                        self.completed_by_type.get(job.job_type, 0) + bump
+                    )
             else:
-                # Track skip for stats
                 self.total_skipped += 1
+        else:
+            if not is_skipped:
+                work_count = _job_work_count(job)
+                reported = self._file_progress_by_job.pop(job.job_id, 0)
+                failed_work = max(0, work_count - reported)
+                if failed_work == 0 and reported > 0:
+                    # Keep terminal work totals stable when a batch reports all files
+                    # before failing during final aggregation/output generation.
+                    failed_work = 1
+                    self.completed_count = max(0, self.completed_count - 1)
+                    self.completed_by_type[job.job_type] = max(
+                        0, self.completed_by_type.get(job.job_type, 0) - 1
+                    )
+                self.failed_count += failed_work
+                self.failed_by_type[job.job_type] = (
+                    self.failed_by_type.get(job.job_type, 0) + failed_work
+                )
+                try:
+                    err_str = (err or "")[:1500]
+                    err_lower = err_str.lower()
+                    is_oom = (
+                        "oom" in err_lower
+                        or "out of memory" in err_lower
+                        or "outofmemory" in err_lower
+                        or "worker killed" in err_lower
+                        or "killed (oom)" in err_lower
+                        or "memory error" in err_lower
+                        or "worker died" in err_lower
+                        or "worker unexpectedly exits" in err_lower
+                        or "worker exit" in err_lower
+                        or "sigkill" in err_lower
+                        or "connection error" in err_lower
+                        or "system_error" in err_lower
+                    )
+                    sid_fail = (
+                        job.context.get_sample_id()
+                        if hasattr(job.context, "get_sample_id")
+                        else "unknown"
+                    )
+                    fp_fail = getattr(job.context, "filepath", "") or ""
+                    self._failed_jobs_log.append(
+                        {
+                            "sample_id": sid_fail,
+                            "filepath": fp_fail,
+                            "job_type": job.job_type,
+                            "error": err_str,
+                            "is_oom": is_oom,
+                            "failure_kind": failure_kind or "",
+                        }
+                    )
+                except Exception:
+                    pass
+        try:
+            sid_early = (
+                job.context.get_sample_id()
+                if hasattr(job.context, "get_sample_id")
+                else "unknown"
+            )
+            ent_early = self.samples_by_id.get(sid_early)
+            if ent_early is not None:
+                if ent_early.get("active_jobs", 0) > 0:
+                    ent_early["active_jobs"] -= 1
+                is_skip_early = False
+                try:
+                    is_skip_early = (job.job_type == "preprocessing") and bool(
+                        job.context.metadata.get("skip_downstream", False)
+                    )
+                except Exception:
+                    is_skip_early = False
+                if not is_skip_early:
+                    if ok:
+                        ent_early["completed_jobs"] = (
+                            ent_early.get("completed_jobs", 0) + 1
+                        )
+                    else:
+                        ent_early["failed_jobs"] = ent_early.get("failed_jobs", 0) + 1
+                ent_early["last_seen"] = time.time()
+        except Exception:
+            pass
+
+        # Release backpressure for this job BEFORE awaiting submit_jobs() for downstream
+        # triggers. Otherwise _dispatch_ready_job can block forever in
+        # _wait_for_global_capacity() (Coordinator deadlock; GUI frozen). Also see
+        # _wait_for_global_capacity uses max_total_waiting + _global_wait_soft_slack
+        # so brief burst overshoot (e.g. 1281 vs cap 1280) cannot wedge the actor.
+        try:
+            jt_bp = job.job_type
+            if self.inflight_by_type.get(jt_bp, 0) > 0:
+                self.inflight_by_type[jt_bp] -= 1
+                if self.inflight_by_type[jt_bp] == 0:
+                    self.inflight_by_type.pop(jt_bp, None)
+            qn_bp = queue_name or job_queue_of(jt_bp)
+            if self.inflight_by_queue.get(qn_bp, 0) > 0:
+                self.inflight_by_queue[qn_bp] -= 1
+                if self.inflight_by_queue[qn_bp] == 0:
+                    self.inflight_by_queue.pop(qn_bp, None)
+            # A worker for jt_bp just freed up. Force-flush any pending batches
+            # of the same type out of the batcher so the worker (or
+            # _drain_waiting_jobs below) has something to pick up immediately,
+            # rather than waiting out the busy timeout. Coalescing in
+            # _dispatch_ready_job will merge these with anything still sitting
+            # in the waiting lists for the same (sample, type).
+            await self._flush_batcher_for_type(jt_bp)
+            await self._drain_waiting_jobs(qn_bp, jt_bp)
+        except Exception:
+            pass
+
+        if ok:
             # trigger downstream (preferred). For bed_conversion, schedule
             # classifiers/slow once per sample instead of per-file.
-            requested = job.context.metadata.get("original_workflow", [])
+            requested = (
+                ctx.metadata.get("original_workflow", [])
+                if hasattr(ctx, "metadata")
+                else []
+            )
+            if not requested:
+                requested = job.context.metadata.get("original_workflow", [])
             req_types = [s.split(":", 1)[1] for s in requested] if requested else None
             if job.job_type == "bed_conversion":
                 sample_id = (
@@ -2467,10 +3437,20 @@ class Coordinator:
                     busy = self.classif_pending_by_type.get(t, 0) >= 1
                     if not busy:
                         q = job_queue_of(t)
-                        j = Job(next(_job_id_counter), t, q, [f"{q}:{t}"], 0, ctx)
+                        j = self._classifier_refresh_job(
+                            Job(
+                                next(_job_id_counter),
+                                t,
+                                q,
+                                [f"{q}:{t}"],
+                                0,
+                                ctx,
+                            )
+                        )
                         # submit directly and mark pending
                         proc = self.processors.get(t)
                         if proc is not None:
+                            class_work = _job_work_count(j)
                             if getattr(self, "using_pools", False):
                                 try:
                                     proc.enqueue.remote(j)
@@ -2485,11 +3465,12 @@ class Coordinator:
                             # Record submission for totals used by GUI
                             try:
                                 self.submitted_by_type[j.job_type] = (
-                                    self.submitted_by_type.get(j.job_type, 0) + 1
+                                    self.submitted_by_type.get(j.job_type, 0)
+                                    + class_work
                                 )
                             except Exception:
                                 pass
-                            self.total_enqueued += 1
+                            self.total_enqueued += class_work
                             # Update per-sample aggregate immediately for GUI samples view
                             try:
                                 sid_local = (
@@ -2525,50 +3506,70 @@ class Coordinator:
                                 "filepath": j.context.filepath,
                                 "queue": q,
                                 "start_time": time.time(),
+                                "sample_id": sample_id,
+                                "work_count": class_work,
                             }
                     else:
-                        # store single waiting job if none recorded yet
-                        if self.classif_waiting_by_type.get(t) is None:
-                            q = job_queue_of(t)
-                            self.classif_waiting_by_type[t] = Job(
-                                next(_job_id_counter), t, q, [f"{q}:{t}"], 0, ctx
+                        q = job_queue_of(t)
+                        self._queue_cumulative_classifier_job(
+                            Job(
+                                next(_job_id_counter),
+                                t,
+                                q,
+                                [f"{q}:{t}"],
+                                0,
+                                ctx,
                             )
+                        )
             else:
                 triggered_jobs: List[Job] = []
                 for t in TRIGGERS.get(job.job_type, []):
                     if (req_types is None) or (t in req_types):
                         q = job_queue_of(t)
-                        
-                        # Only create CNV jobs if preprocessing completed successfully
+
+                        # Only create downstream jobs when preprocessing produced
+                        # the data that analysis type requires.
                         if job.job_type == "preprocessing":
-                            if 'preprocessing' not in ctx.results:
+                            if "preprocessing" not in ctx.results:
                                 continue
-                            
-                            prep_result = ctx.results['preprocessing']
-                            prep_status = prep_result.get('status', 'unknown')
-                            
-                            if prep_status != 'success':
+
+                            prep_result = ctx.results["preprocessing"]
+                            if not _preprocessing_allows_downstream(prep_result, t):
                                 continue
-                        
-                        # Use the updated context from the worker (which has the extracted sample ID) instead of the original context
-                        cnv_job = Job(next(_job_id_counter), t, q, [f"{q}:{t}"], 0, ctx)
-                        
-                        triggered_jobs.append(cnv_job)
+
+                        # Every fan-out branch owns its context. Batching stores
+                        # branch-specific metadata on that object.
+                        downstream_context = _clone_workflow_context(ctx)
+                        triggered_jobs.append(
+                            Job(
+                                next(_job_id_counter),
+                                t,
+                                q,
+                                [f"{q}:{t}"],
+                                0,
+                                downstream_context,
+                                1,
+                            )
+                        )
                 if (not is_skipped) and triggered_jobs:
                     # For CNV jobs, use batching if enabled
                     if self.enable_batching and self.sample_batcher:
                         # Check if any of the triggered jobs are CNV jobs
                         cnv_jobs = [j for j in triggered_jobs if j.job_type == "cnv"]
                         other_jobs = [j for j in triggered_jobs if j.job_type != "cnv"]
-                        
+
                         # Submit non-CNV jobs immediately
                         if other_jobs:
-                            await self.submit_jobs(other_jobs)
-                        
+                            self._defer_submit_after_finish(other_jobs)
+
                         # For CNV jobs, add them to the batcher
                         for cnv_job in cnv_jobs:
                             try:
-                                sid_pending = cnv_job.context.get_sample_id() if cnv_job.context else "unknown"
+                                sid_pending = (
+                                    cnv_job.context.get_sample_id()
+                                    if cnv_job.context
+                                    else "unknown"
+                                )
                             except Exception:
                                 sid_pending = "unknown"
                             try:
@@ -2586,7 +3587,9 @@ class Coordinator:
                                             "last_seen": time.time(),
                                         }
                                         self.samples_by_id[sid_pending] = ent_pending
-                                    ent_pending["pending_jobs"] = ent_pending.get("pending_jobs", 0) + 1
+                                    ent_pending["pending_jobs"] = (
+                                        ent_pending.get("pending_jobs", 0) + 1
+                                    )
                                     ent_pending["last_seen"] = time.time()
                             except Exception:
                                 pass
@@ -2596,97 +3599,36 @@ class Coordinator:
                                     for batch in batches:
                                         sid_batch = batch.sample_id
                                         if sid_batch != "unknown":
-                                            ent_pending = self.samples_by_id.get(sid_batch)
-                                            if ent_pending and ent_pending.get("pending_jobs", 0) > 0:
+                                            ent_pending = self.samples_by_id.get(
+                                                sid_batch
+                                            )
+                                            if (
+                                                ent_pending
+                                                and ent_pending.get("pending_jobs", 0)
+                                                > 0
+                                            ):
                                                 ent_pending["pending_jobs"] = max(
                                                     0,
-                                                    ent_pending.get("pending_jobs", 0) - len(batch.contexts),
+                                                    ent_pending.get("pending_jobs", 0)
+                                                    - len(batch.contexts),
                                                 )
                                                 ent_pending["last_seen"] = time.time()
                                 except Exception:
                                     pass
                                 # Convert BatchedJob to regular Job for processing
                                 regular_jobs = self._convert_batched_jobs(batches)
-                                await self._submit_jobs_internal(regular_jobs)
+                                self._defer_submit_after_finish(
+                                    regular_jobs, internal=True
+                                )
                     else:
                         # No batching, submit all jobs normally
-                        await self.submit_jobs(triggered_jobs)
+                        self._defer_submit_after_finish(triggered_jobs)
                 else:
                     # advance linear chain if any
                     nxt = job.next_job()
                     if (not is_skipped) and nxt:
-                        await self.submit_jobs([nxt])
-        else:
-            # Only record as failed if not a deliberate skip
-            if not is_skipped:
-                self.failed_count += 1
-                self.failed_by_type[job.job_type] = (
-                    self.failed_by_type.get(job.job_type, 0) + 1
-                )
-                # Record failed job for tracking and OOM diagnosis
-                try:
-                    err_str = (err or "")[:1500]  # Keep more of traceback so root cause is visible
-                    err_lower = err_str.lower()
-                    # Ray OOM: worker is killed by raylet; error often says "worker died" / "connection" / "SIGKILL" not "oom"
-                    is_oom = (
-                        "oom" in err_lower
-                        or "out of memory" in err_lower
-                        or "outofmemory" in err_lower
-                        or "worker killed" in err_lower
-                        or "killed (oom)" in err_lower
-                        or "memory error" in err_lower
-                        or "worker died" in err_lower
-                        or "worker unexpectedly exits" in err_lower
-                        or "worker exit" in err_lower
-                        or "sigkill" in err_lower
-                        or "connection error" in err_lower
-                        or "system_error" in err_lower
-                    )
-                    sid_fail = (
-                        job.context.get_sample_id()
-                        if hasattr(job.context, "get_sample_id")
-                        else "unknown"
-                    )
-                    fp_fail = getattr(job.context, "filepath", "") or ""
-                    self._failed_jobs_log.append({
-                        "sample_id": sid_fail,
-                        "filepath": fp_fail,
-                        "job_type": job.job_type,
-                        "error": err_str,
-                        "is_oom": is_oom,
-                        "failure_kind": failure_kind or "",
-                    })
-                except Exception:
-                    pass
+                        self._defer_submit_after_finish([nxt])
 
-        # per-sample finish updates
-        try:
-            sid2 = (
-                job.context.get_sample_id()
-                if hasattr(job.context, "get_sample_id")
-                else "unknown"
-            )
-            ent2 = self.samples_by_id.get(sid2)
-            if ent2 is not None:
-                if ent2.get("active_jobs", 0) > 0:
-                    ent2["active_jobs"] -= 1
-                # Do not count deliberately skipped preprocessing as completed or failed
-                is_skipped = False
-                try:
-                    is_skipped = (job.job_type == "preprocessing") and bool(
-                        job.context.metadata.get("skip_downstream", False)
-                    )
-                except Exception:
-                    is_skipped = False
-                if not is_skipped:
-                    if ok:
-                        ent2["completed_jobs"] = ent2.get("completed_jobs", 0) + 1
-                    else:
-                        ent2["failed_jobs"] = ent2.get("failed_jobs", 0) + 1
-                ent2["last_seen"] = time.time()
-        except Exception:
-            pass
-        
         # Periodically clean up completed samples to prevent memory growth
         self._jobs_since_last_cleanup += 1
         if self._jobs_since_last_cleanup >= self._sample_cleanup_interval:
@@ -2695,7 +3637,7 @@ class Coordinator:
                 asyncio.create_task(self._cleanup_completed_samples())
             except Exception:
                 pass
-        
+
         # Periodically clean up CNV cache to prevent memory growth
         self._jobs_since_cnv_cleanup += 1
         if self._jobs_since_cnv_cleanup >= self._cnv_cache_cleanup_interval:
@@ -2738,16 +3680,17 @@ class Coordinator:
                 )
                 proc2 = self.processors.get(nxt_job.job_type)
                 if proc2 is not None:
+                    next_work = _job_work_count(nxt_job)
                     ref2 = proc2.process.remote(nxt_job)
                     self._inflight[ref2] = nxt_job
                     # Record submission for totals used by GUI
                     try:
                         self.submitted_by_type[nxt_job.job_type] = (
-                            self.submitted_by_type.get(nxt_job.job_type, 0) + 1
+                            self.submitted_by_type.get(nxt_job.job_type, 0) + next_work
                         )
                     except Exception:
                         pass
-                    self.total_enqueued += 1
+                    self.total_enqueued += next_work
                     # Update per-sample aggregate immediately for GUI samples view
                     try:
                         sid_local2 = (
@@ -2783,38 +3726,34 @@ class Coordinator:
                         "filepath": nxt_job.context.filepath,
                         "queue": job_queue_of(nxt_job.job_type),
                         "start_time": time.time(),
+                        "sample_id": sid,
+                        "work_count": next_work,
                     }
 
-        # Release backpressure queues after a job finishes
-        try:
-            jt = job.job_type
-            # decrement inflight count for this type
-            if self.inflight_by_type.get(jt, 0) > 0:
-                self.inflight_by_type[jt] -= 1
-                if self.inflight_by_type[jt] == 0:
-                    self.inflight_by_type.pop(jt, None)
-            # decrement inflight count for this queue
-            qn = queue_name or job_queue_of(jt)
-            if self.inflight_by_queue.get(qn, 0) > 0:
-                self.inflight_by_queue[qn] -= 1
-                if self.inflight_by_queue[qn] == 0:
-                    self.inflight_by_queue.pop(qn, None)
-            await self._drain_waiting_jobs(qn, jt)
-        except Exception:
-            pass
-        except Exception:
-            pass
         if job.job_type in CLASSIFICATION_TYPES:
             # decrement pending for this type
             if self.classif_pending_by_type.get(job.job_type, 0) > 0:
                 self.classif_pending_by_type[job.job_type] -= 1
                 if self.classif_pending_by_type[job.job_type] == 0:
                     self.classif_pending_by_type.pop(job.job_type, None)
-            nxt = self.classif_waiting_by_type.get(job.job_type)
+            waiting_by_sample = self.classif_waiting_by_type.get(job.job_type) or {}
+            if waiting_by_sample:
+                next_sample = next(iter(waiting_by_sample))
+                nxt = waiting_by_sample.pop(next_sample)
+            else:
+                nxt = None
+            if not waiting_by_sample:
+                self.classif_waiting_by_type.pop(job.job_type, None)
             if nxt is not None:
-                self.classif_waiting_by_type[job.job_type] = None
                 proc3 = self.processors.get(job.job_type)
                 if proc3 is not None:
+                    next_work = _job_work_count(nxt)
+                    sid_local3 = (
+                        nxt.context.get_sample_id()
+                        if hasattr(nxt, "context")
+                        and hasattr(nxt.context, "get_sample_id")
+                        else "unknown"
+                    )
                     if getattr(self, "using_pools", False):
                         try:
                             proc3.enqueue.remote(nxt)
@@ -2826,20 +3765,14 @@ class Coordinator:
                     # Record submission for totals used by GUI
                     try:
                         self.submitted_by_type[job.job_type] = (
-                            self.submitted_by_type.get(job.job_type, 0) + 1
+                            self.submitted_by_type.get(job.job_type, 0) + next_work
                         )
                     except Exception:
                         pass
                     self.classif_pending_by_type[job.job_type] = 1
-                    self.total_enqueued += 1
+                    self.total_enqueued += next_work
                     # Update per-sample aggregate immediately for GUI samples view
                     try:
-                        sid_local3 = (
-                            nxt.context.get_sample_id()
-                            if hasattr(nxt, "context")
-                            and hasattr(nxt.context, "get_sample_id")
-                            else "unknown"
-                        )
                         if sid_local3 != "unknown":
                             ent_local3 = self.samples_by_id.get(sid_local3)
                             if ent_local3 is None:
@@ -2868,6 +3801,8 @@ class Coordinator:
                         "filepath": nxt.context.filepath,
                         "queue": job_queue_of(nxt.job_type),
                         "start_time": time.time(),
+                        "sample_id": sid_local3,
+                        "work_count": next_work,
                     }
 
     async def _drain_loop(self):
@@ -2895,7 +3830,9 @@ class Coordinator:
                                 pass
                             self._inflight.pop(ref, None)
                             err_msg = f"Job timed out after {timeout_sec}s"
-                            await self._on_finish(job, False, job.context, err_msg, "timed_out")
+                            await self._on_finish(
+                                job, False, job.context, err_msg, "timed_out"
+                            )
                 refs = list(self._inflight.keys())
                 if not refs:
                     await asyncio.sleep(0.1)
@@ -2913,14 +3850,14 @@ class Coordinator:
                         await self._on_finish(job, ok, ctx, err)
             except Exception:
                 await asyncio.sleep(0.1)
-    
+
     async def _batch_timeout_loop(self):
         """Periodically check for timed-out batches"""
         while not self._shutdown_requested:
             try:
                 # Check for timed-out batches
                 timed_out_batches = await self.sample_batcher.check_timeouts()
-                
+
                 # Submit timed-out batches
                 if timed_out_batches:
                     try:
@@ -2928,22 +3865,65 @@ class Coordinator:
                             sid_batch = batch.sample_id
                             if sid_batch != "unknown":
                                 ent_pending = self.samples_by_id.get(sid_batch)
-                                if ent_pending and ent_pending.get("pending_jobs", 0) > 0:
+                                if (
+                                    ent_pending
+                                    and ent_pending.get("pending_jobs", 0) > 0
+                                ):
                                     ent_pending["pending_jobs"] = max(
                                         0,
-                                        ent_pending.get("pending_jobs", 0) - len(batch.contexts),
+                                        ent_pending.get("pending_jobs", 0)
+                                        - len(batch.contexts),
                                     )
                                     ent_pending["last_seen"] = time.time()
                     except Exception:
                         pass
                     regular_jobs = self._convert_batched_jobs(timed_out_batches)
                     await self._submit_jobs_internal(regular_jobs)
-                
+
                 await asyncio.sleep(1.0)  # Check every second
-                
+
             except Exception:
                 await asyncio.sleep(1.0)
-    
+
+    def _decrement_pending_for_batches(self, batches: List["BatchedJob"]) -> None:
+        """Decrement the per-sample 'pending_jobs' counter by the number of
+        contexts in each batch. Used after the batcher emits batches into the
+        dispatcher (the contexts moved out of the batcher's queue, so they no
+        longer count as 'pending in the batcher')."""
+        try:
+            for batch in batches:
+                sid_batch = batch.sample_id
+                if not sid_batch or sid_batch == "unknown":
+                    continue
+                ent_pending = self.samples_by_id.get(sid_batch)
+                if ent_pending and ent_pending.get("pending_jobs", 0) > 0:
+                    ent_pending["pending_jobs"] = max(
+                        0,
+                        ent_pending.get("pending_jobs", 0) - len(batch.contexts),
+                    )
+                    ent_pending["last_seen"] = time.time()
+        except Exception:
+            pass
+
+    async def _flush_batcher_for_type(self, job_type: str) -> None:
+        """Force-flush whatever the batcher is holding for ``job_type`` and
+        push the resulting batches into the dispatcher. Called when a worker
+        for that type frees up so it has something to pick up immediately
+        without waiting for the busy timeout."""
+        if not (self.enable_batching and self.sample_batcher):
+            return
+        try:
+            flushed = await self.sample_batcher.force_flush_type(job_type)
+        except Exception:
+            return
+        if not flushed:
+            return
+        self._decrement_pending_for_batches(flushed)
+        regular_jobs = self._convert_batched_jobs(flushed)
+        # Defer the actual submit so we don't recurse into _dispatch_ready_job
+        # while still inside _on_finish — keeps the actor responsive.
+        self._defer_submit_after_finish(regular_jobs, internal=True)
+
     def _convert_batched_jobs(self, batched_jobs: List[BatchedJob]) -> List[Job]:
         """Convert BatchedJob objects to regular Job objects for processing"""
         regular_jobs = []
@@ -2955,16 +3935,22 @@ class Coordinator:
                 origin=batched_job.origin,
                 workflow=batched_job.workflow,
                 step=batched_job.step,
-                context=batched_job.contexts[0]  # Use first context as primary
+                context=_clone_workflow_context(
+                    batched_job.contexts[0]
+                ),  # Use an isolated primary context
+                logical_work_count=len(batched_job.contexts),
             )
             # Store batch information in metadata
             regular_job.context.metadata["_batched_job"] = batched_job
             regular_jobs.append(regular_job)
-        
+
         return regular_jobs
-    
-    def register_batched_handler(self, job_type: str, handler: Callable[[BatchedJob], None]) -> None:
+
+    def register_batched_handler(
+        self, job_type: str, handler: Callable[[BatchedJob], None]
+    ) -> None:
         """Register a handler that can process batched jobs"""
+
         # Wrap the handler to extract BatchedJob from regular Job
         def wrapped_handler(job: Job) -> None:
             batched_job = job.context.metadata.get("_batched_job")
@@ -2981,20 +3967,12 @@ class Coordinator:
                     step=job.step,
                     contexts=[single_context],
                     batch_id=f"single_{job.job_id}",
-                    sample_id=single_context.get_sample_id()
+                    sample_id=single_context.get_sample_id(),
                 )
                 handler(single_batch)
-        
+
         # Register the wrapped handler
         self.register_handler(job_type, wrapped_handler)
-
-    async def mark_running(self, job: Job):
-        if job.job_type in DEDUP_TYPES:
-            key = (job.context.get_sample_id(), job.job_type)
-            self.pending[key] = max(0, self.pending.get(key, 0) - 1)
-            if self.pending[key] == 0:
-                self.pending.pop(key, None)
-            self.running[key] = self.running.get(key, 0) + 1
 
     async def mark_handler_started(self, job_id: int) -> None:
         """Worker calls this when the real handler body begins (Ray task running)."""
@@ -3005,62 +3983,112 @@ class Coordinator:
             if info.get("handler_start_time") is not None:
                 return
             info["handler_start_time"] = time.time()
+            job_type = info.get("job_type")
+            sample_id = info.get("sample_id")
+            if job_type in DEDUP_TYPES:
+                key = (sample_id or "unknown", job_type)
+                self.pending[key] = max(0, self.pending.get(key, 0) - 1)
+                if self.pending[key] == 0:
+                    self.pending.pop(key, None)
+                self.running[key] = self.running.get(key, 0) + 1
+            self._stats_cache = None
         except Exception:
             pass
+
+    async def increment_completed_files(
+        self, job_type: str, count: int = 1, job_id: Optional[int] = None
+    ) -> None:
+        """Record per-file progress for batched jobs (display only)."""
+        n = max(1, int(count or 1))
+        if job_id is not None:
+            jid = int(job_id)
+            info = self.active.get(jid)
+            # Progress callbacks are fire-and-forget from worker processes and
+            # can arrive after _on_finish. The terminal callback has already
+            # credited the whole immutable work count, so a late update must
+            # not create additional completed work.
+            if info is None:
+                return
+            work_count = int((info or {}).get("work_count", 1) or 1)
+            already = self._file_progress_by_job.get(jid, 0)
+            n = min(n, max(0, work_count - already))
+            if n <= 0:
+                return
+            self._file_progress_by_job[jid] = already + n
+        self.completed_by_type[job_type] = self.completed_by_type.get(job_type, 0) + n
+        self.completed_count += n
+        self._stats_cache = None
 
     async def stats(self) -> Dict[str, Any]:
         # Check cache first for performance
         now = time.time()
         if self._stats_cache and (now - self._stats_cache_time) < self._stats_cache_ttl:
             return self._stats_cache
-        
+
         # per-queue active summary (also expose as 'active_by_worker' for GUI compat)
         # IMPORTANT: We keep two representations:
         # - active_by_queue: truncated to the 2 most recently started jobs (UI display)
         # - active_count_by_queue/job_type: full counts (debugging "Act" discrepancies)
         active_by_queue: Dict[str, List[Dict[str, Any]]] = {}
+        queued_by_queue: Dict[str, List[Dict[str, Any]]] = {}
         active_count_by_queue: Dict[str, int] = {}
         active_count_by_job_type: Dict[str, int] = {}
+        active_work_by_queue: Dict[str, int] = {}
+        queued_count_by_queue: Dict[str, int] = {}
+        queued_count_by_job_type: Dict[str, int] = {}
+        queued_work_by_queue: Dict[str, int] = {}
         for jid, info in self.active.items():
             q = info["queue"]
             jt = info["job_type"]
-            active_count_by_queue[q] = active_count_by_queue.get(q, 0) + 1
-            active_count_by_job_type[jt] = active_count_by_job_type.get(jt, 0) + 1
+            work_count = max(1, int(info.get("work_count", 1) or 1))
             hs = info.get("handler_start_time")
             st = info.get("start_time")
             if hs is not None:
+                active_count_by_queue[q] = active_count_by_queue.get(q, 0) + 1
+                active_count_by_job_type[jt] = active_count_by_job_type.get(jt, 0) + 1
+                active_work_by_queue[q] = active_work_by_queue.get(q, 0) + work_count
                 duration_s = int(now - float(hs))
-                dispatch_wait = (
-                    int(float(hs) - float(st)) if st is not None else None
-                )
+                dispatch_wait = int(float(hs) - float(st)) if st is not None else None
+                destination = active_by_queue
             else:
+                queued_count_by_queue[q] = queued_count_by_queue.get(q, 0) + 1
+                queued_count_by_job_type[jt] = queued_count_by_job_type.get(jt, 0) + 1
+                queued_work_by_queue[q] = queued_work_by_queue.get(q, 0) + work_count
                 duration_s = int(now - float(st)) if st is not None else 0
                 dispatch_wait = None
-            active_by_queue.setdefault(q, []).append(
+                destination = queued_by_queue
+            destination.setdefault(q, []).append(
                 {
                     "job_id": jid,
                     "job_type": jt,
                     "filepath": info["filepath"],
                     "duration": duration_s,
                     "dispatch_wait_seconds": dispatch_wait,
+                    "work_count": work_count,
                     "start_time": info["start_time"],
                 }
             )
 
-        # Sort each queue's list by start_time descending (newest first), then keep only first 2
-        for q in active_by_queue:
-            active_by_queue[q] = sorted(
-                active_by_queue[q], key=lambda x: x["start_time"], reverse=True
-            )[:2]
-            for entry in active_by_queue[q]:
-                entry.pop("start_time", None)
+        # Keep compact samples for CLI/GUI display.
+        for rows_by_queue in (active_by_queue, queued_by_queue):
+            for q in rows_by_queue:
+                rows_by_queue[q] = sorted(
+                    rows_by_queue[q], key=lambda x: x["start_time"], reverse=True
+                )[:2]
+                for entry in rows_by_queue[q]:
+                    entry.pop("start_time", None)
 
         # Fallback path: if coordinator active bookkeeping is empty/missing while
         # queue actors still report running jobs, surface those in monitor stats.
         try:
-            runtime_rows = await asyncio.gather(
-                *[proc.runtime_status.remote() for proc in self.processors.values()],
-                return_exceptions=True,
+            unique_processors = list(dict.fromkeys(self.processors.values()))
+            runtime_rows = (
+                await asyncio.gather(
+                    *[proc.runtime_status.remote() for proc in unique_processors],
+                    return_exceptions=True,
+                )
+                if self.using_pools
+                else []
             )
         except Exception:
             runtime_rows = []
@@ -3073,13 +4101,17 @@ class Coordinator:
             qn = str(row.get("queue") or "")
             rc = int(row.get("running_count") or 0)
             if qn:
-                runtime_active_count_by_queue[qn] = runtime_active_count_by_queue.get(qn, 0) + rc
-            for j in (row.get("inflight") or []):
+                runtime_active_count_by_queue[qn] = (
+                    runtime_active_count_by_queue.get(qn, 0) + rc
+                )
+            for j in row.get("inflight") or []:
                 if not isinstance(j, dict):
                     continue
                 jt = str(j.get("job_type") or "")
                 if jt:
-                    runtime_active_count_by_job_type[jt] = runtime_active_count_by_job_type.get(jt, 0) + 1
+                    runtime_active_count_by_job_type[jt] = (
+                        runtime_active_count_by_job_type.get(jt, 0) + 1
+                    )
                 if qn:
                     runtime_active_by_queue.setdefault(qn, []).append(
                         {
@@ -3118,6 +4150,7 @@ class Coordinator:
                     ),
                 }
                 for jid, info in self.active.items()
+                if info.get("handler_start_time") is not None
             ],
             key=lambda x: x["duration"],
             reverse=True,
@@ -3152,50 +4185,98 @@ class Coordinator:
             "other": 0,
         }
         for info in self.active.values():
-            running_counts[_cat_of(info["job_type"])] += 1
+            if info.get("handler_start_time") is not None:
+                running_counts[_cat_of(info["job_type"])] += 1
         # totals are the submitted (ever) per type/category
         for jt, c in self.submitted_by_type.items():
             totals_counts[_cat_of(jt)] += int(c or 0)
-        # Count waiting (serialized) jobs so the monitor can account for them
+        # Count all work not yet dispatched to a processor.
         try:
             waiting_serialized = sum(
-                len(v) for v in getattr(self, "waiting_by_type_sample", {}).values()
+                _job_work_count(job)
+                for jobs in getattr(self, "waiting_by_type_sample", {}).values()
+                for job in jobs
             )
         except Exception:
             waiting_serialized = 0
-        # Count global backpressure queues (per-type, per-queue, and global)
-        try:
-            waiting_global = sum(
-                len(v) for v in getattr(self, "waiting_by_type_global", {}).values()
-            )
-        except Exception:
-            waiting_global = 0
-        try:
-            waiting_global += sum(
-                len(v) for v in getattr(self, "waiting_by_queue", {}).values()
-            )
-        except Exception:
-            pass
-        try:
-            waiting_global += len(getattr(self, "waiting_global", []))
-        except Exception:
-            pass
 
         waiting_count_by_queue: Dict[str, int] = {}
-        try:
-            # For debug: how much is queued per queue name
-            for qn, lst in getattr(self, "waiting_by_queue", {}).items():
-                waiting_count_by_queue[qn] = len(lst)
-        except Exception:
-            waiting_count_by_queue = {}
-
         waiting_count_by_type_global: Dict[str, int] = {}
-        try:
-            # For debug: how much is queued in the per-job-type global backpressure lists
-            for jt, lst in getattr(self, "waiting_by_type_global", {}).items():
-                waiting_count_by_type_global[jt] = len(lst)
-        except Exception:
-            waiting_count_by_type_global = {}
+        waiting_global = 0
+
+        def _add_waiting(job_type: Optional[str], count: int) -> None:
+            nonlocal waiting_global
+            if count <= 0:
+                return
+            jt = job_type or "unknown"
+            qn = job_queue_of(jt)
+            waiting_global += count
+            waiting_count_by_queue[qn] = waiting_count_by_queue.get(qn, 0) + count
+            waiting_count_by_type_global[jt] = (
+                waiting_count_by_type_global.get(jt, 0) + count
+            )
+
+        for jt, entries in getattr(self, "waiting_by_type_global", {}).items():
+            for entry in entries:
+                _add_waiting(jt, self._entry_work_count(entry))
+        for qn, entries in getattr(self, "waiting_by_queue", {}).items():
+            for entry in entries:
+                count = self._entry_work_count(entry)
+                waiting_global += count
+                waiting_count_by_queue[qn] = waiting_count_by_queue.get(qn, 0) + count
+                jt = self._entry_job_type(entry) or "unknown"
+                waiting_count_by_type_global[jt] = (
+                    waiting_count_by_type_global.get(jt, 0) + count
+                )
+        for entry in getattr(self, "waiting_global", []):
+            _add_waiting(self._entry_job_type(entry), self._entry_work_count(entry))
+        for (jt, _sid), jobs in getattr(self, "waiting_by_type_sample", {}).items():
+            _add_waiting(jt, sum(_job_work_count(job) for job in jobs))
+
+        waiting_batcher, waiting_batcher_by_type = self._batcher_waiting_counts()
+        for jt, count in waiting_batcher_by_type.items():
+            _add_waiting(jt, count)
+
+        waiting_classification = 0
+        for jt, jobs_by_sample in getattr(self, "classif_waiting_by_type", {}).items():
+            count = sum(_job_work_count(job) for job in jobs_by_sample.values())
+            waiting_classification += count
+            _add_waiting(jt, count)
+
+        completed_work_by_queue: Dict[str, int] = {}
+        for jt, count in self.completed_by_type.items():
+            qn = job_queue_of(jt)
+            completed_work_by_queue[qn] = completed_work_by_queue.get(qn, 0) + count
+        for jt, count in self.failed_by_type.items():
+            qn = job_queue_of(jt)
+            completed_work_by_queue[qn] = completed_work_by_queue.get(qn, 0) + count
+
+        total_work_by_queue: Dict[str, int] = {}
+        for qn in QUEUE_TO_TYPES:
+            total_work_by_queue[qn] = (
+                completed_work_by_queue.get(qn, 0)
+                + active_work_by_queue.get(qn, 0)
+                + queued_work_by_queue.get(qn, 0)
+                + waiting_count_by_queue.get(qn, 0)
+            )
+
+        totals_counts = {
+            "preprocessing": total_work_by_queue.get("preprocessing", 0),
+            "mgmt": total_work_by_queue.get("mgmt", 0),
+            "cnv": total_work_by_queue.get("cnv", 0),
+            "target": total_work_by_queue.get("target", 0),
+            "fusion": total_work_by_queue.get("fusion", 0),
+            "classification": total_work_by_queue.get("classification", 0),
+            "other": (
+                total_work_by_queue.get("bed_conversion", 0)
+                + total_work_by_queue.get("slow", 0)
+            ),
+        }
+
+        running_work = sum(active_work_by_queue.values())
+        queued_work = sum(queued_work_by_queue.values())
+        terminal_work = self.completed_count + self.failed_count
+        total_work = terminal_work + running_work + queued_work + waiting_global
 
         inflight_by_type_debug: Dict[str, int] = {}
         inflight_by_queue_debug: Dict[str, int] = {}
@@ -3235,14 +4316,27 @@ class Coordinator:
             "failed_by_type": dict(self.failed_by_type),
             "active_by_queue": active_by_queue,
             "active_by_worker": active_by_queue,  # compatibility for GUI table
-            "active_count": len(self.active),
+            "queued_by_queue": queued_by_queue,
+            "active_count": sum(active_count_by_queue.values()),
+            "active_work_count": running_work,
+            "queued_count": sum(queued_count_by_queue.values()),
+            "queued_work_count": queued_work,
             "active_count_by_queue": active_count_by_queue,
             "active_count_by_job_type": active_count_by_job_type,
+            "active_work_by_queue": active_work_by_queue,
+            "queued_count_by_queue": queued_count_by_queue,
+            "queued_count_by_job_type": queued_count_by_job_type,
+            "queued_work_by_queue": queued_work_by_queue,
             "active_top_by_duration": active_top_by_duration,
             "waiting_serialized": waiting_serialized,
             "waiting_global": waiting_global,
+            "waiting_batcher": waiting_batcher,
+            "waiting_classification": waiting_classification,
             "waiting_count_by_queue": waiting_count_by_queue,
             "waiting_count_by_type_global": waiting_count_by_type_global,
+            "completed_work_by_queue": completed_work_by_queue,
+            "total_work_by_queue": total_work_by_queue,
+            "total_work": total_work,
             "inflight_by_type_debug": inflight_by_type_debug,
             "inflight_by_queue_debug": inflight_by_queue_debug,
             "running_by_category": running_counts,
@@ -3253,26 +4347,44 @@ class Coordinator:
             # Failed job tracking: last 500 entries for inspection / OOM diagnosis
             "failed_jobs_list": list(self._failed_jobs_log)[-500:],
             "oom_count": sum(1 for e in self._failed_jobs_log if e.get("is_oom")),
+            # Coalesce metrics (dispatch-time merging of small batches)
+            "coalesce_events": int(getattr(self, "coalesce_events", 0) or 0),
+            "coalesce_jobs_absorbed": int(
+                getattr(self, "coalesce_jobs_absorbed", 0) or 0
+            ),
+            "coalesce_contexts_merged": int(
+                getattr(self, "coalesce_contexts_merged", 0) or 0
+            ),
         }
-        if result["active_count"] == 0 and runtime_active_count_by_queue:
+        if (
+            not self.active
+            and result["active_count"] == 0
+            and runtime_active_count_by_queue
+        ):
             result["active_count"] = int(sum(runtime_active_count_by_queue.values()))
-        
+
         # Cache the result for future calls
         self._stats_cache = result
         self._stats_cache_time = now
-        
+
         return result
+
+    async def drain_gui_notifications(self) -> List[Dict[str, Any]]:
+        """Return pending worker-originated GUI notifications exactly once."""
+        notifications = self._gui_notifications
+        self._gui_notifications = []
+        return notifications
 
     async def get_cnv_cache_stats(self) -> Dict[str, Any]:
         """
         Get CNV cache statistics for monitoring purposes.
-        
+
         Returns:
             Dictionary with CNV cache statistics
         """
         if get_sample_cache_stats is None:
             return {"error": "CNV module not available"}
-        
+
         try:
             return get_sample_cache_stats()
         except Exception as e:
@@ -3281,7 +4393,7 @@ class Coordinator:
     async def shutdown(self) -> bool:
         """
         Gracefully shutdown the coordinator and all its actors.
-        
+
         Returns:
             True if shutdown was successful
         """
@@ -3298,7 +4410,7 @@ class Coordinator:
                     print(f"[SHUTDOWN] Wrote failed jobs log: {path}")
             except Exception as e:
                 print(f"[SHUTDOWN] Warning: Could not write failed jobs log: {e}")
-            
+
             # Finalize target accumulation for all samples with batch BAMs pending merge
             try:
                 print("[SHUTDOWN] Finalizing target.bam files for all samples...")
@@ -3306,7 +4418,7 @@ class Coordinator:
                 print("[SHUTDOWN] Target BAM finalization complete")
             except Exception as e:
                 print(f"[SHUTDOWN] Warning: Error during target BAM finalization: {e}")
-            
+
             # Flush any remaining CSV buffer entries
             try:
                 print("[SHUTDOWN] Flushing CSV buffer entries...")
@@ -3314,9 +4426,9 @@ class Coordinator:
                 print("[SHUTDOWN] CSV buffer flushed")
             except Exception as e:
                 print(f"[SHUTDOWN] Warning: Error flushing CSV buffer: {e}")
-            
+
             # Cancel all inflight tasks
-            if hasattr(self, '_inflight') and self._inflight:
+            if hasattr(self, "_inflight") and self._inflight:
                 inflight_count = len(self._inflight)
                 if inflight_count > 0:
                     print(f"[SHUTDOWN] Cancelling {inflight_count} inflight tasks...")
@@ -3326,9 +4438,9 @@ class Coordinator:
                         except Exception:
                             pass
                     print("[SHUTDOWN] Inflight tasks cancelled")
-            
+
             # Shutdown all pool actors gracefully first
-            if hasattr(self, 'queues') and self.queues:
+            if hasattr(self, "queues") and self.queues:
                 total_actors = sum(len(actors) for actors in self.queues.values())
                 if total_actors > 0:
                     print(f"[SHUTDOWN] Shutting down {total_actors} pool actors...")
@@ -3343,19 +4455,21 @@ class Coordinator:
                             except Exception:
                                 pass
                     print("[SHUTDOWN] Pool actors shut down")
-            
+
             # Kill all processor actors
-            if hasattr(self, 'processors') and self.processors:
+            if hasattr(self, "processors") and self.processors:
                 processor_count = len(self.processors)
                 if processor_count > 0:
-                    print(f"[SHUTDOWN] Shutting down {processor_count} processor actors...")
+                    print(
+                        f"[SHUTDOWN] Shutting down {processor_count} processor actors..."
+                    )
                     for processor in self.processors.values():
                         try:
                             ray.kill(processor)
                         except Exception:
                             pass
                     print("[SHUTDOWN] Processor actors shut down")
-            
+
             print("[SHUTDOWN] Coordinator shutdown complete")
             return True
         except Exception as e:
@@ -3383,9 +4497,10 @@ class Pool:
         self._inflight_data: Dict[Any, Tuple[Job, float]] = {}
         self._timed_out_jobs: Set[str] = set()
         self._running_count: int = 0
+        self._pending_jobs: deque[Job] = deque()
         self._shutdown_requested: bool = False
         self._timeout_task: Optional[asyncio.Task] = None
-        
+
         # Initialize memory manager for long-running pool actor
         self.memory_manager = None
         if MemoryManager is not None and not DISABLE_MEMORY_MANAGER:
@@ -3394,13 +4509,15 @@ class Pool:
                 gc_every = 30 if queue_name in {"analysis", "classif"} else 50
                 rss_trigger = 1536 if queue_name in {"analysis", "classif"} else 2048
                 restart_every = 7500 if queue_name in {"analysis", "classif"} else 10000
-                restart_rss_trigger = 3072 if queue_name in {"analysis", "classif"} else 4096
+                restart_rss_trigger = (
+                    3072 if queue_name in {"analysis", "classif"} else 4096
+                )
                 self.memory_manager = MemoryManager(
                     gc_every=gc_every,
                     rss_trigger_mb=rss_trigger,
                     enable_malloc_trim=True,
                     restart_every=restart_every,
-                    restart_rss_trigger_mb=restart_rss_trigger
+                    restart_rss_trigger_mb=restart_rss_trigger,
                 )
             except Exception as e:
                 # Fallback if memory manager fails to initialize
@@ -3422,13 +4539,13 @@ class Pool:
             except Exception:
                 self._coordinator = None
         return self._coordinator
-    
+
     def should_restart(self) -> bool:
         """Check if actor should restart due to memory management."""
         if self.memory_manager is not None:
             return self.memory_manager.is_restart_requested()
         return False
-    
+
     def get_restart_reason(self) -> Optional[str]:
         """Get the reason for restart request."""
         if self.memory_manager is not None:
@@ -3465,6 +4582,7 @@ class Pool:
         return {
             "queue": self.queue_name,
             "running_count": int(self._running_count),
+            "pending_count": len(self._pending_jobs),
             "inflight": inflight,
         }
 
@@ -3472,12 +4590,7 @@ class Pool:
         # Check if shutdown has been requested
         if self._shutdown_requested:
             return
-        
-        # tell coordinator that we're starting this job (updates dedup maps)
-        # We cannot call back into Coordinator directly from here without a reference;
-        # pass coordinator handle via callback's bound actor method (Ray passes actor ref implicitly).
-        # Instead, we expose a small trampoline: the driver calls mark_running before enqueue.
-        # For simplicity, Coordinator calls mark_running() before Pool.enqueue().
+
         tup = self.handlers.get(job.job_type)
         if tup is None:
             ctx = job.context
@@ -3491,17 +4604,27 @@ class Pool:
                     job, False, ctx, f"no_handler:{job.job_type}"
                 )
             return
-        remote_func, opts = tup
-        # Apply resource hints at call site
-        # Bound concurrency to max_parallel to emulate thread runner
-        while self._running_count >= self.max_parallel:
-            await asyncio.sleep(0.005)
+        self._pending_jobs.append(job)
+        await self._start_pending_jobs()
+
+    async def _start_pending_jobs(self) -> None:
+        while self._pending_jobs and self._running_count < self.max_parallel:
+            job = self._pending_jobs.popleft()
+            tup = self.handlers.get(job.job_type)
+            if tup is None:
+                continue
+            remote_func, opts = tup
+            self._start_job(job, remote_func, opts)
+
+    def _start_job(self, job: Job, remote_func, opts: Dict[str, Any]) -> None:
         ref = remote_func.options(**opts).remote(job)
         self._inflight_data[ref] = (job, time.time())
         self._running_count += 1
 
         # Start timeout loop once if per-job timeout is enabled
-        if self.job_timeout_seconds > 0 and (self._timeout_task is None or self._timeout_task.done()):
+        if self.job_timeout_seconds > 0 and (
+            self._timeout_task is None or self._timeout_task.done()
+        ):
             try:
                 self._timeout_task = asyncio.create_task(self._timeout_loop())
             except Exception:
@@ -3514,7 +4637,13 @@ class Pool:
                 ctx = await r
                 # Treat handler "error return" as failure: context has errors for this job_type
                 errors = getattr(ctx, "errors", []) or []
-                job_errors = [e for e in errors if isinstance(e, dict) and e.get("job_type") == job.job_type]
+                alias_types = _HANDLER_ERROR_ALIASES.get(job.job_type, ())
+                error_types = (job.job_type,) + alias_types
+                job_errors = [
+                    e
+                    for e in errors
+                    if isinstance(e, dict) and e.get("job_type") in error_types
+                ]
                 if job_errors:
                     ok = False
                     err = job_errors[-1].get("error", "handler reported error")
@@ -3525,23 +4654,26 @@ class Pool:
                 ctx.add_error(job.job_type, err)
                 failure_kind = "exception"
             self._inflight_data.pop(r, None)
+            if self._running_count > 0:
+                self._running_count -= 1
+            await self._start_pending_jobs()
             coord2 = self._get_coordinator()
             if coord2 is not None and job.job_id not in self._timed_out_jobs:
                 await coord2._on_finish.remote(job, ok, ctx, err, failure_kind)
             elif job.job_id in self._timed_out_jobs:
                 self._timed_out_jobs.discard(job.job_id)
-            if self._running_count > 0:
-                self._running_count -= 1
-            
+
             # Trigger memory cleanup after job completion
             if self.memory_manager is not None:
                 try:
                     is_idle = self._running_count == 0
-                    cleanup_stats = self.memory_manager.check_and_cleanup(is_idle=is_idle)
+                    cleanup_stats = self.memory_manager.check_and_cleanup(
+                        is_idle=is_idle
+                    )
                     # Log memory cleanup if it was triggered
-                    if cleanup_stats.get('gc_triggered', False):
+                    if cleanup_stats.get("gc_triggered", False):
                         pass  # Memory cleanup performed
-                    
+
                     # Actor restart mechanism disabled - no restart checks
                 except Exception as e:
                     # Silently continue if memory management fails
@@ -3552,14 +4684,14 @@ class Pool:
     async def shutdown(self) -> bool:
         """
         Gracefully shutdown the pool actor.
-        
+
         Returns:
             True if shutdown was successful
         """
         try:
             # Stop accepting new jobs
             self._shutdown_requested = True
-            
+
             # Cancel all inflight tasks
             if self._inflight_data:
                 for ref in list(self._inflight_data):
@@ -3567,7 +4699,7 @@ class Pool:
                         ray.cancel(ref)
                     except Exception:
                         pass
-            
+
             return True
         except Exception:
             return False
@@ -3587,13 +4719,12 @@ class Pool:
                         self._inflight_data.pop(ref, None)
                         if self._running_count > 0:
                             self._running_count -= 1
+                        await self._start_pending_jobs()
                         try:
                             ray.cancel(ref)
                         except Exception:
                             pass
-                        err_msg = (
-                            f"Job timed out after {self.job_timeout_seconds}s"
-                        )
+                        err_msg = f"Job timed out after {self.job_timeout_seconds}s"
                         await coord._on_finish.remote(
                             job, False, job.context, err_msg, "timed_out"
                         )
@@ -3610,7 +4741,9 @@ class Pool:
 # ---------- Classifier & Runner ----------
 
 
-def default_file_classifier(filepath: str, plan: List[str], target_panel: str) -> List[Job]:
+def default_file_classifier(
+    filepath: str, plan: List[str], target_panel: str
+) -> List[Job]:
     ctx = WorkflowContext(filepath)
     ctx.add_metadata("filename", os.path.basename(filepath))
     ctx.add_metadata("created", time.time())
@@ -3738,7 +4871,7 @@ async def submit_existing_paths(
         coord_target_panel = await coord.get_target_panel.remote()
     except Exception:
         pass
-    
+
     fail_only_bam_submission = _detect_fail_only_bam_submission(
         paths=paths,
         patterns=patterns,
@@ -3849,13 +4982,23 @@ async def tqdm_monitor(coord, continuous: bool = False) -> None:
         "slow",
     ]
     bars = {
-        q: tqdm(desc=q.title(), unit="jobs", position=i, leave=True, ncols=120, 
-                bar_format='{l_bar}{bar:20}{r_bar}')
+        q: tqdm(
+            desc=q.title(),
+            unit="jobs",
+            position=i,
+            leave=True,
+            ncols=120,
+            bar_format="{l_bar}{bar:20}{r_bar}",
+        )
         for i, q in enumerate(order)
     }
     overall = tqdm(
-        desc="Overall Progress", unit="jobs", position=len(order), leave=True, ncols=120,
-        bar_format='{l_bar}{bar:20}{r_bar}'
+        desc="Overall Progress",
+        unit="jobs",
+        position=len(order),
+        leave=True,
+        ncols=120,
+        bar_format="{l_bar}{bar:20}{r_bar}",
     )
 
     try:
@@ -3877,19 +5020,16 @@ async def tqdm_monitor(coord, continuous: bool = False) -> None:
             active_by_queue = s.get("active_by_queue", {})
             active_count_by_queue = s.get("active_count_by_queue", {}) or {}
             active_count_by_job_type = s.get("active_count_by_job_type", {}) or {}
+            queued_count_by_job_type = s.get("queued_count_by_job_type", {}) or {}
             waiting_count_by_queue = s.get("waiting_count_by_queue", {}) or {}
-            active_count_by_queue = s.get("active_count_by_queue", {}) or {}
-            active_count_by_job_type = s.get("active_count_by_job_type", {}) or {}
-            waiting_count_by_queue = s.get("waiting_count_by_queue", {}) or {}
+            total_work_by_queue = s.get("total_work_by_queue", {}) or {}
 
             # Update per-queue bars
             for q in order:
                 completed_in_q = completed_queue_counts.get(q, 0)
-                # Use full active counts for debugging; UI list is truncated to 2/jobs/queue.
-                active_in_q = int(active_count_by_queue.get(q, 0) or 0)
-                total_for_q = completed_in_q + active_in_q
+                total_for_q = int(total_work_by_queue.get(q, completed_in_q) or 0)
                 b = bars[q]
-                b.total = max(b.total or 0, total_for_q)
+                b.total = total_for_q or None
                 b.n = completed_in_q
                 # Show up to 2 active jobs with per-job duration (no full path to avoid clutter)
                 active_jobs_info = active_by_queue.get(q, [])
@@ -3910,10 +5050,8 @@ async def tqdm_monitor(coord, continuous: bool = False) -> None:
                 b.refresh()
 
             # Overall
-            total_with_waiting = (
-                s.get("total_enqueued", 0) - s.get("total_skipped", 0)
-            ) + int(s.get("waiting_serialized", 0) or 0)
-            overall.total = max(overall.total or 0, total_with_waiting) or 0
+            total_with_waiting = int(s.get("total_work", 0) or 0)
+            overall.total = total_with_waiting or None
             overall.n = s["completed"] + s["failed"]
             fail_str = f"Fail:{s['failed']}"
             oom = s.get("oom_count", 0)
@@ -3926,15 +5064,24 @@ async def tqdm_monitor(coord, continuous: bool = False) -> None:
                 waiting_count_by_queue.items(), key=lambda x: x[1], reverse=True
             )[:3]
             active_types_str = ", ".join([f"{k}:{v}" for k, v in top_active_types])
-            waiting_queues_str = ", ".join(
-                [f"{k}:{v}" for k, v in top_waiting_queues]
+            queued_types_str = ", ".join(
+                f"{k}:{v}"
+                for k, v in sorted(
+                    queued_count_by_job_type.items(),
+                    key=lambda x: x[1],
+                    reverse=True,
+                )[:3]
             )
+            waiting_queues_str = ", ".join([f"{k}:{v}" for k, v in top_waiting_queues])
             overall.set_postfix_str(
-                f"Act:{s['active_count']}[{active_types_str}] | "
-                f"Wait:{s.get('waiting_global',0)}+{s.get('waiting_serialized',0)} "
+                f"Run:{s['active_count']}/{s.get('active_work_count',0)}w"
+                f"[{active_types_str}] | "
+                f"Queue:{s.get('queued_count',0)}/{s.get('queued_work_count',0)}w"
+                f"[{queued_types_str}] | "
+                f"Wait:{s.get('waiting_global',0)} "
                 f"({waiting_queues_str}) | "
-                f"Done:{s['completed']} | {fail_str} | "
-                f"Skip:{s['total_skipped']} | Tot:{s['total_enqueued']}"
+                f"Done:{s['completed'] + s['failed']}/{total_with_waiting} | "
+                f"{fail_str} | Skip:{s['total_skipped']}"
             )
             overall.refresh()
 
@@ -3943,11 +5090,13 @@ async def tqdm_monitor(coord, continuous: bool = False) -> None:
             if (
                 (not continuous)
                 and s["active_count"] == 0
-                and overall.n >= overall.total
+                and s.get("queued_count", 0) == 0
+                and s.get("waiting_global", 0) == 0
+                and overall.n >= total_with_waiting
             ):
                 break
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.25)
     finally:
         for b in bars.values():
             b.close()
@@ -3959,7 +5108,9 @@ async def tqdm_monitor(coord, continuous: bool = False) -> None:
                 path = ray.get(coord._write_failed_jobs_file.remote())
                 if path:
                     oom = final.get("oom_count", 0)
-                    print(f"\nFailed jobs log: {path} ({final['failed']} failures, {oom} likely OOM)")
+                    print(
+                        f"\nFailed jobs log: {path} ({final['failed']} failures, {oom} likely OOM)"
+                    )
         except Exception:
             pass
 
@@ -3994,11 +5145,9 @@ async def rich_monitor(coord, continuous: bool = False) -> None:
         TimeElapsedColumn(),
         TimeRemainingColumn(),
         TextColumn("{task.fields[detail]}"),
-        refresh_per_second=4,
+        refresh_per_second=8,
     )
-    task_ids = {
-        q: progress.add_task(q.title(), total=None, detail="") for q in order
-    }
+    task_ids = {q: progress.add_task(q.title(), total=None, detail="") for q in order}
     overall_id = progress.add_task("Overall Progress", total=None, detail="")
 
     if _RICH_CONSOLE:
@@ -4024,13 +5173,13 @@ async def rich_monitor(coord, continuous: bool = False) -> None:
             active_by_queue = s.get("active_by_queue", {})
             active_count_by_queue = s.get("active_count_by_queue", {}) or {}
             active_count_by_job_type = s.get("active_count_by_job_type", {}) or {}
+            queued_count_by_job_type = s.get("queued_count_by_job_type", {}) or {}
             waiting_count_by_queue = s.get("waiting_count_by_queue", {}) or {}
+            total_work_by_queue = s.get("total_work_by_queue", {}) or {}
 
             for q in order:
                 completed_in_q = completed_queue_counts.get(q, 0)
-                # Use full active counts for debugging; UI list is truncated to 2/jobs/queue.
-                active_in_q = int(active_count_by_queue.get(q, 0) or 0)
-                total_for_q = completed_in_q + active_in_q
+                total_for_q = int(total_work_by_queue.get(q, completed_in_q) or 0)
                 active_jobs_info = active_by_queue.get(q, [])
                 parts = []
                 total_for_q_display = str(total_for_q) if total_for_q > 0 else "-"
@@ -4053,9 +5202,7 @@ async def rich_monitor(coord, continuous: bool = False) -> None:
                     detail=detail,
                 )
 
-            total_with_waiting = (
-                s.get("total_enqueued", 0) - s.get("total_skipped", 0)
-            ) + int(s.get("waiting_serialized", 0) or 0)
+            total_with_waiting = int(s.get("total_work", 0) or 0)
             fail_detail = f"Fail:{s['failed']}"
             oom = s.get("oom_count", 0)
             if oom and s.get("failed"):
@@ -4066,8 +5213,11 @@ async def rich_monitor(coord, continuous: bool = False) -> None:
                 completed=s["completed"] + s["failed"],
                 detail=(
                     f"Done:{s['completed'] + s['failed']}/{total_with_waiting} | "
-                    f"Act:{s['active_count']}[{', '.join([f'{k}:{v}' for k, v in sorted(active_count_by_job_type.items(), key=lambda x: x[1], reverse=True)[:3]])}] | "
-                    f"Wait:{s.get('waiting_global',0)}+{s.get('waiting_serialized',0)} "
+                    f"Run:{s['active_count']}/{s.get('active_work_count',0)}w"
+                    f"[{', '.join([f'{k}:{v}' for k, v in sorted(active_count_by_job_type.items(), key=lambda x: x[1], reverse=True)[:3]])}] | "
+                    f"Queue:{s.get('queued_count',0)}/{s.get('queued_work_count',0)}w"
+                    f"[{', '.join([f'{k}:{v}' for k, v in sorted(queued_count_by_job_type.items(), key=lambda x: x[1], reverse=True)[:3]])}] | "
+                    f"Wait:{s.get('waiting_global',0)} "
                     f"({', '.join([f'{k}:{v}' for k, v in sorted(waiting_count_by_queue.items(), key=lambda x: x[1], reverse=True)[:3]])}) | "
                     f"{fail_detail} | Skip:{s['total_skipped']}"
                 ),
@@ -4076,11 +5226,13 @@ async def rich_monitor(coord, continuous: bool = False) -> None:
             if (
                 (not continuous)
                 and s["active_count"] == 0
+                and s.get("queued_count", 0) == 0
+                and s.get("waiting_global", 0) == 0
                 and s["completed"] + s["failed"] >= total_with_waiting
             ):
                 break
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.25)
     finally:
         progress.stop()
         # Write failed jobs log when run ends so user can inspect (e.g. OOM)
@@ -4090,7 +5242,9 @@ async def rich_monitor(coord, continuous: bool = False) -> None:
                 path = ray.get(coord._write_failed_jobs_file.remote())
                 if path:
                     oom = final.get("oom_count", 0)
-                    print(f"\nFailed jobs log: {path} ({final['failed']} failures, {oom} likely OOM)")
+                    print(
+                        f"\nFailed jobs log: {path} ({final['failed']} failures, {oom} likely OOM)"
+                    )
         except Exception:
             pass
 
@@ -4174,7 +5328,11 @@ class RayFileWatcher(FileSystemEventHandler):
         # Tag fail-only BAM submissions for this watch session.
         # If we've seen a pass BAM, do not suppress errors.
         try:
-            if _is_bam_path(Path(fp)) and self._watch_seen_bam and (not self._watch_seen_pass_bam):
+            if (
+                _is_bam_path(Path(fp))
+                and self._watch_seen_bam
+                and (not self._watch_seen_pass_bam)
+            ):
                 if _bam_filename_kind(fp) == "fail":
                     for j in jobs:
                         j.context.add_metadata("fail_only_bam_submission", True)
@@ -4230,7 +5388,10 @@ def remove_watch_path(path_to_remove: str) -> Tuple[bool, str]:
     global _GLOBAL_OBSERVER, _GLOBAL_WATCHED_PATHS
 
     if _GLOBAL_OBSERVER is None:
-        return False, "No workflow observer found. Is a Ray workflow with watch enabled running?"
+        return (
+            False,
+            "No workflow observer found. Is a Ray workflow with watch enabled running?",
+        )
 
     pth = Path(path_to_remove).resolve()
     path_key = str(pth)
@@ -4316,19 +5477,25 @@ def _scan_watch_folder_for_sample_dirs(
                 return False
 
             # Strong indicators (target outputs / SNP inputs)
-            if (sample_dir / "target.bam").exists() or (sample_dir / "target.bam.bai").exists():
+            if (sample_dir / "target.bam").exists() or (
+                sample_dir / "target.bam.bai"
+            ).exists():
                 return True
             if (sample_dir / "targets_exceeding_threshold.bed").exists():
                 return True
 
             # Fusion outputs
-            if (sample_dir / "target_fusion.csv").exists() or (sample_dir / "genome_wide_fusion.csv").exists():
+            if (sample_dir / "target_fusion.csv").exists() or (
+                sample_dir / "genome_wide_fusion.csv"
+            ).exists():
                 return True
 
             # Classifier outputs
             if (sample_dir / "sturgeon_scores.csv").exists():
                 return True
-            if (sample_dir / "NanoDX_scores.csv").exists() or (sample_dir / "PanNanoDX_scores.csv").exists():
+            if (sample_dir / "NanoDX_scores.csv").exists() or (
+                sample_dir / "PanNanoDX_scores.csv"
+            ).exists():
                 return True
             if (sample_dir / "random_forest_scores.csv").exists():
                 return True
@@ -4408,7 +5575,9 @@ def _scan_watch_folder_for_sample_dirs(
 
             # Classify sample_id by presence of analysis artifacts in work_dir
             sample_dir = wd / sid
-            if sample_dir.is_dir() and _sample_dir_has_analysis_artifacts_local(sample_dir):
+            if sample_dir.is_dir() and _sample_dir_has_analysis_artifacts_local(
+                sample_dir
+            ):
                 analysed_sample_ids.add(sid)
             else:
                 unanalysed_sample_ids.add(sid)
@@ -4557,9 +5726,13 @@ def add_watch_path(new_path: str) -> Tuple[bool, str]:
     msg_parts: List[str] = []
     if newly_added:
         if len(newly_added) <= 5:
-            msg_parts.append("Added watch path(s): " + "; ".join(str(p) for p in newly_added))
+            msg_parts.append(
+                "Added watch path(s): " + "; ".join(str(p) for p in newly_added)
+            )
         else:
-            msg_parts.append(f"Added {len(newly_added)} watch path(s) under: {new_path}")
+            msg_parts.append(
+                f"Added {len(newly_added)} watch path(s) under: {new_path}"
+            )
     if already_watched:
         msg_parts.append(f"{len(already_watched)} path(s) were already watched")
     if analysed_sample_ids:
@@ -4611,6 +5784,8 @@ async def run(
     paths: List[str],
     target_panel: str,
     analysis_workers: int = 1,
+    preprocessing_workers: int = 1,
+    bed_workers: int = 1,
     process_existing: bool = True,
     monitor: bool = True,
     watch: bool = False,
@@ -4626,6 +5801,7 @@ async def run(
     gui_port: int = 8081,
     center: str = None,
     enable_batching: bool = True,
+    with_gui: bool = True,
 ):
     global GLOBAL_LOG_LEVEL, _GLOBAL_OBSERVER, _GLOBAL_WATCHER, _GLOBAL_WATCH_CONTEXT, _GLOBAL_WATCHED_PATHS
     GLOBAL_LOG_LEVEL = (log_level or "INFO").upper()
@@ -4651,6 +5827,7 @@ async def run(
 
     os.environ["RAY_DISABLE_IMPORT_WARNING"] = "1"
     os.environ["RAY_DISABLE_DEPRECATION_WARNING"] = "1"
+    _warn_if_ray_temp_disk_is_full()
 
     # Reference genome status (minimal logging)
     if reference:
@@ -4658,26 +5835,42 @@ async def run(
     else:
         pass  # No reference genome provided
 
-    # Ensure any previous coordinator is terminated to avoid stale-code actors
-    try:
-        old = ray.get_actor("robin_coordinator")
-        try:
-            ray.kill(old)
-        except Exception:
-            pass
-    except Exception:
-        pass
+    # Ensure any previous coordinator/pool actors are terminated to avoid stale handles
+    _kill_stale_robin_actors()
     # Start a fresh coordinator (not detached)
     job_timeout = _job_timeout_seconds()
     if job_timeout > 0:
-        logging.info(f"Per-job timeout enabled: jobs running longer than {job_timeout}s will be cancelled (ROBIN_JOB_TIMEOUT_SECONDS)")
+        logging.info(
+            f"Per-job timeout enabled: jobs running longer than {job_timeout}s will be cancelled (ROBIN_JOB_TIMEOUT_SECONDS)"
+        )
     try:
-        coord = Coordinator.options(name="robin_coordinator", num_cpus=0).remote(
-            target_panel=target_panel, analysis_workers=analysis_workers, preset=preset, reference=reference, enable_batching=enable_batching, job_timeout_seconds=job_timeout
+        coord = Coordinator.options(
+            name="robin_coordinator",
+            num_cpus=0,
+            max_concurrency=32,
+        ).remote(
+            target_panel=target_panel,
+            analysis_workers=analysis_workers,
+            preprocessing_workers=preprocessing_workers,
+            bed_workers=bed_workers,
+            preset=preset,
+            reference=reference,
+            enable_batching=enable_batching,
+            job_timeout_seconds=job_timeout,
         )
     except Exception:
-        coord = Coordinator.options(name="robin_coordinator").remote(
-            target_panel=target_panel, analysis_workers=analysis_workers, preset=preset, reference=reference, enable_batching=enable_batching, job_timeout_seconds=job_timeout
+        coord = Coordinator.options(
+            name="robin_coordinator",
+            max_concurrency=32,
+        ).remote(
+            target_panel=target_panel,
+            analysis_workers=analysis_workers,
+            preprocessing_workers=preprocessing_workers,
+            bed_workers=bed_workers,
+            preset=preset,
+            reference=reference,
+            enable_batching=enable_batching,
+            job_timeout_seconds=job_timeout,
         )
 
     # Set global coordinator reference for external access
@@ -4689,7 +5882,7 @@ async def run(
         await coord.setup.remote()
     except Exception:
         pass
-    
+
     # Set work_dir on coordinator so it's available during shutdown
     if work_dir:
         try:
@@ -4702,7 +5895,9 @@ async def run(
     gui_launcher = None
     gui_publish_task = None
     try:
-        if _GUIUpdateType is None:
+        if not with_gui:
+            _print_styled("GUI disabled: running headless (--no-gui).", level="info")
+        elif _GUIUpdateType is None:
             print("GUI not launched: GUI modules unavailable on this environment.")
         elif not work_dir:
             print("GUI not launched: --work-dir not provided.")
@@ -4735,10 +5930,7 @@ async def run(
                     try:
                         s = await coord.stats.remote()
                         # Basic workflow status & progress
-                        total = int(
-                            (s.get("total_enqueued", 0) - s.get("total_skipped", 0))
-                            or 0
-                        )
+                        total = int(s.get("total_work", 0) or 0)
                         completed = int(s.get("completed", 0) or 0)
                         failed = int(s.get("failed", 0) or 0)
                         progress = (completed + failed) / total if total > 0 else 0.0
@@ -4921,11 +6113,18 @@ async def run(
                             priority=1,
                         )
 
-                        await asyncio.sleep(15.0)  # Poll every 15 seconds to reduce update frequency
+                        for notification in await coord.drain_gui_notifications.remote():
+                            _gui_send_update(
+                                _GUIUpdateType.WARNING_NOTIFICATION,
+                                notification,
+                                priority=5,
+                            )
+
+                        await asyncio.sleep(1.0)
                     except asyncio.CancelledError:
                         break
                     except Exception:
-                        await asyncio.sleep(15.0)  # Poll every 15 seconds to reduce update frequency
+                        await asyncio.sleep(1.0)
 
             gui_publish_task = asyncio.create_task(_publish_gui())
             _print_styled(
@@ -4940,7 +6139,7 @@ async def run(
     if monitor:
         monitor_fn = rich_monitor if _should_use_rich_progress() else tqdm_monitor
         tasks.append(asyncio.create_task(monitor_fn(coord, continuous=watch)))
-    
+
     # Add GUI publish task if GUI was launched
     if gui_publish_task is not None:
         tasks.append(gui_publish_task)
@@ -5045,6 +6244,7 @@ async def run(
         # Final cleanup: ensure Ray is properly shut down
         try:
             import ray
+
             if ray.is_initialized():
                 print("[SHUTDOWN] Shutting down Ray...")
                 ray.shutdown()
@@ -5196,4 +6396,3 @@ if __name__ == "__main__":
         )
     except KeyboardInterrupt:
         pass
-        

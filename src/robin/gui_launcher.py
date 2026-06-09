@@ -17,6 +17,7 @@ warnings.filterwarnings(
 )
 
 import asyncio
+from contextlib import contextmanager
 import hashlib
 import logging
 import queue
@@ -94,6 +95,22 @@ def _get_test_id_from_manifest(sample_dir: Path) -> str:
     except Exception:
         return ""
 
+
+@contextmanager
+def _sample_page_section_timer(page: str, sample_id: str, section: str):
+    """Print elapsed wall time while building one UI section of a sample page."""
+    t0 = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed = time.perf_counter() - t0
+        print(
+            f"[SamplePage] page={page} sample={sample_id} "
+            f"section={section} elapsed_s={elapsed:.3f}",
+            flush=True,
+        )
+
+
 # Salt for deriving encryption key from DOB (fixed so the same DOB always produces the same key).
 _IDENTIFIER_MANIFEST_KEY_SALT = b"robin_sample_manifest_v1"
 
@@ -159,18 +176,20 @@ def _load_manifest_encrypted_fields(sample_dir: Optional[Path]) -> Optional[Dict
 
 
 try:
-    from nicegui import ui, app
+    from nicegui import ui, app, background_tasks
 except ImportError:
     ui = None
     app = None
+    background_tasks = None
 
 try:
     from fastapi import Request
-    from fastapi.responses import RedirectResponse
+    from fastapi.responses import RedirectResponse, FileResponse
     from starlette.middleware.base import BaseHTTPMiddleware
 except ImportError:  # pragma: no cover
     Request = None
     RedirectResponse = None
+    FileResponse = None
     BaseHTTPMiddleware = object
 
 try:
@@ -373,7 +392,7 @@ class SampleRecord:
     _file_mtime: float = 0.0  # master.csv modification time
     files_seen: int = 0  # Total files seen/processed
     files_processed: int = 0  # Files completely processed through all analysis steps
-    
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for table rows."""
         return {
@@ -418,14 +437,13 @@ class GUILauncher:
 
         # Sample status transition timeout (in seconds)
         # Change to 60 for testing (1 minute), 3600 for production (60 minutes)
-        self.completion_timeout_seconds = 60  # Set to 3600 for production
-        
+        self.completion_timeout_seconds = 15 * 60  # 15 minutes
+
         # Message queue for non-blocking communication
         self.update_queue = queue.PriorityQueue()
         self.gui_ready = threading.Event()
         self.shutdown_event = threading.Event()
 
-        self.news_feed = None
         # GUI update thread
         self.update_thread = (
             None  # not used anymore; updates processed on UI thread via timer
@@ -436,7 +454,7 @@ class GUILauncher:
         self.total_updates_processed = 0
         # Monotonic tiebreaker for priority queue to avoid tuple comparison of GUIUpdate
         self._update_seq: int = 0
-        
+
         # Adaptive throttling and update coalescing
         self._last_update_times: Dict[UpdateType, float] = {}
         self._last_queue_size_logged: int = 0
@@ -445,7 +463,7 @@ class GUILauncher:
         # Runtime state
         self._start_time: Optional[float] = None
         self._is_running: bool = False
-        
+
         # Track which samples have had target.bam finalization triggered
         self._finalized_samples: set = set()
 
@@ -460,15 +478,16 @@ class GUILauncher:
         self._last_samples_rows: List[Dict[str, Any]] = []
         self._current_sample_id: Optional[str] = None
         self._selected_sample_id: Optional[str] = None
+        self._selected_sample_ids: set[str] = set()
         self._known_sample_ids: set[str] = set()
         self._preexisting_sample_ids: set[str] = set()
         self._preexisting_scanned: bool = False
         self._pending_samples_data: Optional[Dict[str, Any]] = None
-        
+
         # Caching for samples data
         self._last_cache_time: float = 0.0
         self._cache_duration: float = 30.0  # Cache for 30 seconds
-        
+
         # Master record system - centralized source of truth for samples
         self._samples_master_record: Dict[str, SampleRecord] = {}
         # Per-GUI-process snapshot of on-disk totals from master.csv at first use per sample.
@@ -492,14 +511,42 @@ class GUILauncher:
         self._mgmt_state: Dict[str, Dict[str, Any]] = {}
         # Coverage per-sample cache (file mtimes, computed metrics)
         self._coverage_state: Dict[str, Dict[str, Any]] = {}
-        
+
         # Progress notification event
         from nicegui import Event
         self.progress_notification_event = Event[Dict[str, Any]]()
         # CNV per-sample cache
         self._cnv_state: Dict[str, Dict[str, Any]] = {}
+        self._component_state_max_samples = 24
         # Cache last seen queue status so we can populate immediately on page creation
         self._last_queue_status: Dict[str, Any] = {}
+
+    def _get_selected_sample_ids(self) -> set[str]:
+        """Return per-client export selections, with instance fallback for non-UI contexts."""
+        fallback = set(getattr(self, "_selected_sample_ids", set()) or set())
+        if app is None:
+            return fallback
+        try:
+            raw = app.storage.client.get("_selected_sample_ids", [])
+            if isinstance(raw, (list, tuple, set)):
+                selected = {str(item) for item in raw if str(item)}
+            else:
+                selected = set()
+            self._selected_sample_ids = set(selected)
+            return selected
+        except Exception:
+            return fallback
+
+    def _set_selected_sample_ids(self, selected_ids: set[str]) -> set[str]:
+        """Persist per-client export selections."""
+        normalized = {str(item) for item in selected_ids if str(item)}
+        self._selected_sample_ids = set(normalized)
+        if app is not None:
+            try:
+                app.storage.client["_selected_sample_ids"] = sorted(normalized)
+            except Exception:
+                pass
+        return normalized
 
     def _is_authenticated(self) -> bool:
         """Return True when the current browser session is authenticated for this server run.
@@ -591,7 +638,7 @@ class GUILauncher:
             return False
 
     # ========== Master Record System Methods ==========
-    
+
     def _setup_master_record_cache(self) -> None:
         """Initialize cache file path when monitored_directory is known."""
         try:
@@ -609,10 +656,10 @@ class GUILauncher:
         try:
             if not self._master_record_cache_file or not self._master_record_cache_file.exists():
                 return False
-            
+
             with open(self._master_record_cache_file, 'rb') as f:
                 cached_data = pickle.load(f)
-            
+
             if isinstance(cached_data, dict):
                 # Convert dicts back to SampleRecord objects
                 with self._samples_record_lock:
@@ -634,14 +681,14 @@ class GUILauncher:
         try:
             if not self._master_record_cache_file:
                 return
-            
+
             with self._samples_record_lock:
                 # Convert SampleRecord objects to dicts for pickle
                 cache_data = {
                     sid: asdict(record)
                     for sid, record in self._samples_master_record.items()
                 }
-            
+
             # Save to temporary file first, then rename (atomic operation)
             temp_file = self._master_record_cache_file.with_suffix('.pkl.tmp')
             with open(temp_file, 'wb') as f:
@@ -770,8 +817,12 @@ class GUILauncher:
     def _background_scan_samples(self) -> None:
         """Schedule a background scan without blocking the UI thread."""
         try:
-            import asyncio
-            asyncio.create_task(self._background_scan_samples_async())
+            if background_tasks is None:
+                raise RuntimeError("NiceGUI background tasks unavailable")
+            background_tasks.create(
+                self._background_scan_samples_async(),
+                name="background-sample-scan",
+            )
         except RuntimeError:
             # Fallback if no event loop is available
             self._background_scan_samples_sync()
@@ -798,34 +849,34 @@ class GUILauncher:
         try:
             if not self.monitored_directory:
                 return False
-            
+
             base = Path(self.monitored_directory)
             if not base.exists():
                 return False
-            
+
             # Scan all sample directories
             now_ts = time.time()
             updated_any = False
-            
+
             with self._samples_record_lock:
                 # Track which samples we've seen in this scan
                 seen_sample_ids = set()
-                
+
                 for sample_dir in base.iterdir():
                     if not sample_dir.is_dir():
                         continue
-                    
+
                     sid = sample_dir.name
                     seen_sample_ids.add(sid)
                     master_csv = sample_dir / "master.csv"
-                    
+
                     if not master_csv.exists():
                         continue
-                    
+
                     try:
                         # Get file modification time
                         file_mtime = master_csv.stat().st_mtime
-                        
+
                         # Get or create record
                         record = self._samples_master_record.get(sid)
                         if record is None:
@@ -842,10 +893,10 @@ class GUILauncher:
                             # File has changed - update record
                             record._dirty = True
                             updated_any = True
-                        
+
                         # Update file mtime
                         record._file_mtime = file_mtime
-                        
+
                         # Read master.csv for metadata
                         try:
                             with master_csv.open("r", newline="") as fh:
@@ -858,7 +909,7 @@ class GUILauncher:
                                 )
                                 record.device = first_row.get("run_info_device", "") or ""
                                 record.flowcell = first_row.get("run_info_flow_cell", "") or ""
-                                
+
                                 # Update last_seen from saved value or use file mtime
                                 try:
                                     saved_last = float(
@@ -870,7 +921,7 @@ class GUILauncher:
                                         record._last_seen_raw = file_mtime
                                 except Exception:
                                     record._last_seen_raw = file_mtime
-                                
+
                                 # Update job counts from persisted overview
                                 record.active_jobs = int(
                                     first_row.get("samples_overview_active_jobs", 0) or 0
@@ -892,14 +943,14 @@ class GUILauncher:
                                 )
                         except Exception as e:
                             logging.debug(f"Error reading master.csv for {sid}: {e}")
-                        
+
                         # Update last_seen formatted string
                         record.last_seen = time.strftime(
                             "%Y-%m-%d %H:%M:%S", time.localtime(record._last_seen_raw)
                         )
                         # Load test_id from sample_identifier_manifest.json if present
                         record.test_id = _get_test_id_from_manifest(sample_dir)
-                        
+
                         # Do not leave new records as default "Live" when this folder is already
                         # finished on disk — that would look like a Live→Complete transition and
                         # re-run target.bam finalization on every restart.
@@ -942,10 +993,10 @@ class GUILauncher:
                             if (now_ts - record._last_seen_raw) < self.completion_timeout_seconds or record.active_jobs > 0 or record.pending_jobs > 0:
                                 record.origin = "Live"
                                 record._dirty = True
-                        
+
                         # Save to master record
                         self._samples_master_record[sid] = record
-                        
+
                         # Persist overview to master.csv via MasterCSVManager
                         try:
                             manager = MasterCSVManager(str(base))
@@ -961,10 +1012,10 @@ class GUILauncher:
                             manager.update_sample_overview(sid, persist_payload)
                         except Exception as e:
                             logging.debug(f"Error persisting overview for {sid}: {e}")
-                    
+
                     except Exception as e:
                         logging.debug(f"Error processing sample {sid}: {e}")
-                
+
                 # Remove samples that no longer exist
                 to_remove = set(self._samples_master_record.keys()) - seen_sample_ids
                 if to_remove:
@@ -972,13 +1023,13 @@ class GUILauncher:
                         del self._samples_master_record[sid]
                     updated_any = True
                     logging.debug(f"Removed {len(to_remove)} deleted samples from master record")
-            
+
             # Save cache if anything changed
             if updated_any:
                 self._save_master_record_cache()
-            
+
             return updated_any
-        
+
         except Exception as e:
             logging.error(f"Error in background sample scan: {e}")
             return False
@@ -989,21 +1040,21 @@ class GUILauncher:
         try:
             if not hasattr(self, "samples_table"):
                 return
-            
+
             # Get all records from master
             with self._samples_record_lock:
                 records = list(self._samples_master_record.values())
-            
+
             # Convert to row dicts
             rows = [record.to_dict() for record in records]
-            
+
             # Update cached rows
             self._last_samples_rows = rows
             self._last_cache_time = time.time()
-            
+
             # Apply filters and update table
             self._apply_samples_table_filters()
-            
+
         except Exception as e:
             logging.error(f"Error refreshing table from master: {e}")
 
@@ -1016,9 +1067,9 @@ class GUILauncher:
                     sid = s.get("sample_id", "") or "unknown"
                     if sid == "unknown":
                         continue
-                    
+
                     last_seen = float(s.get("last_seen", time.time()))
-                    
+
                     # Get or create record
                     record = self._samples_master_record.get(sid)
                     if record is None:
@@ -1032,7 +1083,7 @@ class GUILauncher:
                             record.origin = "Pre-existing"
                         else:
                             record.origin = "Live"
-                    
+
                     # Merge session-only coordinator stats with on-disk baseline (see _ensure_job_baseline)
                     merged = self._merge_workflow_sample_job_counts(sid, s)
                     record.active_jobs = merged["active_jobs"]
@@ -1040,18 +1091,18 @@ class GUILauncher:
                     record.total_jobs = merged["total_jobs"]
                     record.completed_jobs = merged["completed_jobs"]
                     record.failed_jobs = merged["failed_jobs"]
-                    
+
                     # Update file progress from job counts (same data source as other columns)
                     record.files_seen = record.total_jobs
                     record.files_processed = record.completed_jobs
-                    
+
                     # Union with persisted job types so restarts do not drop history
                     record.job_types = self._merge_job_types_with_persisted(sid, s)
                     # Load test_id from sample_identifier_manifest.json if present
                     if self.monitored_directory:
                         sample_dir = Path(self.monitored_directory) / sid
                         record.test_id = _get_test_id_from_manifest(sample_dir)
-                    
+
                     # Update last_seen if this is newer
                     if last_seen > record._last_seen_raw:
                         record._last_seen_raw = last_seen
@@ -1059,11 +1110,11 @@ class GUILauncher:
                             "%Y-%m-%d %H:%M:%S", time.localtime(last_seen)
                         )
                         record._dirty = True
-                    
+
                     # Mark as dirty to trigger UI update
                     record._dirty = True
                     self._samples_master_record[sid] = record
-                
+
                 # Persist updates to master.csv
                 try:
                     base = Path(self.monitored_directory) if self.monitored_directory else None
@@ -1084,11 +1135,11 @@ class GUILauncher:
                                 record._dirty = False
                 except Exception as e:
                     logging.debug(f"Error persisting workflow updates: {e}")
-            
+
             # Trigger UI refresh
             if hasattr(self, "samples_table"):
                 self._refresh_table_from_master()
-        
+
         except Exception as e:
             logging.error(f"Error updating master record from workflow: {e}")
 
@@ -1101,7 +1152,7 @@ class GUILauncher:
         center: str = None,
     ) -> bool:
         """Launch the GUI in a completely isolated background thread.
-        
+
         Note: When reload=True, the GUI must run in the main thread because
         signal handlers can only be set in the main thread. In this case,
         this method will block until the GUI is stopped.
@@ -1125,7 +1176,7 @@ class GUILauncher:
             )
         except Exception:
             self.monitored_directory = monitored_directory
-        
+
         # Setup master record cache when directory is known
         if self.monitored_directory:
             self._setup_master_record_cache()
@@ -1159,7 +1210,7 @@ class GUILauncher:
                         "Run from main thread to enable reload."
                     )
                     self.reload = False
-            
+
             # Start GUI in completely isolated background thread (when reload is False)
             self.gui_thread = threading.Thread(
                 target=self._run_gui_worker, daemon=True, name="robin-GUI-Thread"
@@ -1196,7 +1247,7 @@ class GUILauncher:
             # Adaptive threshold: higher threshold for large workloads
             # Threshold increases based on queue size to prevent dropping updates during bursts
             threshold = 500 if queue_size < 200 else 1000
-            
+
             # Rate limiting: Skip low-priority updates if queue is getting too large
             if queue_size > threshold and priority < 5:
                 # Only log when queue size changes significantly to reduce log spam
@@ -1208,16 +1259,16 @@ class GUILauncher:
                     self._last_queue_size_logged = queue_size
                     self._last_log_time = current_time
                 return
-            
+
             # Update coalescing: Skip duplicate low-priority updates of the same type within 0.5 seconds
             # This prevents queue buildup from rapid duplicate updates
             last_time = self._last_update_times.get(update_type, 0)
             time_since_last = current_time - last_time
-            
+
             if priority < 5 and time_since_last < 0.5:
                 # Skip duplicate low-priority updates within coalescing window
                 return
-            
+
             # Create and enqueue the current update
             update = GUIUpdate(
                 update_type=update_type,
@@ -1225,7 +1276,7 @@ class GUILauncher:
                 data=data,
                 priority=priority,
             )
-            
+
             self._last_update_times[update_type] = current_time
 
             # Use negative priority so higher priority updates come first.
@@ -1234,7 +1285,7 @@ class GUILauncher:
             self._update_seq += 1
             self.update_queue.put((-priority, self._update_seq, update))
             self.total_updates_enqueued += 1
-            
+
             # Reduced logging: only log every 100th update or important updates
             if self.total_updates_enqueued % 100 == 0 or priority >= 8:
                 logging.debug(
@@ -1249,17 +1300,17 @@ class GUILauncher:
         """Process queued progress updates for report generation."""
         try:
             from robin.gui.report_progress import progress_manager
-            
+
             # Process updates in the UI context
             while not progress_manager.progress_queue.empty():
                 update = progress_manager.progress_queue.get_nowait()
                 self._handle_progress_update(update)
-                
+
         except queue.Empty:
             pass
         except Exception as e:
             logging.debug(f"Error processing progress queue: {e}")
-    
+
     def _setup_notification_system(self, container):
         """Set up the notification system with the provided container."""
         try:
@@ -1277,7 +1328,7 @@ class GUILauncher:
             message = data.get('message', '')
             notification_type = data.get('type', 'info')
             timeout = data.get('timeout', 5000)
-            
+
             # Create notification in the container
             with container:
                 ui.notify(
@@ -1286,7 +1337,7 @@ class GUILauncher:
                     timeout=timeout,
                     position="top-right"
                 )
-                
+
         except Exception as e:
             logging.error(f"Error showing notification in container: {e}")
 
@@ -1314,10 +1365,10 @@ class GUILauncher:
         """Handle a single progress update in the UI context."""
         try:
             from nicegui import ui
-            
+
             sample_id = update['sample_id']
             update_type = update['type']
-            
+
             if update_type == 'start':
                 # Emit event for initial notification
                 self.progress_notification_event.emit({
@@ -1326,18 +1377,18 @@ class GUILauncher:
                     'type': 'info',
                     'timeout': 3000  # 3 seconds
                 })
-                
+
                 logging.debug(f"Started report generation for {sample_id}")
-                
+
             elif update_type == 'update':
                 stage = update['stage']
                 message = update['message']
                 progress = update.get('progress')
-                
+
                 # Calculate progress percentage
                 progress_percent = int((progress or 0.0) * 100) if progress is not None else ""
                 progress_text = f" ({progress_percent}%)" if progress_percent else ""
-                
+
                 # Emit event for progress notification
                 self.progress_notification_event.emit({
                     'sample_id': sample_id,
@@ -1345,17 +1396,17 @@ class GUILauncher:
                     'type': 'info',
                     'timeout': 2000  # 2 seconds for progress updates
                 })
-                
+
                 logging.debug(f"Updated progress for {sample_id}: {stage} - {message}")
-                
+
             elif update_type == 'complete':
                 filename = update.get('filename')
-                
+
                 # Show completion notification
                 completion_message = f"[{sample_id}] Report generation completed"
                 if filename:
                     completion_message += f": {filename}"
-                
+
                 # Emit event for completion notification
                 self.progress_notification_event.emit({
                     'sample_id': sample_id,
@@ -1363,12 +1414,12 @@ class GUILauncher:
                     'type': 'positive',
                     'timeout': 5000
                 })
-                
+
                 logging.info(f"Completed report generation for {sample_id}")
-                
+
             elif update_type == 'error':
                 error_message = update['error_message']
-                
+
                 # Emit event for error notification
                 self.progress_notification_event.emit({
                     'sample_id': sample_id,
@@ -1376,27 +1427,27 @@ class GUILauncher:
                     'type': 'negative',
                     'timeout': 10000
                 })
-                
+
                 logging.error(f"Report generation failed for {sample_id}: {error_message}")
-                
+
         except Exception as e:
             logging.error(f"Error handling progress update: {e}")
 
     def _drain_updates_on_ui(self):
         """Drain queued updates and apply them on the UI thread (called by ui.timer).
-        
+
         Uses adaptive throttling: processes more updates when queue is large,
         fewer when queue is small. Batches UI updates for better performance.
         """
         if not self.gui_ready.is_set():
             return
-        
+
         processed_count = 0
         max_updates_per_cycle = 50  # Limit updates per cycle to prevent UI blocking
-        
+
         try:
             queue_size = self.update_queue.qsize()
-            
+
             # Adaptive processing: process more updates when queue is large
             if queue_size > 200:
                 max_updates_per_cycle = 100  # Process more aggressively when backlogged
@@ -1404,7 +1455,7 @@ class GUILauncher:
                 max_updates_per_cycle = 75
             elif queue_size < 20:
                 max_updates_per_cycle = 25  # Process fewer when queue is small
-            
+
             # Process updates in batch
             while processed_count < max_updates_per_cycle:
                 try:
@@ -1412,20 +1463,20 @@ class GUILauncher:
                     _, _, update = self.update_queue.get_nowait()
                 except queue.Empty:
                     break
-                
+
                 self._handle_update(update)
                 self.total_updates_processed += 1
                 processed_count += 1
-                
+
                 # Reduced logging: only log every 50th update or when queue size changes significantly
                 if self.total_updates_processed % 50 == 0:
                     logging.debug(
                         f"[GUI] Processed update #{self.total_updates_processed}: {update.update_type.value} (queue: {queue_size})"
                     )
-            
+
             # Note: Timer interval is fixed at 0.5s for consistent performance
             # Adaptive processing (max_updates_per_cycle) handles queue size variations
-                
+
         except Exception as e:
             logging.debug(f"[GUI] Error draining updates on UI: {e}")
         finally:
@@ -1698,18 +1749,18 @@ class GUILauncher:
         try:
             if not hasattr(self, "sample_files_progress_container") or not hasattr(self, "_last_samples_rows"):
                 return
-            
+
             rows = self._last_samples_rows or []
             total_files_seen = 0
             total_files_processed = 0
             sample_progress_data = []
-            
+
             # Calculate totals and collect per-sample data
             for row in rows:
                 files_seen = row.get("files_seen", 0) or 0
                 files_processed = row.get("files_processed", 0) or 0
                 sample_id = row.get("sample_id", "")
-                
+
                 if files_seen > 0:
                     total_files_seen += files_seen
                     total_files_processed += files_processed
@@ -1719,30 +1770,30 @@ class GUILauncher:
                         "files_processed": files_processed,
                         "progress": files_processed / files_seen if files_seen > 0 else 0.0
                     })
-            
+
             # Update overall progress
             if hasattr(self, "overall_files_progress") and hasattr(self, "overall_files_label"):
                 overall_progress = total_files_processed / total_files_seen if total_files_seen > 0 else 0.0
                 self.overall_files_progress.set_value(round(overall_progress, 2))
                 self.overall_files_label.set_text(f"{total_files_processed}/{total_files_seen} files processed")
-            
+
             # Update per-sample progress bars (limit to first 20 to avoid UI overload)
             if hasattr(self, "sample_files_progress_container"):
                 try:
                     # Clear existing content
                     self.sample_files_progress_container.clear()
-                    
+
                     if sample_progress_data:
                         # Sort by progress (lowest first) to show samples needing attention
                         sample_progress_data.sort(key=lambda x: x["progress"])
-                        
+
                         # Show up to 20 samples with most activity
                         for sample_info in sample_progress_data[:20]:
                             sample_id = sample_info["sample_id"]
                             progress = sample_info["progress"]
                             files_seen = sample_info["files_seen"]
                             files_processed = sample_info["files_processed"]
-                            
+
                             with self.sample_files_progress_container:
                                 with ui.row().classes(
                                     "w-full items-center gap-2 mb-1 min-w-0"
@@ -1767,7 +1818,7 @@ class GUILauncher:
                             ).classes("classification-insight-foot italic")
                 except Exception as e:
                     logging.debug(f"Error updating per-sample file progress: {e}")
-                            
+
         except Exception as e:
             logging.debug(f"Error updating file progress: {e}")
 
@@ -1796,13 +1847,13 @@ class GUILauncher:
         try:
             if ui is None:
                 return
-            
+
             message = data.get("message", "")
             title = data.get("title", "Warning")
             sample_id = data.get("sample_id", "")
             filename = data.get("filename", "")
             level = data.get("level", "warning")
-            
+
             # Build notification message
             if sample_id:
                 notification_msg = f"[{sample_id}] {message}"
@@ -1810,7 +1861,7 @@ class GUILauncher:
                 notification_msg = f"[{filename}] {message}"
             else:
                 notification_msg = message
-            
+
             # Show dismissible notification
             # NiceGUI notifications are dismissible by default with a close button
             # timeout=0 makes it persistent until manually dismissed
@@ -1820,7 +1871,7 @@ class GUILauncher:
                 timeout=0,  # Persistent until manually dismissed (close button available)
                 position="top-right",
             )
-            
+
         except Exception as e:
             logging.debug(f"Error showing warning notification: {e}")
 
@@ -1954,7 +2005,7 @@ class GUILauncher:
                 self._create_workflow_monitor()
 
             # Create the samples overview page
-            @ui.page("/live_data")
+            @ui.page("/live_data", response_timeout=60.0)
             def samples_overview():
                 """Samples overview page showing all tracked samples."""
                 _setup_global_resources()
@@ -1962,7 +2013,7 @@ class GUILauncher:
                 self._create_samples_overview()
 
             # Create individual sample detail pages
-            @ui.page("/live_data/{sample_id}")
+            @ui.page("/live_data/{sample_id}", response_timeout=60.0)
             def sample_detail(sample_id: str):
                 """Individual sample detail page."""
                 _setup_global_resources()
@@ -1970,7 +2021,7 @@ class GUILauncher:
                 # Clear cached state BEFORE creating the page so plots refresh on load
                 # This ensures all graphs load properly on each page visit
                 self._refresh_sample_plots(sample_id)
-                
+
                 # Add a page visit handler to refresh plots on reconnect
                 def on_page_visit():
                     """Handle page visit - refresh plots if needed."""
@@ -1993,7 +2044,7 @@ class GUILauncher:
                 self._create_sample_detail_page(sample_id)
 
             # Create sample details page
-            @ui.page("/live_data/{sample_id}/details")
+            @ui.page("/live_data/{sample_id}/details", response_timeout=60.0)
             def sample_details(sample_id: str):
                 """Sample details page with comprehensive information."""
                 _setup_global_resources()
@@ -2023,34 +2074,31 @@ class GUILauncher:
                     if not re.match(r'^[a-zA-Z0-9._-]+$', filename):
                         ui.notify("Invalid filename", type="error")
                         return
-                    
+
                     # Find the sample directory
                     base_dir = Path(self.monitored_directory) if self.monitored_directory else None
                     if not base_dir or not base_dir.exists():
                         ui.notify("Sample directory not found", type="error")
                         return
-                    
+
                     sample_dir = base_dir / sample_id
                     if not sample_dir.exists():
                         ui.notify(f"Sample {sample_id} not found", type="error")
                         return
-                    
+
                     file_path = sample_dir / filename
                     if not file_path.exists() or not file_path.is_file():
                         ui.notify(f"File {filename} not found", type="error")
                         return
-                    
-                    # Read file content
-                    with open(file_path, 'rb') as f:
-                        content = f.read()
-                    
-                    # Use NiceGUI's download functionality
-                    ui.download(
-                        content,
+                    if FileResponse is None:
+                        ui.notify("Download endpoint unavailable", type="error")
+                        return
+                    return FileResponse(
+                        path=str(file_path),
                         filename=filename,
-                        media_type='application/octet-stream'
+                        media_type="application/octet-stream",
                     )
-                    
+
                 except Exception as e:
                     ui.notify(f"Download failed: {e}", type="error")
 
@@ -2084,7 +2132,7 @@ class GUILauncher:
                     # Faster drain rate: 0.5s to keep up with high-volume updates
                     # The _drain_updates_on_ui method adaptively processes more/fewer updates per cycle
                     app.timer(0.5, self._drain_updates_on_ui, active=True)
-                    
+
                     # Background master record scanner - scans folder periodically
                     # Runs every 10 seconds to keep master record up to date
                     # First scan happens immediately if cache was loaded, otherwise after 1 second
@@ -2096,7 +2144,7 @@ class GUILauncher:
                     )
                     # Subsequent scans every 10 seconds
                     app.timer(self._background_scan_interval, self._background_scan_samples, active=True)
-                    
+
                     # If cache was not loaded, do initial preexisting scan after GUI is ready
                     if not self._samples_master_record:
                         app.timer(
@@ -2104,10 +2152,10 @@ class GUILauncher:
                             lambda: self._background_scan_samples(),  # Initial scan
                             once=True,
                         )
-                    
+
                     # Process progress queue for report generation
                     app.timer(0.1, self._process_progress_queue, active=True)
-                    
+
                 except Exception:
                     pass
 
@@ -2120,18 +2168,18 @@ class GUILauncher:
             except Exception as e:
                 logging.error(f"Error locating favicon: {str(e)}")
                 iconfile = None
-            
+
             # Setup global timers once when the app starts
             _setup_global_timers()
-            
+
             try:
                 from robin_native_api import attach_native_api
                 attach_native_api(app, self)
             except Exception as e:
                 logging.warning("Native API not mounted: %s", e)
-            
-            
-            
+
+
+
             # Start the GUI
             ui.run(
                 host=self.host,
@@ -2229,12 +2277,19 @@ class GUILauncher:
                 # News — card uses same surface treatment as global theme
                 with ui.card().classes("w-full max-w-6xl mx-auto mb-8"):
                     with ui.column().classes("w-full"):
-                        # Initialize news feed only if it hasn't been initialized yet
-                        if self.news_feed is None:
-                            self.news_feed = NewsFeed()
-                            self.news_feed.start_update_timer()
-                        # Create the news element
-                        self.news_feed.create_news_element()
+                        news_feed = None
+                        try:
+                            news_feed = app.storage.client.get("news_feed")
+                        except Exception:
+                            news_feed = None
+                        if news_feed is None:
+                            news_feed = NewsFeed()
+                            news_feed.start_update_timer()
+                            try:
+                                app.storage.client["news_feed"] = news_feed
+                            except Exception:
+                                pass
+                        news_feed.create_news_element()
 
     def _create_samples_overview(self):
         """Create the samples overview page showing all tracked samples (design.md Editorial Bioinformatics)."""
@@ -2340,6 +2395,30 @@ class GUILauncher:
                         self._samples_filters = getattr(
                             self, "_samples_filters", None
                         ) or {"query": "", "origin": "All", "job_type": "All"}
+                        # Guard against stale persisted values:
+                        # job_type options are hydrated later from rows, but at initial render
+                        # the select only has ["All"] and NiceGUI rejects unknown defaults.
+                        try:
+                            if (
+                                not isinstance(self._samples_filters, dict)
+                                or self._samples_filters.get("job_type") != "All"
+                            ):
+                                self._samples_filters = {
+                                    "query": str(
+                                        (self._samples_filters or {}).get("query", "")
+                                    ),
+                                    "origin": str(
+                                        (self._samples_filters or {}).get("origin", "All")
+                                    )
+                                    or "All",
+                                    "job_type": "All",
+                                }
+                        except Exception:
+                            self._samples_filters = {
+                                "query": "",
+                                "origin": "All",
+                                "job_type": "All",
+                            }
 
                         # Global search box
                         self.samples_search = (
@@ -2402,7 +2481,7 @@ class GUILauncher:
                         ui.label("This may take a moment for large directories").classes(
                             "text-body-small text-slate-500 dark:text-slate-400 mt-2"
                         )
-                    
+
                     # Create a placeholder table that will be updated later
                     from robin.gui.theme import styled_table
 
@@ -2544,7 +2623,7 @@ class GUILauncher:
                         logging.debug(
                             "[samples_overview] rows-per-page-options props: %s", e
                         )
-                    
+
                     # Set default sorting by last activity in reverse chronological order
                     try:
                         # Try multiple approaches to set default sorting
@@ -2558,7 +2637,7 @@ class GUILauncher:
                                 break
                     except Exception as e:
                         logging.debug("[samples_overview] default sort props: %s", e)
-                    
+
                     # Populate table from master record if available (fast initial load)
                     try:
                         if self._samples_master_record:
@@ -2589,7 +2668,7 @@ class GUILauncher:
                             e,
                             exc_info=True,
                         )
-                    
+
                     # Add job progress column with linear progress bar
                     try:
                         self.samples_table.add_slot(
@@ -2597,10 +2676,10 @@ class GUILauncher:
                             """
 <q-td key=\"file_progress\" :props=\"props\">
   <div style=\"min-width: 120px;\">
-    <q-linear-progress 
-      :value=\"props.row.file_progress || 0\" 
-      :color=\"props.row.file_progress >= 1 ? 'positive' : 'primary'\" 
-      size=\"12px\" 
+    <q-linear-progress
+      :value=\"props.row.file_progress || 0\"
+      :color=\"props.row.file_progress >= 1 ? 'positive' : 'primary'\"
+      size=\"12px\"
       rounded
       class=\"q-mb-xs\" />
     <div class=\"text-center text-[10px] text-slate-600 dark:text-slate-400\">
@@ -2673,7 +2752,7 @@ class GUILauncher:
                             e,
                             exc_info=True,
                         )
-                    
+
                     # Add export checkbox as rightmost column + header "select all" checkbox
                     try:
                         self.samples_table.add_slot(
@@ -2707,7 +2786,7 @@ class GUILauncher:
                             e,
                             exc_info=True,
                         )
-                    
+
                     # Handle finalize-target action
                     def _on_finalize_target(event):
                         try:
@@ -2731,7 +2810,7 @@ class GUILauncher:
                                 ui.notify("Invalid sample ID", type="warning")
                         except Exception as e:
                             ui.notify(f"Error triggering finalization: {e}", type="negative")
-                    
+
                     try:
                         self.samples_table.on("finalize-target", _on_finalize_target)
                     except Exception as e:
@@ -2743,7 +2822,7 @@ class GUILauncher:
 
                     # Track multi-selection for batch export via custom checkbox column
                     try:
-                        self._selected_sample_ids = set()
+                        self._set_selected_sample_ids(set())
 
                         def _on_export_toggled(event):
                             try:
@@ -2756,16 +2835,18 @@ class GUILauncher:
                                     sid = payload.get("id")
                                     val = bool(payload.get("value"))
                                     if sid:
+                                        selected_ids = self._get_selected_sample_ids()
                                         if val:
-                                            self._selected_sample_ids.add(sid)
+                                            selected_ids.add(str(sid))
                                         else:
-                                            self._selected_sample_ids.discard(sid)
+                                            selected_ids.discard(str(sid))
+                                        selected_ids = self._set_selected_sample_ids(selected_ids)
                                         # reflect state back into rows
                                         try:
                                             for r in self.samples_table.rows or []:
                                                 if r.get("sample_id") == sid:
                                                     r["export"] = (
-                                                        sid in self._selected_sample_ids
+                                                        str(sid) in selected_ids
                                                     )
                                             self.samples_table.update()
                                         except Exception as ue:
@@ -2774,7 +2855,7 @@ class GUILauncher:
                                                 ue,
                                                 exc_info=True,
                                             )
-                                        if self._selected_sample_ids:
+                                        if selected_ids:
                                             self.export_reports_button.enable()
                                         else:
                                             self.export_reports_button.disable()
@@ -2783,7 +2864,7 @@ class GUILauncher:
                                             "selected_count=%s",
                                             sid,
                                             val,
-                                            len(self._selected_sample_ids),
+                                            len(selected_ids),
                                         )
                             except Exception as e:
                                 logging.warning(
@@ -3031,24 +3112,28 @@ class GUILauncher:
                         async def _export_selected_reports(state: Dict[str, Any], progress_dialog, files_to_download, download_complete, progress_callback, progress_updates):
                             try:
                                 selected = list(
-                                    getattr(self, "_selected_sample_ids", set()) or []
+                                    self._get_selected_sample_ids() or []
                                 )
                                 if not selected:
                                     ui.notify("No samples selected", type="warning")
                                     return
-                                
+
                                 total_samples = len(selected)
-                                
+
                                 try:
                                     from nicegui import run as ng_run  # type: ignore
                                 except Exception:
                                     ng_run = None  # type: ignore
-                                
+
+                                should_generate_report = bool(
+                                    state.get("export_pdf", True)
+                                    or state.get("export_csv", False)
+                                )
                                 for idx, sid in enumerate(selected):
                                     try:
                                         # Update overall progress
                                         overall_progress = (idx / total_samples) * 0.9
-                                        
+
                                         # Emit progress update showing current sample and mark as starting
                                         current_sample_msg = f"Generating {idx + 1}/{total_samples} - {sid}"
                                         progress_updates.put({
@@ -3057,7 +3142,7 @@ class GUILauncher:
                                             'progress': 0.0,
                                             'sample_id': sid
                                         })
-                                        
+
                                         sample_dir = (
                                             Path(self.monitored_directory) / sid
                                             if self.monitored_directory
@@ -3066,75 +3151,83 @@ class GUILauncher:
                                         if not sample_dir or not sample_dir.exists():
                                             logging.warning(f"Missing output for {sid}")
                                             continue
-                                        
+
                                         # Don't use notification system - only update dialog
-                                        
-                                        filename = f"{sid}_run_report.pdf"
-                                        pdf_path = os.path.join(
-                                            str(sample_dir), filename
-                                        )
-                                        os.makedirs(str(sample_dir), exist_ok=True)
-                                        export_csv_dir = None
-                                        if bool(state.get("export_csv", False)):
-                                            export_csv_dir = os.path.join(
-                                                str(sample_dir), "report_csv"
+
+                                        if should_generate_report:
+                                            filename = f"{sid}_run_report.pdf"
+                                            pdf_path = os.path.join(
+                                                str(sample_dir), filename
                                             )
-                                        
-                                        # Don't use the notification system - use only our dialog callback
-                                        if ng_run is not None:
-                                            # Use custom callback that updates dialog only
-                                            def sample_progress_callback(data: Dict[str, Any]):
-                                                data['sample_id'] = sid  # Add sample ID to track which bar to update
-                                                progress_callback(data)  # This updates the dialog via progress_updates queue
-                                            
-                                            pdf_file = await ng_run.io_bound(
-                                                create_pdf,
-                                                pdf_path,
-                                                str(sample_dir),
-                                                self.center or "Unknown",
-                                                report_type=state.get("type", "detailed"),
-                                                export_csv_dir=export_csv_dir,
-                                                export_xlsx=False,
-                                                export_zip=bool(
-                                                    state.get("export_csv", False)
-                                                ),
-                                                progress_callback=sample_progress_callback,  # Pass the dialog-only callback
-                                                workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                                            )
+                                            os.makedirs(str(sample_dir), exist_ok=True)
+                                            export_csv_dir = None
+                                            if bool(state.get("export_csv", False)):
+                                                export_csv_dir = os.path.join(
+                                                    str(sample_dir), "report_csv"
+                                                )
+
+                                            # Don't use the notification system - use only our dialog callback
+                                            if ng_run is not None:
+                                                # Use custom callback that updates dialog only
+                                                def sample_progress_callback(data: Dict[str, Any]):
+                                                    data['sample_id'] = sid
+                                                    progress_callback(data)
+
+                                                pdf_file = await ng_run.io_bound(
+                                                    create_pdf,
+                                                    pdf_path,
+                                                    str(sample_dir),
+                                                    self.center or "Unknown",
+                                                    report_type=state.get("type", "detailed"),
+                                                    export_csv_dir=export_csv_dir,
+                                                    export_xlsx=False,
+                                                    export_zip=bool(
+                                                        state.get("export_csv", False)
+                                                    ),
+                                                    progress_callback=sample_progress_callback,
+                                                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                )
+                                            else:
+                                                # Use custom callback that updates dialog only
+                                                def sample_progress_callback(data: Dict[str, Any]):
+                                                    data['sample_id'] = sid
+                                                    progress_callback(data)
+
+                                                pdf_file = create_pdf(
+                                                    pdf_path,
+                                                    str(sample_dir),
+                                                    self.center or "Unknown",
+                                                    report_type=state.get("type", "detailed"),
+                                                    export_csv_dir=export_csv_dir,
+                                                    export_xlsx=False,
+                                                    export_zip=bool(
+                                                        state.get("export_csv", False)
+                                                    ),
+                                                    progress_callback=sample_progress_callback,
+                                                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                )
+
+                                            if bool(state.get("export_pdf", True)):
+                                                files_to_download.append(pdf_file)
+
+                                            # Also offer CSV ZIP if requested
+                                            if (
+                                                bool(state.get("export_csv", False))
+                                                and export_csv_dir
+                                            ):
+                                                zip_path = os.path.join(
+                                                    export_csv_dir, f"{sid}_report_data.zip"
+                                                )
+                                                if os.path.exists(zip_path):
+                                                    files_to_download.append(zip_path)
                                         else:
-                                            # Use custom callback that updates dialog only
-                                            def sample_progress_callback(data: Dict[str, Any]):
-                                                data['sample_id'] = sid  # Add sample ID to track which bar to update
-                                                progress_callback(data)  # This updates the dialog via progress_updates queue
-                                            
-                                            pdf_file = create_pdf(
-                                                pdf_path,
-                                                str(sample_dir),
-                                                self.center or "Unknown",
-                                                report_type=state.get("type", "detailed"),
-                                                export_csv_dir=export_csv_dir,
-                                                export_xlsx=False,
-                                                export_zip=bool(
-                                                    state.get("export_csv", False)
-                                                ),
-                                                progress_callback=sample_progress_callback,  # Pass the dialog-only callback
-                                                workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                                            )
-                                        
-                                        # Queue file for download instead of downloading immediately
-                                        files_to_download.append(pdf_file)
-                                        
-                                        # Also offer CSV ZIP if requested
-                                        if (
-                                            bool(state.get("export_csv", False))
-                                            and export_csv_dir
-                                        ):
-                                            zip_path = os.path.join(
-                                                export_csv_dir, f"{sid}_report_data.zip"
-                                            )
-                                            if os.path.exists(zip_path):
-                                                files_to_download.append(zip_path)
-                                        
+                                            progress_updates.put({
+                                                'stage': 'processing_sections',
+                                                'message': 'No PDF/CSV selected; skipping report build',
+                                                'progress': 1.0,
+                                                'sample_id': sid
+                                            })
+
                                         # Mark sample as complete
                                         progress_updates.put({
                                             'stage': 'completed',
@@ -3142,7 +3235,7 @@ class GUILauncher:
                                             'progress': 1.0,
                                             'sample_id': sid
                                         })
-                                        
+
                                     except Exception as e:
                                         # Report generation failed
                                         logging.error(f"Export failed for {sid}: {e}")
@@ -3153,7 +3246,7 @@ class GUILauncher:
                                             'progress': 1.0,
                                             'sample_id': sid
                                         })
-                                
+
                                 # Mark as complete
                                 download_complete["done"] = True
                                 logging.info(f"Bulk export complete. {len(files_to_download)} file(s) ready for download.")
@@ -3165,16 +3258,14 @@ class GUILauncher:
                             logging.info(
                                 "[samples_overview] Export reports clicked "
                                 "selected=%s",
-                                len(
-                                    getattr(self, "_selected_sample_ids", None) or []
-                                ),
+                                len(self._get_selected_sample_ids() or []),
                             )
                             # Ensure there is at least one selection before opening
-                            if not getattr(self, "_selected_sample_ids", None):
+                            if not self._get_selected_sample_ids():
                                 ui.notify("No samples selected", type="warning")
                                 return
 
-                            selected_ids = list(getattr(self, "_selected_sample_ids", set()) or [])
+                            selected_ids = list(self._get_selected_sample_ids() or [])
                             num_selected = len(selected_ids)
 
                             report_types = {
@@ -3183,7 +3274,9 @@ class GUILauncher:
                             }
                             state: Dict[str, Any] = {
                                 "type": "detailed",
+                                "export_pdf": True,
                                 "export_csv": False,
+                                "export_tsv": True,
                             }
 
                             with ui.dialog().props("persistent") as dialog:
@@ -3208,14 +3301,28 @@ class GUILauncher:
                                             )
 
                                         with ui.column().classes("mb-4"):
-                                            ui.label("Include data").classes(
+                                            ui.label("Output formats").classes(
                                                 "target-coverage-panel__meta-label mb-2"
+                                            )
+                                            ui.checkbox(
+                                                "PDF report",
+                                                value=True,
+                                                on_change=lambda e: state.update(
+                                                    {"export_pdf": bool(e.value)}
+                                                ),
                                             )
                                             ui.checkbox(
                                                 "CSV data (ZIP)",
                                                 value=False,
                                                 on_change=lambda e: state.update(
                                                     {"export_csv": bool(e.value)}
+                                                ),
+                                            )
+                                            ui.checkbox(
+                                                "Sample tracking TSV",
+                                                value=True,
+                                                on_change=lambda e: state.update(
+                                                    {"export_tsv": bool(e.value)}
                                                 ),
                                             )
 
@@ -3259,6 +3366,20 @@ class GUILauncher:
                             dialog_result = await dialog
                             if dialog_result != "Export":
                                 return
+                            if not (
+                                bool(state.get("export_pdf", True))
+                                or bool(state.get("export_csv", False))
+                                or bool(state.get("export_tsv", True))
+                            ):
+                                ui.notify(
+                                    "Select at least one output format (PDF, CSV, or TSV).",
+                                    type="warning",
+                                )
+                                return
+
+                            tsv_export_path = None
+                            if bool(state.get("export_tsv", True)):
+                                tsv_export_path = self._build_sample_tracking_tsv_export(selected_ids)
 
                             # Now show the progress dialog
                             with ui.dialog().props("persistent") as progress_dialog:
@@ -3277,15 +3398,22 @@ class GUILauncher:
                                     ui.label(
                                         f"Report Type: {state.get('type', 'detailed').title()}"
                                     ).classes("text-sm mb-2")
-                                    
+
+                                    selected_outputs = []
+                                    if bool(state.get("export_pdf", True)):
+                                        selected_outputs.append("PDF")
+                                    if bool(state.get("export_csv", False)):
+                                        selected_outputs.append("CSV (ZIP)")
+                                    if bool(state.get("export_tsv", True)):
+                                        selected_outputs.append("TSV")
                                     ui.label(
-                                        f"Output: PDF{' + CSV (ZIP)' if state.get('export_csv', False) else ''}"
+                                        f"Output: {' + '.join(selected_outputs) if selected_outputs else 'None'}"
                                     ).classes("text-sm mb-4")
-                                    
+
                                     # Create individual progress bars for each sample
                                     sample_progress_bars = {}
                                     sample_progress_labels = {}
-                                    
+
                                     with ui.column().classes("w-full"):
                                         for sid in selected_ids:
                                             with ui.column().classes("mb-3 w-full"):
@@ -3294,17 +3422,17 @@ class GUILauncher:
                                                 progress_label = ui.label("Waiting...").classes("text-xs text-gray-500")
                                                 sample_progress_bars[sid] = progress_bar
                                                 sample_progress_labels[sid] = progress_label
-                                    
+
                                     # Messages container - use label with newlines for multiple messages
                                     messages_label = ui.label("").classes("text-xs text-gray-500")
 
                                     # Track messages
                                     progress_updates = queue.Queue()
                                     messages_list = []
-                                    
+
                                     # Track current sample being processed
                                     current_sample = {"id": None}
-                                    
+
                                     # Timer to process progress updates on UI thread
                                     def process_progress_updates():
                                         """Process queued progress updates."""
@@ -3315,7 +3443,7 @@ class GUILauncher:
                                                 message = update.get("message", "")
                                                 progress = update.get("progress", 0.0)
                                                 sample_id = update.get("sample_id")
-                                                
+
                                                 # Update the current sample's progress bar
                                                 if sample_id and sample_id in sample_progress_bars:
                                                     if progress is not None:
@@ -3324,24 +3452,24 @@ class GUILauncher:
                                                     else:
                                                         sample_progress_labels[sample_id].text = message
                                                     current_sample["id"] = sample_id
-                                                
+
                                                 # Add message to messages list
                                                 messages_list.append(message)
                                                 # Keep only last 10 messages
                                                 if len(messages_list) > 10:
                                                     messages_list.pop(0)
-                                                
+
                                                 # Update messages label
                                                 messages_label.text = "\n".join(messages_list[-5:])
-                                                
+
                                         except queue.Empty:
                                             pass
                                         except Exception as e:
                                             logging.debug(f"Error processing progress updates: {e}")
-                                    
+
                                     # Set up timer to process updates
                                     update_timer = ui.timer(0.1, process_progress_updates)
-                                    
+
                                     def progress_callback(progress_data: Dict[str, Any]):
                                         """Custom progress callback to update dialog (called from background thread)."""
                                         try:
@@ -3349,14 +3477,14 @@ class GUILauncher:
                                             progress_updates.put(progress_data)
                                         except Exception as e:
                                             logging.debug(f"Error in progress callback: {e}")
-                                    
+
                                     # Track if still generating
                                     is_generating = {"active": True}
 
                                     # Storage for the files to download
-                                    files_to_download = []
+                                    files_to_download = [tsv_export_path] if tsv_export_path else []
                                     download_complete = {"done": False}
-                                    
+
                                     # Timer to handle downloads once background task is done
                                     def handle_downloads():
                                         """Handle downloads in UI context once generation is complete."""
@@ -3391,9 +3519,9 @@ class GUILauncher:
                                             # Close dialog after 3 seconds
                                             ui.timer(3.0, lambda: progress_dialog.submit(None), once=True)
                                             download_timer.deactivate()
-                                    
+
                                     download_timer = ui.timer(0.1, handle_downloads)
-                                    
+
                                     # Start report generation
                                     async def complete_export():
                                         """Complete the export and close dialog."""
@@ -3403,8 +3531,16 @@ class GUILauncher:
                                             # Clean up timer
                                             update_timer.deactivate()
                                             is_generating["active"] = False
-                                    
-                                    asyncio.create_task(complete_export())
+
+                                    if background_tasks is not None:
+                                        background_tasks.create(
+                                            complete_export(),
+                                            name="bulk-report-export",
+                                        )
+                                    else:
+                                        raise RuntimeError(
+                                            "NiceGUI background tasks unavailable"
+                                        )
 
                             await progress_dialog
 
@@ -3517,12 +3653,12 @@ class GUILauncher:
                     total_jobs = merged["total_jobs"]
                     completed_jobs = merged["completed_jobs"]
                     failed_jobs = merged["failed_jobs"]
-                    
+
                     # Set file progress directly from job counts (same data source as other columns)
                     files_seen = total_jobs
                     files_processed = completed_jobs
                     file_progress = completed_jobs / total_jobs if total_jobs > 0 else 0.0
-                    
+
                     by_id[sid] = {
                         "sample_id": sid,
                         "origin": origin_value,
@@ -3596,7 +3732,7 @@ class GUILauncher:
             rows = list(existing_rows_by_id.values())
             # Replace rows to avoid duplicates then apply filters
             self._last_samples_rows = rows
-            
+
             # Update UI on main thread
             if rows and hasattr(self, "samples_table"):
                 self._apply_samples_table_filters()
@@ -3740,14 +3876,14 @@ class GUILauncher:
                     "origin": "All",
                     "job_type": "All",
                 }
-            
+
             # Normalize the query
             normalized_query = (query or "").strip().lower()
             self._samples_filters["query"] = normalized_query
-            
+
             # Apply filters immediately
             self._apply_samples_table_filters()
-            
+
             # Debug logging
             logging.debug(f"Search query updated: '{normalized_query}'")
         except Exception as e:
@@ -3763,14 +3899,14 @@ class GUILauncher:
                     "origin": "All",
                     "job_type": "All",
                 }
-            
+
             # Normalize the origin value
             normalized_origin = origin_value or "All"
             self._samples_filters["origin"] = normalized_origin
-            
+
             # Apply filters immediately
             self._apply_samples_table_filters()
-            
+
             # Debug logging
             logging.debug(f"Origin filter updated: '{normalized_origin}'")
         except Exception as e:
@@ -3824,7 +3960,7 @@ class GUILauncher:
             )
             self._last_samples_rows = base_rows
             rows = self._normalize_rows_for_display(base_rows)
-            
+
             logging.debug(f"Applying filters to {len(rows)} base rows")
 
             # Origin filter, compute dynamic 'Complete' for display if needed
@@ -3909,7 +4045,7 @@ class GUILauncher:
 
             # annotate export selection state per row for rightmost checkbox column
             try:
-                selected = getattr(self, "_selected_sample_ids", set()) or set()
+                selected = self._get_selected_sample_ids()
             except Exception:
                 selected = set()
             for r in rows:
@@ -3945,7 +4081,7 @@ class GUILauncher:
                 logging.debug(f"Updated samples table with {len(rows)} filtered rows")
             else:
                 logging.warning("samples_table not found, cannot update")
-                
+
         except Exception as e:
             logging.error(f"Error applying samples table filters: {e}")
             pass
@@ -3985,8 +4121,33 @@ class GUILauncher:
                         state_dict[key] = {}
                         logging.info(f"Cleared all {attr} state for sample {sample_id}")
 
+            self._prune_component_state_caches()
+
         except Exception as e:
             logging.debug(f"Failed to refresh sample plots for {sample_id}: {e}")
+
+    def _touch_component_state_key(self, sample_key: str) -> None:
+        """Mark a sample key as recently used in component state dicts."""
+        for attr in ["_coverage_state", "_mgmt_state", "_cnv_state", "_fusion_state"]:
+            if not hasattr(self, attr):
+                continue
+            state_dict = getattr(self, attr)
+            if isinstance(state_dict, dict) and sample_key in state_dict:
+                value = state_dict.pop(sample_key)
+                state_dict[sample_key] = value
+
+    def _prune_component_state_caches(self) -> None:
+        """Bound component state dicts to avoid unbounded growth across samples."""
+        max_samples = max(1, int(getattr(self, "_component_state_max_samples", 24)))
+        for attr in ["_coverage_state", "_mgmt_state", "_cnv_state", "_fusion_state"]:
+            if not hasattr(self, attr):
+                continue
+            state_dict = getattr(self, attr)
+            if not isinstance(state_dict, dict):
+                continue
+            while len(state_dict) > max_samples:
+                oldest_key = next(iter(state_dict))
+                state_dict.pop(oldest_key, None)
 
     '''
     def _refresh_all_sample_plots(self):
@@ -4096,6 +4257,9 @@ class GUILauncher:
             if self.monitored_directory
             else None
         )
+        if sample_dir:
+            self._touch_component_state_key(str(sample_dir))
+            self._prune_component_state_caches()
         test_id = _get_test_id_from_manifest(sample_dir) if sample_dir else ""
 
         # Check if this is a page refresh vs navigation
@@ -4103,21 +4267,21 @@ class GUILauncher:
         is_page_refresh = False
         try:
             # Check if we have a flag indicating this page was recently loaded
-            if hasattr(ui, 'storage') and hasattr(ui.storage, 'browser'):
-                last_load_time = ui.storage.browser.get(f'sample_{sample_id}_last_load', 0)
+            if app is not None:
+                last_load_time = app.storage.tab.get(f"sample_{sample_id}_last_load", 0)
                 current_time = time.time()
                 # If last load was very recent (< 2 seconds), it's likely a page refresh
                 is_page_refresh = (current_time - last_load_time) < 2.0
-                
+
                 # Update the last load time
-                ui.storage.browser[f'sample_{sample_id}_last_load'] = current_time
+                app.storage.tab[f"sample_{sample_id}_last_load"] = current_time
         except Exception:
             # If storage is not available, assume it's navigation (show loading)
             is_page_refresh = False
-        
+
         # Show loading spinner unless it's a page refresh
         show_loading = not is_page_refresh
-        
+
         async def confirm_report_generation():
             """Show a confirmation dialog before generating the report."""
             report_types = {
@@ -4126,7 +4290,9 @@ class GUILauncher:
             }
             state: Dict[str, Any] = {
                 "type": "detailed",
+                "export_pdf": True,
                 "export_csv": False,
+                "export_tsv": False,
                 "include_sample_ids": False,
                 "sample_dob": "",
             }
@@ -4192,14 +4358,28 @@ class GUILauncher:
                             )
 
                         with ui.column().classes("mb-4"):
-                            ui.label("Include data").classes(
+                            ui.label("Output formats").classes(
                                 "target-coverage-panel__meta-label mb-2"
                             )
-                            csv_checkbox = ui.checkbox(
+                            ui.checkbox(
+                                "PDF report",
+                                value=True,
+                                on_change=lambda e: state.update(
+                                    {"export_pdf": bool(e.value)}
+                                ),
+                            )
+                            ui.checkbox(
                                 "CSV data (ZIP)",
                                 value=False,
                                 on_change=lambda e: state.update(
                                     {"export_csv": bool(e.value)}
+                                ),
+                            )
+                            ui.checkbox(
+                                "Sample summary TSV",
+                                value=False,
+                                on_change=lambda e: state.update(
+                                    {"export_tsv": bool(e.value)}
                                 ),
                             )
 
@@ -4228,7 +4408,7 @@ class GUILauncher:
                                 "Yes",
                                 on_click=_capture_dob_and_confirm,
                             ).props("color=primary no-caps")
-                    
+
                     # Run name below buttons
                     ui.label(f"Exporting data for run: {sample_id}").classes(
                         "text-sm font-medium text-gray-700 mt-4"
@@ -4236,6 +4416,16 @@ class GUILauncher:
 
             dialog_result = await dialog
             if dialog_result != "Yes":
+                return
+            if not (
+                bool(state.get("export_pdf", True))
+                or bool(state.get("export_csv", False))
+                or bool(state.get("export_tsv", False))
+            ):
+                ui.notify(
+                    "Select at least one output format (PDF, CSV, or TSV).",
+                    type="warning",
+                )
                 return
 
             # If user requested sample identifiers, decrypt with DOB
@@ -4289,10 +4479,10 @@ class GUILauncher:
                     ui.label("Generating report").classes(
                         "classification-insight-heading text-headline-small mb-2"
                     )
-                    
+
                     # Divider
                     ui.separator().classes("mb-4")
-                    
+
                     # Run name
                     ui.label(f"Exporting data for run: {sample_id}").classes(
                         "text-sm font-medium text-gray-700 mb-4"
@@ -4302,26 +4492,33 @@ class GUILauncher:
                     report_type_display = ui.label(
                         f"Report Type: {state.get('type', 'detailed').title()}"
                     ).classes("text-sm mb-2")
-                    
+
+                    selected_outputs = []
+                    if bool(state.get("export_pdf", True)):
+                        selected_outputs.append("PDF")
+                    if bool(state.get("export_csv", False)):
+                        selected_outputs.append("CSV (ZIP)")
+                    if bool(state.get("export_tsv", False)):
+                        selected_outputs.append("TSV")
                     output_display = ui.label(
-                        f"Output: PDF{' + CSV (ZIP)' if state.get('export_csv', False) else ''}"
+                        f"Output: {' + '.join(selected_outputs) if selected_outputs else 'None'}"
                     ).classes("text-sm mb-4")
-                    
+
                     # Progress indicator
                     progress_bar = ui.linear_progress(0.0).classes("mb-2")
-                    
+
                     # Progress text
                     progress_text = ui.label("Preparing...").classes(
                         "text-xs text-gray-600 text-center mb-2"
                     )
-                    
+
                     # Messages container - use label with newlines for multiple messages
                     messages_label = ui.label("").classes("text-xs text-gray-500")
 
                     # Track messages
                     progress_updates = queue.Queue()
                     messages_list = []
-                    
+
                     # Timer to process progress updates on UI thread
                     def process_progress_updates():
                         """Process queued progress updates."""
@@ -4331,30 +4528,30 @@ class GUILauncher:
                                 stage = update.get("stage", "unknown")
                                 message = update.get("message", "")
                                 progress = update.get("progress", 0.0)
-                                
+
                                 if progress is not None:
                                     progress_bar.value = progress
                                     progress_text.text = f"{int(progress * 100)}% - {message}"
                                 else:
                                     progress_text.text = message
-                                
+
                                 # Add message to messages list
                                 messages_list.append(message)
                                 # Keep only last 10 messages
                                 if len(messages_list) > 10:
                                     messages_list.pop(0)
-                                
+
                                 # Update messages label
                                 messages_label.text = "\n".join(messages_list[-5:])
-                                
+
                         except queue.Empty:
                             pass
                         except Exception as e:
                             logging.debug(f"Error processing progress updates: {e}")
-                    
+
                     # Set up timer to process updates
                     update_timer = ui.timer(0.1, process_progress_updates)
-                    
+
                     def progress_callback(progress_data: Dict[str, Any]):
                         """Custom progress callback to update dialog (called from background thread)."""
                         try:
@@ -4362,14 +4559,14 @@ class GUILauncher:
                             progress_updates.put(progress_data)
                         except Exception as e:
                             logging.debug(f"Error in progress callback: {e}")
-                    
+
                     # Track if still generating
                     is_generating = {"active": True}
 
                     # Storage for the files to download (will be populated by background task)
                     files_to_download = []
                     download_complete = {"done": False}
-                    
+
                     # Timer to handle downloads once background task is done
                     def handle_downloads():
                         """Handle downloads in UI context once generation is complete."""
@@ -4377,7 +4574,7 @@ class GUILauncher:
                             # Log that report generation is complete and downloads are available
                             file_count = len([f for f in files_to_download if f is not None])
                             logging.info(f"Report generation complete for {sample_id}. {file_count} file(s) ready for download.")
-                            
+
                             for file_path in files_to_download:
                                 if file_path is not None:
                                     logging.debug(f"Initiating download: {file_path}")
@@ -4385,9 +4582,9 @@ class GUILauncher:
                             # Close dialog after 3 seconds
                             ui.timer(3.0, lambda: progress_dialog.submit(None), once=True)
                             download_timer.deactivate()
-                    
+
                     download_timer = ui.timer(0.1, handle_downloads)
-                    
+
                     # Start report generation
                     async def complete_generation():
                         """Complete the report generation and close dialog."""
@@ -4398,8 +4595,14 @@ class GUILauncher:
                             update_timer.deactivate()
                             is_generating["active"] = False
                             download_complete["done"] = True
-                    
-                    asyncio.create_task(complete_generation())
+
+                    if background_tasks is not None:
+                        background_tasks.create(
+                            complete_generation(),
+                            name="single-report-generation",
+                        )
+                    else:
+                        raise RuntimeError("NiceGUI background tasks unavailable")
 
             await progress_dialog
 
@@ -4407,7 +4610,7 @@ class GUILauncher:
             """Generate report and update progress in dialog."""
             try:
                 from nicegui import run as ng_run  # type: ignore
-                
+
                 if not sample_dir or not sample_dir.exists():
                     # Queue error notification
                     files_to_download.append(None)  # Signal error
@@ -4416,55 +4619,65 @@ class GUILauncher:
                         type="warning",
                     ), once=True)
                     return
-                
-                filename = f"{sample_id}_run_report.pdf"
-                pdf_path = os.path.join(str(sample_dir), filename)
-                os.makedirs(str(sample_dir), exist_ok=True)
-                export_csv_dir = None
-                if bool(state.get("export_csv", False)):
-                    export_csv_dir = os.path.join(
-                        str(sample_dir), "report_csv"
-                    )
-                
-                # Use only our custom callback, not the notification system
-                def combined_callback(progress_data: Dict[str, Any]):
-                    """Custom callback for dialog updates only (no notifications)."""
-                    progress_callback(progress_data)
-                
-                pdf_file = await ng_run.io_bound(
-                    create_pdf,
-                    pdf_path,
-                    str(sample_dir),
-                    self.center or "Unknown",
-                    report_type=state.get("type", "detailed"),
-                    export_csv_dir=export_csv_dir,
-                    export_xlsx=False,
-                    export_zip=bool(state.get("export_csv", False)),
-                    progress_callback=combined_callback,
-                    workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
-                    sample_identifiers=state.get("sample_identifiers"),
+
+                should_generate_report = bool(
+                    state.get("export_pdf", True) or state.get("export_csv", False)
                 )
-                
-                # Mark report as completed
-                from robin.gui.report_progress import progress_manager
-                progress_manager.complete_report(sample_id, filename)
-                
-                # Queue files for download in UI context
-                files_to_download.append(pdf_file)
-                
-                # Also offer CSV ZIP if requested
-                if bool(state.get("export_csv", False)) and export_csv_dir:
-                    zip_path = os.path.join(
-                        export_csv_dir, f"{sample_id}_report_data.zip"
+                if should_generate_report:
+                    filename = f"{sample_id}_run_report.pdf"
+                    pdf_path = os.path.join(str(sample_dir), filename)
+                    os.makedirs(str(sample_dir), exist_ok=True)
+                    export_csv_dir = None
+                    if bool(state.get("export_csv", False)):
+                        export_csv_dir = os.path.join(
+                            str(sample_dir), "report_csv"
+                        )
+
+                    # Use only our custom callback, not the notification system
+                    def combined_callback(progress_data: Dict[str, Any]):
+                        """Custom callback for dialog updates only (no notifications)."""
+                        progress_callback(progress_data)
+
+                    pdf_file = await ng_run.io_bound(
+                        create_pdf,
+                        pdf_path,
+                        str(sample_dir),
+                        self.center or "Unknown",
+                        report_type=state.get("type", "detailed"),
+                        export_csv_dir=export_csv_dir,
+                        export_xlsx=False,
+                        export_zip=bool(state.get("export_csv", False)),
+                        progress_callback=combined_callback,
+                        workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                        sample_identifiers=state.get("sample_identifiers"),
                     )
-                    if os.path.exists(zip_path):
-                        files_to_download.append(zip_path)
-                
+
+                    # Mark report as completed
+                    from robin.gui.report_progress import progress_manager
+                    progress_manager.complete_report(sample_id, filename)
+
+                    # Queue files for download in UI context
+                    if bool(state.get("export_pdf", True)):
+                        files_to_download.append(pdf_file)
+
+                    # Also offer CSV ZIP if requested
+                    if bool(state.get("export_csv", False)) and export_csv_dir:
+                        zip_path = os.path.join(
+                            export_csv_dir, f"{sample_id}_report_data.zip"
+                        )
+                        if os.path.exists(zip_path):
+                            files_to_download.append(zip_path)
+
+                if bool(state.get("export_tsv", False)):
+                    tsv_path = self._build_sample_tracking_tsv_export([sample_id])
+                    if tsv_path and os.path.exists(tsv_path):
+                        files_to_download.append(tsv_path)
+
             except Exception as e:
                 # Mark report as failed
                 from robin.gui.report_progress import progress_manager
                 progress_manager.error_report(sample_id, str(e))
-                
+
                 # Queue error notification in UI context
                 ui.timer(0.1, lambda: ui.notify(
                     f"Error generating report: {str(e)}",
@@ -4478,14 +4691,14 @@ class GUILauncher:
                 # Import here to avoid global dependency if GUI isn't used
                 from nicegui import run as ng_run  # type: ignore
 
-                
+
                 if not sample_dir or not sample_dir.exists():
                     ui.notify(
                         "Output directory not available for this sample",
                         type="warning",
                     )
                     return
-                
+
                 # Show initial notification with more explicit styling
                 ui.notify(
                     f"[{sample_id}] Starting report generation...",
@@ -4493,7 +4706,7 @@ class GUILauncher:
                     timeout=0,  # Persistent notification
                     position="top-right"
                 )
-                
+
                 filename = f"{sample_id}_run_report.pdf"
                 pdf_path = os.path.join(str(sample_dir), filename)
                 os.makedirs(str(sample_dir), exist_ok=True)
@@ -4502,11 +4715,11 @@ class GUILauncher:
                     export_csv_dir = os.path.join(
                         str(sample_dir), "report_csv"
                     )
-                
+
                 # Create progress callback
                 from robin.gui.report_progress import create_progress_callback
                 progress_callback = create_progress_callback(sample_id)
-                
+
                 pdf_file = await ng_run.io_bound(
                     create_pdf,
                     pdf_path,
@@ -4519,11 +4732,11 @@ class GUILauncher:
                     progress_callback=progress_callback,
                     workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
                 )
-                
+
                 # Mark report as completed
                 from robin.gui.report_progress import progress_manager
                 progress_manager.complete_report(sample_id, filename)
-                
+
                 ui.download(pdf_file)
                 # Also offer CSV ZIP if requested
                 if bool(state.get("export_csv", False)) and export_csv_dir:
@@ -4532,12 +4745,12 @@ class GUILauncher:
                     )
                     if os.path.exists(zip_path):
                         ui.download(zip_path)
-                
+
             except Exception as e:
                 # Mark report as failed
                 from robin.gui.report_progress import progress_manager
                 progress_manager.error_report(sample_id, str(e))
-                
+
         title_suffix = f" | {test_id}" if test_id else ""
         with theme.frame(
             f"R.O.B.I.N - Sample {sample_id}{title_suffix}",
@@ -4566,7 +4779,7 @@ class GUILauncher:
                     ui.button(
                         "Back to samples", on_click=lambda: ui.navigate.to("/live_data")
                     ).props("color=primary").classes("rounded-lg mt-2")
-                
+
                 # Soft redirect after short delay
                 def redirect_to_samples():
                     """Redirect to the sample list page."""
@@ -4579,7 +4792,7 @@ class GUILauncher:
                             ui.run_javascript('window.location.href = "/live_data"')
                         except Exception as e2:
                             logging.error(f"Failed JavaScript redirect: {e2}")
-                
+
                 # Create and activate the timer
                 redirect_timer = ui.timer(2.0, redirect_to_samples, once=True)
                 redirect_timer.activate()
@@ -4590,7 +4803,7 @@ class GUILauncher:
                 ui.notify(f"Opening sample {sample_id}", type="info")
             except Exception:
                 pass
-            
+
             # Check directory existence asynchronously to avoid blocking
             async def check_directory_and_notify():
                 try:
@@ -4601,7 +4814,7 @@ class GUILauncher:
                         )
                 except Exception:
                     pass
-            
+
             # Start directory check in background
             ui.timer(0.1, check_directory_and_notify, once=True)
 
@@ -4725,7 +4938,10 @@ class GUILauncher:
                                 from robin.gui.components.summary import add_summary_section
 
                             # Create the UI components immediately on the main thread
-                            add_summary_section(sample_dir, sample_id, self)
+                            with _sample_page_section_timer(
+                                "live_data", sample_id, "summary"
+                            ):
+                                add_summary_section(sample_dir, sample_id, self)
                         except Exception as e:
                             logging.exception(f"[GUI] Summary section failed: {e}")
                             try:
@@ -4739,7 +4955,7 @@ class GUILauncher:
                         except ImportError:
                             is_section_enabled = lambda name, steps: True
                             get_enabled_classification_steps = lambda steps: {"sturgeon", "nanodx", "random_forest", "pannanodx"}
-                        
+
                         workflow_steps = self.workflow_steps if hasattr(self, 'workflow_steps') else None
 
                         # Defer heavy analysis sections until after initial render
@@ -4771,6 +4987,7 @@ class GUILauncher:
                                         pass
                                 analysis_container.clear()
                                 with analysis_container:
+                                    t_analysis_start = time.perf_counter()
                                     # MNP-Flex section
                                     try:
                                         try:
@@ -4778,7 +4995,12 @@ class GUILauncher:
                                         except ImportError:
                                             from robin.gui.components.mnpflex import add_mnpflex_section
 
-                                        add_mnpflex_section(self, sample_dir, sample_id)
+                                        with _sample_page_section_timer(
+                                            "live_data", sample_id, "mnpflex"
+                                        ):
+                                            add_mnpflex_section(
+                                                self, sample_dir, sample_id
+                                            )
                                     except Exception as e:
                                         logging.exception(f"[GUI] MNP-Flex section failed: {e}")
                                         try:
@@ -4799,7 +5021,14 @@ class GUILauncher:
                                                     add_classification_section,
                                                 )
 
-                                            add_classification_section(sample_dir, self)
+                                            with _sample_page_section_timer(
+                                                "live_data",
+                                                sample_id,
+                                                "classification",
+                                            ):
+                                                add_classification_section(
+                                                    sample_dir, self
+                                                )
                                         except Exception as e:
                                             logging.exception(f"[GUI] Classification section failed: {e}")
                                             try:
@@ -4820,13 +5049,20 @@ class GUILauncher:
                                                     add_igv_viewer,
                                                 )
 
-                                            add_coverage_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data",
+                                                sample_id,
+                                                "coverage",
+                                            ):
+                                                add_coverage_section(
+                                                    self, sample_dir
+                                                )
                                         except Exception as e:
                                             try:
                                                 ui.notify(f"Coverage section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
-                                    
+
                                     # MGMT section
                                     if not workflow_steps or is_section_enabled("mgmt", workflow_steps):
                                         try:
@@ -4835,14 +5071,17 @@ class GUILauncher:
                                             except ImportError:
                                                 from robin.gui.components.mgmt import add_mgmt_section
 
-                                            add_mgmt_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "mgmt"
+                                            ):
+                                                add_mgmt_section(self, sample_dir)
                                         except Exception as e:
                                             logging.exception(f"[GUI] MGMT section failed: {e}")
                                             try:
                                                 ui.notify(f"MGMT section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
-                                    
+
                                     # CNV section
                                     if not workflow_steps or is_section_enabled("cnv", workflow_steps):
                                         try:
@@ -4851,7 +5090,10 @@ class GUILauncher:
                                             except ImportError:
                                                 from robin.gui.components.cnv import add_cnv_section
 
-                                            add_cnv_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "cnv"
+                                            ):
+                                                add_cnv_section(self, sample_dir)
                                         except Exception as e:
                                             logging.exception(f"[GUI] CNV section failed: {e}")
                                             try:
@@ -4867,27 +5109,43 @@ class GUILauncher:
                                             except ImportError:
                                                 from robin.gui.components.fusion import add_fusion_section
 
-                                            add_fusion_section(self, sample_dir)
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "fusion"
+                                            ):
+                                                add_fusion_section(self, sample_dir)
                                         except Exception as e:
                                             logging.exception(f"[GUI] Fusion section failed: {e}")
                                             try:
                                                 ui.notify(f"Fusion section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
-                                        
+
                                         try:
                                             try:
                                                 from .gui.components.bed_coverage import add_bed_coverage_section  # type: ignore
                                             except ImportError:
                                                 from robin.gui.components.bed_coverage import add_bed_coverage_section
-                                            
-                                            add_bed_coverage_section(self, sample_dir)
+
+                                            with _sample_page_section_timer(
+                                                "live_data",
+                                                sample_id,
+                                                "bed_coverage",
+                                            ):
+                                                add_bed_coverage_section(
+                                                    self, sample_dir
+                                                )
                                         except Exception as e:
                                             logging.exception(f"[GUI] BED Coverage section failed: {e}")
                                             try:
                                                 ui.notify(f"BED Coverage section failed: {e}", type="warning")
                                             except Exception:
                                                 pass
+                                    total_elapsed = time.perf_counter() - t_analysis_start
+                                    print(
+                                        f"[SamplePage] page=live_data sample={sample_id} "
+                                        f"section=analysis_sections_total elapsed_s={total_elapsed:.3f}",
+                                        flush=True,
+                                    )
                             except Exception as e:
                                 logging.exception(f"[GUI] Failed to build analysis sections: {e}")
 
@@ -5073,7 +5331,7 @@ class GUILauncher:
 
                             # Reset error states on success
                             _notify_state["files_error"] = False
-                            
+
                         except Exception as e:
                             logging.error(f"Error in async sample detail refresh: {e}")
                             # Only show error notification once per error type
@@ -5112,11 +5370,11 @@ class GUILauncher:
                             try:
                                 # Load initial data
                                 await _refresh_sample_detail_async()
-                                
+
                                 # Show content and hide loading
                                 loading_container.style("display: none")
                                 content_container.style("display: flex")
-                                
+
                             except Exception as e:
                                 logging.error(f"Error loading initial data: {e}")
                                 # Show content anyway to avoid infinite loading
@@ -5157,6 +5415,9 @@ class GUILauncher:
             if self.monitored_directory
             else None
         )
+        if sample_dir:
+            self._touch_component_state_key(str(sample_dir))
+            self._prune_component_state_caches()
         test_id = _get_test_id_from_manifest(sample_dir) if sample_dir else ""
 
         # Check if sample is known
@@ -5193,7 +5454,7 @@ class GUILauncher:
                         "mt-1 rounded-lg border border-slate-300 dark:border-slate-600"
                     ).props("flat")
             return
-        
+
         # Create the page with theme frame
         title_suffix = f" | {test_id}" if test_id else ""
         with theme.frame(
@@ -5309,90 +5570,218 @@ class GUILauncher:
                     # IGV Viewer section - moved to top, before tables
                     if sample_dir and sample_dir.exists():
                         from robin.gui.components.coverage import add_igv_viewer
-                        add_igv_viewer(self, sample_dir)
-                    
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "igv_viewer"
+                        ):
+                            add_igv_viewer(self, sample_dir)
+
                     # SNP Analysis section
                     if sample_dir and sample_dir.exists():
                         from robin.gui.components.snp import add_snp_section
-                        add_snp_section(self, sample_dir)
-                    
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "snp"
+                        ):
+                            add_snp_section(self, sample_dir)
+
                     # Fusion Pairs Table section
                     if sample_dir and sample_dir.exists():
+                        _fusion_pairs_t0 = time.perf_counter()
                         from robin.gui.components.fusion import (
                             _load_processed_pickle,
-                            _cluster_fusion_reads
+                            _cluster_fusion_reads,
                         )
                         import pandas as pd
-                        
+
+                        sample_key = str(sample_dir)
+                        fusion_state = getattr(self, "_fusion_state", {})
+                        cache_entry = fusion_state.setdefault(sample_key, {})
+                        target_file = sample_dir / "fusion_candidates_master_processed.pkl"
+                        genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
+                        target_mtime = (
+                            target_file.stat().st_mtime if target_file.exists() else None
+                        )
+                        genome_mtime = (
+                            genome_file.stat().st_mtime if genome_file.exists() else None
+                        )
+                        file_sig = (target_mtime, genome_mtime)
+                        cached_rows = cache_entry.get("details_pairs_rows")
+                        cache_hit = (
+                            isinstance(cached_rows, list)
+                            and cache_entry.get("details_pairs_sig") == file_sig
+                        )
+
+                        def _build_fusion_pairs_rows_sync() -> List[Dict[str, Any]]:
+                            """Load fusion pickle data and build table rows."""
+                            import re
+
+                            fusion_data_local = None
+                            target_file_local = sample_dir / "fusion_candidates_master_processed.pkl"
+                            genome_file_local = sample_dir / "fusion_candidates_all_processed.pkl"
+                            try:
+                                if target_file_local.exists():
+                                    fusion_data_local = _load_processed_pickle(target_file_local)
+                                elif genome_file_local.exists():
+                                    fusion_data_local = _load_processed_pickle(genome_file_local)
+                            except Exception as ex:
+                                logging.warning(f"Failed to load fusion data: {ex}")
+                                return []
+
+                            if not fusion_data_local:
+                                return []
+                            annotated_data_local = fusion_data_local.get("annotated_data", pd.DataFrame())
+                            if annotated_data_local is None or annotated_data_local.empty:
+                                return []
+                            goodpairs_local = fusion_data_local.get("goodpairs", pd.Series())
+                            if goodpairs_local is not None and not goodpairs_local.empty and goodpairs_local.sum() > 0:
+                                aligned_goodpairs = goodpairs_local.reindex(
+                                    annotated_data_local.index, fill_value=False
+                                )
+                                filtered_data = annotated_data_local[aligned_goodpairs]
+                            else:
+                                filtered_data = annotated_data_local
+                            clustered_data_local = _cluster_fusion_reads(
+                                filtered_data,
+                                max_distance=10000,
+                                use_breakpoint_validation=True,
+                            )
+                            if clustered_data_local is None or clustered_data_local.empty:
+                                return []
+
+                            built_rows: List[Dict[str, Any]] = []
+                            for _, row in clustered_data_local.iterrows():
+                                if all(col in row for col in ["gene1_start", "gene1_end", "gene2_start", "gene2_end"]):
+                                    start1_raw = int(row["gene1_start"])
+                                    end1_raw = int(row["gene1_end"])
+                                    start2_raw = int(row["gene2_start"])
+                                    end2_raw = int(row["gene2_end"])
+                                else:
+                                    pos1_str = str(row.get("gene1_position", ""))
+                                    pos2_str = str(row.get("gene2_position", ""))
+                                    pos1_match = re.match(r'(\d+)[-–—](\d+)', pos1_str.replace(',', ''))
+                                    pos2_match = re.match(r'(\d+)[-–—](\d+)', pos2_str.replace(',', ''))
+                                    if pos1_match and pos2_match:
+                                        start1_raw = int(pos1_match.group(1))
+                                        end1_raw = int(pos1_match.group(2))
+                                        start2_raw = int(pos2_match.group(1))
+                                        end2_raw = int(pos2_match.group(2))
+                                    else:
+                                        pos1_single = re.search(r'(\d+)', pos1_str.replace(',', ''))
+                                        pos2_single = re.search(r'(\d+)', pos2_str.replace(',', ''))
+                                        if pos1_single and pos2_single:
+                                            start1_raw = end1_raw = int(pos1_single.group(1))
+                                            start2_raw = end2_raw = int(pos2_single.group(1))
+                                        else:
+                                            continue
+                                padding = 10000
+                                min1 = min(start1_raw, end1_raw)
+                                max1 = max(start1_raw, end1_raw)
+                                min2 = min(start2_raw, end2_raw)
+                                max2 = max(start2_raw, end2_raw)
+                                chr1 = str(row.get("chr1", "Unknown"))
+                                chr2 = str(row.get("chr2", "Unknown"))
+                                built_rows.append(
+                                    {
+                                        "fusion_pair": row.get("fusion_pair", ""),
+                                        "chr1": chr1,
+                                        "pos1": f"{min1:,}-{max1:,}" if min1 != max1 else f"{min1:,}",
+                                        "chr2": chr2,
+                                        "pos2": f"{min2:,}-{max2:,}" if min2 != max2 else f"{min2:,}",
+                                        "reads": int(row.get("reads", 0)),
+                                        "region": (
+                                            f"{chr1}:{max(1, min1 - padding)}-{max1 + padding} "
+                                            f"{chr2}:{max(1, min2 - padding)}-{max2 + padding}"
+                                        ),
+                                        "__row_idx": len(built_rows),
+                                        "action": "",
+                                    }
+                                )
+                            return built_rows
+
+                        if not cache_hit:
+                            rebuilt_rows = _build_fusion_pairs_rows_sync()
+                            cache_entry["details_pairs_sig"] = file_sig
+                            cache_entry["details_pairs_rows"] = [dict(r) for r in rebuilt_rows]
+                            cached_rows = cache_entry["details_pairs_rows"]
+                            cache_hit = True
+
                         # Load fusion data
                         fusion_data_loaded = False
                         fusion_data = None
-                        try:
-                            target_file = sample_dir / "fusion_candidates_master_processed.pkl"
-                            genome_file = sample_dir / "fusion_candidates_all_processed.pkl"
-                            
-                            # Try to load target panel data first, then genome-wide
-                            if target_file.exists():
-                                fusion_data = _load_processed_pickle(target_file)
-                                if fusion_data and fusion_data.get("annotated_data") is not None:
-                                    fusion_data_loaded = True
-                            elif genome_file.exists():
-                                fusion_data = _load_processed_pickle(genome_file)
-                                if fusion_data and fusion_data.get("annotated_data") is not None:
-                                    fusion_data_loaded = True
-                        except Exception as e:
-                            logging.warning(f"Failed to load fusion data: {e}")
-                        
-                        if fusion_data_loaded and fusion_data:
-                            annotated_data = fusion_data.get("annotated_data", pd.DataFrame())
-                            goodpairs = fusion_data.get("goodpairs", pd.Series())
-                            
-                            if not annotated_data.empty:
-                                # Filter to good pairs if available
-                                if not goodpairs.empty and goodpairs.sum() > 0:
-                                    aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
-                                    filtered_data = annotated_data[aligned_goodpairs]
-                                else:
-                                    filtered_data = annotated_data
-                                
-                                # Cluster fusion reads
-                                clustered_data = _cluster_fusion_reads(
-                                    filtered_data, 
-                                    max_distance=10000, 
-                                    use_breakpoint_validation=True
-                                )
-                                
-                                if not clustered_data.empty:
-                                    with ui.element("div").classes(
-                                        "classification-insight-shell w-full min-w-0"
-                                    ):
-                                        ui.label("Fusion pairs").classes(
-                                            "classification-insight-heading text-headline-small"
-                                        )
-                                        ui.label(
-                                            "Click a row to open the fusion region in IGV."
-                                        ).classes("classification-insight-meta w-full mb-2")
-                                        
-                                        # Create columns for the table
-                                        from robin.gui.theme import styled_table
-                                        
-                                        columns = [
-                                            {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": True},
-                                            {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": True},
-                                            {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": True},
-                                            {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": True},
-                                            {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": True},
-                                            {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": True},
-                                            {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
-                                        ]
-                                        
-                                        # Format rows for display
-                                        rows = []
-                                        fusion_region_map = {}  # Store region info for each row
-                                        
-                                        # Import re for position parsing
+                        if not cache_hit:
+                            try:
+                                # Try to load target panel data first, then genome-wide
+                                if target_file.exists():
+                                    fusion_data = _load_processed_pickle(target_file)
+                                    if fusion_data and fusion_data.get("annotated_data") is not None:
+                                        fusion_data_loaded = True
+                                elif genome_file.exists():
+                                    fusion_data = _load_processed_pickle(genome_file)
+                                    if fusion_data and fusion_data.get("annotated_data") is not None:
+                                        fusion_data_loaded = True
+                            except Exception as e:
+                                logging.warning(f"Failed to load fusion data: {e}")
+
+                        annotated_data = (
+                            fusion_data.get("annotated_data", pd.DataFrame())
+                            if (fusion_data_loaded and fusion_data)
+                            else pd.DataFrame()
+                        )
+                        goodpairs = (
+                            fusion_data.get("goodpairs", pd.Series())
+                            if (fusion_data_loaded and fusion_data)
+                            else pd.Series()
+                        )
+
+                        if cache_hit or not annotated_data.empty:
+                            # Filter to good pairs if available
+                            if not goodpairs.empty and goodpairs.sum() > 0:
+                                aligned_goodpairs = goodpairs.reindex(annotated_data.index, fill_value=False)
+                                filtered_data = annotated_data[aligned_goodpairs]
+                            else:
+                                filtered_data = annotated_data
+
+                            # Cluster fusion reads
+                            clustered_data = _cluster_fusion_reads(
+                                filtered_data,
+                                max_distance=10000,
+                                use_breakpoint_validation=True
+                            )
+
+                            if cache_hit or not clustered_data.empty:
+                                with ui.element("div").classes(
+                                    "classification-insight-shell w-full min-w-0"
+                                ):
+                                    ui.label("Fusion pairs").classes(
+                                        "classification-insight-heading text-headline-small"
+                                    )
+                                    ui.label(
+                                        "Click a row to open the fusion region in IGV."
+                                    ).classes("classification-insight-meta w-full mb-2")
+
+                                    # Create columns for the table
+                                    from robin.gui.theme import (
+                                        clamp_qtable_server_pagination,
+                                        styled_server_paged_table,
+                                        wire_qtable_server_pagination_handlers,
+                                    )
+
+                                    columns = [
+                                        {"name": "fusion_pair", "label": "Fusion Pair", "field": "fusion_pair", "sortable": False},
+                                        {"name": "chr1", "label": "Chr 1", "field": "chr1", "sortable": False},
+                                        {"name": "pos1", "label": "Breakpoint 1", "field": "pos1", "sortable": False},
+                                        {"name": "chr2", "label": "Chr 2", "field": "chr2", "sortable": False},
+                                        {"name": "pos2", "label": "Breakpoint 2", "field": "pos2", "sortable": False},
+                                        {"name": "reads", "label": "Supporting Reads", "field": "reads", "sortable": False},
+                                        {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
+                                    ]
+
+                                    # Format rows for display
+                                    rows = [dict(r) for r in cached_rows] if cache_hit else []
+                                    if not cache_hit:
+                                        # Keep region in each source row to avoid duplicate mapping storage.
                                         import re
-                                        
                                         for idx, row in clustered_data.iterrows():
                                             # Try to get start/end coordinates from the row if available
                                             # (e.g., from breakpoint validation)
@@ -5406,11 +5795,9 @@ class GUILauncher:
                                                 # Parse from position strings (format: "start-end")
                                                 pos1_str = str(row.get("gene1_position", ""))
                                                 pos2_str = str(row.get("gene2_position", ""))
-                                                
                                                 # Parse range format "start-end" or just a single number
                                                 pos1_match = re.match(r'(\d+)[-–—](\d+)', pos1_str.replace(',', ''))
                                                 pos2_match = re.match(r'(\d+)[-–—](\d+)', pos2_str.replace(',', ''))
-                                                
                                                 if pos1_match and pos2_match:
                                                     # Extract both start and end from the range
                                                     start1_raw = int(pos1_match.group(1))
@@ -5428,31 +5815,25 @@ class GUILauncher:
                                                     else:
                                                         # Skip this row if we can't parse coordinates
                                                         continue
-                                            
+
                                             # Use the actual range (start to end), then add/subtract 10kb padding
                                             padding = 10000
                                             min1 = min(start1_raw, end1_raw)
                                             max1 = max(start1_raw, end1_raw)
                                             min2 = min(start2_raw, end2_raw)
                                             max2 = max(start2_raw, end2_raw)
-                                            
                                             # Subtract 10kb from min and add 10kb to max
                                             start1 = max(1, min1 - padding)
                                             end1 = max1 + padding
                                             start2 = max(1, min2 - padding)
                                             end2 = max2 + padding
-                                            
                                             chr1 = str(row.get("chr1", "Unknown"))
                                             chr2 = str(row.get("chr2", "Unknown"))
-                                            
                                             # Format region as "chr1:start-end chr2:start-end"
                                             region = f"{chr1}:{start1}-{end1} {chr2}:{start2}-{end2}"
-                                            
                                             # For display, show the breakpoint range (not the padded version)
-                                            # Use a single representative coordinate or the range midpoint
                                             display_pos1 = f"{min1:,}-{max1:,}" if min1 != max1 else f"{min1:,}"
                                             display_pos2 = f"{min2:,}-{max2:,}" if min2 != max2 else f"{min2:,}"
-                                            
                                             formatted_row = {
                                                 "fusion_pair": row.get("fusion_pair", ""),
                                                 "chr1": chr1,
@@ -5460,308 +5841,431 @@ class GUILauncher:
                                                 "chr2": chr2,
                                                 "pos2": display_pos2,
                                                 "reads": int(row.get("reads", 0)),
+                                                "region": region,
+                                                "__row_idx": len(rows),
                                                 "action": "",
                                             }
-                                            
                                             rows.append(formatted_row)
-                                            fusion_region_map[len(rows) - 1] = region
-                                        
-                                        if rows:
-                                            # Store fusion regions mapped by fusion pair for easy lookup
-                                            fusion_regions_by_pair = {}
-                                            for idx, row_data in enumerate(rows):
-                                                fusion_regions_by_pair[row_data["fusion_pair"]] = fusion_region_map[idx]
-                                            
-                                            # Create JavaScript map of regions for IGV navigation
-                                            import json
-                                            js_regions_json = json.dumps(fusion_regions_by_pair)
-                                            
-                                            # Function to navigate IGV to a fusion region
-                                            def navigate_to_fusion_region(fusion_pair: str):
-                                                """Navigate IGV browser to the specified fusion pair region."""
-                                                if fusion_pair in fusion_regions_by_pair:
-                                                    region = fusion_regions_by_pair[fusion_pair]
-                                                    # Escape region string for JavaScript
-                                                    escaped_region = region.replace('"', '\\"').replace("'", "\\'")
-                                                    js_navigate = f"""
-                                                        (function() {{
-                                                            try {{
-                                                                if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                    console.log('[IGV] Navigating to fusion region: {escaped_region}');
-                                                                    window.lj_igv.search('{escaped_region}');
-                                                                }} else {{
-                                                                    console.warn('[IGV] Browser not ready yet, will navigate when ready');
-                                                                    setTimeout(function() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                            window.lj_igv.search('{escaped_region}');
-                                                                        }}
-                                                                    }}, 500);
-                                                                }}
-                                                            }} catch (error) {{
-                                                                console.error('[IGV] Navigation error:', error);
+
+                                    if rows and not cache_hit:
+                                        cache_entry["details_pairs_sig"] = file_sig
+                                        cache_entry["details_pairs_rows"] = [dict(r) for r in rows]
+
+                                    if rows:
+                                        # Store fusion regions mapped by fusion pair for easy lookup
+                                        fusion_regions_by_pair = {}
+                                        for idx, row_data in enumerate(rows):
+                                            fusion_regions_by_pair[row_data["fusion_pair"]] = row_data.get("region", "")
+
+                                        # Create JavaScript map of regions for IGV navigation
+                                        import json
+                                        js_regions_json = json.dumps(fusion_regions_by_pair)
+
+                                        # Function to navigate IGV to a fusion region
+                                        def navigate_to_fusion_region(fusion_pair: str):
+                                            """Navigate IGV browser to the specified fusion pair region."""
+                                            if fusion_pair in fusion_regions_by_pair:
+                                                region = fusion_regions_by_pair[fusion_pair]
+                                                # Escape region string for JavaScript
+                                                escaped_region = region.replace('"', '\\"').replace("'", "\\'")
+                                                js_navigate = f"""
+                                                    (function() {{
+                                                        try {{
+                                                            if (window.lj_igv && window.lj_igv_browser_ready) {{
+                                                                console.log('[IGV] Navigating to fusion region: {escaped_region}');
+                                                                window.lj_igv.search('{escaped_region}');
+                                                            }} else {{
+                                                                console.warn('[IGV] Browser not ready yet, will navigate when ready');
+                                                                setTimeout(function() {{
+                                                                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                                                                        window.lj_igv.search('{escaped_region}');
+                                                                    }}
+                                                                }}, 500);
                                                             }}
-                                                        }})();
-                                                    """
-                                                    ui.run_javascript(js_navigate, timeout=5.0)
-                                            
-                                            # Initialize fusion regions map in window BEFORE creating table
-                                            # This ensures it's available when the slot template renders
-                                            js_init_regions = f"""
-                                                (function() {{
-                                                    window.fusionRegionsMap = window.fusionRegionsMap || {{}};
-                                                    Object.assign(window.fusionRegionsMap, {js_regions_json});
-                                                    console.log('[Fusion] Initialized fusion regions map with', Object.keys(window.fusionRegionsMap).length, 'regions');
-                                                }})();
-                                            """
-                                            ui.run_javascript(js_init_regions, timeout=5.0)
-                                            
-                                            # Create styled table
-                                            table_container, fusion_table = styled_table(
-                                                columns=columns,
-                                                rows=rows,
-                                                pagination=20,
-                                                class_size="table-xs"
+                                                        }} catch (error) {{
+                                                            console.error('[IGV] Navigation error:', error);
+                                                        }}
+                                                    }})();
+                                                """
+                                                ui.run_javascript(js_navigate, timeout=5.0)
+
+                                        # Initialize fusion regions map in window BEFORE creating table
+                                        # This ensures it's available when the slot template renders
+                                        js_init_regions = f"""
+                                            (function() {{
+                                                window.fusionRegionsMap = window.fusionRegionsMap || {{}};
+                                                Object.assign(window.fusionRegionsMap, {js_regions_json});
+                                                console.log('[Fusion] Initialized fusion regions map with', Object.keys(window.fusionRegionsMap).length, 'regions');
+                                            }})();
+                                        """
+                                        ui.run_javascript(js_init_regions, timeout=5.0)
+
+                                        # Render only one page at a time (Quasar server-side paging).
+                                        fusion_preview_mode = len(rows) > 50_000
+                                        fusion_rows_source = rows[:5_000] if fusion_preview_mode else rows
+                                        fusion_total = len(fusion_rows_source)
+                                        fusion_init_pagination = clamp_qtable_server_pagination(
+                                            {
+                                                "sortBy": None,
+                                                "descending": False,
+                                                "page": 1,
+                                                "rowsPerPage": 100,
+                                                "rowsNumber": fusion_total,
+                                            },
+                                            rows_number=fusion_total,
+                                            rows_per_page_default=100,
+                                        )
+                                        table_container, fusion_table = styled_server_paged_table(
+                                            columns=columns,
+                                            rows=[],
+                                            pagination=fusion_init_pagination,
+                                            row_key="__row_idx",
+                                            class_size="table-xs",
+                                        )
+                                        if fusion_preview_mode:
+                                            ui.label(
+                                                f"Preview mode: showing first {len(fusion_rows_source):,} rows of {len(rows):,}. Apply upstream filters to narrow."
+                                            ).classes("classification-insight-level classification-insight-level--low w-full")
+
+                                        def _fill_fusion_from_pagination(pag: Dict[str, Any]) -> None:
+                                            total = len(fusion_rows_source)
+                                            pag = clamp_qtable_server_pagination(
+                                                pag,
+                                                rows_number=total,
+                                                rows_per_page_default=100,
                                             )
-                                            
-                                            # Add clickable action button column using slot that emits events to Python
+                                            rpp = int(pag["rowsPerPage"])
+                                            page = int(pag["page"])
+                                            start = (page - 1) * rpp
+                                            end = start + rpp
+                                            fusion_table.rows = fusion_rows_source[start:end]
+                                            fusion_table.pagination = pag
+                                            fusion_table.update()
+
+                                        wire_qtable_server_pagination_handlers(
+                                            fusion_table, _fill_fusion_from_pagination
+                                        )
+                                        _fill_fusion_from_pagination(fusion_init_pagination)
+
+                                        # Add clickable action button column using slot that emits events to Python
+                                        try:
+                                            # Use Vue event emission which is more reliable than window functions
+                                            fusion_table.add_slot(
+                                                "body-cell-action",
+                                                """
+<q-td key="action" :props="props">
+  <q-btn
+icon="visibility"
+size="sm"
+dense
+flat
+color="primary"
+@click="$parent.$emit('fusion-view-igv', props.row.__row_idx)"
+title="View in IGV"
+  />
+</q-td>
+"""
+                                            )
+
+                                            # Handle the event from the slot
+                                            def on_fusion_view_igv(e):
+                                                """Handle fusion view IGV event from table button."""
+                                                try:
+                                                    fusion_pair = ""
+                                                    row_idx = getattr(e, "args", None)
+                                                    if row_idx is not None:
+                                                        row_idx = int(row_idx)
+                                                        if 0 <= row_idx < len(fusion_rows_source):
+                                                            fusion_pair = fusion_rows_source[row_idx].get("fusion_pair", "")
+                                                    if fusion_pair:
+                                                        logging.debug(f"[Fusion] Button clicked for: {fusion_pair}")
+                                                        navigate_to_fusion_region(fusion_pair)
+                                                except Exception as ex:
+                                                    logging.warning(f"Error handling fusion view IGV event: {ex}")
+
+                                            fusion_table.on("fusion-view-igv", on_fusion_view_igv)
+                                            logging.debug("Added action button column slot with event handler")
+                                        except Exception as slot_ex:
+                                            logging.warning(f"Could not add action column slot: {slot_ex}")
+                                            import traceback
+                                            logging.warning(traceback.format_exc())
+
+                                            # Fallback: Use JavaScript with inline region lookup
                                             try:
-                                                # Use Vue event emission which is more reliable than window functions
+                                                # Create a safer inline handler that doesn't rely on window functions
+                                                js_inline_handler = f"""
+                                                    (function() {{
+                                                        // Store regions as a constant in the closure
+                                                        const fusionRegions = {js_regions_json};
+
+                                                        // Create handler function immediately
+                                                        window.handleFusionNav = function(fusionPair) {{
+                                                            console.log('[Fusion] Navigation handler called for:', fusionPair);
+                                                            const region = fusionRegions[fusionPair];
+                                                            if (region) {{
+                                                                console.log('[Fusion] Navigating to:', region);
+                                                                function nav() {{
+                                                                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                                                                        window.lj_igv.search(region);
+                                                                        return true;
+                                                                    }}
+                                                                    return false;
+                                                                }}
+                                                                if (!nav()) {{
+                                                                    setTimeout(nav, 500);
+                                                                    setTimeout(nav, 1500);
+                                                                }}
+                                                            }}
+                                                        }};
+                                                        console.log('[Fusion] Created navigation handler');
+                                                    }})();
+                                                """
+                                                ui.run_javascript(js_inline_handler, timeout=5.0)
+
                                                 fusion_table.add_slot(
                                                     "body-cell-action",
                                                     """
 <q-td key="action" :props="props">
-  <q-btn 
-    icon="visibility" 
-    size="sm" 
-    dense 
-    flat 
-    color="primary"
-    @click="$parent.$emit('fusion-view-igv', props.row.fusion_pair)"
-    title="View in IGV"
+  <q-btn
+icon="visibility"
+size="sm"
+dense
+flat
+color="primary"
+@click="window.handleFusionNav && window.handleFusionNav(props.row.fusion_pair)"
+title="View in IGV"
   />
 </q-td>
 """
                                                 )
-                                                
-                                                # Handle the event from the slot
-                                                def on_fusion_view_igv(e):
-                                                    """Handle fusion view IGV event from table button."""
-                                                    try:
-                                                        fusion_pair = e.args if isinstance(e.args, str) else getattr(e, 'args', None)
-                                                        if fusion_pair:
-                                                            logging.debug(f"[Fusion] Button clicked for: {fusion_pair}")
-                                                            navigate_to_fusion_region(fusion_pair)
-                                                    except Exception as ex:
-                                                        logging.warning(f"Error handling fusion view IGV event: {ex}")
-                                                
-                                                fusion_table.on("fusion-view-igv", on_fusion_view_igv)
-                                                logging.debug("Added action button column slot with event handler")
-                                            except Exception as slot_ex:
-                                                logging.warning(f"Could not add action column slot: {slot_ex}")
-                                                import traceback
-                                                logging.warning(traceback.format_exc())
-                                                
-                                                # Fallback: Use JavaScript with inline region lookup
-                                                try:
-                                                    # Create a safer inline handler that doesn't rely on window functions
-                                                    js_inline_handler = f"""
-                                                        (function() {{
-                                                            // Store regions as a constant in the closure
-                                                            const fusionRegions = {js_regions_json};
-                                                            
-                                                            // Create handler function immediately
-                                                            window.handleFusionNav = function(fusionPair) {{
-                                                                console.log('[Fusion] Navigation handler called for:', fusionPair);
-                                                                const region = fusionRegions[fusionPair];
-                                                                if (region) {{
-                                                                    console.log('[Fusion] Navigating to:', region);
-                                                                    function nav() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
+                                            except Exception as fallback_ex:
+                                                logging.warning(f"Fallback approach also failed: {fallback_ex}")
+
+                                        # Use JavaScript to attach click handlers to rows - improved with event delegation
+                                        js_attach_handlers = f"""
+                                            (function() {{
+                                                let attached = false;
+
+                                                function attachFusionHandlers() {{
+                                                    if (attached) return;
+
+                                                    console.log('[Fusion] Attaching click handlers...');
+
+                                                    // Use event delegation on the document body for better reliability
+                                                    function handleFusionRowClick(e) {{
+                                                        // Check if click is on a fusion table row
+                                                        let target = e.target;
+                                                        let row = target.closest('tbody tr');
+
+                                                        if (!row) return;
+
+                                                        // Check if this row is in a fusion table
+                                                        const table = row.closest('table');
+                                                        if (!table) return;
+
+                                                        const headers = table.querySelectorAll('thead th');
+                                                        let isFusionTable = false;
+                                                        for (let i = 0; i < headers.length; i++) {{
+                                                            if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
+                                                                isFusionTable = true;
+                                                                break;
+                                                            }}
+                                                        }}
+
+                                                        if (!isFusionTable) return;
+
+                                                        // Skip if clicking on the action button (let button handle it)
+                                                        if (target.closest('button') || target.closest('.q-btn')) {{
+                                                            return;
+                                                        }}
+
+                                                        e.preventDefault();
+                                                        e.stopPropagation();
+
+                                                        console.log('[Fusion] Row clicked');
+
+                                                        // Get fusion pair from first cell
+                                                        const cells = row.querySelectorAll('td');
+                                                        if (cells.length > 0) {{
+                                                            const fusionPair = cells[0].textContent.trim();
+                                                            console.log('[Fusion] Fusion pair:', fusionPair);
+
+                                                            if (fusionPair && window.fusionRegionsMap && window.fusionRegionsMap[fusionPair]) {{
+                                                                const region = window.fusionRegionsMap[fusionPair];
+                                                                console.log('[Fusion] Navigating to region:', region);
+
+                                                                // Visual feedback
+                                                                row.style.backgroundColor = '#e3f2fd';
+                                                                setTimeout(function() {{
+                                                                    row.style.backgroundColor = '';
+                                                                }}, 400);
+
+                                                                // Navigate IGV
+                                                                function navIGV() {{
+                                                                    if (window.lj_igv && window.lj_igv_browser_ready) {{
+                                                                        try {{
                                                                             window.lj_igv.search(region);
+                                                                            console.log('[Fusion] IGV navigation successful');
                                                                             return true;
+                                                                        }} catch(err) {{
+                                                                            console.error('[Fusion] IGV error:', err);
+                                                                            return false;
                                                                         }}
-                                                                        return false;
                                                                     }}
-                                                                    if (!nav()) {{
-                                                                        setTimeout(nav, 500);
-                                                                        setTimeout(nav, 1500);
-                                                                    }}
+                                                                    return false;
                                                                 }}
-                                                            }};
-                                                            console.log('[Fusion] Created navigation handler');
-                                                        }})();
-                                                    """
-                                                    ui.run_javascript(js_inline_handler, timeout=5.0)
-                                                    
-                                                    # Wait a moment for JS to execute, then add slot
-                                                    ui.timer(0.1, lambda: None, once=True)
-                                                    
-                                                    fusion_table.add_slot(
-                                                        "body-cell-action",
-                                                        """
-<q-td key="action" :props="props">
-  <q-btn 
-    icon="visibility" 
-    size="sm" 
-    dense 
-    flat 
-    color="primary"
-    @click="window.handleFusionNav && window.handleFusionNav(props.row.fusion_pair)"
-    title="View in IGV"
-  />
-</q-td>
-"""
-                                                    )
-                                                except Exception as fallback_ex:
-                                                    logging.warning(f"Fallback approach also failed: {fallback_ex}")
-                                            
-                                            # Use JavaScript to attach click handlers to rows - improved with event delegation
-                                            js_attach_handlers = f"""
-                                                (function() {{
-                                                    let attached = false;
-                                                    
-                                                    function attachFusionHandlers() {{
-                                                        if (attached) return;
-                                                        
-                                                        console.log('[Fusion] Attaching click handlers...');
-                                                        
-                                                        // Use event delegation on the document body for better reliability
-                                                        function handleFusionRowClick(e) {{
-                                                            // Check if click is on a fusion table row
-                                                            let target = e.target;
-                                                            let row = target.closest('tbody tr');
-                                                            
-                                                            if (!row) return;
-                                                            
-                                                            // Check if this row is in a fusion table
-                                                            const table = row.closest('table');
-                                                            if (!table) return;
-                                                            
-                                                            const headers = table.querySelectorAll('thead th');
-                                                            let isFusionTable = false;
-                                                            for (let i = 0; i < headers.length; i++) {{
-                                                                if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
-                                                                    isFusionTable = true;
-                                                                    break;
-                                                                }}
-                                                            }}
-                                                            
-                                                            if (!isFusionTable) return;
-                                                            
-                                                            // Skip if clicking on the action button (let button handle it)
-                                                            if (target.closest('button') || target.closest('.q-btn')) {{
-                                                                return;
-                                                            }}
-                                                            
-                                                            e.preventDefault();
-                                                            e.stopPropagation();
-                                                            
-                                                            console.log('[Fusion] Row clicked');
-                                                            
-                                                            // Get fusion pair from first cell
-                                                            const cells = row.querySelectorAll('td');
-                                                            if (cells.length > 0) {{
-                                                                const fusionPair = cells[0].textContent.trim();
-                                                                console.log('[Fusion] Fusion pair:', fusionPair);
-                                                                
-                                                                if (fusionPair && window.fusionRegionsMap && window.fusionRegionsMap[fusionPair]) {{
-                                                                    const region = window.fusionRegionsMap[fusionPair];
-                                                                    console.log('[Fusion] Navigating to region:', region);
-                                                                    
-                                                                    // Visual feedback
-                                                                    row.style.backgroundColor = '#e3f2fd';
-                                                                    setTimeout(function() {{
-                                                                        row.style.backgroundColor = '';
-                                                                    }}, 400);
-                                                                    
-                                                                    // Navigate IGV
-                                                                    function navIGV() {{
-                                                                        if (window.lj_igv && window.lj_igv_browser_ready) {{
-                                                                            try {{
-                                                                                window.lj_igv.search(region);
-                                                                                console.log('[Fusion] IGV navigation successful');
-                                                                                return true;
-                                                                            }} catch(err) {{
-                                                                                console.error('[Fusion] IGV error:', err);
-                                                                                return false;
-                                                                            }}
-                                                                        }}
-                                                                        return false;
-                                                                    }}
-                                                                    
-                                                                    if (!navIGV()) {{
-                                                                        setTimeout(function() {{ navIGV(); }}, 500);
-                                                                        setTimeout(function() {{ navIGV(); }}, 1500);
-                                                                    }}
+
+                                                                if (!navIGV()) {{
+                                                                    setTimeout(function() {{ navIGV(); }}, 500);
+                                                                    setTimeout(function() {{ navIGV(); }}, 1500);
                                                                 }}
                                                             }}
                                                         }}
-                                                        
-                                                        // Attach event listener to document (event delegation)
-                                                        document.addEventListener('click', handleFusionRowClick, true);
-                                                        
-                                                        // Also make rows visually clickable
-                                                        const tables = document.querySelectorAll('table');
-                                                        tables.forEach(function(table) {{
-                                                            const headers = table.querySelectorAll('thead th');
-                                                            let isFusionTable = false;
-                                                            for (let i = 0; i < headers.length; i++) {{
-                                                                if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
-                                                                    isFusionTable = true;
-                                                                    break;
-                                                                }}
-                                                            }}
-                                                            
-                                                            if (isFusionTable) {{
-                                                                const tbody = table.querySelector('tbody');
-                                                                if (tbody) {{
-                                                                    const rows = tbody.querySelectorAll('tr');
-                                                                    rows.forEach(function(row) {{
-                                                                        row.style.cursor = 'pointer';
-                                                                    }});
-                                                                    console.log('[Fusion] Made', rows.length, 'rows clickable');
-                                                                }}
-                                                            }}
-                                                        }});
-                                                        
-                                                        attached = true;
-                                                        console.log('[Fusion] Click handlers attached successfully');
                                                     }}
-                                                    
-                                                    // Try multiple times to ensure table is rendered
-                                                    attachFusionHandlers();
-                                                    setTimeout(attachFusionHandlers, 300);
-                                                    setTimeout(attachFusionHandlers, 800);
-                                                    setTimeout(attachFusionHandlers, 1500);
-                                                    setTimeout(attachFusionHandlers, 2500);
-                                                }})();
-                                            """
-                                            
-                                            # Execute JavaScript after table is created
-                                            ui.timer(0.5, lambda: ui.run_javascript(js_attach_handlers, timeout=10.0), once=True)
-                                            ui.timer(2.0, lambda: ui.run_javascript(js_attach_handlers, timeout=10.0), once=True)
-                                            
-                                            # Add summary
-                                            total_fusions = len(rows)
-                                            total_reads = sum(r["reads"] for r in rows)
-                                            ui.label(
-                                                f"Total fusions: {total_fusions} | "
-                                                f"Total supporting reads: {total_reads}"
-                                            ).classes("classification-insight-foot")
-                                        else:
-                                            ui.label("No fusion pairs found").classes(
-                                                "classification-insight-meta"
-                                            )
-                                else:
-                                    with ui.element("div").classes(
-                                        "classification-insight-shell w-full min-w-0"
-                                    ):
-                                        ui.label("Fusion pairs").classes(
-                                            "classification-insight-heading text-headline-small"
+
+                                                    // Attach event listener to document (event delegation)
+                                                    document.addEventListener('click', handleFusionRowClick, true);
+
+                                                    // Also make rows visually clickable
+                                                    const tables = document.querySelectorAll('table');
+                                                    tables.forEach(function(table) {{
+                                                        const headers = table.querySelectorAll('thead th');
+                                                        let isFusionTable = false;
+                                                        for (let i = 0; i < headers.length; i++) {{
+                                                            if ((headers[i].textContent || '').toLowerCase().includes('fusion pair')) {{
+                                                                isFusionTable = true;
+                                                                break;
+                                                            }}
+                                                        }}
+
+                                                        if (isFusionTable) {{
+                                                            const tbody = table.querySelector('tbody');
+                                                            if (tbody) {{
+                                                                const rows = tbody.querySelectorAll('tr');
+                                                                rows.forEach(function(row) {{
+                                                                    row.style.cursor = 'pointer';
+                                                                }});
+                                                                console.log('[Fusion] Made', rows.length, 'rows clickable');
+                                                            }}
+                                                        }}
+                                                    }});
+
+                                                    attached = true;
+                                                    console.log('[Fusion] Click handlers attached successfully');
+                                                }}
+
+                                                // Try multiple times to ensure table is rendered
+                                                attachFusionHandlers();
+                                                setTimeout(attachFusionHandlers, 300);
+                                                setTimeout(attachFusionHandlers, 800);
+                                                setTimeout(attachFusionHandlers, 1500);
+                                                setTimeout(attachFusionHandlers, 2500);
+                                            }})();
+                                        """
+
+                                        # Execute JavaScript after table is created using app-level timers
+                                        # (avoids UI-slot-bound timers firing after navigation).
+                                        def _run_fusion_handlers_js() -> None:
+                                            try:
+                                                ui.run_javascript(js_attach_handlers, timeout=10.0)
+                                            except Exception:
+                                                pass
+
+                                        fusion_timer_1 = app.timer(0.5, _run_fusion_handlers_js, once=True)
+                                        fusion_timer_2 = app.timer(2.0, _run_fusion_handlers_js, once=True)
+                                        fusion_pairs_refresh_timer = None
+                                        try:
+                                            def _cleanup_fusion_page() -> None:
+                                                fusion_rows_source.clear()
+                                                fusion_table.rows = []
+                                                for timer in (
+                                                    fusion_timer_1,
+                                                    fusion_timer_2,
+                                                    fusion_pairs_refresh_timer,
+                                                ):
+                                                    try:
+                                                        timer.deactivate()
+                                                    except Exception:
+                                                        pass
+                                            ui.context.client.on_disconnect(_cleanup_fusion_page)
+                                        except Exception:
+                                            pass
+
+                                        # Add summary
+                                        total_fusions = len(rows)
+                                        total_reads = sum(r["reads"] for r in rows)
+                                        fusion_summary_label = ui.label(
+                                            f"Total fusions: {total_fusions} | "
+                                            f"Total supporting reads: {total_reads}"
+                                        ).classes("classification-insight-foot")
+
+                                        async def _refresh_fusion_pairs_rows_async() -> None:
+                                            try:
+                                                new_sig = (
+                                                    target_file.stat().st_mtime
+                                                    if target_file.exists()
+                                                    else None,
+                                                    genome_file.stat().st_mtime
+                                                    if genome_file.exists()
+                                                    else None,
+                                                )
+                                                if new_sig == cache_entry.get("details_pairs_sig"):
+                                                    return
+                                                updated_rows = await asyncio.to_thread(
+                                                    _build_fusion_pairs_rows_sync
+                                                )
+                                                cache_entry["details_pairs_sig"] = new_sig
+                                                cache_entry["details_pairs_rows"] = [
+                                                    dict(r) for r in updated_rows
+                                                ]
+                                                fusion_rows_source[:] = (
+                                                    updated_rows[:5_000]
+                                                    if len(updated_rows) > 50_000
+                                                    else updated_rows
+                                                )
+                                                fusion_regions_by_pair.clear()
+                                                for row_data in fusion_rows_source:
+                                                    fusion_regions_by_pair[
+                                                        row_data["fusion_pair"]
+                                                    ] = row_data.get("region", "")
+                                                import json
+                                                ui.run_javascript(
+                                                    f"""
+                                                    (function() {{
+                                                        window.fusionRegionsMap = window.fusionRegionsMap || {{}};
+                                                        Object.keys(window.fusionRegionsMap).forEach(function(k) {{ delete window.fusionRegionsMap[k]; }});
+                                                        Object.assign(window.fusionRegionsMap, {json.dumps(fusion_regions_by_pair)});
+                                                    }})();
+                                                    """,
+                                                    timeout=5.0,
+                                                )
+                                                pag = clamp_qtable_server_pagination(
+                                                    dict(fusion_table.pagination),
+                                                    rows_number=len(fusion_rows_source),
+                                                    rows_per_page_default=100,
+                                                )
+                                                if int(pag.get("page", 1)) < 1:
+                                                    pag["page"] = 1
+                                                _fill_fusion_from_pagination(pag)
+                                                fusion_summary_label.set_text(
+                                                    f"Total fusions: {len(updated_rows)} | "
+                                                    f"Total supporting reads: {sum(r.get('reads', 0) for r in updated_rows)}"
+                                                )
+                                            except Exception as refresh_ex:
+                                                logging.warning(
+                                                    f"Fusion pairs background refresh failed: {refresh_ex}"
+                                                )
+
+                                        fusion_pairs_refresh_timer = app.timer(
+                                            30.0,
+                                            _refresh_fusion_pairs_rows_async,
+                                            active=True,
+                                            immediate=False,
                                         )
-                                        ui.label(
-                                            "No validated fusion pairs found in this run."
-                                        ).classes("classification-insight-meta")
+                                    else:
+                                        ui.label("No fusion pairs found").classes(
+                                            "classification-insight-meta"
+                                        )
                             else:
                                 with ui.element("div").classes(
                                     "classification-insight-shell w-full min-w-0"
@@ -5769,9 +6273,9 @@ class GUILauncher:
                                     ui.label("Fusion pairs").classes(
                                         "classification-insight-heading text-headline-small"
                                     )
-                                    ui.label("Fusion data is empty.").classes(
-                                        "classification-insight-meta"
-                                    )
+                                    ui.label(
+                                        "No validated fusion pairs found in this run."
+                                    ).classes("classification-insight-meta")
                         else:
                             with ui.element("div").classes(
                                 "classification-insight-shell w-full min-w-0"
@@ -5779,50 +6283,57 @@ class GUILauncher:
                                 ui.label("Fusion pairs").classes(
                                     "classification-insight-heading text-headline-small"
                                 )
-                                ui.label(
-                                    "Fusion analysis data not available. Run fusion analysis first."
-                                ).classes("classification-insight-meta")
-                    
+                                ui.label("Fusion data is empty.").classes(
+                                    "classification-insight-meta"
+                                )
+                        if _fusion_pairs_t0 is not None:
+                            fp_elapsed = time.perf_counter() - _fusion_pairs_t0
+                            print(
+                                f"[SamplePage] page=sample_details sample={sample_id} "
+                                f"section=fusion_pairs elapsed_s={fp_elapsed:.3f}",
+                                flush=True,
+                            )
                     # Target Genes Table section
                     if sample_dir and sample_dir.exists():
                         target_coverage_file = sample_dir / "target_coverage.csv"
                         bed_coverage_file = sample_dir / "bed_coverage_main.csv"
-                        
+
                         # Try target_coverage.csv first, fallback to bed_coverage_main.csv
                         coverage_file = None
                         if target_coverage_file.exists():
                             coverage_file = target_coverage_file
                         elif bed_coverage_file.exists():
                             coverage_file = bed_coverage_file
-                        
+
                         if coverage_file:
-                            # Load coverage data asynchronously to avoid blocking GUI
-                            def load_coverage_data():
-                                try:
-                                    import pandas as pd
-                                    return pd.read_csv(coverage_file)
-                                except Exception as e:
-                                    logging.error(f"Failed to load coverage file {coverage_file}: {e}")
-                                    return None
-                            
-                            # Create placeholder table that will be updated when data loads
-                            coverage_table_placeholder = ui.table(
-                                columns=[
-                                    {"name": "gene", "label": "Gene", "field": "gene"},
-                                    {"name": "chrom", "label": "Chrom", "field": "chrom"},
-                                    {"name": "startpos", "label": "Start", "field": "startpos"},
-                                    {"name": "endpos", "label": "End", "field": "endpos"},
-                                    {"name": "coverage", "label": "Coverage", "field": "coverage"},
-                                ],
-                                rows=[],
-                            ).classes("w-full")
-                            
+                            _t_target_genes = time.perf_counter()
+
                             # Load coverage data synchronously (fast enough for typical file sizes)
                             # Note: This runs during page creation, not during user interaction
                             try:
                                 import pandas as pd
-                                df = pd.read_csv(coverage_file)
-                                
+                                df = pd.read_csv(
+                                    coverage_file,
+                                    usecols=lambda c: c in {
+                                        "chrom",
+                                        "startpos",
+                                        "endpos",
+                                        "name",
+                                        "coverage",
+                                        "length",
+                                        "bases",
+                                    },
+                                    dtype={
+                                        "chrom": "string",
+                                        "name": "string",
+                                        "startpos": "float64",
+                                        "endpos": "float64",
+                                        "coverage": "float64",
+                                        "length": "float64",
+                                        "bases": "float64",
+                                    },
+                                )
+
                                 # Ensure we have the required columns
                                 required_cols = ["chrom", "startpos", "endpos", "name"]
                                 if all(col in df.columns for col in required_cols):
@@ -5836,7 +6347,7 @@ class GUILauncher:
                                                 df["coverage"] = df["bases"] / df["length"]
                                             else:
                                                 df["coverage"] = 0
-                                    
+
                                     # Prepare table data
                                     table_data = []
                                     gene_regions_by_name = {}  # Store regions for navigation
@@ -5845,23 +6356,24 @@ class GUILauncher:
                                         chrom = str(row["chrom"])
                                         startpos_raw = int(row["startpos"])
                                         endpos_raw = int(row["endpos"])
-                                        
+
                                         # Store region info for navigation (with 10kb padding)
                                         padding = 10000
                                         startpos_nav = max(1, startpos_raw - padding)
                                         endpos_nav = endpos_raw + padding
                                         region = f"{chrom}:{startpos_nav}-{endpos_nav}"
                                         gene_regions_by_name[gene_name] = region
-                                        
+
                                         table_data.append({
                                             "chrom": chrom,
                                             "startpos": f"{startpos_raw:,}",  # Format with commas for display
                                             "endpos": f"{endpos_raw:,}",  # Format with commas for display
                                             "name": gene_name,
                                             "coverage": float(row.get("coverage", 0)),
+                                            "__row_idx": len(table_data),
                                             "action": "",
                                         })
-                                    
+
                                     if table_data:
                                         with ui.element("div").classes(
                                             "classification-insight-shell w-full min-w-0"
@@ -5872,35 +6384,113 @@ class GUILauncher:
                                             ui.label(
                                                 "Click a gene row to open the region in IGV."
                                             ).classes("classification-insight-meta w-full mb-2")
-                                            
-                                            from robin.gui.theme import styled_table
-                                            
+
+                                            from robin.gui.theme import (
+                                                clamp_qtable_server_pagination,
+                                                styled_server_paged_table,
+                                                wire_qtable_server_pagination_handlers,
+                                            )
+
                                             columns = [
-                                                {"name": "name", "label": "Gene Name", "field": "name", "sortable": True},
-                                                {"name": "chrom", "label": "Chromosome", "field": "chrom", "sortable": True},
-                                                {"name": "startpos", "label": "Start", "field": "startpos", "sortable": True},
-                                                {"name": "endpos", "label": "End", "field": "endpos", "sortable": True},
-                                                {"name": "coverage", "label": "Coverage (x)", "field": "coverage", "sortable": True},
+                                                {"name": "name", "label": "Gene Name", "field": "name", "sortable": False},
+                                                {"name": "chrom", "label": "Chromosome", "field": "chrom", "sortable": False},
+                                                {"name": "startpos", "label": "Start", "field": "startpos", "sortable": False},
+                                                {"name": "endpos", "label": "End", "field": "endpos", "sortable": False},
+                                                {"name": "coverage", "label": "Coverage (x)", "field": "coverage", "sortable": False},
                                                 {"name": "action", "label": "View in IGV", "field": "action", "sortable": False}
                                             ]
-                                            
-                                            table_container, gene_table = styled_table(
-                                                columns=columns,
-                                                rows=table_data,
-                                                pagination=25,
-                                                class_size="table-xs"
+
+                                            gene_preview_mode = len(table_data) > 50_000
+                                            gene_rows_source = table_data[:5_000] if gene_preview_mode else table_data
+                                            gene_page_state: Dict[str, Any] = {
+                                                "filtered_positions": list(range(len(gene_rows_source))),
+                                            }
+                                            gene_total_matches = len(gene_page_state["filtered_positions"])
+                                            gene_init_pagination = clamp_qtable_server_pagination(
+                                                {
+                                                    "sortBy": None,
+                                                    "descending": False,
+                                                    "page": 1,
+                                                    "rowsPerPage": 100,
+                                                    "rowsNumber": gene_total_matches,
+                                                },
+                                                rows_number=gene_total_matches,
+                                                rows_per_page_default=100,
                                             )
-                                            
-                                            # Add search functionality
+                                            table_container, gene_table = styled_server_paged_table(
+                                                columns=columns,
+                                                rows=[],
+                                                pagination=gene_init_pagination,
+                                                row_key="__row_idx",
+                                                class_size="table-xs",
+                                            )
+                                            if gene_preview_mode:
+                                                ui.label(
+                                                    f"Preview mode: showing first {len(gene_rows_source):,} rows of {len(table_data):,}. Apply filters to narrow."
+                                                ).classes("classification-insight-level classification-insight-level--low w-full")
+
+                                            def _fill_gene_from_pagination(pag: Dict[str, Any]) -> None:
+                                                total = len(gene_page_state["filtered_positions"])
+                                                pag = clamp_qtable_server_pagination(
+                                                    pag,
+                                                    rows_number=total,
+                                                    rows_per_page_default=100,
+                                                )
+                                                rpp = int(pag["rowsPerPage"])
+                                                page = int(pag["page"])
+                                                start = (page - 1) * rpp
+                                                end = start + rpp
+                                                positions = gene_page_state["filtered_positions"]
+                                                slice_pos = positions[start:end]
+                                                gene_table.rows = [
+                                                    gene_rows_source[i] for i in slice_pos
+                                                ]
+                                                gene_table.pagination = pag
+                                                gene_table.update()
+
+                                            wire_qtable_server_pagination_handlers(
+                                                gene_table, _fill_gene_from_pagination
+                                            )
+
+                                            def _apply_gene_search(term: str) -> None:
+                                                txt = str(term or "").strip().lower()
+                                                if not txt:
+                                                    gene_page_state["filtered_positions"] = list(
+                                                        range(len(gene_rows_source))
+                                                    )
+                                                else:
+                                                    gene_page_state["filtered_positions"] = [
+                                                        i
+                                                        for i, row in enumerate(gene_rows_source)
+                                                        if txt in str(row.get("name", "")).lower()
+                                                        or txt in str(row.get("chrom", "")).lower()
+                                                    ]
+                                                pag = clamp_qtable_server_pagination(
+                                                    dict(gene_table.pagination),
+                                                    rows_number=len(gene_page_state["filtered_positions"]),
+                                                    rows_per_page_default=100,
+                                                )
+                                                pag["page"] = 1
+                                                _fill_gene_from_pagination(pag)
+
+                                            _fill_gene_from_pagination(gene_init_pagination)
+
                                             try:
                                                 with gene_table.add_slot("top-right"):
-                                                    with ui.input(placeholder="Search genes...").props("type=search").bind_value(
-                                                        gene_table, "filter"
-                                                    ).add_slot("append"):
+                                                    gene_search_input = ui.input(
+                                                        placeholder="Search genes..."
+                                                    ).props("type=search dense clearable")
+                                                    gene_search_input.on(
+                                                        "update:model-value",
+                                                        lambda e: _apply_gene_search(
+                                                            getattr(e, "value", "")
+                                                        ),
+                                                    )
+                                                    with gene_search_input.add_slot("append"):
                                                         ui.icon("search")
                                             except Exception:
                                                 pass
-                                            
+
                                             # Add colored coverage badges
                                             try:
                                                 gene_table.add_slot(
@@ -5915,11 +6505,11 @@ class GUILauncher:
                                                 )
                                             except Exception:
                                                 pass
-                                            
+
                                             # Function to navigate IGV to a gene region
                                             import json
                                             js_gene_regions_json = json.dumps(gene_regions_by_name)
-                                            
+
                                             def navigate_to_gene_region(gene_name: str):
                                                 """Navigate IGV browser to the specified gene region."""
                                                 if gene_name in gene_regions_by_name:
@@ -5946,7 +6536,7 @@ class GUILauncher:
                                                         }})();
                                                     """
                                                     ui.run_javascript(js_navigate, timeout=5.0)
-                                            
+
                                             # Store regions in window object for JavaScript access
                                             js_init_gene_regions = f"""
                                                 window.geneRegionsMap = window.geneRegionsMap || {{}};
@@ -5954,7 +6544,7 @@ class GUILauncher:
                                                 console.log('[Gene] Loaded', Object.keys(window.geneRegionsMap).length, 'gene regions');
                                             """
                                             ui.run_javascript(js_init_gene_regions, timeout=5.0)
-                                            
+
                                             # Add clickable action button column using slot that emits events to Python
                                             try:
                                                 # Use Vue event emission which is more reliable than window functions
@@ -5962,37 +6552,43 @@ class GUILauncher:
                                                     "body-cell-action",
                                                     """
 <q-td key="action" :props="props">
-  <q-btn 
-    icon="visibility" 
-    size="sm" 
-    dense 
-    flat 
+  <q-btn
+    icon="visibility"
+    size="sm"
+    dense
+    flat
     color="primary"
-    @click="$parent.$emit('gene-view-igv', props.row.name)"
+    @click="$parent.$emit('gene-view-igv', props.row.__row_idx)"
     title="View in IGV"
   />
 </q-td>
 """
                                                 )
-                                                
+
                                                 # Handle the event from the slot
                                                 def on_gene_view_igv(e):
                                                     """Handle gene view IGV event from table button."""
                                                     try:
-                                                        gene_name = e.args if isinstance(e.args, str) else getattr(e, 'args', None)
+                                                        row_idx = getattr(e, "args", None)
+                                                        gene_name = ""
+                                                        if row_idx is not None:
+                                                            row_idx = int(row_idx)
+                                                            if 0 <= row_idx < len(gene_rows_source):
+                                                                gene_name = gene_rows_source[row_idx].get("name", "")
                                                         if gene_name:
                                                             logging.debug(f"[Gene] Button clicked for: {gene_name}")
                                                             navigate_to_gene_region(gene_name)
                                                     except Exception as ex:
                                                         logging.warning(f"Error handling gene view IGV event: {ex}")
-                                                
+
                                                 gene_table.on("gene-view-igv", on_gene_view_igv)
                                                 logging.debug("Added action button column slot with event handler")
                                             except Exception as slot_ex:
                                                 logging.warning(f"Could not add action column slot: {slot_ex}")
                                                 import traceback
                                                 logging.warning(traceback.format_exc())
-                                            
+
+                                            gene_handler_timers: List[Any] = []
                                             # Also add row click handlers as a fallback
                                             try:
                                                 # Create JavaScript to handle row clicks
@@ -6001,15 +6597,15 @@ class GUILauncher:
                                                         // Store regions in window for JavaScript access
                                                         window.geneRegionsMap = window.geneRegionsMap || {{}};
                                                         Object.assign(window.geneRegionsMap, {js_gene_regions_json});
-                                                        
+
                                                         function attachGeneTableHandlers() {{
                                                             // Find tables with "Gene Name" header
                                                             const tables = document.querySelectorAll('table');
-                                                            
+
                                                             tables.forEach(function(table) {{
                                                                 const headers = table.querySelectorAll('thead th');
                                                                 let isGeneTable = false;
-                                                                
+
                                                                 for (let i = 0; i < headers.length; i++) {{
                                                                     const headerText = (headers[i].textContent || '').toLowerCase();
                                                                     if (headerText.includes('gene name') && headerText.includes('chromosome')) {{
@@ -6017,7 +6613,7 @@ class GUILauncher:
                                                                         break;
                                                                     }}
                                                                 }}
-                                                                
+
                                                                 if (isGeneTable) {{
                                                                     const tbody = table.querySelector('tbody');
                                                                     if (tbody) {{
@@ -6026,34 +6622,34 @@ class GUILauncher:
                                                                             // Skip if clicking on the action button (let button handle it)
                                                                             if (row.hasAttribute('data-gene-handled')) return;
                                                                             row.setAttribute('data-gene-handled', 'true');
-                                                                            
+
                                                                             // Make row clickable (but button takes precedence)
                                                                             row.style.cursor = 'pointer';
-                                                                            
+
                                                                             row.onclick = function(e) {{
                                                                                 // Don't handle if clicking on button
                                                                                 if (e.target.closest('button') || e.target.closest('.q-btn')) {{
                                                                                     return;
                                                                                 }}
-                                                                                
+
                                                                                 e.preventDefault();
                                                                                 e.stopPropagation();
-                                                                                
+
                                                                                 const cells = row.querySelectorAll('td');
                                                                                 if (cells.length >= 5) {{
                                                                                     const geneName = cells[0].textContent.trim();
-                                                                                    
+
                                                                                     if (geneName && window.geneRegionsMap && window.geneRegionsMap[geneName]) {{
                                                                                         const region = window.geneRegionsMap[geneName];
                                                                                         console.log('[Gene] Row clicked, navigating to region:', region);
-                                                                                        
+
                                                                                         // Visual feedback
                                                                                         const origBg = row.style.backgroundColor;
                                                                                         row.style.backgroundColor = '#e3f2fd';
                                                                                         setTimeout(function() {{
                                                                                             row.style.backgroundColor = origBg;
                                                                                         }}, 400);
-                                                                                        
+
                                                                                         // Navigate IGV
                                                                                         function navIGV() {{
                                                                                             if (window.lj_igv && window.lj_igv_browser_ready) {{
@@ -6068,7 +6664,7 @@ class GUILauncher:
                                                                                             }}
                                                                                             return false;
                                                                                         }}
-                                                                                        
+
                                                                                         if (!navIGV()) {{
                                                                                             setTimeout(function() {{ navIGV(); }}, 500);
                                                                                             setTimeout(function() {{ navIGV(); }}, 1500);
@@ -6081,19 +6677,38 @@ class GUILauncher:
                                                                 }}
                                                             }});
                                                         }}
-                                                        
+
                                                         attachGeneTableHandlers();
                                                         setTimeout(attachGeneTableHandlers, 300);
                                                         setTimeout(attachGeneTableHandlers, 800);
                                                         setTimeout(attachGeneTableHandlers, 1500);
                                                     }})();
                                                 """
-                                                
-                                                ui.timer(0.5, lambda: ui.run_javascript(js_gene_table_handlers, timeout=10.0), once=True)
-                                                ui.timer(2.0, lambda: ui.run_javascript(js_gene_table_handlers, timeout=10.0), once=True)
+
+                                                def _run_gene_handlers_js() -> None:
+                                                    try:
+                                                        ui.run_javascript(js_gene_table_handlers, timeout=10.0)
+                                                    except Exception:
+                                                        pass
+
+                                                gene_handler_timers.append(app.timer(0.5, _run_gene_handlers_js, once=True))
+                                                gene_handler_timers.append(app.timer(2.0, _run_gene_handlers_js, once=True))
                                             except Exception as e:
                                                 logging.warning(f"Could not add gene table click handlers: {e}")
-                                            
+                                            try:
+                                                def _cleanup_gene_page() -> None:
+                                                    gene_page_state["filtered_positions"] = []
+                                                    gene_rows_source.clear()
+                                                    gene_table.rows = []
+                                                    for timer_obj in gene_handler_timers:
+                                                        try:
+                                                            timer_obj.deactivate()
+                                                        except Exception:
+                                                            pass
+                                                ui.context.client.on_disconnect(_cleanup_gene_page)
+                                            except Exception:
+                                                pass
+
                                             # Add summary
                                             total_genes = len(table_data)
                                             ui.label(
@@ -6101,6 +6716,12 @@ class GUILauncher:
                                             ).classes("classification-insight-foot")
                             except Exception as e:
                                 logging.warning(f"Could not load target gene table: {e}")
+                            tg_elapsed = time.perf_counter() - _t_target_genes
+                            print(
+                                f"[SamplePage] page=sample_details sample={sample_id} "
+                                f"section=target_genes elapsed_s={tg_elapsed:.3f}",
+                                flush=True,
+                            )
 
     def _create_workflow_monitor(self):
         """Create the main workflow monitoring page."""
@@ -6712,7 +7333,7 @@ class GUILauncher:
         return True, ""
 
     def _list_samples_needing_snp_calling(self) -> List[str]:
-        """Samples under work dir that are ready for SNP but lack Clair3 outputs."""
+        """Samples lacking SNP outputs that can run SNP now or via finalize-first."""
         logging.info(
             "[missing_snp_scan] thread=%s",
             threading.current_thread().name,
@@ -6730,12 +7351,56 @@ class GUILauncher:
                 sid = d.name
                 if self._sample_has_snp_calling_outputs(sid):
                     continue
-                ok, _ = self._sample_snp_prerequisites_met(d)
-                if ok:
+                # Need a non-empty targets BED either way.
+                targets_bed = d / "targets_exceeding_threshold.bed"
+                if not targets_bed.is_file():
+                    continue
+                try:
+                    if not targets_bed.read_text(encoding="utf-8", errors="replace").strip():
+                        continue
+                except OSError:
+                    continue
+
+                # Eligible if SNP can start now (target.bam exists) or if we can
+                # likely finalize first (batch BAMs pending merge).
+                target_bam = d / "target.bam"
+                can_finalize_first = False
+                if not target_bam.is_file():
+                    try:
+                        can_finalize_first = any(d.glob("batch_*.bam"))
+                    except Exception:
+                        can_finalize_first = False
+                if target_bam.is_file() or can_finalize_first:
                     need.append(sid)
         except Exception as e:
             logging.debug(f"List samples needing SNP: {e}")
         return need
+
+    def _wait_for_snp_outputs_or_terminal_status(
+        self,
+        sample_id: str,
+        *,
+        poll_s: float = 5.0,
+        max_wait_s: float = 86400.0,
+    ) -> bool:
+        """Wait for SNP outputs, but exit early on terminal failure/skip statuses."""
+        terminal_phases = {
+            "Finalize failed",
+            "Finalize timeout",
+            "SNP skipped",
+            "SNP submit failed",
+            "SNP failed",
+            "Finalize/SNP failed",
+        }
+        deadline = time.time() + max_wait_s
+        while time.time() < deadline:
+            if self._sample_has_snp_calling_outputs(sample_id):
+                return True
+            phase = str(self._sample_pipeline_status.get(sample_id, {}).get("phase", "") or "")
+            if phase in terminal_phases:
+                return False
+            time.sleep(poll_s)
+        return False
 
     def _is_mnpflex_enabled_for_gui(self) -> bool:
         """True when MNP-Flex credentials exist in the server environment."""
@@ -6894,6 +7559,389 @@ class GUILauncher:
             logging.error(f"Could not zip export files: {e}")
             return None
 
+    def _build_sample_tracking_tsv_export(self, sample_ids: List[str]) -> Optional[str]:
+        """Build TSV export with tracked-table fields and summary data."""
+        try:
+            if not sample_ids or not self.monitored_directory:
+                return None
+
+            table_fields: List[str] = []
+            table = getattr(self, "samples_table", None)
+            for col in (getattr(table, "columns", None) or []):
+                field = str(col.get("field", "") or "").strip()
+                if field and field not in ("actions", "export") and field not in table_fields:
+                    table_fields.append(field)
+            if not table_fields:
+                table_fields = [
+                    "sample_id",
+                    "test_id",
+                    "origin",
+                    "run_start",
+                    "device",
+                    "flowcell",
+                    "file_progress",
+                    "pipeline_progress",
+                    "active_jobs",
+                    "pending_jobs",
+                    "total_jobs",
+                    "completed_jobs",
+                    "failed_jobs",
+                    "job_types",
+                    "last_seen",
+                ]
+
+            run_info_fields = [
+                "run_time",
+                "model",
+                "device",
+                "flow_cell",
+                "panel",
+                "bam_passed",
+                "bam_failed",
+                "total_bases",
+                "mapped_reads",
+                "unmapped_reads",
+                "bam_batches",
+            ]
+            classification_models = ["sturgeon", "nanodx", "pannanodx", "random_forest"]
+            analysis_fields = {
+                "coverage": ["quality", "global_coverage", "target_coverage", "enrichment"],
+                "cnv": ["genetic_sex", "bin_width", "variance", "gained", "lost"],
+                "cnv_broad": [
+                    "whole_chromosome_events",
+                    "arm_events",
+                    "broad_gain_events",
+                    "broad_loss_events",
+                ],
+                "mgmt": [
+                    "status",
+                    "methylation_percent",
+                    "average_methylation",
+                    "prediction_score",
+                    "cpg_sites",
+                ],
+                "fusion": [
+                    "target_fusions",
+                    "genome_fusions",
+                    "target_pairs",
+                    "target_groups",
+                    "genome_pairs",
+                    "genome_groups",
+                ],
+                "mnpflex": [
+                    "qc_status",
+                    "qc_avg_coverage",
+                    "qc_missing_site_count",
+                    "mgmt_status",
+                    "mgmt_average",
+                    "mgmt_site_count",
+                    "classifier_name",
+                    "classifier_version",
+                    "classifier_type",
+                    "has_hierarchical_summary",
+                    "top_path",
+                    "top_path_score",
+                ],
+                "variants": [
+                    "snp_total_variants",
+                    "snp_pathogenic_variants",
+                    "snp_pathogenic_list",
+                    "indel_total_variants",
+                    "indel_pathogenic_variants",
+                    "indel_pathogenic_list",
+                ],
+            }
+
+            headers = list(table_fields)
+            headers.extend([f"run_summary_{k}" for k in run_info_fields])
+            for model_name in classification_models:
+                headers.extend(
+                    [
+                        f"classification_{model_name}_class",
+                        f"classification_{model_name}_confidence",
+                        f"classification_{model_name}_confidence_level",
+                        f"classification_{model_name}_features",
+                    ]
+                )
+            for section, keys in analysis_fields.items():
+                headers.extend([f"analysis_{section}_{k}" for k in keys])
+
+            rows_by_id = {
+                str(r.get("sample_id")): r
+                for r in (self._last_samples_rows or [])
+                if r.get("sample_id")
+            }
+            from robin.gui.components.summary import _refresh_summary_cache_sync
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            out_path = os.path.join(tempfile.gettempdir(), f"robin_sample_tracking_{timestamp}.tsv")
+            if os.path.exists(out_path):
+                i = 2
+                while os.path.exists(out_path):
+                    out_path = os.path.join(
+                        tempfile.gettempdir(), f"robin_sample_tracking_{timestamp}_{i}.tsv"
+                    )
+                    i += 1
+
+            def _clean_tsv_value(value: Any) -> Any:
+                if value is None:
+                    return ""
+                if isinstance(value, (int, float, bool)):
+                    return value
+                text = str(value)
+                return text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
+
+            with open(out_path, "w", newline="", encoding="utf-8") as fh:
+                writer = csv.DictWriter(fh, fieldnames=headers, delimiter="\t")
+                writer.writeheader()
+                for sample_id in [str(s) for s in sample_ids]:
+                    sample_dir = Path(self.monitored_directory) / sample_id
+                    row_data = dict(rows_by_id.get(sample_id, {}))
+                    summary = (
+                        _refresh_summary_cache_sync(sample_dir, sample_id, self)
+                        if sample_dir.exists()
+                        else {}
+                    )
+                    run_info = summary.get("run_info", {}) or {}
+                    classification = summary.get("classification_data", {}) or {}
+                    analysis = summary.get("analysis_data", {}) or {}
+                    mnpflex_data: Dict[str, Any] = {}
+                    variant_data: Dict[str, Any] = {}
+                    cnv_broad_data: Dict[str, Any] = {}
+
+                    # Variant/SNP summary extraction (when available)
+                    try:
+                        def _format_pathogenic_rows(rows: Any) -> str:
+                            if not isinstance(rows, list):
+                                return ""
+                            formatted: List[str] = []
+                            for row in rows:
+                                if not isinstance(row, dict):
+                                    continue
+                                chrom = str(row.get("CHROM", "") or "").strip()
+                                pos = str(row.get("POS", "") or "").strip()
+                                ref = str(row.get("REF", "") or "").strip()
+                                alt = str(row.get("ALT", "") or "").strip()
+                                gene = str(
+                                    row.get("SYMBOL", "")
+                                    or row.get("GENE", "")
+                                    or row.get("GENEINFO", "")
+                                    or ""
+                                ).strip()
+                                clnsig = str(row.get("CLNSIG", "") or "").strip()
+                                locus = f"{chrom}:{pos}" if chrom and pos else ""
+                                allele = f"{ref}>{alt}" if ref and alt else ""
+                                item_parts = [p for p in [locus, allele, gene, clnsig] if p]
+                                if item_parts:
+                                    formatted.append("|".join(item_parts))
+                            # Keep deterministic + compact while still "listing" all hits.
+                            return "; ".join(formatted)
+
+                        clair_dir = sample_dir / "clair3"
+                        snp_display_path = clair_dir / "snpsift_output_display.json"
+                        if snp_display_path.exists():
+                            with open(snp_display_path, "r", encoding="utf-8") as f:
+                                snp_display = json.load(f)
+                            summary_dict = snp_display.get("summary", {}) or {}
+                            rows_all = snp_display.get("rows_all", []) or []
+                            rows_pathogenic = snp_display.get("rows_pathogenic", []) or []
+                            variant_data["snp_total_variants"] = summary_dict.get(
+                                "total_variants", len(rows_all)
+                            )
+                            variant_data["snp_pathogenic_variants"] = summary_dict.get(
+                                "pathogenic_variants", len(rows_pathogenic)
+                            )
+                            variant_data["snp_pathogenic_list"] = _format_pathogenic_rows(
+                                rows_pathogenic
+                            )
+
+                        # INDEL summary (from ClinVar-annotated display if available)
+                        indel_display_path = clair_dir / "snpsift_indel_output_display.json"
+                        if indel_display_path.exists():
+                            with open(indel_display_path, "r", encoding="utf-8") as f:
+                                indel_display = json.load(f)
+                            indel_summary = indel_display.get("summary", {}) or {}
+                            indel_rows_all = indel_display.get("rows_all", []) or []
+                            indel_rows_pathogenic = indel_display.get("rows_pathogenic", []) or []
+                            variant_data["indel_total_variants"] = indel_summary.get(
+                                "total_variants", len(indel_rows_all)
+                            )
+                            variant_data["indel_pathogenic_variants"] = indel_summary.get(
+                                "pathogenic_variants", len(indel_rows_pathogenic)
+                            )
+                            variant_data["indel_pathogenic_list"] = _format_pathogenic_rows(
+                                indel_rows_pathogenic
+                            )
+                        else:
+                            # Fallback: count records from annotated INDEL VCF if present
+                            indel_vcf = clair_dir / "snpsift_indel_output.vcf"
+                            if indel_vcf.exists():
+                                total_indel = 0
+                                pathogenic_indel = 0
+                                pathogenic_indel_items: List[str] = []
+                                with open(indel_vcf, "r", encoding="utf-8", errors="ignore") as f:
+                                    for line in f:
+                                        if not line or line.startswith("#"):
+                                            continue
+                                        total_indel += 1
+                                        if "CLNSIG=Pathogenic" in line or "CLNSIG=Likely_pathogenic" in line:
+                                            pathogenic_indel += 1
+                                            fields = line.strip().split("\t")
+                                            if len(fields) >= 5:
+                                                chrom, pos, _vid, ref, alt = fields[:5]
+                                                pathogenic_indel_items.append(
+                                                    f"{chrom}:{pos}|{ref}>{alt}"
+                                                )
+                                variant_data["indel_total_variants"] = total_indel
+                                variant_data["indel_pathogenic_variants"] = pathogenic_indel
+                                variant_data["indel_pathogenic_list"] = "; ".join(
+                                    pathogenic_indel_items
+                                )
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract variant/SNP TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
+
+                    # Broad CNV events extraction (whole-chromosome / arm-level)
+                    try:
+                        cnv_results_csv = sample_dir / "cnv_results.csv"
+                        if cnv_results_csv.exists():
+                            whole_chr_events = 0
+                            arm_events = 0
+                            broad_gain_events = 0
+                            broad_loss_events = 0
+                            with open(cnv_results_csv, "r", newline="", encoding="utf-8", errors="ignore") as f:
+                                reader = csv.DictReader(f)
+                                for event_row in reader:
+                                    region = str(
+                                        event_row.get("Region")
+                                        or event_row.get("region")
+                                        or ""
+                                    ).lower()
+                                    state = str(
+                                        event_row.get("State")
+                                        or event_row.get("state")
+                                        or event_row.get("event_type")
+                                        or ""
+                                    ).upper()
+                                    if "whole chromosome" in region:
+                                        whole_chr_events += 1
+                                    if "arm" in region:
+                                        arm_events += 1
+                                    if any(k in state for k in ("GAIN", "HIGH_GAIN")):
+                                        broad_gain_events += 1
+                                    if any(k in state for k in ("LOSS", "DEEP_LOSS")):
+                                        broad_loss_events += 1
+                            cnv_broad_data = {
+                                "whole_chromosome_events": whole_chr_events,
+                                "arm_events": arm_events,
+                                "broad_gain_events": broad_gain_events,
+                                "broad_loss_events": broad_loss_events,
+                            }
+                    except Exception as ex:
+                        logging.debug(
+                            "Could not extract broad CNV TSV fields for %s: %s",
+                            sample_id,
+                            ex,
+                        )
+
+                    try:
+                        results_dir = self._mnpflex_results_dir_for_sample(sample_dir, sample_id)
+                        if results_dir:
+                            bundle_path = results_dir / "bundle_summary.json"
+                            if bundle_path.exists():
+                                with open(bundle_path, "r", encoding="utf-8") as f:
+                                    bundle = json.load(f)
+                                qc = bundle.get("qc", {}) or {}
+                                mgmt = bundle.get("mgmt", {}) or {}
+                                classifier_summary = bundle.get("classifier_summary", {}) or {}
+                                classifier = classifier_summary.get("classifier", {}) or {}
+                                hierarchy = classifier_summary.get("summary_hierarchical", []) or []
+                                scores = classifier_summary.get("scores") or []
+                                top_path = ""
+                                top_path_score = ""
+                                try:
+                                    if hierarchy:
+                                        def _flatten(nodes: List[Dict[str, Any]], path: Optional[List[str]] = None):
+                                            current_path = path or []
+                                            flat_rows = []
+                                            for node in nodes or []:
+                                                group = node.get("group", "Unknown")
+                                                score = node.get("score")
+                                                next_path = current_path + [group]
+                                                members = node.get("members") or []
+                                                if members:
+                                                    flat_rows.extend(_flatten(members, next_path))
+                                                else:
+                                                    flat_rows.append((score, next_path))
+                                            return flat_rows
+
+                                        flat = _flatten(hierarchy)
+                                        if flat:
+                                            best_score, best_path = max(flat, key=lambda x: x[0] or 0)
+                                            top_path = " > ".join(best_path)
+                                            top_path_score = best_score
+                                    elif scores:
+                                        top = sorted(
+                                            scores,
+                                            key=lambda item: float(item.get("score", 0) or 0),
+                                            reverse=True,
+                                        )[:1]
+                                        if top:
+                                            top_ref = top[0].get("reference_group") or {}
+                                            top_path = (
+                                                top_ref.get("molecular_subclass")
+                                                or top_ref.get("name")
+                                                or ""
+                                            )
+                                            top_path_score = top[0].get("score", "")
+                                except Exception:
+                                    pass
+                                mnpflex_data = {
+                                    "qc_status": qc.get("status", ""),
+                                    "qc_avg_coverage": qc.get("avg_coverage", ""),
+                                    "qc_missing_site_count": qc.get("missing_site_count", ""),
+                                    "mgmt_status": mgmt.get("status", ""),
+                                    "mgmt_average": mgmt.get("average", ""),
+                                    "mgmt_site_count": mgmt.get("site_count", ""),
+                                    "classifier_name": classifier.get("name", ""),
+                                    "classifier_version": classifier.get("version", ""),
+                                    "classifier_type": classifier.get("classifier_type", ""),
+                                    "has_hierarchical_summary": bool(hierarchy),
+                                    "top_path": top_path,
+                                    "top_path_score": top_path_score,
+                                }
+                    except Exception as ex:
+                        logging.debug("Could not extract MNP-Flex TSV fields for %s: %s", sample_id, ex)
+                    if mnpflex_data:
+                        analysis["mnpflex"] = mnpflex_data
+                    if variant_data:
+                        analysis["variants"] = variant_data
+                    if cnv_broad_data:
+                        analysis["cnv_broad"] = cnv_broad_data
+
+                    export_row: Dict[str, Any] = {k: row_data.get(k, "") for k in table_fields}
+                    for key in run_info_fields:
+                        export_row[f"run_summary_{key}"] = run_info.get(key, "")
+                    for model_name in classification_models:
+                        model_data = classification.get(model_name, {}) or {}
+                        export_row[f"classification_{model_name}_class"] = model_data.get("classification", "")
+                        export_row[f"classification_{model_name}_confidence"] = model_data.get("confidence", "")
+                        export_row[f"classification_{model_name}_confidence_level"] = model_data.get("confidence_level", "")
+                        export_row[f"classification_{model_name}_features"] = model_data.get("features", "")
+                    for section, keys in analysis_fields.items():
+                        section_data = analysis.get(section, {}) or {}
+                        for key in keys:
+                            export_row[f"analysis_{section}_{key}"] = section_data.get(key, "")
+                    writer.writerow({k: _clean_tsv_value(v) for k, v in export_row.items()})
+
+            return out_path
+        except Exception as e:
+            logging.error("Failed to build sample tracking TSV export: %s", e, exc_info=True)
+            return None
+
     def _wait_for_snp_outputs_or_timeout(
         self,
         sample_id: str,
@@ -7028,6 +8076,52 @@ class GUILauncher:
                 sample_dir = Path(self.monitored_directory) / sid
                 ok, reason = self._sample_snp_prerequisites_met(sample_dir)
                 if not ok:
+                    if str(reason) == "missing target.bam":
+                        self._set_pipeline_status(
+                            sid,
+                            phase="Finalize requested",
+                            progress=0.1,
+                            detail="Bulk SNP triggering finalize-first path",
+                        )
+                        self._trigger_target_bam_finalization(sid, trigger_snp=True)
+                        finished = self._wait_for_snp_outputs_or_terminal_status(
+                            sid, poll_s=5.0, max_wait_s=86400.0
+                        )
+                        if finished:
+                            self._set_pipeline_status(
+                                sid,
+                                phase="SNP complete",
+                                progress=1.0,
+                                detail="SNP outputs detected",
+                            )
+                            logging.info("Bulk SNP: completed via finalize-first %s", sid)
+                        else:
+                            phase = str(
+                                self._sample_pipeline_status
+                                .get(sid, {})
+                                .get("phase", "SNP still running")
+                            )
+                            if phase not in {
+                                "SNP skipped",
+                                "SNP submit failed",
+                                "SNP failed",
+                                "Finalize failed",
+                                "Finalize timeout",
+                                "Finalize/SNP failed",
+                            }:
+                                self._set_pipeline_status(
+                                    sid,
+                                    phase="SNP still running",
+                                    progress=0.9,
+                                    detail="Timed out waiting for outputs",
+                                    level="warning",
+                                )
+                            logging.warning(
+                                "Bulk SNP: finalize-first path incomplete/terminal for %s (phase=%s)",
+                                sid,
+                                phase,
+                            )
+                        continue
                     self._set_pipeline_status(
                         sid,
                         phase="SNP skipped",
@@ -7090,7 +8184,7 @@ class GUILauncher:
                         progress=0.85,
                         detail="Queued in slow worker",
                     )
-                    finished = self._wait_for_snp_outputs_or_timeout(
+                    finished = self._wait_for_snp_outputs_or_terminal_status(
                         sid, poll_s=5.0, max_wait_s=86400.0
                     )
                     if finished:
@@ -7304,12 +8398,12 @@ class GUILauncher:
         try:
             rows = getattr(self.samples_table, "rows", None) or []
             visible_ids = {str(r.get("sample_id")) for r in rows if r.get("sample_id")}
-            self._selected_sample_ids = set(visible_ids)
+            selected_ids = self._set_selected_sample_ids(set(visible_ids))
             for r in self._last_samples_rows or []:
                 sid = r.get("sample_id")
                 if sid:
-                    r["export"] = str(sid) in self._selected_sample_ids
-            if self._selected_sample_ids:
+                    r["export"] = str(sid) in selected_ids
+            if selected_ids:
                 self.export_reports_button.enable()
             else:
                 self.export_reports_button.disable()
@@ -7317,7 +8411,7 @@ class GUILauncher:
             logging.info(
                 "[samples_overview] Select all (toolbar): %d sample(s) "
                 "(visible filtered rows=%d)",
-                len(self._selected_sample_ids),
+                len(selected_ids),
                 len(rows),
             )
         except Exception as e:
@@ -7327,7 +8421,7 @@ class GUILauncher:
 
     def _samples_clear_export_selection(self) -> None:
         try:
-            self._selected_sample_ids.clear()
+            self._set_selected_sample_ids(set())
             for r in self._last_samples_rows or []:
                 r["export"] = False
             self.export_reports_button.disable()
@@ -7392,9 +8486,8 @@ class GUILauncher:
             )
 
         try:
-            from robin.analysis.target_analysis import finalize_accumulation_for_sample
             import csv
-            
+
             # Read target_panel from master.csv
             sample_dir = Path(self.monitored_directory) / sample_id
             master_csv = sample_dir / "master.csv"
@@ -7417,7 +8510,7 @@ class GUILauncher:
                                 target_panel = panel
                 except Exception:
                     pass  # Use default
-            
+
             already_finalized = sample_id in self._finalized_samples
 
             # Trigger finalization (and optional SNP analysis) in background thread to avoid blocking GUI
@@ -7526,6 +8619,10 @@ class GUILauncher:
                                     f"Target BAM finalization job submission failed for {sample_id}; running inline"
                                 )
                         if finalization_succeeded:
+                            from robin.analysis.target_analysis import (
+                                finalize_accumulation_for_sample,
+                            )
+
                             logging.debug(
                                 "target_bam_finalize: finalize_accumulation_for_sample "
                                 "sample_id=%s",
@@ -7852,7 +8949,7 @@ class GUILauncher:
                         level="negative",
                     )
                     logging.error(f"Error finalizing target.bam for {sample_id}: {e}")
-            
+
             thread = threading.Thread(target=finalize_in_background, daemon=True)
             logging.debug(
                 "target_bam_finalize: starting worker thread sample_id=%s", sample_id
@@ -7864,7 +8961,7 @@ class GUILauncher:
                 "target_bam_finalize: outer exception sample_id=%s: %s", sample_id, e
             )
             logging.error(f"Failed to trigger target.bam finalization for {sample_id}: {e}")
-    
+
     def _get_expected_completion_job_types(self) -> Set[str]:
         """Get the set of job types expected to complete for this workflow."""
         if not self.workflow_steps:
@@ -7898,12 +8995,12 @@ class GUILauncher:
             completed_jobs = 0
             failed_jobs = 0
             job_types = set()
-            
+
             job_patterns = COMPLETION_JOB_PATTERNS
             job_types_to_check = (
                 expected_job_types if expected_job_types else set(job_patterns.keys())
             )
-            
+
             # Check for each job type
             for job_type in job_types_to_check:
                 patterns = job_patterns.get(job_type, [])
@@ -7920,7 +9017,7 @@ class GUILauncher:
                         if (sample_dir / pattern).exists():
                             job_found = True
                             break
-                
+
                 if job_found:
                     total_jobs += 1
                     completed_jobs += 1  # Assume completed if files exist
@@ -7928,14 +9025,14 @@ class GUILauncher:
 
             if expected_job_types:
                 total_jobs = len(expected_job_types)
-            
+
             return {
                 "total_jobs": total_jobs,
                 "completed_jobs": completed_jobs,
                 "failed_jobs": failed_jobs,
                 "job_types": ", ".join(sorted(job_types)) if job_types else ""
             }
-            
+
         except Exception as e:
             logging.warning(f"Error calculating job counts from files for {sample_dir}: {e}")
             return {
@@ -8064,9 +9161,39 @@ class GUILauncher:
 
                                 ui.separator().classes("mgmt-detail-separator")
 
-                                ui.label("Add folder").classes(
+                                ui.label("Add folders").classes(
                                     "target-coverage-panel__meta-label mt-1 mb-1"
                                 )
+                                pending_paths: list[str] = []
+                                pending_paths_container = ui.column().classes(
+                                    "w-full gap-1"
+                                )
+
+                                def refresh_pending_paths():
+                                    pending_paths_container.clear()
+                                    with pending_paths_container:
+                                        for selected_path in pending_paths:
+                                            with ui.row().classes(
+                                                "w-full items-center gap-2 p-2 rounded "
+                                                "min-w-0 watched-folders-path-row"
+                                            ):
+                                                ui.icon("folder").classes("shrink-0")
+                                                ui.label(selected_path).classes(
+                                                    "text-xs flex-1 break-all font-mono"
+                                                )
+
+                                                def remove_pending(path=selected_path):
+                                                    if path in pending_paths:
+                                                        pending_paths.remove(path)
+                                                    refresh_pending_paths()
+
+                                                ui.button(
+                                                    icon="close",
+                                                    on_click=remove_pending,
+                                                ).props(
+                                                    "flat round dense aria-label=Remove"
+                                                )
+
                                 with ui.row().classes(
                                     "w-full gap-2 items-end flex-wrap"
                                 ):
@@ -8090,14 +9217,17 @@ class GUILauncher:
                                             )
                                         )
                                         picker = local_folder_picker(
-                                            start, upper_limit=None
+                                            start, upper_limit=None, multiple=True
                                         )
                                         result = await picker
-                                        if result and len(result) > 0:
-                                            path_input.value = result[0]
+                                        if result:
+                                            for selected_path in result:
+                                                if selected_path not in pending_paths:
+                                                    pending_paths.append(selected_path)
+                                            refresh_pending_paths()
 
                                     ui.button(
-                                        "Browse",
+                                        "Browse folders",
                                         on_click=pick_folder,
                                         icon="folder_open",
                                     ).props("flat no-caps outline")
@@ -8113,9 +9243,12 @@ class GUILauncher:
 
                                 async def do_add_folder():
                                     path_val = (path_input.value or "").strip()
-                                    if not path_val:
+                                    paths_to_add = list(pending_paths)
+                                    if path_val and path_val not in paths_to_add:
+                                        paths_to_add.append(path_val)
+                                    if not paths_to_add:
                                         ui.notify(
-                                            "Please enter a folder path",
+                                            "Please enter or select at least one folder",
                                             type="warning",
                                         )
                                         return
@@ -8129,24 +9262,31 @@ class GUILauncher:
                                                 "items-center gap-3 min-w-0"
                                             ):
                                                 ui.spinner(size="lg")
-                                                ui.label("Adding folder…").classes(
+                                                ui.label("Adding folders…").classes(
                                                     "classification-insight-model"
                                                 )
                                     add_dialog.open()
                                     # Close modal immediately before long-running add to avoid
                                     # "client has been deleted" when user navigates away during add
                                     add_dialog.close()
-                                    self._safe_notify("Adding folder...", "info")
-                                    await self._do_add_folder(
+                                    self._safe_notify(
+                                        f"Adding {len(paths_to_add)} folder"
+                                        f"{'s' if len(paths_to_add) != 1 else ''}...",
+                                        "info",
+                                    )
+                                    failed_paths = await self._do_add_folders(
+                                        paths=paths_to_add,
                                         path_input=path_input,
                                         add_watch_path=add_watch_path,
                                         watched_container=watched_container,
                                         get_watched_paths=get_watched_paths,
                                         remove_watch_path=remove_watch_path,
                                     )
+                                    pending_paths[:] = failed_paths
+                                    refresh_pending_paths()
 
                                 ui.button(
-                                    "Add folder",
+                                    "Add folders",
                                     on_click=do_add_folder,
                                     icon="add_circle_outline",
                                 ).props("color=primary no-caps").classes("w-full mt-2")
@@ -8406,6 +9546,87 @@ class GUILauncher:
                         raise
         else:
             self._safe_notify(message, "negative")
+
+    async def _do_add_folders(
+        self,
+        paths,
+        path_input,
+        add_watch_path,
+        watched_container=None,
+        get_watched_paths=None,
+        remove_watch_path=None,
+    ):
+        """Add several watch folders and return any paths which failed."""
+        unique_paths = list(dict.fromkeys(str(path).strip() for path in paths if path))
+        if not unique_paths:
+            self._safe_notify("Please select at least one folder", "warning")
+            return []
+
+        try:
+            from nicegui import run as ng_run
+        except ImportError:
+            ng_run = None
+
+        successes = []
+        failures = []
+        failure_messages = []
+        warnings = []
+        for path in unique_paths:
+            if ng_run is not None:
+                success, message = await ng_run.io_bound(add_watch_path, path)
+            else:
+                success, message = add_watch_path(path)
+            if success:
+                successes.append(path)
+                message_lower = (message or "").lower()
+                if (
+                    "skipped previously-analysed" in message_lower
+                    or "skipped previously analyzed" in message_lower
+                ):
+                    warnings.append(message)
+            else:
+                failures.append(path)
+                failure_messages.append(f"{path}: {message}")
+
+        if failures:
+            summary = (
+                f"Added {len(successes)} of {len(unique_paths)} folders. "
+                f"Failed: {'; '.join(failure_messages[:3])}"
+            )
+            if len(failures) > 3:
+                summary += f" (+{len(failures) - 3} more)"
+            self._safe_notify(summary, "warning" if successes else "negative")
+        elif warnings:
+            self._safe_notify(
+                f"Added {len(successes)} folders with warnings: {warnings[0]}",
+                "warning",
+            )
+        else:
+            self._safe_notify(
+                f"Added {len(successes)} folder"
+                f"{'s' if len(successes) != 1 else ''}.",
+                "positive",
+            )
+
+        try:
+            path_input.value = ""
+        except RuntimeError as exc:
+            if "deleted" not in str(exc).lower() and "client" not in str(exc).lower():
+                raise
+
+        if (
+            watched_container is not None
+            and get_watched_paths is not None
+            and remove_watch_path is not None
+        ):
+            try:
+                self._refresh_watched_list(
+                    watched_container, remove_watch_path, get_watched_paths
+                )
+            except RuntimeError as exc:
+                if "deleted" not in str(exc).lower():
+                    raise
+        return failures
 
     def _do_remove_folder(self, path, watched_container, remove_watch_path, get_watched_paths):
         """Remove a folder from the watch list."""

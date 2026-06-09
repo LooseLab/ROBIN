@@ -1347,7 +1347,15 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         return analysis_result
 
 
-def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2, reference: Optional[str] = None):
+def process_multiple_bams(
+    bam_paths,
+    metadata_list,
+    work_dir,
+    logger,
+    threads=2,
+    reference: Optional[str] = None,
+    job_id: Optional[int] = None,
+):
     """
     Process multiple BAM files for CNV analysis using aggregated CNV data.
     
@@ -1562,39 +1570,19 @@ def process_multiple_bams(bam_paths, metadata_list, work_dir, logger, threads=2,
                 copy_numbers = updated_copy_numbers
                 
                 logger.info(f"Completed BAM file {i+1}/{len(valid_bam_paths)}: {os.path.basename(bam_path)}")
+                if job_id is not None:
+                    try:
+                        from robin.workflow_ray import notify_coordinator_files_completed
 
-            # After processing all BAM files, get the final aggregated results
-            # We need to run one final analysis to get the aggregated CNV data
+                        notify_coordinator_files_completed("cnv", 1, job_id=job_id)
+                    except Exception:
+                        pass
+
+            # The last loop result already reflects all BAMs accumulated in
+            # copy_numbers. Re-running the final BAM here would add its reads
+            # twice and waste a complete sample/reference analysis pass.
             logger.info("Generating final aggregated CNV results...")
-            
-            # Use the last BAM file to generate final results (copy_numbers now contains aggregated data)
-            final_bam_path = valid_bam_paths[-1]
-            
-            if USE_CNV_SUBPROCESS:
-                # For subprocess mode, we need to run one more analysis to get final results
-                final_result = run_cnv_analysis_subprocess(
-                    final_bam_path,
-                    {},
-                    ref_cnv_path,
-                    temp_dir,
-                    logger,
-                    threads=threads,
-                    mapq_filter=60,
-                    sample_id=sample_id,
-                    copy_numbers_path=copy_numbers_path,
-                    timeout=adaptive_timeout,
-                )
-            else:
-                # For direct mode, run one final analysis to get aggregated results
-                final_result = run_cnv_analysis_direct(
-                    final_bam_path,
-                    copy_numbers,  # This now contains aggregated data from all BAM files
-                    ref_cnv_dict_loaded,
-                    logger,
-                    threads=threads,
-                    mapq_filter=60,
-                    sample_id=sample_id,
-                )
+            final_result = subprocess_result
 
             if final_result is None or not final_result.get("success", False):
                 error_msg = (
@@ -1815,6 +1803,7 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
             logger=logger,
             threads=threads,
             reference=reference,
+            job_id=job.job_id,
         )
         
         # Store batch results in job context (maintain compatibility with existing structure)
@@ -1832,8 +1821,21 @@ def cnv_handler(job, work_dir=None, target_panel=None, threads=2):
         
         if batch_result.get("error_message"):
             logger.error(f"Batch processing completed with errors: {batch_result['error_message']}")
+            job.context.add_error("cnv_analysis", batch_result["error_message"])
         else:
             logger.info("Batch processing completed successfully with aggregated CNV analysis")
+            job.context.add_result(
+                "cnv_analysis",
+                {
+                    "status": "success",
+                    "sample_id": sample_id,
+                    "analysis_time": batch_result.get("analysis_timestamp", 0),
+                    "processing_steps": batch_result.get("processing_steps", []),
+                    "files_processed": batch_result.get("files_processed", batch_size),
+                    "total_files": batch_result.get("total_files", batch_size),
+                    "cnv_data_path": batch_result.get("cnv_data_path", ""),
+                },
+            )
         
         return
         

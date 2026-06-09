@@ -26,9 +26,11 @@ import pickle
 import glob
 import time
 import bisect
+import re
 from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
+from itertools import combinations
 from typing import Dict, Any, Optional, List, Tuple, Set, Union
 from dataclasses import dataclass, asdict
 
@@ -64,6 +66,34 @@ DEBUG_MASTER_BED_INCREMENTAL = os.getenv("ROBIN_DEBUG_MASTER_BED_INCREMENTAL", "
 
 # Minimum primary alignment QS (BAM tag "qs") to include a read in fusion analysis
 MIN_PRIMARY_QS = 12
+
+
+def _replace_file_if_changed(temporary_path: str, destination_path: str) -> bool:
+    """
+    Atomically replace destination_path only when temporary_path has different content.
+
+    Returns True when destination_path was created or changed.
+    """
+    try:
+        if os.path.exists(destination_path):
+            if os.path.getsize(temporary_path) == os.path.getsize(destination_path):
+                with open(temporary_path, "rb") as new_file, open(destination_path, "rb") as existing_file:
+                    while True:
+                        new_chunk = new_file.read(1024 * 1024)
+                        existing_chunk = existing_file.read(1024 * 1024)
+                        if new_chunk != existing_chunk:
+                            break
+                        if not new_chunk:
+                            os.remove(temporary_path)
+                            return False
+        os.replace(temporary_path, destination_path)
+        return True
+    except Exception:
+        try:
+            os.remove(temporary_path)
+        except OSError:
+            pass
+        raise
 
 
 @dataclass(slots=True)
@@ -307,6 +337,40 @@ def _build_fusion_row_dict(
     ref_end: int,
 ) -> Dict[str, Any]:
     """Build a row dict with the standard fusion columns."""
+    return _build_fusion_row_from_values(
+        ref_name=ref_name,
+        gene_start=gene_start,
+        gene_end=gene_end,
+        gene_name=gene_name,
+        read_id=read.query_name,
+        mapping_quality=read.mapping_quality,
+        strand="-" if read.is_reverse else "+",
+        read_start=read.query_alignment_start,
+        read_end=read.query_alignment_end,
+        is_secondary=read.is_secondary,
+        is_supplementary=read.is_supplementary,
+        ref_start=ref_start,
+        ref_end=ref_end,
+    )
+
+
+def _build_fusion_row_from_values(
+    *,
+    ref_name: str,
+    gene_start: int,
+    gene_end: int,
+    gene_name: str,
+    read_id: str,
+    mapping_quality: int,
+    strand: str,
+    read_start: int,
+    read_end: int,
+    is_secondary: bool,
+    is_supplementary: bool,
+    ref_start: int,
+    ref_end: int,
+) -> Dict[str, Any]:
+    """Build a fusion row from a BAM record or an SA-tag alignment."""
     return {
         "col1": ref_name,
         "col2": gene_start,
@@ -315,13 +379,13 @@ def _build_fusion_row_dict(
         "reference_id": ref_name,
         "reference_start": ref_start,
         "reference_end": ref_end,
-        "read_id": read.query_name,
-        "mapping_quality": read.mapping_quality,
-        "strand": "-" if read.is_reverse else "+",
-        "read_start": read.query_alignment_start,
-        "read_end": read.query_alignment_end,
-        "is_secondary": read.is_secondary,
-        "is_supplementary": read.is_supplementary,
+        "read_id": read_id,
+        "mapping_quality": mapping_quality,
+        "strand": strand,
+        "read_start": read_start,
+        "read_end": read_end,
+        "is_secondary": is_secondary,
+        "is_supplementary": is_supplementary,
         "mapping_span": ref_end - ref_start,
     }
 
@@ -366,8 +430,6 @@ def _append_gene_intersections(
     min_overlap: Optional[int] = None,
 ) -> int:
     """Append gene intersections for a read into columnar storage."""
-    if not read.has_tag("SA"):
-        return 0
     if not gene_regions:
         return 0
 
@@ -432,9 +494,6 @@ def _append_combined_gene_intersections(
     min_overlap: Optional[int] = None,
 ) -> None:
     """Append overlaps from a combined tagged index into target/genome buckets."""
-    if not read.has_tag("SA"):
-        return
-
     if min_overlap is None:
         min_overlap = get_fusion_threshold("gene_overlap")
     ncls_index, tagged_regions = combined_index
@@ -946,6 +1005,34 @@ def _check_read_alignments_overlap(read_rows: List[Dict]) -> bool:
     return False
 
 
+def _canonicalize_gene_alignment_rows(
+    rows: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Collapse BAM and SA-tag representations of the same gene alignment."""
+    unique: Dict[Tuple[Any, ...], Dict[str, Any]] = {}
+    for row in rows:
+        key = (
+            row["read_id"],
+            row["col4"],
+            row["reference_id"],
+            row["reference_start"],
+            row["reference_end"],
+            row["strand"],
+        )
+        existing = unique.get(key)
+        if existing is None or (
+            existing.get("_from_sa_tag", False)
+            and not row.get("_from_sa_tag", False)
+        ):
+            unique[key] = row
+
+    result = []
+    for row in unique.values():
+        row.pop("_from_sa_tag", None)
+        result.append(row)
+    return result
+
+
 def _find_gene_intersections(
     read: pysam.AlignedSegment,
     ref_name: str,
@@ -978,11 +1065,6 @@ def _find_gene_intersections(
         List of intersection dictionaries with the exact column structure
     """
     read_rows = []
-
-    # Only process reads that have supplementary alignments (SA tag)
-    # This ensures we only look at reads that actually map to multiple locations
-    if not read.has_tag("SA"):
-        return read_rows
 
     # Early return if no gene regions
     if not gene_regions:
@@ -1050,6 +1132,82 @@ def _find_gene_intersections(
             )
 
     return read_rows
+
+
+def _sa_alignment_spans(cigar: str) -> Tuple[int, int]:
+    """Return reference and aligned-query spans for an SA-tag CIGAR."""
+    reference_span = 0
+    query_span = 0
+    for length_text, operation in re.findall(r"(\d+)([MIDNSHP=X])", cigar or ""):
+        length = int(length_text)
+        if operation in "MDN=X":
+            reference_span += length
+        if operation in "MI=X":
+            query_span += length
+    return reference_span, query_span
+
+
+def _find_gene_intersections_for_values(
+    *,
+    ref_name: str,
+    ref_start: int,
+    ref_end: int,
+    read_id: str,
+    mapping_quality: int,
+    strand: str,
+    read_start: int,
+    read_end: int,
+    gene_regions: List[GeneRegion],
+    region_starts: Optional[List[int]] = None,
+    region_index: Optional[Tuple["NCLS", List[GeneRegion]]] = None,
+    min_overlap: Optional[int] = None,
+) -> List[Dict[str, Any]]:
+    """Find gene intersections for an alignment represented only by SA values."""
+    if not gene_regions:
+        return []
+    if min_overlap is None:
+        min_overlap = get_fusion_threshold("gene_overlap")
+
+    if region_index and _HAS_NCLS:
+        candidates = (
+            region_index[1][region_id]
+            for _, _, region_id in region_index[0].find_overlap(ref_start, ref_end)
+        )
+    else:
+        if region_starts is None:
+            region_starts = [region.start for region in gene_regions]
+        rightmost_idx = bisect.bisect_right(region_starts, ref_end)
+        candidates = (
+            gene_regions[index]
+            for index in range(rightmost_idx - 1, -1, -1)
+            if gene_regions[index].end >= ref_start
+        )
+
+    rows = []
+    for gene_region in candidates:
+        overlap_start = max(gene_region.start, ref_start)
+        overlap_end = min(gene_region.end, ref_end)
+        if overlap_end <= overlap_start or (overlap_end - overlap_start) <= min_overlap:
+            continue
+        rows.append(
+            _build_fusion_row_from_values(
+                ref_name=ref_name,
+                gene_start=gene_region.start,
+                gene_end=gene_region.end,
+                gene_name=gene_region.name,
+                read_id=read_id,
+                mapping_quality=mapping_quality,
+                strand=strand,
+                read_start=read_start,
+                read_end=read_end,
+                is_secondary=False,
+                is_supplementary=True,
+                ref_start=ref_start,
+                ref_end=ref_end,
+            )
+        )
+        rows[-1]["_from_sa_tag"] = True
+    return rows
 
 
 def _process_reads_for_fusions(
@@ -1158,34 +1316,40 @@ def _process_reads_for_fusions(
 
 def _optimize_fusion_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Optimize fusion DataFrame memory usage.
+    Apply inexpensive native dtypes suitable for immediate Parquet staging.
 
-    Args:
-        df: Input DataFrame
-
-    Returns:
-        Memory-optimized DataFrame
+    String columns remain ordinary object columns. Converting small per-BAM
+    tables to categoricals costs CPU and provides little benefit because
+    Parquet performs its own dictionary encoding. Complete integer columns use
+    native NumPy dtypes; columns containing missing values remain regular
+    numeric columns rather than pandas nullable extension arrays.
     """
-    # Use categorical dtypes for string columns
-    string_columns = ["col1", "col4", "reference_id", "strand", "read_id"]
-    for col in string_columns:
-        if col in df.columns:
-            df[col] = df[col].astype("category")
+    integer_dtypes = {
+        "col2": np.int32,
+        "col3": np.int32,
+        "reference_start": np.int32,
+        "reference_end": np.int32,
+        "read_start": np.int32,
+        "read_end": np.int32,
+        "mapping_quality": np.uint8,
+        "mapping_span": np.int32,
+    }
+    conversions = {}
+    for column, dtype in integer_dtypes.items():
+        if column not in df.columns:
+            continue
+        numeric = pd.to_numeric(df[column], errors="coerce")
+        if numeric.notna().all():
+            conversions[column] = dtype
+        else:
+            df[column] = numeric
 
-    # Use appropriate integer types
-    int_columns = [
-        "col2",
-        "col3",
-        "reference_start",
-        "reference_end",
-        "read_start",
-        "read_end",
-        "mapping_quality",
-        "mapping_span",
-    ]
-    for col in int_columns:
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce").astype("Int64")
+    for column in ("is_secondary", "is_supplementary"):
+        if column in df.columns and not df[column].isna().any():
+            conversions[column] = bool
+
+    if conversions:
+        df = df.astype(conversions, copy=False)
 
     return df
 
@@ -1680,17 +1844,22 @@ def process_bam_single_pass(
                     if not ref_name or ref_name == "chrM":
                         continue
                     
-                    # Check for supplementary alignments
-                    # If we have a complete supplementary_read_ids list, trust it and skip SA tag checks
+                    # Single SA fetch for incomplete-list path (reused below for master BED parsing).
+                    # Complete-list path trusts preprocessing and fetches SA once at master BED stage.
+                    sa_tag_cached: Optional[str] = None
                     if supplementary_reads_set is not None and supplementary_read_ids_complete:
                         if read.query_name not in supplementary_reads_set:
                             continue
-                        has_supplementary = True
                     else:
-                        # Always check SA tag directly to ensure we catch ALL reads
-                        has_supplementary = read.has_tag("SA")
-                        # Optional optimization: if we have a supplementary_read_ids list and the read is not in it,
-                        # we can skip the SA tag check (but this risks missing reads if the list is incomplete)
+                        try:
+                            sa_tag_cached = read.get_tag("SA")
+                        except KeyError:
+                            sa_tag_cached = None
+                        has_supplementary = (
+                            sa_tag_cached is not None or read.is_supplementary
+                        )
+                        # Optional: if we have a supplementary_read_ids list and the read is not in it,
+                        # keep the read only when it still has an SA tag (same as has_tag("SA") before).
                         if supplementary_reads_set is not None and read.query_name not in supplementary_reads_set:
                             if not has_supplementary:
                                 continue
@@ -1794,33 +1963,33 @@ def process_bam_single_pass(
                     if len(master_bed_rows) >= master_bed_chunk_size:
                         _flush_master_bed_rows(master_bed_rows)
                     
-                    # Parse SA tag to get all supplementary alignments
-                    if supplementary_reads_set is not None and supplementary_read_ids_complete:
+                    # Parse SA tag for supplementary master BED rows (one fetch: reuse sa_tag_cached or get once)
+                    if read.is_supplementary:
+                        sa_tag_to_parse = None
+                    elif supplementary_reads_set is not None and supplementary_read_ids_complete:
                         try:
-                            sa_tag = read.get_tag("SA")
+                            sa_tag_to_parse = read.get_tag("SA")
                         except KeyError:
                             continue
-                    elif read.has_tag("SA"):
+                    else:
+                        sa_tag_to_parse = sa_tag_cached
+
+                    if sa_tag_to_parse:
                         try:
-                            sa_tag = read.get_tag("SA")
                             # SA tag format: "chr,pos,strand,CIGAR,mapQ,NM;chr,pos,strand,CIGAR,mapQ,NM;..."
-                            sa_entries = sa_tag.split(";")
+                            sa_entries = sa_tag_to_parse.split(";")
                             for sa_entry in sa_entries:
                                 if not sa_entry:
                                     continue
                                 sa_parts = sa_entry.split(",")
-                                if len(sa_parts) >= 3:
+                                if len(sa_parts) >= 5:
                                     sa_chrom = sa_parts[0]
-                                    sa_pos = int(sa_parts[1])
+                                    sa_pos = max(0, int(sa_parts[1]) - 1)
                                     sa_strand = sa_parts[2]
-                                    sa_mapq = int(sa_parts[4]) if len(sa_parts) > 4 else 0
-                                    
-                                    # Estimate end position from CIGAR if available
-                                    if len(sa_parts) > 3:
-                                        # Simple estimate: use read length as span
-                                        sa_end = sa_pos + read.query_length
-                                    else:
-                                        sa_end = sa_pos + 100  # Default small span
+                                    sa_cigar = sa_parts[3]
+                                    sa_mapq = int(sa_parts[4])
+                                    sa_span, sa_query_span = _sa_alignment_spans(sa_cigar)
+                                    sa_end = sa_pos + sa_span
                                     sa_span = sa_end - sa_pos
                                     
                                     # Apply same quality thresholds to supplementary mappings
@@ -1830,6 +1999,54 @@ def process_bam_single_pass(
                                     # Skip mitochondrial chromosomes
                                     if sa_chrom == "chrM" or sa_chrom == "M":
                                         continue
+
+                                    sa_tokens = re.findall(r"(\d+)([MIDNSHP=X])", sa_cigar)
+                                    sa_read_start = (
+                                        int(sa_tokens[0][0])
+                                        if sa_tokens and sa_tokens[0][1] == "S"
+                                        else 0
+                                    )
+                                    sa_read_end = sa_read_start + sa_query_span
+
+                                    if sa_chrom in target_regions:
+                                        target_rows = _find_gene_intersections_for_values(
+                                            ref_name=sa_chrom,
+                                            ref_start=sa_pos,
+                                            ref_end=sa_end,
+                                            read_id=read_id,
+                                            mapping_quality=sa_mapq,
+                                            strand=sa_strand,
+                                            read_start=sa_read_start,
+                                            read_end=sa_read_end,
+                                            gene_regions=target_regions[sa_chrom],
+                                            region_starts=target_region_starts.get(sa_chrom),
+                                            region_index=target_region_indexes.get(sa_chrom),
+                                            min_overlap=min_overlap,
+                                        )
+                                        if target_rows:
+                                            target_read_alignments.setdefault(
+                                                read_id, []
+                                            ).extend(target_rows)
+
+                                    if sa_chrom in genome_regions:
+                                        genome_rows = _find_gene_intersections_for_values(
+                                            ref_name=sa_chrom,
+                                            ref_start=sa_pos,
+                                            ref_end=sa_end,
+                                            read_id=read_id,
+                                            mapping_quality=sa_mapq,
+                                            strand=sa_strand,
+                                            read_start=sa_read_start,
+                                            read_end=sa_read_end,
+                                            gene_regions=genome_regions[sa_chrom],
+                                            region_starts=genome_region_starts.get(sa_chrom),
+                                            region_index=genome_region_indexes.get(sa_chrom),
+                                            min_overlap=min_overlap,
+                                        )
+                                        if genome_rows:
+                                            genome_read_alignments.setdefault(
+                                                read_id, []
+                                            ).extend(genome_rows)
                                     
                                     # Add supplementary alignment as a row
                                     master_bed_rows.append(
@@ -1844,8 +2061,8 @@ def process_bam_single_pass(
                                             "read_id": read_id,
                                             "mapping_quality": sa_mapq,
                                             "strand": sa_strand,
-                                            "read_start": 0,
-                                            "read_end": read.query_length,
+                                            "read_start": sa_read_start,
+                                            "read_end": sa_read_end,
                                             "is_secondary": False,
                                             "is_supplementary": True,
                                             "mapping_span": sa_end - sa_pos,
@@ -1869,8 +2086,9 @@ def process_bam_single_pass(
             filtered_target_rows = [
                 align
                 for _rid, alignments in target_read_alignments.items()
-                if not _check_read_alignments_overlap(alignments)
-                for align in alignments
+                for deduplicated in [_canonicalize_gene_alignment_rows(alignments)]
+                if not _check_read_alignments_overlap(deduplicated)
+                for align in deduplicated
                 if align.get("mapping_quality", 0) > min_mq and align.get("mapping_span", 0) > min_span
             ]
             if filtered_target_rows:
@@ -1884,8 +2102,9 @@ def process_bam_single_pass(
             filtered_genome_rows = [
                 align
                 for _rid, alignments in genome_read_alignments.items()
-                if not _check_read_alignments_overlap(alignments)
-                for align in alignments
+                for deduplicated in [_canonicalize_gene_alignment_rows(alignments)]
+                if not _check_read_alignments_overlap(deduplicated)
+                for align in deduplicated
                 if align.get("mapping_quality", 0) > min_mq and align.get("mapping_span", 0) > min_span
             ]
             if filtered_genome_rows:
@@ -1977,9 +2196,16 @@ def _get_pending_count(work_dir: str, sample_id: str) -> int:
                 return int(f.read().strip())
     except (ValueError, IOError) as e:
         logger.debug(f"Could not read pending_count for {sample_id}: {e}")
-    # Fallback to filesystem scan if counter missing/corrupt
-    staging_files = glob.glob(os.path.join(staging_dir, "target_*.parquet"))
-    return len(staging_files)
+    # Fallback to the unique per-BAM counters represented by any sparse
+    # candidate type. Fully empty BAMs still rely on pending_count.txt.
+    counters = set()
+    for pattern in ("target_*.parquet", "genome_*.parquet", "master_bed_*.parquet"):
+        for path in glob.glob(os.path.join(staging_dir, pattern)):
+            try:
+                counters.add(int(os.path.basename(path).rsplit("_", 1)[1].split(".", 1)[0]))
+            except (IndexError, ValueError):
+                continue
+    return len(counters)
 
 
 def _set_pending_count(work_dir: str, sample_id: str, count: int) -> None:
@@ -1994,11 +2220,19 @@ def _increment_pending_count(work_dir: str, sample_id: str, delta: int = 1) -> i
     """Increment the pending staging count and return the new value."""
     staging_dir = _get_staging_dir(work_dir, sample_id)
     count_file = os.path.join(staging_dir, "pending_count.txt")
-    current = _get_pending_count(work_dir, sample_id)
-    new_count = max(0, current + int(delta))
-    with open(count_file, "w") as f:
-        f.write(str(new_count))
-    return new_count
+    lock_file = os.path.join(staging_dir, "pending_count.lock")
+    with FileLock(lock_file, timeout=30.0):
+        current = 0
+        if os.path.exists(count_file):
+            try:
+                with open(count_file, "r") as f:
+                    current = int(f.read().strip())
+            except (ValueError, IOError):
+                current = 0
+        new_count = max(0, current + int(delta))
+        with open(count_file, "w") as f:
+            f.write(str(new_count))
+        return new_count
 
 
 def _atomic_counter_increment(work_dir: str, sample_id: str) -> int:
@@ -2095,16 +2329,8 @@ def process_bam_with_staging(
             supplementary_read_ids_complete,
         )
         
-        # Apply fusion candidate filtering
-        if target_candidates is not None and not target_candidates.empty:
-            target_candidates = _filter_fusion_candidates(target_candidates)
-            
-        if genome_wide_candidates is not None and not genome_wide_candidates.empty:
-            genome_wide_candidates = _filter_fusion_candidates(genome_wide_candidates)
-        
-        # Save to staging. Always write one file per BAM per type (even if empty) so that
-        # accumulation sees one staging file per BAM and cross-batch fusion support is preserved.
-        # Use snappy compression for smaller files and faster read/write.
+        # Save only non-empty candidate types. The pending counter records processed
+        # BAMs independently, so empty placeholder Parquets are unnecessary.
         staging_dir = _get_staging_dir(work_dir, sample_id)
         _staging_opts = {"index": False, "engine": "pyarrow", "compression": "snappy"}
 
@@ -2115,18 +2341,12 @@ def process_bam_with_staging(
         if target_candidates is not None and not target_candidates.empty:
             target_candidates.to_parquet(target_staging, **_staging_opts)
             logger.info(f"Saved {len(target_candidates)} target candidates to staging")
-        else:
-            pd.DataFrame().to_parquet(target_staging, **_staging_opts)
         if genome_wide_candidates is not None and not genome_wide_candidates.empty:
             genome_wide_candidates.to_parquet(genome_staging, **_staging_opts)
             logger.debug(f"Saved {len(genome_wide_candidates)} genome-wide candidates to staging")
-        else:
-            pd.DataFrame().to_parquet(genome_staging, **_staging_opts)
         if master_bed_candidates is not None and not master_bed_candidates.empty:
             master_bed_candidates.to_parquet(master_bed_staging, **_staging_opts)
             logger.info(f"Saved {len(master_bed_candidates)} master BED candidates to staging")
-        else:
-            pd.DataFrame().to_parquet(master_bed_staging, **_staging_opts)
         
         # Check if accumulation should run
         # Note: This check is not atomic - multiple workers might see threshold reached
@@ -2211,19 +2431,17 @@ def accumulate_fusion_candidates(
         target_files = sorted(glob.glob(os.path.join(staging_dir, "target_*.parquet")))
         genome_files = sorted(glob.glob(os.path.join(staging_dir, "genome_*.parquet")))
         master_bed_files = sorted(glob.glob(os.path.join(staging_dir, "master_bed_*.parquet")))
+        pending_count = _get_pending_count(work_dir, sample_id)
         logger.debug(
-            "Staging file counts - target: %d, genome: %d, master_bed: %d",
+            "Staging file counts - target: %d, genome: %d, master_bed: %d, pending BAMs: %d",
             len(target_files),
             len(genome_files),
             len(master_bed_files),
+            pending_count,
         )
-        _set_pending_count(work_dir, sample_id, len(target_files))
         
-        # Track which master_bed staging files are new (for incremental processing)
-        # These are the files being accumulated in this batch - all of them are "new" for this accumulation
-        new_master_bed_files = set(master_bed_files)
-        
-        if not target_files:
+        all_staging_files = target_files + genome_files + master_bed_files
+        if pending_count == 0 and not all_staging_files:
             logger.info(
                 f"No staged fusion files to accumulate for {sample_id} "
                 "(no new data this iteration - skip output generation)."
@@ -2239,19 +2457,19 @@ def accumulate_fusion_candidates(
             }
         
         # Re-check if we should accumulate based on count
-        if not force and len(target_files) < batch_size:
+        if not force and pending_count < batch_size:
             logger.info(
-                f"Skipping fusion accumulation - only {len(target_files)} files staged "
+                f"Skipping fusion accumulation - only {pending_count} BAMs staged "
                 f"(threshold: {batch_size}, force={force}). Another worker may have already accumulated."
             )
             return {
                 "status": "below_threshold",
-                "files_pending": len(target_files),
-                "error": f"Below batch threshold ({len(target_files)} < {batch_size})",
+                "files_pending": pending_count,
+                "error": f"Below batch threshold ({pending_count} < {batch_size})",
             }
         
         logger.info(
-            f"Accumulating {len(target_files)} staged fusion files for {sample_id}"
+            f"Accumulating candidates from {pending_count} staged BAMs for {sample_id}"
         )
         
         # Stream staged files and append to datasets to cap memory usage
@@ -2264,45 +2482,71 @@ def accumulate_fusion_candidates(
             except (IndexError, ValueError):
                 return int(time.time())
 
-        def _append_staged_files(file_list: List[str], candidate_type: str) -> int:
+        def _append_staged_files(
+            file_list: List[str], candidate_type: str
+        ) -> Tuple[int, List[str]]:
             total_rows = 0
+            dataset_paths = []
             for file_path in file_list:
                 try:
                     file_start = time.time()
-                    df = pd.read_parquet(file_path)
+                    batch_id = _extract_batch_id(file_path)
+                    n, dataset_path = _append_fusion_candidates_parquet_from_file(
+                        file_path,
+                        candidate_type,
+                        work_dir,
+                        sample_id,
+                        batch_id,
+                    )
                     load_elapsed = time.time() - file_start
-                    if df is None or df.empty:
+                    total_rows += n
+                    if dataset_path:
+                        dataset_paths.append(dataset_path)
+                    if n:
+                        logger.debug(
+                            "Moved %s parquet %s rows=%d in %.3fs",
+                            candidate_type,
+                            os.path.basename(file_path),
+                            n,
+                            load_elapsed,
+                        )
+                    else:
                         logger.debug(
                             "Loaded %s parquet %s (empty) in %.3fs",
                             candidate_type,
                             os.path.basename(file_path),
                             load_elapsed,
                         )
-                        continue
-                    batch_id = _extract_batch_id(file_path)
-                    _append_fusion_candidates_parquet(
-                        df, candidate_type, work_dir, sample_id, batch_id
-                    )
-                    total_rows += len(df)
-                    logger.debug(
-                        "Appended %s parquet %s rows=%d in %.3fs",
-                        candidate_type,
-                        os.path.basename(file_path),
-                        len(df),
-                        load_elapsed,
-                    )
                 except Exception as e:
                     logger.warning(
-                        f"Error loading {candidate_type} staging file {os.path.basename(file_path)}: {e}"
+                        f"Error moving {candidate_type} staging file {os.path.basename(file_path)}: {e}"
                     )
-            return total_rows
+            return total_rows, dataset_paths
+
+        # Load the baseline before appending. If fusion_counts.json does not yet
+        # exist, _load_fusion_counts derives it from the current dataset.
+        counts_start = time.time()
+        counts = _load_fusion_counts(work_dir, sample_id)
+        logger.debug(
+            "Loaded fusion counts in %.3fs (current: target=%d, genome=%d, master_bed=%d)",
+            time.time() - counts_start,
+            counts.get("target_candidates", 0),
+            counts.get("genome_wide_candidates", 0),
+            counts.get("master_bed_candidates", 0),
+        )
 
         append_start = time.time()
-        batch_target_rows = _append_staged_files(target_files, "target_candidates")
-        batch_genome_rows = _append_staged_files(genome_files, "genome_wide_candidates")
-        batch_master_bed_rows = _append_staged_files(master_bed_files, "master_bed_candidates")
+        batch_target_rows, _ = _append_staged_files(
+            target_files, "target_candidates"
+        )
+        batch_genome_rows, _ = _append_staged_files(
+            genome_files, "genome_wide_candidates"
+        )
+        batch_master_bed_rows, new_master_bed_dataset_files = _append_staged_files(
+            master_bed_files, "master_bed_candidates"
+        )
         logger.debug(
-            "Appended staging files in %.3fs (target=%d, genome=%d, master_bed=%d)",
+            "Moved staging files in %.3fs (target=%d, genome=%d, master_bed=%d)",
             time.time() - append_start,
             batch_target_rows,
             batch_genome_rows,
@@ -2313,15 +2557,6 @@ def accumulate_fusion_candidates(
             f"{batch_master_bed_rows} master BED candidates"
         )
         
-        counts_start = time.time()
-        counts = _load_fusion_counts(work_dir, sample_id)
-        logger.debug(
-            "Loaded fusion counts in %.3fs (current: target=%d, genome=%d, master_bed=%d)",
-            time.time() - counts_start,
-            counts.get("target_candidates", 0),
-            counts.get("genome_wide_candidates", 0),
-            counts.get("master_bed_candidates", 0),
-        )
         counts["target_candidates"] = counts.get("target_candidates", 0) + batch_target_rows
         counts["genome_wide_candidates"] = counts.get("genome_wide_candidates", 0) + batch_genome_rows
         counts["master_bed_candidates"] = counts.get("master_bed_candidates", 0) + batch_master_bed_rows
@@ -2374,7 +2609,7 @@ def accumulate_fusion_candidates(
         # This avoids expensive groupby operations and CSV generation during intermediate accumulations
         # Output files are only needed at the end, not after every batch
         # However, master BED breakpoint extraction should still run incrementally to build up the BED file
-        if force:
+        if force and all_staging_files:
             logger.info("Final accumulation detected - generating output files (CSV, BED, etc.)")
             output_start = time.time()
             _generate_output_files(
@@ -2384,7 +2619,7 @@ def accumulate_fusion_candidates(
                 work_dir, 
                 reference=reference,
                 generate_master_bed=True,  # Generate master BED on final accumulation
-                new_master_bed_files=new_master_bed_files,  # Pass new files for incremental processing
+                new_master_bed_files=set(new_master_bed_dataset_files),
             )
             logger.debug(
                 "Generated output files in %.3fs for %s",
@@ -2399,7 +2634,9 @@ def accumulate_fusion_candidates(
         cleanup_start = time.time()
         removed = 0
         failed = 0
-        for f in target_files + genome_files + master_bed_files:
+        for f in all_staging_files:
+            if not os.path.exists(f):
+                continue
             try:
                 os.remove(f)
                 removed += 1
@@ -2417,16 +2654,23 @@ def accumulate_fusion_candidates(
         elapsed = time.time() - start_time
         logger.info(
             f"Fusion batch accumulation complete for {sample_id}: "
-            f"{len(target_files)} files in {elapsed:.2f}s "
-            f"({elapsed/len(target_files):.3f}s per file)"
+            f"{pending_count} BAMs in {elapsed:.2f}s "
+            f"({elapsed/pending_count:.3f}s per BAM)"
         )
         
         return {
             "status": "success",
-            "files_processed": len(target_files),
+            "files_processed": pending_count,
             "target_candidates": counts.get("target_candidates", 0),
             "genome_wide_candidates": counts.get("genome_wide_candidates", 0),
             "master_bed_candidates": counts.get("master_bed_candidates", 0),
+            "target_candidates_count": counts.get("target_candidates", 0),
+            "genome_wide_candidates_count": counts.get(
+                "genome_wide_candidates", 0
+            ),
+            "master_bed_candidates_count": counts.get(
+                "master_bed_candidates", 0
+            ),
             "elapsed_time": elapsed,
         }
     
@@ -2558,6 +2802,118 @@ def process_bam_file(
         }
 
 
+def _rebuild_filtered_fusion_candidates(
+    candidate_type: str,
+    output_csv_name: str,
+    output_pickle_name: str,
+    work_dir: str,
+    sample_id: str,
+) -> None:
+    """Rebuild reported fusion pairs from all accumulated sample candidates."""
+    output_csv_path = os.path.join(work_dir, sample_id, output_csv_name)
+    output_pickle_path = os.path.join(work_dir, sample_id, output_pickle_name)
+
+    def _remove_stale_outputs() -> None:
+        for path in (output_csv_path, output_pickle_path):
+            try:
+                if os.path.exists(path):
+                    os.remove(path)
+            except OSError as e:
+                logger.warning("Could not remove stale fusion output %s: %s", path, e)
+
+    dataset_dir = _get_parquet_dataset_dir(work_dir, sample_id, candidate_type)
+    dataset_files = glob.glob(os.path.join(dataset_dir, "*.parquet"))
+    legacy_path = _get_parquet_paths(work_dir, sample_id).get(candidate_type)
+    if not dataset_files and not (legacy_path and os.path.exists(legacy_path)):
+        _remove_stale_outputs()
+        return
+
+    read_to_genes: Dict[str, Set[str]] = defaultdict(set)
+    for batch in _iter_fusion_candidates_parquet_batches(
+        candidate_type, work_dir, sample_id, columns=["read_id", "col4"]
+    ):
+        if batch.empty:
+            continue
+        grouped = batch.groupby("read_id", observed=True)["col4"].unique()
+        for read_id, genes in grouped.items():
+            if pd.isna(read_id):
+                continue
+            read_to_genes[str(read_id)].update(
+                str(gene) for gene in genes if not pd.isna(gene)
+            )
+
+    pair_to_read_ids: Dict[Tuple[str, str], Set[str]] = defaultdict(set)
+    for read_id, genes in read_to_genes.items():
+        for pair in combinations(sorted(genes), 2):
+            pair_to_read_ids[pair].add(read_id)
+
+    min_support = get_fusion_threshold("read_support")
+    valid_pairs = {
+        pair
+        for pair, read_ids in pair_to_read_ids.items()
+        if len(read_ids) >= min_support
+    }
+    if not valid_pairs:
+        _remove_stale_outputs()
+        return
+
+    temp_csv_path = output_csv_path + ".tmp"
+    wrote_rows = False
+    write_header = True
+    try:
+        for batch in _iter_fusion_candidates_parquet_batches(
+            candidate_type, work_dir, sample_id, columns=None
+        ):
+            if batch.empty or "read_id" not in batch.columns:
+                continue
+            batch = batch.copy()
+            batch["read_id"] = batch["read_id"].astype(str)
+            tagged_batches = []
+            for pair in valid_pairs:
+                subset = batch[
+                    batch["read_id"].isin(pair_to_read_ids[pair])
+                    & batch["col4"].astype(str).isin(pair)
+                ]
+                if subset.empty:
+                    continue
+                subset = subset.copy()
+                subset["tag"] = ",".join(pair)
+                tagged_batches.append(subset)
+            if not tagged_batches:
+                continue
+
+            output_batch = pd.concat(tagged_batches, ignore_index=True)
+            output_batch = output_batch.drop_duplicates()
+            output_batch.to_csv(
+                temp_csv_path, mode="a", header=write_header, index=False
+            )
+            write_header = False
+            wrote_rows = True
+
+        if not wrote_rows:
+            _remove_stale_outputs()
+            return
+        os.replace(temp_csv_path, output_csv_path)
+    finally:
+        if os.path.exists(temp_csv_path):
+            try:
+                os.remove(temp_csv_path)
+            except OSError:
+                pass
+
+    try:
+        filtered_df = pd.read_csv(output_csv_path)
+        if not filtered_df.empty:
+            preprocess_fusion_data_standalone(filtered_df, output_pickle_path)
+    except Exception as e:
+        logger.warning(
+            "Could not preprocess %s from %s: %s",
+            candidate_type,
+            output_csv_path,
+            e,
+        )
+
+
 def _generate_output_files(
     sample_id: str,
     analysis_results: Dict[str, Any],
@@ -2587,6 +2943,15 @@ def _generate_output_files(
         output_csv_name: str,
         output_pickle_name: str,
     ) -> None:
+        _rebuild_filtered_fusion_candidates(
+            candidate_type,
+            output_csv_name,
+            output_pickle_name,
+            work_dir,
+            sample_id,
+        )
+        return
+
         state_path = os.path.join(work_dir, sample_id, f"{candidate_type}_filter_state.pkl")
         processed_read_ids: Set[str] = set()
         read_to_genes: Dict[str, Set[str]] = {}
@@ -2855,8 +3220,10 @@ def _generate_output_files(
             f.write("0")
 
     
-    # Generate fusion breakpoint BED file
-    _generate_fusion_breakpoint_bed(sample_id, fusion_metadata, work_dir)
+    # Generate fusion breakpoint BED file only when content has changed.
+    fusion_breakpoint_changed = _generate_fusion_breakpoint_bed(
+        sample_id, fusion_metadata, work_dir
+    )
     
     # Generate master BED breakpoint BED file (new target regions from supplementary alignments)
     # This is called incrementally as data accumulates. For large datasets, we use an incremental
@@ -2866,8 +3233,9 @@ def _generate_output_files(
     
     #ToDo: This is the slow code from here.
     
+    master_bed_breakpoint_changed = False
     if master_bed_candidates is not None and not master_bed_candidates.empty:
-        _generate_master_bed_breakpoint_bed(
+        master_bed_breakpoint_changed = _generate_master_bed_breakpoint_bed(
             sample_id, 
             fusion_metadata, 
             work_dir,
@@ -2878,8 +3246,8 @@ def _generate_output_files(
     if ENABLE_MASTER_BED:
         
         
-        # Generate master BED file only if requested (should only be done once per batch at the end)
-        # Use async (non-blocking) generation to avoid blocking the analysis pipeline
+        # Ask the master BED generator to refresh. It is content-signature gated,
+        # so unchanged source BEDs return without doing the expensive merge.
         if generate_master_bed:
             try:
                 from robin.analysis.master_bed_generator import generate_master_bed_async
@@ -2899,6 +3267,13 @@ def _generate_output_files(
                     logger_instance=logger,
                     reference=reference,
                 )
+                if fusion_breakpoint_changed or master_bed_breakpoint_changed:
+                    logger.debug(
+                        "Requested master BED refresh after fusion source BED change "
+                        "(fusion=%s, master_bed=%s)",
+                        fusion_breakpoint_changed,
+                        master_bed_breakpoint_changed,
+                    )
             except Exception as e:
                 logger.warning(f"Could not start async master BED generation: {e}")
 
@@ -4213,7 +4588,7 @@ def _generate_master_bed_breakpoint_bed(
     fusion_metadata: FusionMetadata,
     work_dir: str,
     new_master_bed_files: Optional[Set[str]] = None,
-) -> None:
+) -> bool:
     """
     Generate BED file for master BED breakpoints (new target regions from supplementary alignments).
     Creates regions with +/- 1 bin_width around breakpoints.
@@ -4257,7 +4632,7 @@ def _generate_master_bed_breakpoint_bed(
         
         if not master_bed_breakpoints:
             logger.debug("No master BED breakpoints found - skipping BED file generation")
-            return
+            return False
         # Get bin_width from CNV analysis if available, otherwise use default
         bin_width = _get_cnv_bin_width(work_dir, sample_id)
         
@@ -4306,7 +4681,8 @@ def _generate_master_bed_breakpoint_bed(
         )
 
         write_start = time.time()
-        with open(master_bed_bp_file, "w") as f:
+        temporary_path = f"{master_bed_bp_file}.tmp"
+        with open(temporary_path, "w") as f:
             for bp in sorted_breakpoints:
                 chrom = bp["chromosome"]
                 start = bp["start"]
@@ -4322,10 +4698,12 @@ def _generate_master_bed_breakpoint_bed(
                 # Write BED entry: chrom, start, end, name (master_bed-breakpoint)
                 name = "master_bed-breakpoint"
                 f.write(f"{chrom}\t{region_start}\t{region_end}\t{name}\t0\t.\n")
+        changed = _replace_file_if_changed(temporary_path, master_bed_bp_file)
         logger.debug(
-            "Wrote master BED breakpoint BED in %.3fs (%s)",
+            "Checked master BED breakpoint BED in %.3fs (%s, changed=%s)",
             time.time() - write_start,
             master_bed_bp_file,
+            changed,
         )
         
         # Log summary of read support
@@ -4334,10 +4712,11 @@ def _generate_master_bed_breakpoint_bed(
             min_reads = min(read_counts) if read_counts else 0
             max_reads = max(read_counts) if read_counts else 0
             avg_reads = sum(read_counts) / len(read_counts) if read_counts else 0
-            logger.info(
-                f"Generated master BED breakpoint BED file: {master_bed_bp_file} with {len(master_bed_breakpoints)} breakpoints "
-                f"(read support: min={min_reads}, max={max_reads}, avg={avg_reads:.1f})"
-            )
+            if changed:
+                logger.info(
+                    f"Generated master BED breakpoint BED file: {master_bed_bp_file} with {len(master_bed_breakpoints)} breakpoints "
+                    f"(read support: min={min_reads}, max={max_reads}, avg={avg_reads:.1f})"
+                )
         else:
             logger.info(f"Generated master BED breakpoint BED file: {master_bed_bp_file} with 0 breakpoints")
         
@@ -4352,11 +4731,13 @@ def _generate_master_bed_breakpoint_bed(
             "Master BED breakpoint BED pipeline completed in %.3fs",
             time.time() - step_start,
         )
+        return changed
         
     except Exception as e:
         logger.warning(f"Error generating master BED breakpoint BED file: {e}")
         import traceback
         logger.debug(f"Traceback: {traceback.format_exc()}")
+        return False
 
 
 def _generate_master_bed_events_summary(
@@ -4665,7 +5046,7 @@ def _generate_fusion_breakpoint_bed(
     sample_id: str,
     fusion_metadata: FusionMetadata,
     work_dir: str,
-) -> None:
+) -> bool:
     """
     Generate BED file for fusion breakpoints with +/- 1 bin_width regions.
     Only includes fusions that meet the minimum read support threshold.
@@ -4790,7 +5171,7 @@ def _generate_fusion_breakpoint_bed(
         
         if not fusion_breakpoints:
             logger.debug("No fusion breakpoints found - skipping BED file generation")
-            return
+            return False
         
         # Get bin_width from CNV analysis if available, otherwise use default
         bin_width = _get_cnv_bin_width(work_dir, sample_id)
@@ -4834,7 +5215,8 @@ def _generate_fusion_breakpoint_bed(
         
         sorted_breakpoints = sorted(fusion_breakpoints, key=sort_key)
         
-        with open(fusion_bed_file, "w") as f:
+        temporary_path = f"{fusion_bed_file}.tmp"
+        with open(temporary_path, "w") as f:
             for bp in sorted_breakpoints:
                 chrom = bp["chromosome"]
                 start = bp["start"]
@@ -4852,8 +5234,10 @@ def _generate_fusion_breakpoint_bed(
                 # Write BED entry: chrom, start, end, name (gene-source)
                 name = f"{gene}-{source}"
                 f.write(f"{chrom}\t{region_start}\t{region_end}\t{name}\n")
+        changed = _replace_file_if_changed(temporary_path, fusion_bed_file)
         
-        logger.info(f"Generated fusion breakpoint BED file: {fusion_bed_file} with {len(fusion_breakpoints)} breakpoints")
+        if changed:
+            logger.info(f"Generated fusion breakpoint BED file: {fusion_bed_file} with {len(fusion_breakpoints)} breakpoints")
         try:
             state = {
                 "processed_read_ids": list(processed_read_ids),
@@ -4866,11 +5250,13 @@ def _generate_fusion_breakpoint_bed(
             os.replace(tmp_path, state_path)
         except Exception as e:
             logger.warning(f"Could not save fusion breakpoint state: {e}")
+        return changed
         
     except Exception as e:
         logger.warning(f"Error generating fusion breakpoint BED file: {e}")
         import traceback
         logger.debug(f"Traceback: {traceback.format_exc()}")
+        return False
 
 
 def find_and_process_bam_files(root_dir):
@@ -4956,6 +5342,47 @@ def _extract_staging_batch_id(staging_files: List[str]) -> int:
     if counters:
         return max(counters)
     return int(time.time())
+
+
+def _append_fusion_candidates_parquet_from_file(
+    source_path: str,
+    candidate_type: str,
+    work_dir: str,
+    sample_id: str,
+    batch_id: int,
+) -> Tuple[int, Optional[str]]:
+    """
+    Move a staging Parquet file into the append-only dataset without reading
+    or recompressing its table data.
+
+    Returns (number of rows appended, destination path). Empty files are removed.
+    Raises if the Parquet metadata is unreadable.
+    """
+    pf = pq.ParquetFile(source_path, memory_map=True)
+    nrow = int(pf.metadata.num_rows)
+    if nrow == 0:
+        logger.debug(
+            "Skipping empty %s staging parquet %s",
+            candidate_type,
+            os.path.basename(source_path),
+        )
+        os.remove(source_path)
+        return 0, None
+    dataset_dir = _get_parquet_dataset_dir(work_dir, sample_id, candidate_type)
+    os.makedirs(dataset_dir, exist_ok=True)
+    part_path = os.path.join(dataset_dir, f"part_{batch_id:06d}.parquet")
+    if os.path.exists(part_path):
+        part_path = os.path.join(
+            dataset_dir, f"part_{batch_id:06d}_{time.time_ns()}.parquet"
+        )
+    os.replace(source_path, part_path)
+    logger.debug(
+        "Moved %d %s rows from staging to %s",
+        nrow,
+        candidate_type,
+        part_path,
+    )
+    return nrow, part_path
 
 
 def _append_fusion_candidates_parquet(
@@ -5998,10 +6425,11 @@ def _annotate_results(result: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series]:
 
     # Group by read_id and aggregate col4 (Gene) values efficiently
     # Use sorted() to ensure deterministic tag generation regardless of input order
-    lookup = result.groupby("read_id", observed=True)["col4"].agg(
-        lambda x: ",".join(sorted(set(x)))
-    )
-    result["tag"] = result["read_id"].map(lookup)
+    if "tag" not in result.columns:
+        lookup = result.groupby("read_id", observed=True)["col4"].agg(
+            lambda x: ",".join(sorted(set(x)))
+        )
+        result["tag"] = result["read_id"].map(lookup)
 
     # Generate colors for each read_id group efficiently
     colors = result.groupby("read_id", observed=True)["col4"].apply(
