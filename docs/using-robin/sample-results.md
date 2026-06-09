@@ -223,6 +223,12 @@ Sections appear **only when** the underlying files exist and your **workflow** e
 
 **MNP-Flex** is provided commercially by **[Heidelberg Epignostix GmbH](https://epignostix.com/)**. You can only use it under an **agreement with Epignostix**; they supply the **account credentials** ROBIN needs to call their service.
 
+!!! warning "When to run MNP-Flex"
+
+    MNP-Flex is recommended only after at least **12 hours of sequencing data**
+    have been generated for the sample. Running it earlier may provide less
+    reliable or less representative results.
+
 Some sites show an **MNP-Flex results** block in the sample page. It may include:
 
 - When results were last updated  

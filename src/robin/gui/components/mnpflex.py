@@ -159,6 +159,15 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             "classification-insight-heading text-headline-small"
         )
         with ui.column().classes("w-full min-w-0 gap-3"):
+            with ui.row().classes("mnpflex-notice"):
+                ui.icon("schedule", size="sm").classes(
+                    "mnpflex-notice-icon mt-0.5"
+                )
+                ui.label(
+                    "MNP-Flex is recommended only after at least 12 hours of "
+                    "sequencing data have been generated for this sample."
+                ).classes("mnpflex-notice-text")
+
             with ui.row().classes(
                 "w-full justify-between items-start gap-3 flex-wrap"
             ):

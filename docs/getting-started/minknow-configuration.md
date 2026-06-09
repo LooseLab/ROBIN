@@ -10,7 +10,7 @@
 
 | Area | Requirement |
 |------|-------------|
-| **Basecalling** | Real-time; **5hmC / 5mC** where your ROBIN build needs methylation. |
+| **Basecalling** | Real-time; enable **5mC / 5hmC modified-base calling in CpG contexts only** where your ROBIN build needs methylation. Do **not** use all-context calling. |
 | **Alignment** | Same **reference** you pass to **`robin workflow --reference`**. |
 | **BAM output** | **Read-count** rollover — **not** time-only hourly chunks. Keep each file under the [supported read count](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings); **~20k–50k reads per file** is a common range. |
 | **Sample ID** | Unique per library; match [generated IDs](../using-robin/pages-and-routes.md#sample-id-generator) if you use the Sample ID helper. |

@@ -18,6 +18,12 @@ ROBIN sends sample-derived methylation data to an external service. Confirm
 that this is permitted by your local information-governance and data-transfer
 policies before enabling the integration.
 
+!!! warning "Wait for sufficient sequencing data"
+
+    MNP-Flex is recommended only after at least **12 hours of sequencing data**
+    have been generated for the sample. Running it earlier may provide less
+    reliable or less representative results.
+
 ## Configure credentials
 
 Set the credentials in the environment of the **server process running
@@ -80,7 +86,8 @@ After restarting ROBIN:
 2. Look for the **MNP-Flex results** section.
 3. Use **Generate MNP-Flex subset BED** to confirm that the sample methylation
    parquet can be prepared.
-4. Use **Run MNP-Flex analysis** to submit that sample.
+4. Once at least **12 hours of sequencing data** have been generated, use
+   **Run MNP-Flex analysis** to submit that sample.
 
 The samples overview also shows **mnpflex run all** when credentials are
 available. This runs MNP-Flex sequentially for eligible samples that do not
