@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "robin"
-version = "0.5.2"
+version = "0.5.3"
 description = "A Python CLI tool with file watching capabilities"
 readme = "README.md"
 license = {text = "MIT"}
@@ -53,7 +53,7 @@ dependencies = [
     "opencv-python",
     "zxing-cpp<3",
     "pyranges",
-    "pyarrow==16.1",
+    "pyarrow>=23.0.1",
     "requests",
     "PyPDF2",
     "alive-progress",

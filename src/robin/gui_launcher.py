@@ -98,16 +98,18 @@ def _get_test_id_from_manifest(sample_dir: Path) -> str:
 
 @contextmanager
 def _sample_page_section_timer(page: str, sample_id: str, section: str):
-    """Print elapsed wall time while building one UI section of a sample page."""
+    """Log elapsed wall time while building one UI section at debug level."""
     t0 = time.perf_counter()
     try:
         yield
     finally:
         elapsed = time.perf_counter() - t0
-        print(
-            f"[SamplePage] page={page} sample={sample_id} "
-            f"section={section} elapsed_s={elapsed:.3f}",
-            flush=True,
+        logging.debug(
+            "[SamplePage] page=%s sample=%s section=%s elapsed_s=%.3f",
+            page,
+            sample_id,
+            section,
+            elapsed,
         )
 
 
@@ -5141,10 +5143,11 @@ class GUILauncher:
                                             except Exception:
                                                 pass
                                     total_elapsed = time.perf_counter() - t_analysis_start
-                                    print(
-                                        f"[SamplePage] page=live_data sample={sample_id} "
-                                        f"section=analysis_sections_total elapsed_s={total_elapsed:.3f}",
-                                        flush=True,
+                                    logging.debug(
+                                        "[SamplePage] page=live_data sample=%s "
+                                        "section=analysis_sections_total elapsed_s=%.3f",
+                                        sample_id,
+                                        total_elapsed,
                                     )
                             except Exception as e:
                                 logging.exception(f"[GUI] Failed to build analysis sections: {e}")
@@ -6288,10 +6291,11 @@ title="View in IGV"
                                 )
                         if _fusion_pairs_t0 is not None:
                             fp_elapsed = time.perf_counter() - _fusion_pairs_t0
-                            print(
-                                f"[SamplePage] page=sample_details sample={sample_id} "
-                                f"section=fusion_pairs elapsed_s={fp_elapsed:.3f}",
-                                flush=True,
+                            logging.debug(
+                                "[SamplePage] page=sample_details sample=%s "
+                                "section=fusion_pairs elapsed_s=%.3f",
+                                sample_id,
+                                fp_elapsed,
                             )
                     # Target Genes Table section
                     if sample_dir and sample_dir.exists():
@@ -6717,10 +6721,11 @@ title="View in IGV"
                             except Exception as e:
                                 logging.warning(f"Could not load target gene table: {e}")
                             tg_elapsed = time.perf_counter() - _t_target_genes
-                            print(
-                                f"[SamplePage] page=sample_details sample={sample_id} "
-                                f"section=target_genes elapsed_s={tg_elapsed:.3f}",
-                                flush=True,
+                            logging.debug(
+                                "[SamplePage] page=sample_details sample=%s "
+                                "section=target_genes elapsed_s=%.3f",
+                                sample_id,
+                                tg_elapsed,
                             )
 
     def _create_workflow_monitor(self):

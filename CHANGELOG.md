@@ -27,7 +27,7 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **GUI responsiveness:** More sample-page loading and refresh work runs asynchronously, expensive coverage plots are deferred until after first paint, and per-sample component caches are bounded.
 - **Theme and IGV:** Stabilized per-user dark-mode persistence and table theme synchronization. IGV remains a deliberately light panel in either app theme and reports clearer loading/ready states.
 - **Documentation:** MinKNOW and quickstart guidance now explicitly requires 5mC/5hmC modified-base calling in **CpG contexts only** and warns against all-context models.
-- **Version:** Package and application metadata are aligned to `0.5.2`.
+- **Version:** Package and application metadata are aligned to `0.5.3`.
 
 ### Fixed
 - Fixed Ray coordinator deadlocks and frozen completion counters when waiting queues reached or briefly exceeded their configured capacity.
