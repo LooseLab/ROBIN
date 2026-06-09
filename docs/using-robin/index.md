@@ -17,6 +17,7 @@ ROBIN’s interface shows how your sequencing run is progressing and surfaces **
 | [First steps and navigation](authentication-and-layout.md) | Sign in, use the menu, turn on **Dark mode**, find **Links** and **Log out**, and understand the top bar (CPU/RAM). |
 | [Tour of the screens](pages-and-routes.md) | Move from the **Welcome** page to **samples**, the **workflow monitor**, **watched folders**, and the **sample ID** helper. |
 | [Reading your results](sample-results.md) | Read the **Run summary**, **Classification**, **Analysis**, and **reports** on a sample page. |
+| [MNP-Flex setup](../getting-started/mnpflex.md) | Configure Epignostix credentials, submit samples, and troubleshoot the optional MNP-Flex integration. |
 | [Troubleshooting](troubleshooting.md) | Fix common problems (can’t connect, wrong sample, dark mode, reports). |
 
 ## A simple workflow

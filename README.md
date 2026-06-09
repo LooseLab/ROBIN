@@ -15,6 +15,7 @@
 - [Common issues](#common-issues)
 - [Usage](#usage)
   - [BAM read limit and MinKNOW](#bam-read-limit-and-minknow-settings)
+  - [Optional MNP-Flex integration](#optional-mnp-flex-integration)
 - [Command reference](#command-reference)
 - [Known issues and limitations](#known-issues-and-limitations)
 - [Performance](#performance)
@@ -166,6 +167,18 @@ You can add that to your shell config (after conda init).
 ### Memory and Dorado
 
 On machines with **≤ 64 GB RAM**, restart the machine (or at least Dorado) before a heavy run. Dorado can retain memory indefinitely; on a P2i, after a run on position A and then B, restarting after position B (once basecalling finishes) is recommended.
+
+### Optional MNP-Flex integration
+
+ROBIN can submit methylation data to the commercial **MNP-Flex** service from
+Heidelberg Epignostix and display the returned results in the GUI. This
+requires an agreement and credentials from Epignostix.
+
+Set `MNPFLEX_USERNAME` and `MNPFLEX_PASSWORD` in the server environment before
+starting ROBIN. See the
+[MNP-Flex setup guide](docs/getting-started/mnpflex.md) for configuration,
+data-transfer considerations, optional API settings, operation, and
+troubleshooting.
 
 ### Example workflows
 

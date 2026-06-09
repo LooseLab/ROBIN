@@ -77,6 +77,7 @@ nav:
     - At startup (disclaimer, GUI, password): getting-started/startup.md
     - Library Preparation: getting-started/library-preparation.md
     - MinKNOW Configuration: getting-started/minknow-configuration.md
+    - MNP-Flex Setup: getting-started/mnpflex.md
   - Command-line reference:
     - Overview: cli/index.md
     - workflow command: cli/workflow.md
