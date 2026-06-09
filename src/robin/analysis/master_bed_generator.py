@@ -910,7 +910,7 @@ def _get_target_bed_path(target_panel: Optional[str] = None) -> Optional[str]:
     Get the path to the target gene BED file.
     
     Args:
-        target_panel: Target panel name (rCNS2, AML, PanCan, etc.)
+        target_panel: Target panel name (rCNS2, AML, custom, etc.)
         
     Returns:
         Path to target BED file, or None if not found
@@ -923,8 +923,6 @@ def _get_target_bed_path(target_panel: Optional[str] = None) -> Optional[str]:
             bed_path = os.path.join(resources_dir, "rCNS2_panel_name_uniq.bed")
         elif target_panel == "AML":
             bed_path = os.path.join(resources_dir, "AML_panel_name_uniq.bed")
-        elif target_panel == "PanCan":
-            bed_path = os.path.join(resources_dir, "2025-03_pan-cancer_merged_20kb.bed")
         else:
             # Try custom panel
             bed_path = os.path.join(resources_dir, f"{target_panel}_panel_name_uniq.bed")
@@ -937,8 +935,6 @@ def _get_target_bed_path(target_panel: Optional[str] = None) -> Optional[str]:
             fallback = "rCNS2_panel_name_uniq.bed"
         elif target_panel == "AML":
             fallback = "AML_panel_name_uniq.bed"
-        elif target_panel == "PanCan":
-            fallback = "2025-03_pan-cancer_merged_20kb.bed"
         else:
             fallback = f"{target_panel}_panel_name_uniq.bed"
         

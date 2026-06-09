@@ -537,12 +537,6 @@ def _setup_file_paths(target_panel: str) -> Tuple[str, str]:
                 gene_bed = a_ml_path
             else:
                 gene_bed = "AML_panel_name_uniq.bed"
-        elif target_panel == "PanCan":
-            pancan_path = os.path.join(resources_dir, "2025-03_pan-cancer_merged_20kb.bed")
-            if os.path.exists(pancan_path):
-                gene_bed = pancan_path
-            else:
-                gene_bed = "2025-03_pan-cancer_merged_20kb.bed"
         else:
             # Check for custom panel
             custom_panel_path = os.path.join(resources_dir, f"{target_panel}_panel_name_uniq.bed")
@@ -565,8 +559,6 @@ def _setup_file_paths(target_panel: str) -> Tuple[str, str]:
             gene_bed = "rCNS2_panel_name_uniq.bed"
         elif target_panel == "AML":
             gene_bed = "AML_panel_name_uniq.bed"
-        elif target_panel == "PanCan":
-            gene_bed = "2025-03_pan-cancer_merged_20kb.bed"
         else:
             # Custom panel - use as is, don't fallback to rCNS2
             gene_bed = f"{target_panel}_panel_name_uniq.bed"
@@ -1603,7 +1595,7 @@ def process_bam_single_pass(
 
     Args:
         bamfile: Path to BAM file
-        target_panel: Target panel to use (rCNS2, AML, or PanCan)
+        target_panel: Target panel to use (rCNS2, AML, or custom panel)
         work_dir: Working directory (optional, for master BED processing)
         sample_id: Sample ID (optional, for master BED processing)
         supplementary_read_ids: Optional list of read IDs with supplementary alignments
@@ -1939,7 +1931,7 @@ def process_bam_for_fusions_work(
 
     Args:
         bamfile: Path to BAM file
-        target_panel: Target panel to use (rCNS2, AML, or PanCan)
+        target_panel: Target panel to use (rCNS2, AML, or custom panel)
 
     Returns:
         Tuple of (target_panel_candidates, genome_wide_candidates) DataFrames

@@ -604,10 +604,10 @@ def _remove_panel_from_system(panel_name: str) -> bool:
     """Remove a custom panel from ROBIN system."""
     try:
         # Check if it's a built-in panel
-        built_in_panels = {"rCNS2", "AML", "PanCan"}
+        built_in_panels = {"rCNS2", "AML"}
         if panel_name in built_in_panels:
             click.echo(f"Error: Cannot remove built-in panel '{panel_name}'", err=True)
-            click.echo("Built-in panels (rCNS2, AML, PanCan) cannot be removed.", err=True)
+            click.echo("Built-in panels (rCNS2, AML) cannot be removed.", err=True)
             return False
         
         # Get resources directory
@@ -676,7 +676,7 @@ def remove_panel(panel_name: str, force: bool) -> None:
     
     PANEL_NAME: Name of the panel to remove
     
-    Built-in panels (rCNS2, AML, PanCan) cannot be removed.
+    Built-in panels (rCNS2, AML) cannot be removed.
     """
     if not _get_user_acknowledgment():
         sys.exit(1)
@@ -689,10 +689,10 @@ def remove_panel(panel_name: str, force: bool) -> None:
     panel_name = panel_name.strip()
     
     # Check if it's a built-in panel
-    built_in_panels = {"rCNS2", "AML", "PanCan"}
+    built_in_panels = {"rCNS2", "AML"}
     if panel_name in built_in_panels:
         click.echo(f"Error: Cannot remove built-in panel '{panel_name}'", err=True)
-        click.echo("Built-in panels (rCNS2, AML, PanCan) cannot be removed.", err=True)
+        click.echo("Built-in panels (rCNS2, AML) cannot be removed.", err=True)
         sys.exit(1)
     
     # Get resources directory
@@ -758,7 +758,7 @@ def list_panels() -> None:
     click.echo("Available panels in ROBIN:\n")
     
     # Built-in panels
-    built_in_panels = ["rCNS2", "AML", "PanCan"]
+    built_in_panels = ["rCNS2", "AML"]
     custom_panels = [p for p in panels if p not in built_in_panels]
     
     click.echo("BUILT-IN PANELS:")
@@ -976,7 +976,7 @@ def _generate_unique_gene_bed(input_bed_path: Path, output_bed_path: Path) -> bo
 
 def _get_available_panels() -> List[str]:
     """Get list of available panels from resources directory."""
-    panels = ["rCNS2", "AML", "PanCan"]  # Built-in panels
+    panels = ["rCNS2", "AML"]  # Built-in panels
     
     try:
         # Try to find the resources directory without importing robin module
@@ -1168,7 +1168,7 @@ def add_panel(bed_file: Path, panel_name: str, validate_only: bool) -> None:
     panel_name = panel_name.strip()
     
     # Check for reserved panel names
-    reserved_names = {"rCNS2", "AML", "PanCan"}
+    reserved_names = {"rCNS2", "AML"}
     if panel_name in reserved_names:
         click.echo(f"Error: Panel name '{panel_name}' is reserved. Please choose a different name.", err=True)
         sys.exit(1)

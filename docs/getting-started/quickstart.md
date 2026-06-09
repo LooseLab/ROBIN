@@ -12,11 +12,11 @@ ROBIN consumes **aligned BAMs** from Oxford Nanopore (usually written in real ti
 
 | Expectation | Notes |
 |-------------|--------|
-| **Basecalling** | **HAC** is enough; SUP not required. |
-| **Methylation** | Enable **5hmC / 5mC** in MinKNOW if your analyses need it. |
-| **Alignment** | Done **in MinKNOW** — ROBIN does not realign. |
-| **BAM chunks** | **Read-count–based** rollover. Each BAM **≤ 50,000 reads**; **~50k per file** is a good target. **Do not** use **time-only** (e.g. hourly) rollover — see [README — BAM read limit](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings). |
-| **POD5 / FASTQ** | Optional; you can disable if BAM alone is enough. |
+| Basecalling | **HAC** is sufficient; SUP not required. |
+| Methylation | Enable **5mC / 5hmC modified-base calling in CpG contexts only** in MinKNOW if your analyses need methylation. Do **not** use all-context calling. |
+| Alignment | Done **in MinKNOW** — ROBIN does not realign reads. |
+| BAM rollover | **Read-count–based** chunks. **Each BAM must be ≤ 50,000 reads**; we recommend **~50,000 reads per file**. Do **not** rely on **time-only** (e.g. hourly) rollover — see [README — BAM read limit](https://github.com/LooseLab/ROBIN/blob/main/README.md#bam-read-limit-and-minknow-settings). |
+| POD5 / FASTQ | Not required; you can turn them off if you only need BAM. |
 
 !!! tip "Memory on smaller machines"
     On **≤ 64 GB RAM**, restart between long runs or after moving the flow cell. Dorado can retain GPU/host memory; restarting Dorado or the instrument after a run reduces OOM risk.
@@ -33,10 +33,10 @@ robin utils sequencing-files --panel rCNS2 --output-dir ~/references/robin_ref
 
 | Option | Purpose |
 |--------|---------|
-| `-p` / `--panel` | **Required.** Same names as `--target-panel` (`rCNS2`, `AML`, `PanCan`, … — run `robin utils sequencing-files --help` on your install). |
-| `-r` / `--reference` | **Reference FASTA:** HTTPS URL or local `.fa` / `.fa.gz`. If omitted, ROBIN may download the default **GRCh38 no-alt** set (large). |
-| `-o` / `--output-dir` | Output folder (default: `./reference_files`). |
-| `-y` / `--yes` | Skip confirmation (for scripts). |
+| `-p` / `--panel` | **Required.** Same names as `--target-panel` (built-in panels such as `rCNS2`, `AML`; run `robin utils sequencing-files --help` for the list on your install). |
+| `-r` / `--reference` | **Reference FASTA:** either an **HTTPS URL** to download, or a **local path** to `.fa` / `.fa.gz`. If omitted, ROBIN uses the default **NCBI GRCh38 no-alt analysis set** (UCSC-style contig names) — a **large** download; use `-r` to point at an existing file if you already have GRCh38. |
+| `-o` / `--output-dir` | Output folder (default: **`./reference_files`** in the current directory). |
+| `-y` / `--yes` | Skip the confirmation prompt (for scripts). |
 
 Use the **same** reference file for **MinKNOW alignment** and **`robin workflow --reference`**.
 
@@ -70,7 +70,7 @@ robin workflow <data_folder> --work-dir <output_folder> \
 | `-w` | Comma-separated analysis types |
 | `--reference` | Reference FASTA (needed for most steps) |
 | `--center` | Site label (e.g. `Sherwood`, `Auckland`) |
-| `--target-panel` | Panel name, e.g. `rCNS2`, `PanCan` |
+| `--target-panel` | Panel name, e.g. `rCNS2` |
 
 ### Examples
 
@@ -89,7 +89,7 @@ robin workflow ~/data/bam_files \
   -w mgmt,sturgeon \
   --reference ~/references/hg38_simple.fa \
   --center Auckland \
-  --target-panel PanCan
+  --target-panel AML
 
 # More logging
 robin workflow ~/data/bam_files \
@@ -130,7 +130,7 @@ robin workflow /path/to/directory -w "<workflow_plan>" [OPTIONS]
 
 ## Panel management
 
-Built-in panels include **rCNS2**, **AML**, **PanCan**. Custom panels are registered from BED (≥ four columns: chr, start, end, gene name(s)).
+Built-in panels include **rCNS2** and **AML**. Custom panels are registered from BED (at least four columns: chr, start, end, gene name(s)).
 
 ```bash
 robin list-panels
@@ -140,7 +140,7 @@ robin remove-panel MyCustomPanel
 robin remove-panel MyCustomPanel --force
 ```
 
-Reserved names: **`rCNS2`**, **`AML`**, **`PanCan`**.
+You cannot reuse reserved names: `rCNS2`, `AML`.
 
 ---
 

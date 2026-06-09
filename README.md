@@ -158,7 +158,7 @@ You can add that to your shell config (after conda init).
 ### What ROBIN expects from your sequencing setup
 
 - BAMs from an Oxford Nanopore sequencer; **real-time HAC** basecalling (SUP not required).
-- **5hmC / 5mC** methylation calling enabled in MinKNOW.
+- **5mC / 5hmC modified-base calling in CpG contexts only** enabled in MinKNOW. Do **not** use all-context 5mC / 5hmC calling.
 - **Real-time alignment in MinKNOW** — ROBIN does not realign reads.
 - BAMs must respect the **[50,000-read limit](#bam-read-limit-and-minknow-settings)** and MinKNOW read-count output settings above.
 - ROBIN does **not** consume POD5 or FASTQ; you can disable those outputs in MinKNOW if you wish.
@@ -185,7 +185,7 @@ robin workflow <data_folder> --work-dir <output_folder> \
 | `-w` / `--workflow` | Comma-separated job types (see [`list-job-types`](#list-job-types)) |
 | `--reference` | Reference FASTA (required for many analyses) |
 | `--center` | Site ID (e.g. `Sherwood`, `Auckland`, `New York`) |
-| `--target-panel` | Panel for target/CNV/fusion (e.g. `rCNS2`, `PanCan`) |
+| `--target-panel` | Panel for target/CNV/fusion (e.g. `rCNS2`, `AML`) |
 
 More examples:
 
@@ -204,7 +204,7 @@ robin workflow ~/data/bam_files \
   -w mgmt,sturgeon \
   --reference ~/references/hg38_simple.fa \
   --center Auckland \
-  --target-panel PanCan
+  --target-panel AML
 
 # Verbose logging
 robin workflow ~/data/bam_files \
@@ -265,7 +265,7 @@ robin workflow /path/to/directory --workflow "workflow_plan" [OPTIONS]
 
 ### Panel management
 
-Built-in panels include `rCNS2`, `AML`, `PanCan`. Custom panels are stored after you add them from a BED file.
+Built-in panels include `rCNS2`, `AML`. Custom panels are stored after you add them from a BED file.
 
 **List panels**
 
@@ -280,7 +280,7 @@ robin add-panel /path/to/your_panel.bed MyCustomPanel
 robin add-panel /path/to/your_panel.bed MyCustomPanel --validate-only
 ```
 
-Names must be non-empty and not reserved (`rCNS2`, `AML`, `PanCan`).
+Names must be non-empty and not reserved (`rCNS2`, `AML`).
 
 **Remove a custom panel**
 
