@@ -19,7 +19,8 @@ from robin.analysis.mnpflex_bed import (
     build_subset_bed_from_parquet,
 )
 from robin.analysis.mnpflex_config import load_mnpflex_config
-from robin.analysis.mnpflex_runner import run_mnpflex_analysis
+from robin.analysis.mnpflex_docker import format_mnpflex_runtime_error
+from robin.analysis.mnpflex_runner import preflight_mnpflex_runtime, run_mnpflex_analysis
 from robin.gui.theme import styled_table
 
 
@@ -745,9 +746,80 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                         ui.label(p["title"]).classes("classification-insight-meta")
                         ui.image(p["data_url"]).classes("w-full")
 
+        def _notify_mnpflex_error(message: str) -> None:
+            """Surface an error toast and inline message on the UI thread."""
+            alert = (message or "MNP-Flex failed.").strip()
+            state["last_error"] = alert
+            if len(alert) > 320:
+                toast = alert[:317] + "..."
+            else:
+                toast = alert
+            try:
+                ui.timer(0.05, lambda m=alert: error_label.set_text(m), once=True)
+                ui.timer(
+                    0.05,
+                    lambda: ui.notify(
+                        toast,
+                        type="negative",
+                        timeout=12000,
+                        multi_line=True,
+                    ),
+                    once=True,
+                )
+            except Exception:
+                pass
+
+        def _audit_mnpflex_failure(
+            *,
+            acting_user_id: Any,
+            auto: bool,
+            error_message: str,
+        ) -> None:
+            try:
+                launcher._audit_log(
+                    event_type="run.started",
+                    result="failure",
+                    user_id=acting_user_id,
+                    target_type="sample",
+                    target_id=sample_id,
+                    details={
+                        "run_type": "mnpflex",
+                        "trigger": "auto" if auto else "manual",
+                        "error": error_message[:500],
+                    },
+                    error_code="mnpflex_failed",
+                )
+            except Exception:
+                pass
+
         def _run_fetch(auto: bool = False) -> None:
             if state["running"]:
                 return
+
+            preflight_err = preflight_mnpflex_runtime(mnpflex_config)
+            acting_user_id = launcher._get_current_user_id()
+            if preflight_err:
+                _notify_mnpflex_error(preflight_err)
+                _audit_mnpflex_failure(
+                    acting_user_id=acting_user_id,
+                    auto=auto,
+                    error_message=preflight_err,
+                )
+                return
+
+            try:
+                launcher._audit_log(
+                    event_type="run.started",
+                    user_id=acting_user_id,
+                    target_type="sample",
+                    target_id=sample_id,
+                    details={
+                        "run_type": "mnpflex",
+                        "trigger": "auto" if auto else "manual",
+                    },
+                )
+            except Exception:
+                pass
             state["running"] = True
             state["last_error"] = ""
             status_badge.set_text("Running")
@@ -765,8 +837,14 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                     _execute_mnpflex_analysis(output_dir)
                     state["last_updated"] = time.time()
                 except Exception as exc:
-                    state["last_error"] = str(exc)
+                    friendly = format_mnpflex_runtime_error(str(exc))
                     logging.error(f"[MNPFlex] Fetch failed: {exc}")
+                    _notify_mnpflex_error(friendly)
+                    _audit_mnpflex_failure(
+                        acting_user_id=acting_user_id,
+                        auto=auto,
+                        error_message=friendly,
+                    )
                 finally:
                     state["running"] = False
 

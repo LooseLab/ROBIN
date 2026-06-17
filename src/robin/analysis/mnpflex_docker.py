@@ -65,6 +65,27 @@ def is_docker_image_available(image: str, binary: str = "docker") -> Tuple[bool,
     return True, ""
 
 
+def format_mnpflex_runtime_error(message: str) -> str:
+    """Return a short, actionable error string for GUI users."""
+    text = (message or "").strip()
+    lower = text.lower()
+    if "executable not found" in lower:
+        return "Docker is not installed or not available on PATH."
+    if (
+        "daemon is not available" in lower
+        or "cannot connect to the docker daemon" in lower
+    ):
+        return (
+            "Docker is not running or not reachable. Start Docker Desktop "
+            "(or your Docker daemon), then try MNP-Flex again."
+        )
+    if "timed out" in lower and "docker" in lower:
+        return "Docker did not respond in time. Check that the daemon is running."
+    if "image" in lower and "not available" in lower:
+        return text.split("\n")[0][:400]
+    return text.split("\n")[0][:400]
+
+
 def validate_docker_runtime(config: MNPFlexConfig) -> None:
     err = config.validation_error()
     if err:

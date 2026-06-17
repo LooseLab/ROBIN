@@ -11,6 +11,7 @@ from robin.analysis.mnpflex_docker import (
     adapt_docker_outputs,
     build_bundle_summary_from_docker_dir,
     find_docker_output_dir,
+    format_mnpflex_runtime_error,
     run_docker_mnpflex,
 )
 from robin.analysis.mnpflex_config import MNPFlexConfig
@@ -19,6 +20,16 @@ from robin.analysis.mnpflex_config import MNPFlexConfig
 FIXTURE_DIR = (
     Path(__file__).resolve().parent / "fixtures" / "mnpflex_docker" / "26D22147.MNPFlex"
 )
+
+
+def test_format_mnpflex_runtime_error_docker_daemon() -> None:
+    raw = (
+        "docker daemon is not available: Cannot connect to the Docker daemon "
+        "at unix:///Users/me/.docker/run/docker.sock"
+    )
+    msg = format_mnpflex_runtime_error(raw)
+    assert "Docker is not running" in msg
+    assert "Docker Desktop" in msg
 
 
 def test_build_bundle_summary_from_fixture() -> None:

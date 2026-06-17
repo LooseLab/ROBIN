@@ -18,14 +18,15 @@ If nothing loads: [Troubleshooting — I can’t open the page](troubleshooting.
 
 ## Signing in
 
-If password protection is on, you’ll see **Sign in** with **Enter password to continue.** The layout includes the green header (**R.O.B.I.N**, menu, logo), the password card, and the footer (**Links**, copyright).
+If the GUI is enabled, you’ll see **Sign in** with **username** and **password** fields.
 
-![ROBIN web sign-in: header, Sign in card with password field and Log in button, footer](../images/login.png)
-
-- Enter the password your team uses (often the one set with the **GUI password** in the terminal).  
+- Enter the credentials your administrator provided (or the `admin` account created at setup).  
+- On first login, accept the **research-use agreement** — acceptance is recorded per user in the audit database.  
 - Press **Log in** or **Enter**.  
 
 After sign-in, ROBIN opens the page you wanted or **Welcome**.
+
+For account setup and auditing, see [Users, consent, and auditing](audit-and-users.md).
 
 ---
 
@@ -53,6 +54,7 @@ After sign-in, ROBIN opens the page you wanted or **Welcome**.
 | Published docs (new tab) | **Documentation** |
 | Dark theme | **Dark Mode** |
 | Remote access (advanced) | **Allow Remote Access** |
+| User accounts and audit log *(admin only)* | **Administration** |
 | End web session | **LOG OUT** |
 | Stop ROBIN on this machine *(some setups)* | **Quit** — read the warning; closing the **tab** often leaves analysis running. |
 

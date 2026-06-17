@@ -338,7 +338,16 @@ def _get_user_acknowledgment() -> bool:
     # Skip disclaimer in development mode
     if is_development_mode:
         return True
-        
+
+    try:
+        from robin.security import SecurityStore, get_consent_version
+
+        store = SecurityStore()
+        if store.any_active_admin_has_consent(get_consent_version()):
+            return True
+    except Exception:
+        pass
+
     if _RICH_AVAILABLE and _RICH_CONSOLE is not None:
         _RICH_CONSOLE.print(
             Panel(
@@ -424,6 +433,395 @@ def password_set() -> None:
     if not set_gui_password_interactive():
         sys.exit(1)
     click.echo("GUI password set successfully.")
+
+
+@main.group()
+def users() -> None:
+    """Manage GUI users for multi-user authentication."""
+    pass
+
+
+def _get_security_services():
+    from robin.security import AuditService, AuthService, SecurityStore
+
+    store = SecurityStore()
+    return store, AuthService(store), AuditService(store)
+
+
+@users.command("bootstrap-admin")
+@click.option("--username", default="admin", show_default=True, help="Initial admin username.")
+@click.option(
+    "--from-legacy-hash",
+    is_flag=True,
+    help="Use the existing GUI password hash file (password unchanged).",
+)
+def users_bootstrap_admin(username: str, from_legacy_hash: bool) -> None:
+    """Create the first admin account for a new ROBIN install."""
+    try:
+        from robin.gui_launcher import _get_gui_password_hash_path
+        from robin.security import get_consent_version
+
+        store, auth, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    if store.has_users():
+        click.echo(
+            "Users already exist. Use 'robin users create' to add more accounts.",
+            err=True,
+        )
+        sys.exit(1)
+
+    if from_legacy_hash:
+        if username != "admin":
+            click.echo(
+                "Legacy hash import always creates user 'admin'. Omit --username or use --username admin.",
+                err=True,
+            )
+            sys.exit(1)
+        legacy_path = _get_gui_password_hash_path()
+        if not auth.bootstrap_admin_from_legacy_hash(legacy_path):
+            click.echo(
+                f"No users created. Set a GUI password first (`robin password set`) "
+                f"or run without --from-legacy-hash.",
+                err=True,
+            )
+            sys.exit(1)
+        user = store.get_user_by_username("admin")
+        user_id = user.id if user else None
+    else:
+        password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
+        try:
+            user_id = auth.create_user(username, password, role="admin")
+        except Exception as e:
+            click.echo(f"Failed to create admin user '{username}': {e}", err=True)
+            sys.exit(1)
+
+    audit.log_event(
+        event_type="admin.user.bootstrap",
+        target_type="user",
+        target_id=username,
+        details={
+            "username": username,
+            "user_id": user_id,
+            "from_legacy_hash": from_legacy_hash,
+            "consent_version": get_consent_version(),
+        },
+    )
+    click.echo(f"Bootstrap complete. Admin user '{username}' is ready for GUI login.")
+
+
+@users.command("create")
+@click.argument("username", type=str)
+@click.option("--role", type=click.Choice(["admin", "user"]), default="user", show_default=True)
+def users_create(username: str, role: str) -> None:
+    """Create a GUI user account."""
+    try:
+        store, auth, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
+    try:
+        user_id = auth.create_user(username, password, role=role)
+        audit.log_event(
+            event_type="admin.user.created",
+            user_id=None,
+            target_type="user",
+            target_id=username,
+            details={"role": role, "user_id": user_id},
+        )
+    except Exception as e:
+        click.echo(f"Failed to create user '{username}': {e}", err=True)
+        sys.exit(1)
+    click.echo(f"Created user '{username}' with role '{role}'.")
+
+
+@users.command("set-password")
+@click.argument("username", type=str)
+def users_set_password(username: str) -> None:
+    """Set a new password for an existing GUI user."""
+    try:
+        store, auth, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    password = click.prompt("New password", hide_input=True, confirmation_prompt=True)
+    new_hash = auth.hash_password(password)
+    if not store.set_user_password_hash(username, new_hash):
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    audit.log_event(
+        event_type="admin.user.password_reset",
+        user_id=None,
+        target_type="user",
+        target_id=username,
+        details={"username": username},
+    )
+    click.echo(f"Updated password for user '{username}'.")
+
+
+@users.command("list")
+def users_list() -> None:
+    """List configured GUI users."""
+    try:
+        store, _, _ = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    users = store.list_users()
+    if not users:
+        click.echo("No users configured.")
+        return
+    click.echo("Configured users:")
+    for user in users:
+        click.echo(
+            f" - {user.username} (id={user.id}, active={user.is_active}, last_login={user.last_login_at or 'never'})"
+        )
+
+
+@users.command("consent-status")
+@click.option(
+    "--version",
+    "consent_version",
+    default="",
+    help="Consent version to check (default: active ROBIN_CONSENT_VERSION).",
+)
+def users_consent_status(consent_version: str) -> None:
+    """Show per-user research-use consent status."""
+    try:
+        from robin.security import get_consent_version
+
+        store, _, _ = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    version = (consent_version or get_consent_version()).strip()
+    rows = store.list_consent_status(version)
+    if not rows:
+        click.echo("No users configured.")
+        return
+
+    click.echo(f"Consent version: {version}")
+    for row in rows:
+        status = "accepted" if row["has_consent"] else "pending"
+        agreed = row["agreed_at"] or "never"
+        active = "active" if row["is_active"] else "inactive"
+        click.echo(
+            f" - {row['username']} ({active}): {status} (agreed_at={agreed})"
+        )
+
+
+@users.command("deactivate")
+@click.argument("username", type=str)
+def users_deactivate(username: str) -> None:
+    """Deactivate a user account."""
+    try:
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+    username = username.strip()
+    user = store.get_user_by_username(username)
+    if user is None:
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    if store.user_has_role(user.id, "admin") and store.count_active_admins() <= 1:
+        click.echo("Cannot deactivate the last active admin.", err=True)
+        sys.exit(1)
+    if not store.set_user_active(username, False):
+        click.echo(f"Failed to deactivate '{username}'.", err=True)
+        sys.exit(1)
+    audit.log_event(
+        event_type="admin.user.deactivated",
+        target_type="user",
+        target_id=username,
+        details={"username": username},
+    )
+    click.echo(f"Deactivated user '{username}'.")
+
+
+@users.command("activate")
+@click.argument("username", type=str)
+def users_activate(username: str) -> None:
+    """Activate a user account."""
+    try:
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+    username = username.strip()
+    if not store.set_user_active(username, True):
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    audit.log_event(
+        event_type="admin.user.activated",
+        target_type="user",
+        target_id=username,
+        details={"username": username},
+    )
+    click.echo(f"Activated user '{username}'.")
+
+
+@users.command("grant-role")
+@click.argument("username", type=str)
+@click.argument("role", type=click.Choice(["admin", "user"]))
+def users_grant_role(username: str, role: str) -> None:
+    """Grant a role to a user."""
+    try:
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+    username = username.strip()
+    user = store.get_user_by_username(username)
+    if user is None:
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    store.assign_role(user.id, role)
+    audit.log_event(
+        event_type="admin.user.role_granted",
+        target_type="user",
+        target_id=username,
+        details={"username": username, "role": role},
+    )
+    click.echo(f"Granted role '{role}' to '{username}'.")
+
+
+@users.command("revoke-role")
+@click.argument("username", type=str)
+@click.argument("role", type=click.Choice(["admin", "user"]))
+def users_revoke_role(username: str, role: str) -> None:
+    """Revoke a role from a user."""
+    try:
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+    username = username.strip()
+    user = store.get_user_by_username(username)
+    if user is None:
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    if role == "admin" and store.user_has_role(user.id, "admin") and store.count_active_admins() <= 1:
+        click.echo("Cannot revoke admin role from the last active admin.", err=True)
+        sys.exit(1)
+    if not store.revoke_role(user.id, role):
+        click.echo(f"Role '{role}' was not assigned to '{username}'.", err=True)
+        sys.exit(1)
+    audit.log_event(
+        event_type="admin.user.role_revoked",
+        target_type="user",
+        target_id=username,
+        details={"username": username, "role": role},
+    )
+    click.echo(f"Revoked role '{role}' from '{username}'.")
+
+
+@main.group()
+def audit() -> None:
+    """Query and export audit events."""
+    pass
+
+
+@audit.command("list")
+@click.option("--user", "username", type=str, default="", help="Filter by username.")
+@click.option("--event", "event_type", type=str, default="", help="Filter by event type.")
+@click.option("--from-ts", type=str, default="", help="Start timestamp (UTC ISO8601).")
+@click.option("--to-ts", type=str, default="", help="End timestamp (UTC ISO8601).")
+@click.option("--limit", type=int, default=50, show_default=True)
+def audit_list(username: str, event_type: str, from_ts: str, to_ts: str, limit: int) -> None:
+    """List recent audit events."""
+    try:
+        store, _, _ = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    events = store.query_audit_events(
+        username=username,
+        event_type=event_type,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        limit=limit,
+    )
+    if not events:
+        click.echo("No audit events found.")
+        return
+    for e in events:
+        click.echo(
+            f"{e['occurred_at']} user={e['username'] or '-'} event={e['event_type']} "
+            f"target={e['target_type']}:{e['target_id']} result={e['result']}"
+        )
+
+
+@audit.command("export")
+@click.option("--user", "username", type=str, default="", help="Filter by username.")
+@click.option("--event", "event_type", type=str, default="", help="Filter by event type.")
+@click.option("--from-ts", type=str, default="", help="Start timestamp (UTC ISO8601).")
+@click.option("--to-ts", type=str, default="", help="End timestamp (UTC ISO8601).")
+@click.option("--limit", type=int, default=5000, show_default=True)
+@click.option("--out", "out_path", type=click.Path(path_type=Path), required=True)
+def audit_export(username: str, event_type: str, from_ts: str, to_ts: str, limit: int, out_path: Path) -> None:
+    """Export audit events to CSV."""
+    try:
+        store, _, _ = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    events = store.query_audit_events(
+        username=username,
+        event_type=event_type,
+        from_ts=from_ts,
+        to_ts=to_ts,
+        limit=limit,
+    )
+    fieldnames = [
+        "id",
+        "occurred_at",
+        "user_id",
+        "username",
+        "event_type",
+        "target_type",
+        "target_id",
+        "result",
+        "error_code",
+        "ip",
+        "user_agent",
+        "session_id",
+        "request_id",
+        "details",
+    ]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(out_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for e in events:
+            row = dict(e)
+            row["details"] = str(e.get("details", {}))
+            writer.writerow({k: row.get(k, "") for k in fieldnames})
+    click.echo(f"Exported {len(events)} audit events to {out_path}")
 
 
 @main.group()

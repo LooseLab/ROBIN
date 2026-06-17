@@ -1,8 +1,10 @@
 # `robin password`
 
-Configure the **NiceGUI** workflow monitor login password.
+Configure the legacy **GUI password hash file** used when bootstrapping the first admin user.
 
-For the full startup sequence (disclaimer, when the GUI prompts for a password), see **[What happens at startup](../getting-started/startup.md)**.
+For multi-user account management, see **[`robin users`](users.md)**.
+
+For the full startup sequence, see **[What happens at startup](../getting-started/startup.md)**.
 
 ## `robin password set`
 
@@ -17,9 +19,15 @@ If the GUI password module fails to import (minimal install / broken env), the c
 
 ## When it applies
 
-The password is used when the **[`robin workflow`](workflow.md)** GUI is enabled (`--with-gui`, default) and password protection is active in the GUI layer — see application logs and on-screen prompts if login is required.
+- **`robin password set`** writes `gui_password_hash` under your config directory.
+- On first GUI launch with no users, ROBIN can **bootstrap** user `admin` from this hash.
+- Prefer **`robin users bootstrap-admin`** for explicit first-time setup.
+
+The GUI login screen uses **username + password** accounts stored in `security.db`.
 
 ## Related
 
+- [`robin users`](users.md)  
+- [`robin audit`](audit.md)  
 - [`robin workflow` GUI options](workflow.md#gui-nicegui)  
 - [CLI overview](index.md)  

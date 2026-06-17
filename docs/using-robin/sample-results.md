@@ -154,8 +154,11 @@ CNV here is for **rapid visual screening**; it is **not** a replacement for cert
 - **Candidate summary** — counts for **target panel** vs **genome-wide** pairs and groups.  
 - **Target panel** — tables (and often plots) restricted to fusions involving your **assay panel**.  
 - **Genome-wide** — broader fusion calls outside the panel, if configured.
+- **FusionVis-style model view** — selecting a validated fusion pair displays its parent-gene exon tracks, observed join, breakpoint-local support, and predicted exon-scale fusion products directly above the supporting-read table.
 
 Use the tables to inspect **gene pairs**, support, and grouping; follow your lab’s rules for **confirming** interesting events.
+
+The model is generated from ROBIN's existing fusion alignment rows with the bundled GENCODE annotation; no separate FusionVis installation or service is required. It is an exploratory review view and is not a clinical caller.
 
 ---
 

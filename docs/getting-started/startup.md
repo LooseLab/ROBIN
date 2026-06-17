@@ -36,7 +36,7 @@ If you pass a reference **FASTA**, ROBIN validates it and ensures an index (e.g.
 
 ## 3. Research disclaimer (`I agree`)
 
-ROBIN prints the **research-use** text and waits for **`I agree`** exactly (case-sensitive) before the workflow starts.
+ROBIN prints the **research-use** text and waits for **`I agree`** exactly (case-sensitive) before the workflow starts — **unless** an active **admin** has already accepted the current consent version in the GUI (`~/.config/robin/security.db`). In that case the terminal prompt is skipped; per-user consent is still collected at GUI sign-in.
 
 ---
 

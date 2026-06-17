@@ -40,11 +40,18 @@ import zipfile
 import json
 import pickle
 import getpass
+import uuid
 from urllib.parse import quote
 
 from robin.gui import theme, images
 
 from robin.gui.components.news_feed import NewsFeed
+from robin.security import (
+    AuditService,
+    AuthService,
+    get_consent_version,
+    SecurityStore,
+)
 
 from robin.reporting.report import create_pdf
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
@@ -436,6 +443,10 @@ class GUILauncher:
         # /robin_dark_mode: session cookie for theme (must work on /login before auth).
         self._unrestricted_page_routes = {"/login", "/robin_dark_mode"}
         self._password_hash: Optional[str] = None  # cached after first read
+        self.security_store = SecurityStore()
+        self.auth_service = AuthService(self.security_store)
+        self.audit_service = AuditService(self.security_store)
+        self.consent_version = get_consent_version()
 
         # Sample status transition timeout (in seconds)
         # Change to 60 for testing (1 minute), 3600 for production (60 minutes)
@@ -565,6 +576,133 @@ class GUILauncher:
             and app.storage.user.get("_auth_generation") == gen
         )
 
+    def _get_request_context(self) -> Dict[str, str]:
+        if not app:
+            return {"ip": "", "user_agent": "", "session_id": "", "request_id": ""}
+        try:
+            return {
+                "ip": str(app.storage.user.get("_request_ip", "") or ""),
+                "user_agent": str(app.storage.user.get("_request_user_agent", "") or ""),
+                "session_id": str(app.storage.user.get("_session_id", "") or ""),
+                "request_id": str(app.storage.user.get("_request_id", "") or ""),
+            }
+        except Exception:
+            return {"ip": "", "user_agent": "", "session_id": "", "request_id": ""}
+
+    def _get_current_user_id(self) -> Optional[int]:
+        if not app:
+            return None
+        try:
+            raw = app.storage.user.get("user_id")
+            if raw is None:
+                return None
+            return int(raw)
+        except Exception:
+            return None
+
+    def _get_current_username(self) -> Optional[str]:
+        if not app:
+            return None
+        try:
+            username = app.storage.user.get("username")
+            if username:
+                return str(username).strip()
+        except Exception:
+            pass
+        return None
+
+    def _report_generation_metadata(self) -> Dict[str, str]:
+        return {
+            "generated_by": self._get_current_username() or "",
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    def _is_current_user_admin(self) -> bool:
+        """Return True when the signed-in user has the admin role."""
+        user_id = self._get_current_user_id()
+        if user_id is None:
+            return False
+        try:
+            if not self.security_store.user_has_role(user_id, "admin"):
+                return False
+            user = self.security_store.get_user_by_id(user_id)
+            return bool(user and user.is_active)
+        except Exception:
+            return False
+
+    def _open_sample_audit_dialog(self, sample_id: str) -> None:
+        from robin.gui.components.sample_audit import open_sample_audit_dialog
+
+        open_sample_audit_dialog(self, sample_id)
+
+    def _audit_log(
+        self,
+        *,
+        event_type: str,
+        result: str = "success",
+        user_id: Optional[int] = None,
+        target_type: str = "",
+        target_id: str = "",
+        details: Optional[Dict[str, Any]] = None,
+        error_code: str = "",
+    ) -> None:
+        ctx = self._get_request_context()
+        self.audit_service.log_event(
+            event_type=event_type,
+            result=result,
+            user_id=user_id,
+            target_type=target_type,
+            target_id=target_id,
+            details=details or {},
+            ip=ctx["ip"],
+            user_agent=ctx["user_agent"],
+            session_id=ctx["session_id"],
+            request_id=ctx["request_id"],
+            error_code=error_code,
+        )
+
+    def _audit_report_generated(
+        self,
+        *,
+        state: Dict[str, Any],
+        target_type: str = "sample",
+        target_id: str,
+        result: str = "success",
+        output_files: Optional[List[str]] = None,
+        generated_at: Optional[str] = None,
+        error_code: str = "",
+        error_message: str = "",
+        extra_details: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Record report generation (PDF/CSV/TSV) in the audit trail."""
+        report_meta = self._report_generation_metadata()
+        details: Dict[str, Any] = {
+            "report_type": state.get("type", "detailed"),
+            "export_pdf": bool(state.get("export_pdf", True)),
+            "export_csv": bool(state.get("export_csv", False)),
+            "export_tsv": bool(state.get("export_tsv", False)),
+            "generated_by": report_meta["generated_by"],
+            "generated_at": generated_at or report_meta["generated_at"],
+            "include_sample_identifiers": bool(state.get("include_sample_ids")),
+        }
+        if output_files:
+            details["output_files"] = [
+                os.path.basename(path) for path in output_files if path
+            ]
+        if error_message:
+            details["error"] = error_message[:500]
+        if extra_details:
+            details.update(extra_details)
+        self._audit_log(
+            event_type="report.generated",
+            result=result,
+            user_id=self._get_current_user_id(),
+            target_type=target_type,
+            target_id=target_id,
+            details=details,
+            error_code=error_code,
+        )
+
     def _register_auth_middleware(self) -> None:
         """Register request middleware that protects all GUI pages."""
         if self._auth_middleware_registered:
@@ -590,9 +728,21 @@ class GUILauncher:
                     if not host and getattr(url, "host", None):
                         host = str(url.host).split(":")[0]
                     app.storage.user["_request_host"] = (host or "").strip()
+                    forwarded_for = request.headers.get("x-forwarded-for", "")
+                    real_ip = request.headers.get("x-real-ip", "")
+                    client_host = request.client.host if request.client else ""
+                    ip = (forwarded_for.split(",")[0].strip() if forwarded_for else "") or real_ip or client_host
+                    app.storage.user["_request_ip"] = ip
+                    app.storage.user["_request_user_agent"] = request.headers.get("user-agent", "")
+                    app.storage.user["_request_id"] = uuid.uuid4().hex
+                    if not app.storage.user.get("_session_id"):
+                        app.storage.user["_session_id"] = uuid.uuid4().hex
                 except Exception:
                     try:
                         app.storage.user["_request_host"] = ""
+                        app.storage.user["_request_ip"] = ""
+                        app.storage.user["_request_user_agent"] = ""
+                        app.storage.user["_request_id"] = ""
                     except Exception:
                         pass
                 path = request.url.path
@@ -626,18 +776,22 @@ class GUILauncher:
         except OSError:
             return None
 
-    def _verify_password(self, candidate: str) -> bool:
-        """Verify the candidate password against the stored Argon2 hash."""
-        if not candidate or PasswordHasher is None:
-            return False
-        stored = self._get_password_hash()
-        if not stored:
-            return False
-        try:
-            PasswordHasher().verify(stored, candidate)
+    def _verify_user_login(self, username: str, password: str) -> Optional[Dict[str, Any]]:
+        user = self.auth_service.verify_login(username, password)
+        if user is None:
+            return None
+        roles = self.security_store.get_user_roles(user.id)
+        return {"user_id": user.id, "username": user.username, "roles": roles}
+
+    def _bootstrap_security_from_legacy_password(self) -> bool:
+        """Backfill initial admin from legacy GUI password hash if needed."""
+        if self.security_store.has_users():
             return True
-        except (VerifyMismatchError, InvalidHashError):
-            return False
+        legacy_path = _get_gui_password_hash_path()
+        if self.auth_service.bootstrap_admin_from_legacy_hash(legacy_path):
+            logging.info("Bootstrapped default admin user from legacy GUI password hash")
+            return True
+        return False
 
     # ========== Master Record System Methods ==========
 
@@ -1163,9 +1317,13 @@ class GUILauncher:
             logging.error("NiceGUI is not available")
             return False
 
-        if not ensure_gui_password_set():
-            logging.error("GUI password check failed. Cannot start GUI.")
-            return False
+        if not self.security_store.has_users():
+            if not ensure_gui_password_set():
+                logging.error("GUI password check failed. Cannot start GUI.")
+                return False
+            if not self._bootstrap_security_from_legacy_password():
+                logging.error("Could not bootstrap admin user from legacy password hash.")
+                return False
 
         self.workflow_runner = workflow_runner
         self.workflow_steps = workflow_steps or []
@@ -1895,6 +2053,14 @@ class GUILauncher:
             # Set thread name for identification
             threading.current_thread().name = "robin-GUI-Thread"
             self._register_auth_middleware()
+            theme.set_logout_callback(
+                lambda: self._audit_log(
+                    event_type="auth.logout",
+                    user_id=self._get_current_user_id(),
+                    target_type="session",
+                    target_id=str(app.storage.user.get("_session_id", "") or ""),
+                )
+            )
 
             # Session cookie dark_mode (nicegui.io pattern): available on first HTML response so theme matches paint.
             if app is not None:
@@ -1917,17 +2083,78 @@ class GUILauncher:
                     return RedirectResponse(safe_target)
 
                 def try_login() -> None:
-                    if self._verify_password(password.value):
-                        app.storage.user.update({
+                    username_value = str(username.value or "").strip()
+                    login_result = self._verify_user_login(username_value, password.value)
+                    if login_result is None:
+                        self._audit_log(
+                            event_type="auth.login.failure",
+                            result="failure",
+                            target_type="user",
+                            target_id=username_value,
+                            details={"username": username_value},
+                            error_code="invalid_credentials",
+                        )
+                        ui.notify("Incorrect username or password", type="negative")
+                        return
+
+                    app.storage.user.update(
+                        {
                             "authenticated": True,
                             "_auth_generation": app.storage.general.get("_auth_generation"),
-                        })
-                        safe_target = (
-                            redirect_to if redirect_to and redirect_to != "/login" else "/"
-                        )
+                            "user_id": login_result["user_id"],
+                            "username": login_result["username"],
+                            "roles": login_result["roles"],
+                        }
+                    )
+                    self._audit_log(
+                        event_type="auth.login.success",
+                        user_id=int(login_result["user_id"]),
+                        target_type="user",
+                        target_id=str(login_result["username"]),
+                        details={"roles": login_result["roles"]},
+                    )
+
+                    safe_target = redirect_to if redirect_to and redirect_to != "/login" else "/"
+                    has_consent = self.security_store.has_consent(
+                        int(login_result["user_id"]), self.consent_version
+                    )
+                    if has_consent:
+                        app.storage.user["disclaimer_acknowledged"] = True
                         ui.navigate.to(safe_target)
-                    else:
-                        ui.notify("Incorrect password", type="negative")
+                        return
+
+                    with ui.dialog().props("persistent") as consent_dialog, ui.card().classes(
+                        "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-2xl"
+                    ):
+                        ui.label("Research use agreement").classes(
+                            "classification-insight-heading text-headline-small q-mb-sm"
+                        )
+                        ui.label(EXTENDED_DISCLAIMER_TEXT).classes("classification-insight-foot q-mb-md")
+
+                        def _accept_consent() -> None:
+                            ctx = self._get_request_context()
+                            self.security_store.record_consent(
+                                int(login_result["user_id"]),
+                                self.consent_version,
+                                ip=ctx["ip"],
+                                user_agent=ctx["user_agent"],
+                                session_id=ctx["session_id"],
+                            )
+                            self._audit_log(
+                                event_type="consent.accepted",
+                                user_id=int(login_result["user_id"]),
+                                target_type="consent",
+                                target_id=self.consent_version,
+                                details={"consent_version": self.consent_version},
+                            )
+                            app.storage.user["disclaimer_acknowledged"] = True
+                            consent_dialog.close()
+                            ui.navigate.to(safe_target)
+
+                        ui.button("I agree", on_click=_accept_consent, icon="check_circle").props(
+                            "color=primary no-caps"
+                        )
+                    consent_dialog.open()
 
                 _setup_global_resources()
                 with theme.frame(
@@ -1969,16 +2196,22 @@ class GUILauncher:
                                                 "shrink-0 text-center"
                                             )
                                         ui.label(
-                                            "Enter password to continue."
+                                            "Enter your username and password to continue."
                                         ).classes(
                                             "classification-insight-foot text-center"
+                                        )
+                                        username = (
+                                            ui.input("Username")
+                                            .props("autocomplete=username outlined dense")
+                                            .classes("w-full")
+                                            .on("keydown.enter", try_login)
                                         )
                                         password = (
                                             ui.input(
                                                 "Password",
                                             )
                                             .props(
-                                                "autocomplete=off outlined dense"
+                                                "autocomplete=current-password outlined dense"
                                             )
                                             .classes("w-full")
                                             .style("-webkit-text-security: disc;")
@@ -1997,6 +2230,12 @@ class GUILauncher:
             def welcome_page():
                 """Welcome page at root route."""
                 _setup_global_resources()
+                self._audit_log(
+                    event_type="page.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/",
+                )
                 self._create_welcome_page()
 
             # Create the workflow monitoring page
@@ -2004,6 +2243,12 @@ class GUILauncher:
             def workflow_monitor():
                 """Workflow monitoring page under /robin route."""
                 _setup_global_resources()
+                self._audit_log(
+                    event_type="page.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/robin",
+                )
                 self._create_workflow_monitor()
 
             # Create the samples overview page
@@ -2011,6 +2256,12 @@ class GUILauncher:
             def samples_overview():
                 """Samples overview page showing all tracked samples."""
                 _setup_global_resources()
+                self._audit_log(
+                    event_type="sample.list.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/live_data",
+                )
                 logging.info("[samples_overview] building page /live_data")
                 self._create_samples_overview()
 
@@ -2019,6 +2270,13 @@ class GUILauncher:
             def sample_detail(sample_id: str):
                 """Individual sample detail page."""
                 _setup_global_resources()
+                self._audit_log(
+                    event_type="sample.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=sample_id,
+                    details={"page": "detail"},
+                )
 
                 # Clear cached state BEFORE creating the page so plots refresh on load
                 # This ensures all graphs load properly on each page visit
@@ -2050,6 +2308,13 @@ class GUILauncher:
             def sample_details(sample_id: str):
                 """Sample details page with comprehensive information."""
                 _setup_global_resources()
+                self._audit_log(
+                    event_type="sample.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=sample_id,
+                    details={"page": "details"},
+                )
                 self._create_sample_details_page(sample_id)
 
             # Watched folders management page
@@ -2066,35 +2331,129 @@ class GUILauncher:
                 _setup_global_resources()
                 self._create_sample_id_generator_page()
 
+            @ui.page("/admin")
+            def admin_page():
+                """Administration: users and audit log (admin role required)."""
+                _setup_global_resources()
+                if not self._is_current_user_admin():
+                    self._audit_log(
+                        event_type="admin.page.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="page",
+                        target_id="/admin",
+                        error_code="not_admin",
+                    )
+                    with theme.frame(
+                        "R.O.B.I.N - Administration",
+                        smalltitle="Admin",
+                        batphone=False,
+                        center=self.center,
+                        setup_notifications=self._setup_notification_system,
+                    ):
+                        with ui.column().classes("w-full max-w-lg mx-auto p-4 gap-3"):
+                            ui.label("Access denied").classes(
+                                "classification-insight-heading text-headline-small"
+                            )
+                            ui.label(
+                                "This page is available to admin users only."
+                            ).classes("classification-insight-foot")
+                            ui.button(
+                                "Back to home",
+                                on_click=lambda: ui.navigate.to("/"),
+                                icon="home",
+                            ).props("color=primary no-caps")
+                    return
+                self._audit_log(
+                    event_type="admin.page.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/admin",
+                )
+                self._create_admin_page()
+
             # Download API endpoint
             @ui.page("/api/download/{sample_id}/{filename}")
             def download_file(sample_id: str, filename: str):
                 """Download a file from a sample directory."""
                 try:
+                    current_user_id = self._get_current_user_id()
                     # Security: Only allow alphanumeric characters and common file extensions
                     import re
                     if not re.match(r'^[a-zA-Z0-9._-]+$', filename):
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="invalid_filename",
+                        )
                         ui.notify("Invalid filename", type="error")
                         return
 
                     # Find the sample directory
                     base_dir = Path(self.monitored_directory) if self.monitored_directory else None
                     if not base_dir or not base_dir.exists():
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="sample_directory_missing",
+                        )
                         ui.notify("Sample directory not found", type="error")
                         return
 
                     sample_dir = base_dir / sample_id
                     if not sample_dir.exists():
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="sample_missing",
+                        )
                         ui.notify(f"Sample {sample_id} not found", type="error")
                         return
 
                     file_path = sample_dir / filename
                     if not file_path.exists() or not file_path.is_file():
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="file_missing",
+                        )
                         ui.notify(f"File {filename} not found", type="error")
                         return
                     if FileResponse is None:
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="endpoint_unavailable",
+                        )
                         ui.notify("Download endpoint unavailable", type="error")
                         return
+                    self._audit_log(
+                        event_type="report.exported",
+                        user_id=current_user_id,
+                        target_type="sample",
+                        target_id=sample_id,
+                        details={"filename": filename, "path": str(file_path)},
+                    )
                     return FileResponse(
                         path=str(file_path),
                         filename=filename,
@@ -2102,6 +2461,15 @@ class GUILauncher:
                     )
 
                 except Exception as e:
+                    self._audit_log(
+                        event_type="report.exported",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sample_id,
+                        details={"filename": filename},
+                        error_code="download_exception",
+                    )
                     ui.notify(f"Download failed: {e}", type="error")
 
             # Setup global CSS and static files - moved to a helper function
@@ -3146,6 +3514,14 @@ class GUILauncher:
                                         )
                                         if not sample_dir or not sample_dir.exists():
                                             logging.warning(f"Missing output for {sid}")
+                                            self._audit_report_generated(
+                                                state=state,
+                                                target_id=sid,
+                                                result="failure",
+                                                error_code="sample_directory_missing",
+                                                error_message="Missing output directory",
+                                                extra_details={"bulk_export": True},
+                                            )
                                             continue
 
                                         # Don't use notification system - only update dialog
@@ -3161,6 +3537,9 @@ class GUILauncher:
                                                 export_csv_dir = os.path.join(
                                                     str(sample_dir), "report_csv"
                                                 )
+
+                                            sample_outputs: List[str] = []
+                                            report_meta = self._report_generation_metadata()
 
                                             # Don't use the notification system - use only our dialog callback
                                             if ng_run is not None:
@@ -3182,6 +3561,8 @@ class GUILauncher:
                                                     ),
                                                     progress_callback=sample_progress_callback,
                                                     workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                    generated_by=report_meta["generated_by"] or None,
+                                                    generated_at=report_meta["generated_at"],
                                                 )
                                             else:
                                                 # Use custom callback that updates dialog only
@@ -3201,10 +3582,13 @@ class GUILauncher:
                                                     ),
                                                     progress_callback=sample_progress_callback,
                                                     workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                    generated_by=report_meta["generated_by"] or None,
+                                                    generated_at=report_meta["generated_at"],
                                                 )
 
                                             if bool(state.get("export_pdf", True)):
                                                 files_to_download.append(pdf_file)
+                                                sample_outputs.append(pdf_file)
 
                                             # Also offer CSV ZIP if requested
                                             if (
@@ -3216,6 +3600,15 @@ class GUILauncher:
                                                 )
                                                 if os.path.exists(zip_path):
                                                     files_to_download.append(zip_path)
+                                                    sample_outputs.append(zip_path)
+
+                                            self._audit_report_generated(
+                                                state=state,
+                                                target_id=sid,
+                                                output_files=sample_outputs,
+                                                generated_at=report_meta["generated_at"],
+                                                extra_details={"bulk_export": True},
+                                            )
                                         else:
                                             progress_updates.put({
                                                 'stage': 'processing_sections',
@@ -3235,6 +3628,14 @@ class GUILauncher:
                                     except Exception as e:
                                         # Report generation failed
                                         logging.error(f"Export failed for {sid}: {e}")
+                                        self._audit_report_generated(
+                                            state=state,
+                                            target_id=sid,
+                                            result="failure",
+                                            error_code="generation_exception",
+                                            error_message=str(e),
+                                            extra_details={"bulk_export": True},
+                                        )
                                         # Mark sample as failed
                                         progress_updates.put({
                                             'stage': 'error',
@@ -3322,17 +3723,6 @@ class GUILauncher:
                                                 ),
                                             )
 
-                                        with ui.column().classes("mb-4"):
-                                            ui.label("Disclaimer").classes(
-                                                "target-coverage-panel__meta-label mb-2"
-                                            )
-                                            formatted_text = EXTENDED_DISCLAIMER_TEXT.replace(
-                                                "\n\n", "<br><br>"
-                                            ).replace("\n", " ")
-                                            ui.label(formatted_text).classes(
-                                                "text-sm text-gray-600 mb-4"
-                                            )
-
                                         ui.label(
                                             f"Are you sure you want to export reports for {num_selected} sample(s)?"
                                         ).classes("classification-insight-foot mb-4")
@@ -3375,7 +3765,24 @@ class GUILauncher:
 
                             tsv_export_path = None
                             if bool(state.get("export_tsv", True)):
-                                tsv_export_path = self._build_sample_tracking_tsv_export(selected_ids)
+                                report_meta = self._report_generation_metadata()
+                                tsv_export_path = self._build_sample_tracking_tsv_export(
+                                    selected_ids,
+                                    generated_by=report_meta["generated_by"] or None,
+                                    generated_at=report_meta["generated_at"],
+                                )
+                                if tsv_export_path and os.path.exists(tsv_export_path):
+                                    self._audit_report_generated(
+                                        state=state,
+                                        target_type="batch",
+                                        target_id=f"{num_selected}_samples",
+                                        output_files=[tsv_export_path],
+                                        generated_at=report_meta["generated_at"],
+                                        extra_details={
+                                            "sample_ids": selected_ids,
+                                            "artifact": "sample_tracking_tsv",
+                                        },
+                                    )
 
                             # Now show the progress dialog
                             with ui.dialog().props("persistent") as progress_dialog:
@@ -4343,17 +4750,6 @@ class GUILauncher:
                             sample_dob_input.on("update:model-value", _on_sample_dob_change)
 
                         with ui.column().classes("mb-4"):
-                            ui.label("Disclaimer").classes(
-                                "target-coverage-panel__meta-label mb-2"
-                            )
-                            formatted_text = EXTENDED_DISCLAIMER_TEXT.replace(
-                                "\n\n", "<br><br>"
-                            ).replace("\n", " ")
-                            ui.label(formatted_text).classes(
-                                "text-sm text-gray-600 mb-4"
-                            )
-
-                        with ui.column().classes("mb-4"):
                             ui.label("Output formats").classes(
                                 "target-coverage-panel__meta-label mb-2"
                             )
@@ -4604,10 +5000,20 @@ class GUILauncher:
 
         async def generate_and_download_report(state: Dict[str, Any], progress_callback, progress_dialog, is_generating, files_to_download):
             """Generate report and update progress in dialog."""
+            generated_files: List[str] = []
+            report_meta = self._report_generation_metadata()
             try:
                 from nicegui import run as ng_run  # type: ignore
 
                 if not sample_dir or not sample_dir.exists():
+                    self._audit_report_generated(
+                        state=state,
+                        target_id=sample_id,
+                        result="failure",
+                        error_code="sample_directory_missing",
+                        error_message="Output directory not available for this sample",
+                        generated_at=report_meta["generated_at"],
+                    )
                     # Queue error notification
                     files_to_download.append(None)  # Signal error
                     ui.timer(0.1, lambda: ui.notify(
@@ -4646,6 +5052,8 @@ class GUILauncher:
                         progress_callback=combined_callback,
                         workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
                         sample_identifiers=state.get("sample_identifiers"),
+                        generated_by=report_meta["generated_by"] or None,
+                        generated_at=report_meta["generated_at"],
                     )
 
                     # Mark report as completed
@@ -4655,6 +5063,7 @@ class GUILauncher:
                     # Queue files for download in UI context
                     if bool(state.get("export_pdf", True)):
                         files_to_download.append(pdf_file)
+                        generated_files.append(pdf_file)
 
                     # Also offer CSV ZIP if requested
                     if bool(state.get("export_csv", False)) and export_csv_dir:
@@ -4663,16 +5072,38 @@ class GUILauncher:
                         )
                         if os.path.exists(zip_path):
                             files_to_download.append(zip_path)
+                            generated_files.append(zip_path)
 
                 if bool(state.get("export_tsv", False)):
-                    tsv_path = self._build_sample_tracking_tsv_export([sample_id])
+                    tsv_path = self._build_sample_tracking_tsv_export(
+                        [sample_id],
+                        generated_by=report_meta["generated_by"] or None,
+                        generated_at=report_meta["generated_at"],
+                    )
                     if tsv_path and os.path.exists(tsv_path):
                         files_to_download.append(tsv_path)
+                        generated_files.append(tsv_path)
+
+                self._audit_report_generated(
+                    state=state,
+                    target_id=sample_id,
+                    output_files=generated_files,
+                    generated_at=report_meta["generated_at"],
+                )
 
             except Exception as e:
                 # Mark report as failed
                 from robin.gui.report_progress import progress_manager
                 progress_manager.error_report(sample_id, str(e))
+                self._audit_report_generated(
+                    state=state,
+                    target_id=sample_id,
+                    result="failure",
+                    output_files=generated_files,
+                    generated_at=report_meta["generated_at"],
+                    error_code="generation_exception",
+                    error_message=str(e),
+                )
 
                 # Queue error notification in UI context
                 ui.timer(0.1, lambda: ui.notify(
@@ -4683,12 +5114,22 @@ class GUILauncher:
 
         async def download_report(state: Dict[str, Any]):
             """Generate and download the report for this sample."""
+            generated_files: List[str] = []
+            report_meta = self._report_generation_metadata()
             try:
                 # Import here to avoid global dependency if GUI isn't used
                 from nicegui import run as ng_run  # type: ignore
 
 
                 if not sample_dir or not sample_dir.exists():
+                    self._audit_report_generated(
+                        state=state,
+                        target_id=sample_id,
+                        result="failure",
+                        error_code="sample_directory_missing",
+                        error_message="Output directory not available for this sample",
+                        generated_at=report_meta["generated_at"],
+                    )
                     ui.notify(
                         "Output directory not available for this sample",
                         type="warning",
@@ -4727,12 +5168,15 @@ class GUILauncher:
                     export_zip=bool(state.get("export_csv", False)),
                     progress_callback=progress_callback,
                     workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                    generated_by=report_meta["generated_by"] or None,
+                    generated_at=report_meta["generated_at"],
                 )
 
                 # Mark report as completed
                 from robin.gui.report_progress import progress_manager
                 progress_manager.complete_report(sample_id, filename)
 
+                generated_files.append(pdf_file)
                 ui.download(pdf_file)
                 # Also offer CSV ZIP if requested
                 if bool(state.get("export_csv", False)) and export_csv_dir:
@@ -4740,12 +5184,29 @@ class GUILauncher:
                         export_csv_dir, f"{sample_id}_report_data.zip"
                     )
                     if os.path.exists(zip_path):
+                        generated_files.append(zip_path)
                         ui.download(zip_path)
+
+                self._audit_report_generated(
+                    state=state,
+                    target_id=sample_id,
+                    output_files=generated_files,
+                    generated_at=report_meta["generated_at"],
+                )
 
             except Exception as e:
                 # Mark report as failed
                 from robin.gui.report_progress import progress_manager
                 progress_manager.error_report(sample_id, str(e))
+                self._audit_report_generated(
+                    state=state,
+                    target_id=sample_id,
+                    result="failure",
+                    output_files=generated_files,
+                    generated_at=report_meta["generated_at"],
+                    error_code="generation_exception",
+                    error_message=str(e),
+                )
 
         title_suffix = f" | {test_id}" if test_id else ""
         with theme.frame(
@@ -4893,6 +5354,13 @@ class GUILauncher:
                             ).props("color=primary no-caps").classes(
                                 "rounded-lg px-4 py-2 text-title-medium "
                                 "w-full md:w-auto md:min-w-[10rem]"
+                            )
+                            ui.button(
+                                "View audit",
+                                on_click=lambda: self._open_sample_audit_dialog(sample_id),
+                                icon="history",
+                            ).props("flat no-caps outline").classes(
+                                "rounded-lg w-full md:w-auto md:min-w-[10rem]"
                             )
                 # Main content area with conditional loading state
                 with ui.column().classes("w-full p-2 md:p-3 gap-2"):
@@ -5492,13 +5960,22 @@ class GUILauncher:
                             ).classes("mt-1 self-start").props(
                                 "flat dense color=primary no-caps"
                             )
-                        ui.button(
-                            "Back to sample",
-                            on_click=lambda: ui.navigate.to(f"/live_data/{sample_id}"),
-                        ).props("color=primary no-caps").classes(
-                            "rounded-lg shrink-0 self-stretch md:self-start "
-                            "w-full md:w-auto md:min-w-[10rem]"
-                        )
+                        with ui.column().classes(
+                            "shrink-0 self-stretch md:self-start w-full md:w-auto gap-2"
+                        ):
+                            ui.button(
+                                "View audit",
+                                on_click=lambda: self._open_sample_audit_dialog(sample_id),
+                                icon="history",
+                            ).props("flat no-caps outline").classes(
+                                "rounded-lg w-full md:min-w-[10rem]"
+                            )
+                            ui.button(
+                                "Back to sample",
+                                on_click=lambda: ui.navigate.to(f"/live_data/{sample_id}"),
+                            ).props("color=primary no-caps").classes(
+                                "rounded-lg w-full md:min-w-[10rem]"
+                            )
 
                 with ui.column().classes("w-full gap-3 p-2 md:p-3"):
                     with ui.element("div").classes(
@@ -7558,7 +8035,13 @@ title="View in IGV"
             logging.error(f"Could not zip export files: {e}")
             return None
 
-    def _build_sample_tracking_tsv_export(self, sample_ids: List[str]) -> Optional[str]:
+    def _build_sample_tracking_tsv_export(
+        self,
+        sample_ids: List[str],
+        *,
+        generated_by: Optional[str] = None,
+        generated_at: Optional[str] = None,
+    ) -> Optional[str]:
         """Build TSV export with tracked-table fields and summary data."""
         try:
             if not sample_ids or not self.monitored_directory:
@@ -7691,6 +8174,12 @@ title="View in IGV"
                 return text.replace("\t", " ").replace("\r", " ").replace("\n", " ")
 
             with open(out_path, "w", newline="", encoding="utf-8") as fh:
+                if generated_at:
+                    fh.write(f"# Generated: {generated_at}\n")
+                if generated_by:
+                    fh.write(f"# Generated by: {generated_by}\n")
+                if generated_at or generated_by:
+                    fh.write("#\n")
                 writer = csv.DictWriter(fh, fieldnames=headers, delimiter="\t")
                 writer.writeheader()
                 for sample_id in [str(s) for s in sample_ids]:
@@ -8168,6 +8657,15 @@ title="View in IGV"
                         operation=f"Bulk SNP submission for {sid}",
                     )
                     if not submitted:
+                        self._audit_log(
+                            event_type="run.started",
+                            result="failure",
+                            user_id=self._get_current_user_id(),
+                            target_type="sample",
+                            target_id=sid,
+                            details={"run_type": "snp_bulk"},
+                            error_code="submit_failed",
+                        )
                         self._set_pipeline_status(
                             sid,
                             phase="SNP submit failed",
@@ -8177,6 +8675,13 @@ title="View in IGV"
                         )
                         logging.warning("Bulk SNP: submit failed for %s", sid)
                         continue
+                    self._audit_log(
+                        event_type="run.started",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sid,
+                        details={"run_type": "snp_bulk"},
+                    )
                     self._set_pipeline_status(
                         sid,
                         phase="SNP queued",
@@ -8256,7 +8761,25 @@ title="View in IGV"
                 )
                 return
 
-            from robin.analysis.mnpflex_runner import run_mnpflex_analysis
+            from robin.analysis.mnpflex_config import load_mnpflex_config
+            from robin.analysis.mnpflex_runner import (
+                preflight_mnpflex_runtime,
+                run_mnpflex_analysis,
+            )
+
+            mnpflex_config = load_mnpflex_config()
+            preflight_err = preflight_mnpflex_runtime(mnpflex_config)
+            if preflight_err:
+                self.send_update(
+                    UpdateType.WARNING_NOTIFICATION,
+                    {
+                        "title": "MNP-Flex unavailable",
+                        "message": preflight_err,
+                        "level": "negative",
+                    },
+                    priority=6,
+                )
+                return
 
             total = len(sample_ids)
             processed = 0
@@ -8288,16 +8811,37 @@ title="View in IGV"
                     logging.info(
                         "Bulk MNP-Flex (%d/%d): running %s", idx, total, sid
                     )
+                    self._audit_log(
+                        event_type="run.started",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sid,
+                        details={"run_type": "mnpflex", "trigger": "bulk"},
+                    )
 
                     output_dir = sample_dir / f"mnpflex_results_{sid}"
                     run_mnpflex_analysis(
                         sample_dir=sample_dir,
                         sample_id=sid,
                         output_dir=output_dir,
+                        config=mnpflex_config,
                     )
                     processed += 1
                 except Exception as exc:
                     errors += 1
+                    self._audit_log(
+                        event_type="run.started",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sid,
+                        details={
+                            "run_type": "mnpflex",
+                            "trigger": "bulk",
+                            "error": str(exc)[:500],
+                        },
+                        error_code="mnpflex_failed",
+                    )
                     logging.error(
                         "Bulk MNP-Flex error for %s: %s", sid, exc, exc_info=True
                     )
@@ -8499,6 +9043,13 @@ title="View in IGV"
                                 submitted,
                             )
                             if submitted:
+                                self._audit_log(
+                                    event_type="run.started",
+                                    user_id=self._get_current_user_id(),
+                                    target_type="sample",
+                                    target_id=sample_id,
+                                    details={"run_type": "target_bam_finalize"},
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="Finalize queued",
@@ -8776,6 +9327,13 @@ title="View in IGV"
                                 submitted = False
 
                             if submitted:
+                                self._audit_log(
+                                    event_type="run.started",
+                                    user_id=self._get_current_user_id(),
+                                    target_type="sample",
+                                    target_id=sample_id,
+                                    details={"run_type": "snp_analysis"},
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP queued",
@@ -8821,6 +9379,15 @@ title="View in IGV"
                                     priority=6,
                                 )
                             else:
+                                self._audit_log(
+                                    event_type="run.started",
+                                    result="failure",
+                                    user_id=self._get_current_user_id(),
+                                    target_type="sample",
+                                    target_id=sample_id,
+                                    details={"run_type": "snp_analysis"},
+                                    error_code="runner_unavailable",
+                                )
                                 self._set_pipeline_status(
                                     sample_id,
                                     phase="SNP submit failed",
@@ -9277,6 +9844,12 @@ title="View in IGV"
             return False, f"Cannot write manifest: {e}"
         return True, f"Manifest saved to {sample_dir}"
 
+    def _create_admin_page(self) -> None:
+        """Administration page for user management and audit review."""
+        from robin.gui.admin import create_admin_page
+
+        create_admin_page(self)
+
     def _create_sample_id_generator_page(self):
         """Create the page for generating sample identifiers from Test ID, name, and D.O.B."""
         with theme.frame(
@@ -9644,9 +10217,19 @@ title="View in IGV"
             # Check if it's a Simple workflow or Ray workflow
             if hasattr(self.workflow_runner, "submit_sample_job"):
                 # Simple workflow
-                return self.workflow_runner.submit_sample_job(
+                submitted = self.workflow_runner.submit_sample_job(
                     sample_dir, job_type, sample_id
                 )
+                self._audit_log(
+                    event_type="run.started",
+                    result="success" if submitted else "failure",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=str(sample_id or ""),
+                    details={"run_type": str(job_type), "sample_dir": str(sample_dir)},
+                    error_code="" if submitted else "submit_failed",
+                )
+                return submitted
             elif hasattr(self.workflow_runner, "manager") and hasattr(
                 self.workflow_runner.manager, "submit_sample_job"
             ):
@@ -9654,13 +10237,40 @@ title="View in IGV"
                 print(
                     f"[GUI] Ray workflow detected for {job_type} job - manual submission not yet supported"
                 )
+                self._audit_log(
+                    event_type="run.started",
+                    result="failure",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=str(sample_id or ""),
+                    details={"run_type": str(job_type), "sample_dir": str(sample_dir)},
+                    error_code="ray_manual_submit_unsupported",
+                )
                 return False
             else:
                 print(f"[GUI] Unknown workflow type for {job_type} job")
+                self._audit_log(
+                    event_type="run.started",
+                    result="failure",
+                    user_id=self._get_current_user_id(),
+                    target_type="sample",
+                    target_id=str(sample_id or ""),
+                    details={"run_type": str(job_type), "sample_dir": str(sample_dir)},
+                    error_code="unknown_workflow_type",
+                )
                 return False
 
         except Exception as e:
             print(f"[GUI] Failed to submit {job_type} job for sample {sample_id}: {e}")
+            self._audit_log(
+                event_type="run.started",
+                result="failure",
+                user_id=self._get_current_user_id(),
+                target_type="sample",
+                target_id=str(sample_id or ""),
+                details={"run_type": str(job_type), "sample_dir": str(sample_dir)},
+                error_code="submit_exception",
+            )
             return False
 
 

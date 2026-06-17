@@ -18,7 +18,14 @@ from robin.__init__ import __version__
 VERSION = __version__
 
 
-def header_footer_canvas_factory(sample_id, centreID, styles, fonts_dir):
+def header_footer_canvas_factory(
+    sample_id,
+    centreID,
+    styles,
+    fonts_dir,
+    generated_by=None,
+    generated_at=None,
+):
     """Factory function to create a header/footer canvas class."""
 
     class HeaderFooterCanvas(canvas.Canvas):
@@ -131,10 +138,11 @@ def header_footer_canvas_factory(sample_id, centreID, styles, fonts_dir):
             # Footer text with M3 colors
             self.setFont("FiraSans", 8)
             self.setFillColor(colors.HexColor("#49454F"))  # M3 on_surface_variant color
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            page_text = (
-                f"Page {self._pageNumber} | Generated: {timestamp} | Version: {VERSION}"
-            )
+            timestamp = generated_at or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            page_text = f"Page {self._pageNumber} | Generated: {timestamp}"
+            if generated_by:
+                page_text += f" by {generated_by}"
+            page_text += f" | Version: {VERSION}"
             self.drawString(0.5 * inch, 0.15 * inch, page_text)
 
             warning_text = "RESEARCH USE ONLY"

@@ -87,9 +87,12 @@ nav:
     - Panel commands: cli/panels.md
     - Utilities (utils): cli/utils.md
     - GUI password: cli/password.md
+    - GUI users: cli/users.md
+    - Audit log: cli/audit.md
   - Using ROBIN:
     - Overview: using-robin/index.md
     - First steps and navigation: using-robin/authentication-and-layout.md
+    - Users, consent, and auditing: using-robin/audit-and-users.md
     - Tour of the screens: using-robin/pages-and-routes.md
     - Reading your results: using-robin/sample-results.md
     - Troubleshooting: using-robin/troubleshooting.md
