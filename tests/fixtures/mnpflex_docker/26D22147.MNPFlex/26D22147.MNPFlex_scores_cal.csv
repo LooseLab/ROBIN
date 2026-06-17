@@ -1,0 +1,185 @@
+"","my sample"
+"Astrocytoma, IDH-Mutant; Lower Grade",0.00206645834259689
+"High-Grade Astrocytoma With Piloid Features",0.00461563654243946
+"Glioneuronal tumor with ATRX alteration, kinase fusion and anaplastic features ",0.00327092339284718
+"Atypical Teratoid / Rhabdoid Tumour, MYC Activated",0.00197301898151636
+"Atypical Teratoid / Rhabdoid Tumour, SHH Activated",0.00214205123484135
+"Atypical Teratoid / Rhabdoid Tumour, Tyrosinase Activated",0.00183452432975173
+"Chordoid Glioma, PRKCA-Mutant",0.00269817630760372
+"Chordoma",0.00240041641518474
+"Central Neurocytoma",0.0051207048818469
+"CNS Neuroblastoma, FOXR2-Altered",0.00293322838842869
+"Primary Intracranial Sarcoma, DICER1-Mutant",0.00289207557216287
+"Choroid Plexus Tumours, Pediatric Subtype B",0.00237077940255404
+"Choroid Plexus Tumors, Adult Subtype B",0.00335626979358494
+"Adamantinomatous Craniopharyngioma",0.00234235683456063
+"Papillary Craniopharyngioma",0.00237955874763429
+"Choroid Plexus Tumours, Adult Subtype A",0.00204634503461421
+"Choroid Plexus Tumours, Pediatric Subtype A",0.00201094639487565
+"Cribriform Neuroepithelial Tumour",0.00218290742486715
+"Control Tissue, Blood",0.00213621696457267
+"Diffuse Glioneuronal Tumour With Oligodendroglioma-Like Features And Nuclear Clusters",0.00294187921099365
+"Desmoplastic Infantile Ganglioglioma / Desmoplastic Infantile Astrocytoma",0.00336822005920112
+"Diffuse Leptomeningeal Glioneuronal Tumour, Subclass 1",0.00255556381307542
+"Diffuse Leptomeningeal Glioneuronal Tumour, Subclass 2",0.00249646068550646
+"Diffuse Midline Glioma, H3 K27-Altered, Subtype H3 K27-Mutant or EZHIP Expressing",0.00344468839466572
+"Dysembryoplastic Neuroepithelial Tumour",0.00190811289940029
+"CIC-Rearranged Sarcoma",0.00439367396757007
+"Olfactory Neuroblastoma",0.00321266637183726
+"Sinonasal Undifferentiated Carcinoma, IDH2-Mutant",0.00322986068204045
+"CNS Tumour With EP300:BCOR(L1) Fusion",0.00393141666427255
+"Spinal Ependymoma (myxopapillary-enriched)",0.00430035591125488
+"Posterior Fossa Ependymoma (Subependymoma-enriched)",0.00459972117096186
+"Spinal Ependymoma",0.00291584967635572
+"Spinal Ependymoma, MYCN-Amplified",0.00369781465269625
+"Spinal Ependymoma (Subependymoma-enriched) [Subtype B]",0.00356170791201293
+"Spinal Ependymoma (Subependymoma-enriched) [Subtype A]",0.00477970391511917
+"Neuroepithelial Tumour, PLAGL1-Fusion",0.00488403299823403
+"Supratentorial Ependymoma (Subependymoma-enriched)",0.00309523590840399
+"Supratentorial Ependymoma, YAP1 Fusion-Positive",0.00630977237597108
+"Embryonal Tumour With Multilayered Rosettes, C19MC Altered",0.00325013021938503
+"Embryonal Tumour With Multilayered Rosettes, Atypical",0.0039890413172543
+"Extraventricular Neurocytoma",0.00335667445324361
+"Ewing Sarcoma",0.0029678565915674
+"High-Grade Diffuse Glioma Of The Midline/Posterior Fossa; H3/IDH-Wildtype",0.00495804706588387
+"Diffuse Hemispheric Glioma, H3 G34-Mutant",0.00470069050788879
+"Astrocytoma, IDH-Mutant; High Grade",0.00446555530652404
+"Inflammatory Microenvironment",0.00242964643985033
+"Glioblastoma, IDH-Wildtype, [Typical Mesenchymal Type]",0.0293432231992483
+"Glioblastoma, IDH-Wildtype, [Atypical Mesenchymal Type]",0.00536007713526487
+"Diffuse Paediatric-Type High Grade Glioma, MYCN Subtype",0.00580019364133477
+"Diffuse Paediatric-Type High Grade Glioma, RTK1 Subtype, Subclass A",0.00695550628006458
+"Diffuse Paediatric-Type High Grade Glioma, RTK1 Subtype, Subclass B",0.00446812016889453
+"Diffuse Paediatric-Type High Grade Glioma, RTK1 Subtype, Subclass C",0.00315208151005208
+"Diffuse Paediatric-Type High Grade Glioma, RTK2 Subtype, Subclass A",0.0066611054353416
+"Diffuse Paediatric-Type High Grade Glioma, RTK2 Subtype, Subclass B",0.0105326874181628
+"Glioblastoma, IDH-Wildtype, RTK1 Subtype",0.108451709151268
+"Glioblastoma, IDH-Wildtype, RTK2 Subtype",0.254857897758484
+"Diffuse Midline Glioma, H3 K27-Altered, Subtype EGFR-Altered",0.00394353643059731
+"Germinoma, Subtype KIT Wildtype",0.00283290888182819
+"Germinoma, Subtype KIT Mutant",0.00435930816456676
+"(Immature) Teratoma",0.00227825646288693
+"Yolk Sac Tumour",0.00328018562868237
+"Ganglioglioma",0.00378990382887423
+"Control Tissue, Reactive Tumour Microenvironment",0.00184841197915375
+"Diffuse Glioneuronal Tumour, Subtype A",0.00263847946189344
+"Diffuse Paediatric-Type High Grade Glioma, H3-Wildtype And IDH-Wildtype, Subtype A",0.00633920589461923
+"Diffuse Paediatric-Type High Grade Glioma, H3-Wildtype And IDH-Wildtype, Subtype B",0.0057276408188045
+"CNS Tumour With BCOR Internal Tandem Duplication",0.00300661032088101
+"Neuroepithelial Tumour, MN1:CXXC5-Fusion",0.00318302819505334
+"Astroblastoma, MN1-Altered, MN1:BEND2-Fusion",0.00423190882429481
+"Glioblastoma, IDH-Wildtype, With Primitive Neuronal Component",0.0095796687528491
+"Diffuse high-grade astrocytoma, MAPK pathway-altered",0.00274494546465576
+"Diffuse High Grade Glioma, IDH-Wildtype, Subtype E",0.00565772922709584
+"Gliomatosis Cerebri-like Glioma, IDH-wildtype",0.0112225757911801
+"Neuroepithelial Tumour with PATZ1 Fusion",0.00796019285917282
+"CNS Embryonal Tumour With PLAG-Family Amplification",0.00264850328676403
+"Haemangioblastoma",0.00575236929580569
+"Solitary Fibrous Tumour / Haemangiopericytoma",0.00305171427316964
+"Infant-Type Hemispheric Glioma",0.0250764638185501
+"Intraocular Medulloepithelioma",0.00311382161453366
+"Langerhans Cell Histiocytosis",0.00257671298459172
+"Angiocentric Glioma, MYB/MYBL1-Altered",0.00372057571075857
+"Diffuse Astrocytoma, MYB or MYBL1-Altered, Subtype B [Infratentorial]",0.00332860928028822
+"Diffuse Astrocytoma, MYB or MYBL1-Altered, Subtype C [Isomorphic]",0.00277274777181447
+"Diffuse Astrocytoma, MYB or MYBL1-Altered, Subtype D",0.00369559018872678
+"Liponeurocytoma",0.00387876504100859
+"CNS Embryonal Tumour With BRD4:LEUTX Fusion",0.00408243993297219
+"Medullomyoblastoma",0.00275520817376673
+"Medulloblastoma, SHH-Activated, Subtype 1",0.00293602421879768
+"Medulloblastoma, SHH-Activated, Subtype 2",0.00272509618662298
+"Medulloblastoma, SHH-Activated, Subtype 3",0.00191539106890559
+"Medulloblastoma, SHH-Activated, Subtype 4",0.00186054781079292
+"Medulloblastoma, SHH-Activated, IDH-Mutant",0.00294306897558272
+"Medulloblastoma, WNT Activated",0.00301708723418415
+"Medulloblastoma Group 3, Subclass I",0.0020847583655268
+"Medulloblastoma Group 3, Subclass II",0.00132420298177749
+"Medulloblastoma Group 3, Subclass III",0.00104581983759999
+"Medulloblastoma Group 3, Subclass IV",0.00109198468271643
+"Medulloblastoma Group 4, Subclass V",0.00145251583307981
+"Medulloblastoma Group 4, Subclass VI",0.00107089860830456
+"Medulloblastoma Group 4, Subclass VII",0.00141656456980854
+"Medulloblastoma Group 4, Subclass VIII",0.00175653386395425
+"Malignant Melanotic Nerve Sheath Tumour",0.00307898595929146
+"Melanocytoma",0.00281201582401991
+"Melanoma [Metastatic]",0.00328154023736715
+"Meningioma, Subclass Benign 1",0.00125236436724663
+"Meningioma, Subclass Benign 2",0.00129856215789914
+"Meningioma, Subclass Benign 3",0.00148434087168425
+"Meningioma, SMARCE1-Altered",0.00268789147958159
+"Meningioma, Subclass Intermediate A",0.000966226798482239
+"Meningioma, Subclass Intermediate B",0.00153785536531359
+"Meningioma, Malignant",0.00313204270787537
+"Malignant Peripheral Nerve Sheath Tumour [Typical Type]",0.00289331818930805
+"Malignant Peripheral Nerve Sheath Tumour [Spinal Or Atypical Type]",0.00369601673446596
+"Myxoid Glioneuronal Tumour, PDGFRA-Mutant",0.0043251421302557
+"Neuroblastoma, Subtype MYCN",0.00232663191854954
+"Neuroblastoma, Subtype TMM Negative",0.00231463694944978
+"Neuroblastoma, Subtype ALT/TERT TMM Positive",0.00241817277856171
+"Plexiform Neurofibroma",0.00273669487796724
+"Control Tissue, Pituitary Gland (Anterior Lobe)",0.00226733018644154
+"Control Tissue, Cerebellar Hemisphere",0.00364333693869412
+"Control Tissue, White Matter (Corpus Callosum)",0.00395550997927785
+"Control Tissue, Hemispheric Cortex",0.00258771074004471
+"Control Tissue, Hypothalamus",0.00254505313932896
+"Control Tissue, Optic Pathway",0.0026419039350003
+"Control Tissue, Pineal Gland",0.0023559567052871
+"Control Tissue, Pons",0.00260394066572189
+"Oligodendroglioma, IDH-Mutant And 1p/19q-Codeleted",0.00223925802856684
+"Oligosarcoma, IDH-Mutant",0.00328778196126223
+"Supratentorial Pilocytic Astrocytoma",0.0031015535350889
+"Infratentorial Pilocytic Astrocytoma",0.00363994389772415
+"Infratentorial Pilocytic Astrocytoma, FGFR1-Altered",0.00522476527839899
+"Supratentorial Midline Pilocytic Astrocytoma",0.00312988995574415
+"Pineoblastoma, miRNA Pathway Altered, Group 1a",0.00221550464630127
+"Pineoblastoma, miRNA Pathway Altered, Group 1b",0.00299116387031972
+"Pineoblastoma, miRNA Pathway Altered, Group 2",0.002394147682935
+"Pineoblastoma, MYC/FOXR2-Activated",0.00265492009930313
+"Primary Diffuse Large B Cell Lymphoma Of The CNS",0.00456480961292982
+"Plasma Cell Tumours Of The CNS",0.00394438626244664
+"Posterior Fossa Group A (PFA) Ependymoma, Subclass 1a",0.0014364953385666
+"Posterior Fossa Group A (PFA) Ependymoma, Subclass 1b",0.00182016717735678
+"Posterior Fossa Group A (PFA) Ependymoma, Subclass 1c",0.00249595008790493
+"Posterior Fossa Group A (PFA) Ependymoma, Subclass 1d",0.00140944146551192
+"Posterior Fossa Group A (PFA) Ependymoma, Subclass 1e",0.00246913800947368
+"Posterior Fossa Group A (PFA) Ependymoma, Subclass 1f",0.00322777149267495
+"Posterior Fossa Group A (PFA) Ependymoma, Subclass 2a",0.00194909935817122
+"Posterior Fossa Group A (PFA) Ependymoma, Subclass 2b",0.00196129758842289
+"Posterior Fossa Group A (PFA) Ependymoma, Subclass 2c",0.00298411468975246
+"Posterior Fossa Group B (PFB) Ependymoma, Subclass 1",0.00159792287740856
+"Posterior Fossa Group B (PFB) Ependymoma, Subclass 2",0.00238178158178926
+"Posterior Fossa Group B (PFB) Ependymoma, Subclass 3",0.00216646841727197
+"Posterior Fossa Group B (PFB) Ependymoma, Subclass 4",0.00373834138736129
+"Posterior Fossa Group B (PFB) Ependymoma, Subclass 5",0.00245256442576647
+"Cauda Equina Neuroendocrine Tumour [Paraganglioma]",0.00294091692194343
+"Papillary Glioneuronal Tumour",0.00398858729749918
+"Pineocytoma",0.00278366752900183
+"Pineoblastoma, RB1-altered (pineal retinoblastoma)",0.00193091086111963
+"PitNET, ACTH Subtype",0.00219494733028114
+"PitNET, Gonadotrophin Subtype",0.00257626920938492
+"PitNET, Prolactin Subtype",0.00387174496427178
+"PitNET, STH-Subtype, Subclass Densely Granulated A",0.00254730763845146
+"PitNET, STH-Subtype, Subclass Densely Granulated B",0.00315454928204417
+"PitNET, STH-Subtype, Subclass Sparsely Granulated",0.00315620866604149
+"PitNET, TSH-Subtype",0.00254709413275123
+"Pituicytoma, Granular Cell Tumour Of The Sellar Region, And Spindle-Cell Oncocytoma",0.00249542994424701
+"Polymorphous Low-Grade Neuroepithelial Tumour Of The Young",0.0056641804985702
+"Pineal Parenchymal Tumour Of Intermediate Differentiation, Subclass A",0.00210167840123177
+"Pineal Parenchymal Tumour Of Intermediate Differentiation, Subclass B",0.00229543424211442
+"Papillary Tumour Of The Pineal Region, Subclass A",0.00348394573666155
+"Papillary Tumour Of The Pineal Region, Subclass B",0.0031185750849545
+"Pleomorphic Xanthoastrocytoma",0.00462679145857692
+"Retinoblastoma",0.0024001223500818
+"Retinoblastoma, MYCN-Activated",0.00286127557046711
+"Supratentorial Ependymoma, ZFTA Fusion-Positive, Subclass C",0.00331930560059845
+"Supratentorial Ependymoma, ZFTA Fusion-Positive, Subclass D",0.00329272076487541
+"Supratentorial Ependymoma, ZFTA Fusion-Positive, Subclass E",0.00268361275084317
+"Rosette-Forming Glioneuronal Tumour",0.00366697949357331
+"Rhabdomyosarcoma, Alveolar Subtype",0.00329992128536105
+"Rhabdomyosarcoma, Embryonal Subtype",0.0027655023150146
+"Rhabdomyosarcoma, MYOD1-Mutant",0.00387014099396765
+"Schwannoma",0.00250996532849967
+"Subependymal Giant Cell Astrocytoma",0.00385082908906043
+"Supratentorial Ependymoma, ZFTA Fusion-Positive, Subtype ZFTA-RELA Fusion, Subclass A",0.00276664993725717
+"Supratentorial Ependymoma, ZFTA Fusion-Positive, Subtype ZFTA-RELA Fusion, Subclass B",0.00288038700819016
+"CNS Schwannoma, VGLL-Fusion",0.00421443907544017

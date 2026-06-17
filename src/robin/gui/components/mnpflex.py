@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 import base64
 import json
 import logging
-import os
+import queue
 import threading
 import time
 
@@ -15,10 +15,11 @@ try:
 except ImportError:  # pragma: no cover
     ui = None
 
-from robin.utils.mnpflex_client_standalone import MNPFlexClient
-from robin.analysis.utilities.matkit import reconstruct_full_bedmethyl_for_mnpflex
-from robin.analysis.utilities.mnp_flex import APIClient as MnpFlexApiClient
-from robin import resources
+from robin.analysis.mnpflex_bed import (
+    build_subset_bed_from_parquet,
+)
+from robin.analysis.mnpflex_config import load_mnpflex_config
+from robin.analysis.mnpflex_runner import run_mnpflex_analysis
 from robin.gui.theme import styled_table
 
 
@@ -26,16 +27,19 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
     """Display and refresh MNP-Flex results for the sample."""
     if ui is None:
         return
-    username = os.getenv("MNPFLEX_USERNAME") or os.getenv("EPIGNOSTIX_USERNAME")
-    password = os.getenv("MNPFLEX_PASSWORD") or os.getenv("EPIGNOSTIX_PASSWORD")
-    if not username or not password:
-        return
+    mnpflex_config = load_mnpflex_config()
+    analysis_available = (
+        mnpflex_config.is_enabled() and mnpflex_config.validation_error() is None
+    )
+    analysis_config_error = mnpflex_config.validation_error()
 
     state: Dict[str, Any] = {
         "running": False,
+        "building_bed": False,
         "last_error": "",
         "last_updated": None,
         "auto_fetch_attempted": False,
+        "bed_build_queue": queue.Queue(),
     }
 
     def _sample_is_complete() -> bool:
@@ -74,32 +78,8 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 return candidate
         return None
 
-    def _find_parquet_file() -> Optional[Path]:
-        preferred = sample_dir / f"{sample_id}.parquet"
-        if preferred.exists():
-            return preferred
-        matches = list(sample_dir.glob("*.parquet"))
-        return matches[0] if matches else None
-
-    def _build_bed_file_from_parquet() -> Path:
-        parquet_path = _find_parquet_file()
-        if not parquet_path or not parquet_path.exists():
-            raise RuntimeError("No parquet data found for this sample.")
-        bed_path = sample_dir / f"{sample_id}.mnpflex.bed"
-        bed_df = reconstruct_full_bedmethyl_for_mnpflex(str(parquet_path))
-        bed_df.to_csv(bed_path, sep="\t", index=False, header=False)
-        return bed_path
-
-    def _build_subset_bed_from_parquet() -> Path:
-        bed_path = _build_bed_file_from_parquet()
-        subset_path = sample_dir / f"{sample_id}.MNPFlex.subset.bed"
-        reference_bed = os.path.join(
-            os.path.dirname(os.path.abspath(resources.__file__)),
-            "mnp_flex_sample_clean.bed",
-        )
-        api_client = MnpFlexApiClient(base_url="https://mnp-flex.org", verify_ssl=False)
-        api_client.process_streaming(reference_bed, str(bed_path), str(subset_path))
-        return subset_path
+    def _build_subset_bed_from_parquet_local() -> Path:
+        return build_subset_bed_from_parquet(sample_dir, sample_id)
 
     def _read_image_base64(path: Path) -> Optional[str]:
         if not path.exists():
@@ -111,45 +91,12 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             logging.exception(f"[MNPFlex] Failed to load image: {path}")
             return None
 
-    def _fetch_results_from_api(output_dir: Path) -> None:
-        username = os.getenv("MNPFLEX_USERNAME") or os.getenv("EPIGNOSTIX_USERNAME")
-        password = os.getenv("MNPFLEX_PASSWORD") or os.getenv("EPIGNOSTIX_PASSWORD")
-        if not username or not password:
-            raise RuntimeError(
-                "Missing MNP-Flex credentials. Set MNPFLEX_USERNAME/MNPFLEX_PASSWORD."
-            )
-        workflow_id_env = os.getenv("MNPFLEX_WORKFLOW_ID", "18")
-        try:
-            workflow_id = int(workflow_id_env)
-        except ValueError:
-            raise RuntimeError(
-                f"Invalid MNPFLEX_WORKFLOW_ID: {workflow_id_env}. Must be an integer."
-            )
-
-        # Use the same subset format as mnpflex_preprocess_modkit.sh
-        bed_path = _build_subset_bed_from_parquet()
-
-        base_url = os.getenv("MNPFLEX_BASE_URL", "https://app.epignostix.com")
-        verify_ssl_env = False
-        verify_ssl = False
-
-        client_id = os.getenv("MNPFLEX_CLIENT_ID", "ROBIN")
-        client_secret = os.getenv("MNPFLEX_CLIENT_SECRET", "SECRET")
-        scope = os.getenv("MNPFLEX_SCOPE", "")
-        client = MNPFlexClient(
-            base_url=base_url,
-            username=username,
-            password=password,
-            verify_ssl=verify_ssl,
-            client_id=client_id,
-            client_secret=client_secret,
-            scope=scope,
-        )
-        client.upload_retrieve_cleanup(
-            bed_file_path=str(bed_path),
-            sample_identifier=sample_id,
-            workflow_id=workflow_id,
-            output_dir=str(output_dir),
+    def _execute_mnpflex_analysis(output_dir: Path) -> None:
+        run_mnpflex_analysis(
+            sample_dir=sample_dir,
+            sample_id=sample_id,
+            output_dir=output_dir,
+            config=mnpflex_config,
         )
 
     with ui.element("div").classes("classification-insight-shell w-full min-w-0").props(
@@ -175,6 +122,14 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                     last_updated_label = ui.label("Last updated: --").classes(
                         "classification-insight-meta"
                     )
+                    backend_label = ui.label(
+                        f"Backend: {mnpflex_config.describe_backend()}"
+                    ).classes("classification-insight-meta")
+                    if analysis_config_error:
+                        backend_label.set_text(
+                            f"Backend: {mnpflex_config.describe_backend()} "
+                            f"({analysis_config_error})"
+                        )
                 with ui.row().classes("items-center gap-2 flex-shrink-0"):
                     status_badge = ui.badge("Idle").classes(
                         "mnpflex-toolbar-badge mnpflex-toolbar-badge--idle"
@@ -185,11 +140,18 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 fetch_button = ui.button(
                     "Run MNP-Flex analysis", color="primary"
                 ).props("no-caps dense")
+                if not analysis_available:
+                    fetch_button.set_visibility(False)
                 build_button = ui.button("Generate MNP-Flex subset BED").props(
                     "outline no-caps dense"
                 )
                 empty_state_label = ui.label(
                     "No MNP-Flex results yet. Run the analysis to populate results."
+                    if analysis_available
+                    else (
+                        "MNP-Flex analysis is not configured. Set MNPFLEX_BACKEND and "
+                        "the required Docker or API settings to enable runs."
+                    )
                 ).classes("classification-insight-foot")
 
         results_container = ui.column().classes("w-full min-w-0")
@@ -800,7 +762,7 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 try:
                     output_dir = sample_dir / f"mnpflex_results_{sample_id}"
                     output_dir.mkdir(parents=True, exist_ok=True)
-                    _fetch_results_from_api(output_dir)
+                    _execute_mnpflex_analysis(output_dir)
                     state["last_updated"] = time.time()
                 except Exception as exc:
                     state["last_error"] = str(exc)
@@ -814,9 +776,55 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
         def _handle_fetch_click() -> None:
             _run_fetch(auto=False)
 
-        def _handle_build_click() -> None:
-            if state["running"]:
+        def _apply_bed_build_outcome(outcome: Dict[str, Any]) -> None:
+            state["building_bed"] = False
+            status_badge.set_text("Idle")
+            status_badge.classes(
+                replace="mnpflex-toolbar-badge mnpflex-toolbar-badge--idle"
+            )
+            fetch_button.enable()
+            build_button.enable()
+
+            if outcome.get("ok"):
+                state["last_error"] = ""
+                error_label.set_text("")
+                subset_path = outcome.get("subset_path")
+                full_bed_path = outcome.get("full_bed_path")
+                message = (
+                    f"MNP-Flex BED files written to the sample directory: "
+                    f"{full_bed_path.name} and {subset_path.name}"
+                )
+                logging.info("[MNPFlex] %s", message)
+                try:
+                    ui.notify(message, type="positive")
+                except Exception:
+                    pass
                 return
+
+            error = (
+                outcome.get("error")
+                or "MNP-Flex BED generation failed for an unknown reason."
+            )
+            state["last_error"] = error
+            error_label.set_text(error)
+            logging.error("[MNPFlex] BED generation failed: %s", error)
+            try:
+                ui.notify(error, type="negative")
+            except Exception:
+                pass
+
+        def _process_bed_build_queue() -> None:
+            try:
+                while True:
+                    outcome = state["bed_build_queue"].get_nowait()
+                    _apply_bed_build_outcome(outcome)
+            except queue.Empty:
+                pass
+
+        def _handle_build_click() -> None:
+            if state["running"] or state["building_bed"]:
+                return
+            state["building_bed"] = True
             state["last_error"] = ""
             status_badge.set_text("Preparing subset")
             status_badge.classes(
@@ -827,30 +835,58 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             build_button.disable()
 
             def _worker() -> None:
+                outcome: Dict[str, Any]
                 try:
-                    bed_path = _build_subset_bed_from_parquet()
+                    subset_path = _build_subset_bed_from_parquet_local()
+                    full_bed_path = sample_dir / f"{sample_id}.mnpflex.bed"
+                    if not full_bed_path.exists():
+                        raise RuntimeError(
+                            f"Full BED file was not created at {full_bed_path}"
+                        )
+                    if full_bed_path.stat().st_size == 0:
+                        raise RuntimeError(
+                            f"Full BED file is empty at {full_bed_path}"
+                        )
+                    if not subset_path.exists():
+                        raise RuntimeError(
+                            f"Subset BED file was not created at {subset_path}"
+                        )
+                    if subset_path.stat().st_size == 0:
+                        raise RuntimeError(
+                            f"Subset BED file is empty at {subset_path}"
+                        )
                     state["last_updated"] = time.time()
-                    logging.info(f"[MNPFlex] BED file generated at {bed_path}")
+                    outcome = {
+                        "ok": True,
+                        "subset_path": subset_path,
+                        "full_bed_path": full_bed_path,
+                    }
                 except Exception as exc:
-                    state["last_error"] = str(exc)
-                    logging.error(f"[MNPFlex] BED generation failed: {exc}")
-                finally:
-                    status_badge.set_text("Idle")
-                    status_badge.classes(
-                        replace="mnpflex-toolbar-badge mnpflex-toolbar-badge--idle"
-                    )
-                    fetch_button.enable()
-                    build_button.enable()
+                    logging.exception("[MNPFlex] BED generation failed")
+                    outcome = {
+                        "ok": False,
+                        "error": str(exc) or repr(exc),
+                    }
+                state["bed_build_queue"].put(outcome)
 
             thread = threading.Thread(target=_worker, daemon=True)
             thread.start()
 
-        def _poll_status_sync() -> None:
-            if state["running"]:
+        def _set_toolbar_status() -> None:
+            if state["building_bed"]:
+                status_badge.set_text("Preparing subset")
+                status_badge.classes(
+                    replace="mnpflex-toolbar-badge mnpflex-toolbar-badge--busy"
+                )
+                fetch_button.disable()
+                build_button.disable()
+            elif state["running"]:
                 status_badge.set_text("Running")
                 status_badge.classes(
                     replace="mnpflex-toolbar-badge mnpflex-toolbar-badge--running"
                 )
+                fetch_button.disable()
+                build_button.disable()
             else:
                 status_badge.set_text("Idle")
                 status_badge.classes(
@@ -859,12 +895,16 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 fetch_button.enable()
                 build_button.enable()
 
+        def _poll_status_sync() -> None:
+            _process_bed_build_queue()
+            _set_toolbar_status()
+
             if state["last_error"]:
                 error_label.set_text(state["last_error"])
             else:
                 error_label.set_text("")
 
-            if not state["auto_fetch_attempted"]:
+            if not state["auto_fetch_attempted"] and analysis_available:
                 results_dir = _find_results_dir()
                 if results_dir is None and _sample_is_complete():
                     state["auto_fetch_attempted"] = True
@@ -872,25 +912,15 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             _apply_mnpflex_disk_payload(_load_mnpflex_disk_payload())
 
         async def _poll_status_async() -> None:
-            if state["running"]:
-                status_badge.set_text("Running")
-                status_badge.classes(
-                    replace="mnpflex-toolbar-badge mnpflex-toolbar-badge--running"
-                )
-            else:
-                status_badge.set_text("Idle")
-                status_badge.classes(
-                    replace="mnpflex-toolbar-badge mnpflex-toolbar-badge--idle"
-                )
-                fetch_button.enable()
-                build_button.enable()
+            _process_bed_build_queue()
+            _set_toolbar_status()
 
             if state["last_error"]:
                 error_label.set_text(state["last_error"])
             else:
                 error_label.set_text("")
 
-            if not state["auto_fetch_attempted"]:
+            if not state["auto_fetch_attempted"] and analysis_available:
                 results_dir = _find_results_dir()
                 if results_dir is None and _sample_is_complete():
                     state["auto_fetch_attempted"] = True
@@ -908,9 +938,15 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
 
         fetch_button.on_click(_handle_fetch_click)
         build_button.on_click(_handle_build_click)
+        bed_build_timer = ui.timer(0.25, _process_bed_build_queue, active=True)
         refresh_timer = ui.timer(30.0, _poll_status, active=True, immediate=False)
         ui.timer(0.5, _poll_status, once=True)
+
+        def _on_disconnect_cleanup() -> None:
+            refresh_timer.deactivate()
+            bed_build_timer.deactivate()
+
         try:
-            ui.context.client.on_disconnect(lambda: refresh_timer.deactivate())
+            ui.context.client.on_disconnect(_on_disconnect_cleanup)
         except Exception:
             pass

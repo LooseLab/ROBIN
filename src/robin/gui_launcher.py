@@ -2355,14 +2355,8 @@ class GUILauncher:
                             ).props("color=secondary dense no-caps").classes(
                                 "border border-slate-300 dark:border-slate-600"
                             )
-                            # Optional bulk MNP-Flex action (only if credentials are available)
-                            _mnpflex_username = (
-                                os.getenv("MNPFLEX_USERNAME") or os.getenv("EPIGNOSTIX_USERNAME")
-                            )
-                            _mnpflex_password = (
-                                os.getenv("MNPFLEX_PASSWORD") or os.getenv("EPIGNOSTIX_PASSWORD")
-                            )
-                            if _mnpflex_username and _mnpflex_password:
+                            # Optional bulk MNP-Flex action (Docker or API backend)
+                            if self._is_mnpflex_enabled_for_gui():
                                 self.bulk_mnpflex_button = ui.button(
                                     "mnpflex run all",
                                     on_click=lambda: None,
@@ -7408,10 +7402,10 @@ title="View in IGV"
         return False
 
     def _is_mnpflex_enabled_for_gui(self) -> bool:
-        """True when MNP-Flex credentials exist in the server environment."""
-        username = os.getenv("MNPFLEX_USERNAME") or os.getenv("EPIGNOSTIX_USERNAME")
-        password = os.getenv("MNPFLEX_PASSWORD") or os.getenv("EPIGNOSTIX_PASSWORD")
-        return bool(username and password)
+        """True when MNP-Flex analysis is configured (Docker or API)."""
+        from robin.analysis.mnpflex_config import is_mnpflex_enabled
+
+        return is_mnpflex_enabled()
 
     def _mnpflex_results_dir_for_sample(
         self, sample_dir: Path, sample_id: str
@@ -8252,44 +8246,17 @@ title="View in IGV"
                     UpdateType.WARNING_NOTIFICATION,
                     {
                         "title": "MNP-Flex batch skipped",
-                        "message": "Missing MNP-Flex credentials in the server environment.",
+                        "message": (
+                            "MNP-Flex is not configured. Set MNPFLEX_BACKEND and the "
+                            "required Docker or API settings."
+                        ),
                         "level": "warning",
                     },
                     priority=6,
                 )
                 return
 
-            username = os.getenv("MNPFLEX_USERNAME") or os.getenv("EPIGNOSTIX_USERNAME")
-            password = os.getenv("MNPFLEX_PASSWORD") or os.getenv("EPIGNOSTIX_PASSWORD")
-            base_url = os.getenv("MNPFLEX_BASE_URL", "https://app.epignostix.com")
-            workflow_id_env = os.getenv("MNPFLEX_WORKFLOW_ID", "18")
-            try:
-                workflow_id = int(workflow_id_env)
-            except ValueError:
-                workflow_id = 18
-                logging.warning(
-                    "MNPFLEX_WORKFLOW_ID invalid (%s); defaulting to %s",
-                    workflow_id_env,
-                    workflow_id,
-                )
-            client_id = os.getenv("MNPFLEX_CLIENT_ID", "ROBIN")
-            client_secret = os.getenv("MNPFLEX_CLIENT_SECRET", "SECRET")
-            scope = os.getenv("MNPFLEX_SCOPE", "")
-
-            from robin import resources as robin_resources
-            from robin.analysis.utilities.matkit import (
-                reconstruct_full_bedmethyl_for_mnpflex,
-            )
-            from robin.analysis.utilities.mnp_flex import APIClient as MnpFlexApiClient
-            from robin.utils.mnpflex_client_standalone import MNPFlexClient
-
-            reference_bed = os.path.join(
-                os.path.dirname(os.path.abspath(robin_resources.__file__)),
-                "mnp_flex_sample_clean.bed",
-            )
-
-            # Reuse streaming API client across samples.
-            api_client = MnpFlexApiClient(base_url="https://mnp-flex.org", verify_ssl=False)
+            from robin.analysis.mnpflex_runner import run_mnpflex_analysis
 
             total = len(sample_ids)
             processed = 0
@@ -8323,47 +8290,10 @@ title="View in IGV"
                     )
 
                     output_dir = sample_dir / f"mnpflex_results_{sid}"
-                    output_dir.mkdir(parents=True, exist_ok=True)
-
-                    # Build full bedmethyl BED from the parquet, then create the MNP-Flex subset BED.
-                    bed_path = sample_dir / f"{sid}.mnpflex.bed"
-                    bed_df = reconstruct_full_bedmethyl_for_mnpflex(str(parquet_path))
-                    bed_df.to_csv(bed_path, sep="\t", index=False, header=False)
-
-                    subset_path = sample_dir / f"{sid}.MNPFlex.subset.bed"
-                    api_client.process_streaming(
-                        reference_bed, str(bed_path), str(subset_path)
-                    )
-
-                    client = MNPFlexClient(
-                        base_url=base_url,
-                        username=username,
-                        password=password,
-                        verify_ssl=False,
-                        client_id=client_id,
-                        client_secret=client_secret,
-                        scope=scope,
-                    )
-                    client.authenticate(
-                        username=username,
-                        password=password,
-                        client_id=client_id,
-                        client_secret=client_secret,
-                    )
-                    logging.info(
-                        "Bulk MNP-Flex (%d/%d): submitting sample=%s workflow_id=%s subset_bed=%s output_dir=%s",
-                        idx,
-                        total,
-                        sid,
-                        workflow_id,
-                        str(subset_path),
-                        str(output_dir),
-                    )
-                    client.upload_retrieve_cleanup(
-                        bed_file_path=str(subset_path),
-                        sample_identifier=sid,
-                        workflow_id=workflow_id,
-                        output_dir=str(output_dir),
+                    run_mnpflex_analysis(
+                        sample_dir=sample_dir,
+                        sample_id=sid,
+                        output_dir=output_dir,
                     )
                     processed += 1
                 except Exception as exc:
