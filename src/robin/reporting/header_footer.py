@@ -25,6 +25,7 @@ def header_footer_canvas_factory(
     fonts_dir,
     generated_by=None,
     generated_at=None,
+    robin_commit=None,
 ):
     """Factory function to create a header/footer canvas class."""
 
@@ -143,6 +144,8 @@ def header_footer_canvas_factory(
             if generated_by:
                 page_text += f" by {generated_by}"
             page_text += f" | Version: {VERSION}"
+            if robin_commit:
+                page_text += f" | Commit: {robin_commit[:12]}"
             self.drawString(0.5 * inch, 0.15 * inch, page_text)
 
             warning_text = "RESEARCH USE ONLY"
