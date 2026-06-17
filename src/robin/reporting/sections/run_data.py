@@ -10,7 +10,11 @@ from reportlab.platypus import Paragraph, Spacer, Table, TableStyle, PageBreak
 from reportlab.lib.units import inch
 from reportlab.lib.styles import ParagraphStyle
 from .base import ReportSection
-from robin.analysis.bam_preprocessor import _get_modbase_model_warning
+from robin.analysis.bam_preprocessor import (
+    _get_modbase_model_warning,
+    _get_modbase_model_warning_level,
+    _is_unresolved_modbase_model,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -133,20 +137,32 @@ class RunDataSection(ReportSection):
             # Get the first row of data (since master.csv has all data in one row)
             master_data = masterdf.iloc[0]
             modbase_model = self._master_value(master_data, "modbase_models")
+            modbase_model_display = (
+                "Unknown"
+                if _is_unresolved_modbase_model(modbase_model)
+                else modbase_model
+            )
             modbase_warning = _get_modbase_model_warning(
                 None if modbase_model == "Missing" else modbase_model
             )
 
             if modbase_warning:
-                warning_text = (
-                    f"<b>Methylation model warning:</b> {modbase_warning}"
+                warning_level = _get_modbase_model_warning_level(
+                    None if modbase_model == "Missing" else modbase_model
                 )
+                label = (
+                    "Methylation model note"
+                    if warning_level == "info"
+                    else "Methylation model warning"
+                )
+                warning_text = f"<b>{label}:</b> {modbase_warning}"
+                style_name = "Normal" if warning_level == "info" else "Warning"
                 self.summary_elements.append(
-                    Paragraph(warning_text, self.styles.styles["Warning"])
+                    Paragraph(warning_text, self.styles.styles[style_name])
                 )
                 self.summary_elements.append(Spacer(1, 8))
                 self.elements.append(
-                    Paragraph(warning_text, self.styles.styles["Warning"])
+                    Paragraph(warning_text, self.styles.styles[style_name])
                 )
                 self.elements.append(Spacer(1, 6))
 
@@ -160,7 +176,7 @@ class RunDataSection(ReportSection):
                     "Basecalling Model",
                     self._master_value(master_data, "basecall_models"),
                 ),
-                ("Modbase Model", modbase_model),
+                ("Modbase Model", modbase_model_display),
             ]
             self.elements.append(
                 self._create_info_table(sample_info, "Sample Information")

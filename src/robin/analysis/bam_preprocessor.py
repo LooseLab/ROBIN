@@ -39,6 +39,7 @@ _RUNID_PREFIX = "runid="
 _MODBASE_MODELS_KEY = "modbase_models"
 _CPG_MODBASE_MARKER = "5mCG_5hmCG"
 _ALL_CONTEXT_MODBASE_MARKER = "5mC_5hmC"
+_UNRESOLVED_MODBASE_MODEL_VALUES = frozenset({"modbase_model_version_id"})
 
 # Optional: configure BAM read threads via environment variable (pysam/htslib BGZF threads)
 # Set LJ_BAM_THREADS=4 (or higher) to enable multi-threaded decompression when reading BAMs.
@@ -171,6 +172,20 @@ def get_rg_tags_from_bam(sam_file) -> Optional[Tuple[Optional[str], ...]]:
     )
 
 
+def _is_unresolved_modbase_model(modbase_models: Optional[str]) -> bool:
+    """Return True when the BAM only records an unresolved modbase model placeholder."""
+    if not modbase_models:
+        return False
+    return modbase_models.strip().lower() in _UNRESOLVED_MODBASE_MODEL_VALUES
+
+
+def _get_modbase_model_warning_level(modbase_models: Optional[str]) -> str:
+    """Return ``info`` for unknown model placeholders, else ``warning``."""
+    if modbase_models and _is_unresolved_modbase_model(modbase_models):
+        return "info"
+    return "warning"
+
+
 def _get_modbase_model_warning(modbase_models: Optional[str]) -> Optional[str]:
     """Return a user-facing warning for unsupported methylation model settings."""
     if modbase_models and _CPG_MODBASE_MARKER in modbase_models:
@@ -181,6 +196,12 @@ def _get_modbase_model_warning(modbase_models: Optional[str]) -> Optional[str]:
             "Methylation classifications may be incorrect and slower than expected. "
             "Use 5mCG_5hmCG modbase calling, which restricts methylation calling "
             "to CpG contexts."
+        )
+    if modbase_models and _is_unresolved_modbase_model(modbase_models):
+        return (
+            "The BAM header does not record which modbase model was used. "
+            "Compatibility with the recommended 5mCG_5hmCG configuration could not "
+            "be verified."
         )
     if modbase_models:
         return (
@@ -814,12 +835,19 @@ def bam_preprocessing_handler(job, center: str = None):
             metadata.extracted_data.get("modbase_models")
         )
         if modbase_warning:
-            logger.warning(f"WARNING: {modbase_warning}")
+            modbase_models = metadata.extracted_data.get("modbase_models")
+            warning_level = _get_modbase_model_warning_level(modbase_models)
+            if warning_level == "info":
+                logger.info(modbase_warning)
+            else:
+                logger.warning(f"WARNING: {modbase_warning}")
+                _send_modbase_warning_notification(
+                    modbase_warning, sample_id, os.path.basename(bam_path)
+                )
             metadata.extracted_data["modbase_warning"] = modbase_warning
+            metadata.extracted_data["modbase_warning_level"] = warning_level
             job.context.add_metadata("modbase_warning", modbase_warning)
-            _send_modbase_warning_notification(
-                modbase_warning, sample_id, os.path.basename(bam_path)
-            )
+            job.context.add_metadata("modbase_warning_level", warning_level)
         
         if total_reads > 0:
             # Check if BAM file has no mapped reads (no alignment data)

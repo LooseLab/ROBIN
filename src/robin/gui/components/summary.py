@@ -19,7 +19,11 @@ except ImportError:  # pragma: no cover
     background_tasks = None
 
 from robin.classification_config import get_confidence_ui_tier
-from robin.analysis.bam_preprocessor import _get_modbase_model_warning
+from robin.analysis.bam_preprocessor import (
+    _get_modbase_model_warning,
+    _get_modbase_model_warning_level,
+    _is_unresolved_modbase_model,
+)
 from robin.gui.config import (
     get_confidence_level as get_classifier_confidence_level,
     is_section_enabled,
@@ -123,6 +127,11 @@ def _run_info_section(sample_dir: Path, sample_id: str):
     rt = run_info.get("run_time", "Not available")
     model = run_info.get("model", "Missing")
     modbase_model = run_info.get("modbase_model", "Missing")
+    modbase_display = (
+        "Unknown"
+        if _is_unresolved_modbase_model(modbase_model)
+        else modbase_model
+    )
     device = run_info.get("device", "Not available")
     flow = run_info.get("flow_cell", "Not available")
     panel = run_info.get("panel", "Not available")
@@ -149,7 +158,7 @@ def _run_info_section(sample_dir: Path, sample_id: str):
         ("tag", "Flow cell", flow, ""),
         ("science", "Analysis panel", panel, ""),
         ("settings", "Basecall model", model, "run-summary-cell--basecall"),
-        ("biotech", "Modbase model", modbase_model, "run-summary-cell--basecall"),
+        ("biotech", "Modbase model", modbase_display, "run-summary-cell--basecall"),
         ("pin", "Sample ID", sample_id, "run-summary-cell--sample"),
     ]
     for icn, lab, key in (
@@ -177,13 +186,29 @@ def _run_info_section(sample_dir: Path, sample_id: str):
             None if modbase_model == "Missing" else modbase_model
         )
         if modbase_warning:
-            with ui.element("div").classes(
-                "w-full flex items-start gap-2 rounded-lg border border-amber-400 "
-                "bg-amber-50 px-4 py-3 text-amber-900"
-            ):
-                ui.icon("warning").classes("text-amber-700 mt-0.5")
+            warning_level = _get_modbase_model_warning_level(
+                None if modbase_model == "Missing" else modbase_model
+            )
+            if warning_level == "info":
+                box_classes = (
+                    "w-full flex items-start gap-2 rounded-lg border border-slate-300 "
+                    "bg-slate-50 px-4 py-3 text-slate-700"
+                )
+                icon_classes = "text-slate-600 mt-0.5"
+                icon_name = "info"
+                title = "Methylation model"
+            else:
+                box_classes = (
+                    "w-full flex items-start gap-2 rounded-lg border border-amber-400 "
+                    "bg-amber-50 px-4 py-3 text-amber-900"
+                )
+                icon_classes = "text-amber-700 mt-0.5"
+                icon_name = "warning"
+                title = "Methylation model warning"
+            with ui.element("div").classes(box_classes):
+                ui.icon(icon_name).classes(icon_classes)
                 with ui.column().classes("gap-0"):
-                    ui.label("Methylation model warning").classes("font-semibold")
+                    ui.label(title).classes("font-semibold")
                     ui.label(modbase_warning).classes("text-sm")
 
 
