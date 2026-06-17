@@ -44,6 +44,7 @@ import uuid
 from urllib.parse import quote
 
 from robin.gui import theme, images
+from robin.gui.session import clear_auth_session_fields, is_authenticated_session
 
 from robin.gui.components.news_feed import NewsFeed
 from robin.security import (
@@ -567,14 +568,7 @@ class GUILauncher:
         Requires both authenticated flag and matching _auth_generation so that persisted
         user storage from a previous server run (or before a password reset) is invalid.
         """
-        if not app:
-            return False
-        gen = app.storage.general.get("_auth_generation")
-        return bool(
-            app.storage.user.get("authenticated", False)
-            and gen is not None
-            and app.storage.user.get("_auth_generation") == gen
-        )
+        return is_authenticated_session()
 
     def _get_request_context(self) -> Dict[str, str]:
         if not app:
@@ -590,6 +584,8 @@ class GUILauncher:
             return {"ip": "", "user_agent": "", "session_id": "", "request_id": ""}
 
     def _get_current_user_id(self) -> Optional[int]:
+        if not is_authenticated_session():
+            return None
         if not app:
             return None
         try:
@@ -601,6 +597,8 @@ class GUILauncher:
             return None
 
     def _get_current_username(self) -> Optional[str]:
+        if not is_authenticated_session():
+            return None
         if not app:
             return None
         try:
@@ -755,6 +753,7 @@ class GUILauncher:
                     return await call_next(request)
                 gen = app.storage.general.get("_auth_generation")
                 if not app.storage.user.get("authenticated", False) or gen is None or app.storage.user.get("_auth_generation") != gen:
+                    clear_auth_session_fields()
                     requested_path = path
                     if request.url.query:
                         requested_path = f"{requested_path}?{request.url.query}"
@@ -2162,6 +2161,8 @@ class GUILauncher:
                 if self._is_authenticated():
                     safe_target = redirect_to if redirect_to and redirect_to != "/login" else "/"
                     return RedirectResponse(safe_target)
+
+                clear_auth_session_fields()
 
                 def try_login() -> None:
                     username_value = str(username.value or "").strip()

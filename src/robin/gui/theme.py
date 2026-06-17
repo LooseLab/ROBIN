@@ -53,6 +53,8 @@ from typing import Callable, Optional, Any, Dict, List
 from nicegui import ui, app, events, core, run, background_tasks
 import nicegui.air
 
+from robin.gui.session import current_session_is_admin, current_session_username
+
 from pathlib import Path
 
 # These will be set by the get_imagefile() and get_version() functions
@@ -620,24 +622,12 @@ MENU_BREAKPOINT = 1200
 
 def _current_user_is_admin() -> bool:
     """Return True when the signed-in session has the admin role."""
-    try:
-        roles = app.storage.user.get("roles") or []
-        if isinstance(roles, str):
-            roles = [roles]
-        return "admin" in set(roles)
-    except Exception:
-        return False
+    return current_session_is_admin()
 
 
 def _current_username() -> str:
     """Return the signed-in username for display in the header."""
-    try:
-        username = app.storage.user.get("username")
-        if username:
-            return str(username).strip()
-    except Exception:
-        pass
-    return ""
+    return current_session_username()
 
 
 class GlobalSystemMetrics:
