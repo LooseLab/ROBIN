@@ -124,3 +124,17 @@ def test_any_active_admin_has_consent(tmp_path: Path) -> None:
 
     store.set_user_active("admin", False)
     assert not store.any_active_admin_has_consent("v1")
+
+
+def test_must_change_password_flag_and_admin_reset(tmp_path: Path) -> None:
+    store = _store(tmp_path)
+    user_id = store.create_user("dave", "hash1")
+    user = store.get_user_by_id(user_id)
+    assert user is not None
+    assert user.must_change_password is True
+
+    store.set_user_password_hash("dave", "hash2", must_change_password=False)
+    assert not store.user_must_change_password(user_id)
+
+    store.set_user_password_hash("dave", "hash3", must_change_password=True)
+    assert store.user_must_change_password(user_id)

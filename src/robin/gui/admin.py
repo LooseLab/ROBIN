@@ -31,6 +31,7 @@ def _user_table_rows(launcher: "GUILauncher") -> List[Dict[str, Any]]:
                 "username": user.username,
                 "roles": ", ".join(roles) or "—",
                 "active": "yes" if user.is_active else "no",
+                "password": "must change" if user.must_change_password else "ok",
                 "last_login": user.last_login_at or "never",
                 "consent": "accepted" if consent.get("has_consent") else "pending",
                 "consent_at": consent.get("agreed_at") or "—",
@@ -116,6 +117,7 @@ def _build_users_panel(launcher: "GUILauncher", consent_version: str) -> None:
                 {"name": "username", "label": "Username", "field": "username", "align": "left"},
                 {"name": "roles", "label": "Roles", "field": "roles", "align": "left"},
                 {"name": "active", "label": "Active", "field": "active", "align": "left"},
+                {"name": "password", "label": "Password", "field": "password", "align": "left"},
                 {"name": "last_login", "label": "Last login", "field": "last_login", "align": "left"},
                 {"name": "consent", "label": "Consent", "field": "consent", "align": "left"},
                 {"name": "consent_at", "label": "Consent at", "field": "consent_at", "align": "left"},
@@ -290,7 +292,10 @@ def _open_create_user_dialog(
                 target_id=username,
                 details={"role": role, "user_id": user_id, "source": "gui"},
             )
-            ui.notify(f"Created user '{username}'", type="positive")
+            ui.notify(
+                f"Created user '{username}'. They must set a new password on first sign-in.",
+                type="positive",
+            )
             dialog.close()
             if on_created is not None:
                 on_created()
@@ -341,7 +346,7 @@ def _open_manage_user_dialog(
                 ui.notify("Passwords do not match", type="negative")
                 return
             new_hash = launcher.auth_service.hash_password(pwd)
-            if not store.set_user_password_hash(username, new_hash):
+            if not store.set_user_password_hash(username, new_hash, must_change_password=True):
                 ui.notify("Password update failed", type="negative")
                 return
             launcher._audit_log(
@@ -349,9 +354,12 @@ def _open_manage_user_dialog(
                 user_id=launcher._get_current_user_id(),
                 target_type="user",
                 target_id=username,
-                details={"source": "gui"},
+                details={"source": "gui", "must_change_password": True},
             )
-            ui.notify("Password updated", type="positive")
+            ui.notify(
+                f"Password updated for {username}. They must choose a new password on next sign-in.",
+                type="positive",
+            )
 
         def _toggle_active() -> None:
             if user.is_active:

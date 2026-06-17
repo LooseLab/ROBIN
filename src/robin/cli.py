@@ -498,7 +498,7 @@ def users_bootstrap_admin(username: str, from_legacy_hash: bool) -> None:
     else:
         password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
         try:
-            user_id = auth.create_user(username, password, role="admin")
+            user_id = auth.create_user(username, password, role="admin", must_change_password=False)
         except Exception as e:
             click.echo(f"Failed to create admin user '{username}': {e}", err=True)
             sys.exit(1)
@@ -547,6 +547,7 @@ def users_create(username: str, role: str) -> None:
         click.echo(f"Failed to create user '{username}': {e}", err=True)
         sys.exit(1)
     click.echo(f"Created user '{username}' with role '{role}'.")
+    click.echo("The user must choose a new password on first GUI sign-in.")
 
 
 @users.command("set-password")
@@ -566,7 +567,7 @@ def users_set_password(username: str) -> None:
 
     password = click.prompt("New password", hide_input=True, confirmation_prompt=True)
     new_hash = auth.hash_password(password)
-    if not store.set_user_password_hash(username, new_hash):
+    if not store.set_user_password_hash(username, new_hash, must_change_password=True):
         click.echo(f"User '{username}' not found.", err=True)
         sys.exit(1)
     audit.log_event(
@@ -574,9 +575,10 @@ def users_set_password(username: str) -> None:
         user_id=None,
         target_type="user",
         target_id=username,
-        details={"username": username},
+        details={"username": username, "must_change_password": True},
     )
     click.echo(f"Updated password for user '{username}'.")
+    click.echo("The user must choose a new password on next GUI sign-in.")
 
 
 @users.command("list")

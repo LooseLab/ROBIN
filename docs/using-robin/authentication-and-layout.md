@@ -21,6 +21,7 @@ If nothing loads: [Troubleshooting — I can’t open the page](troubleshooting.
 If the GUI is enabled, you’ll see **Sign in** with **username** and **password** fields.
 
 - Enter the credentials your administrator provided (or the `admin` account created at setup).  
+- If you are signing in with a **temporary** password, you must **choose a new password** before continuing.  
 - On first login, accept the **research-use agreement** — acceptance is recorded per user in the audit database.  
 - Press **Log in** or **Enter**.  
 
@@ -54,6 +55,7 @@ For account setup and auditing, see [Users, consent, and auditing](audit-and-use
 | Published docs (new tab) | **Documentation** |
 | Dark theme | **Dark Mode** |
 | Remote access (advanced) | **Allow Remote Access** |
+| Update your password | **Change password** |
 | User accounts and audit log *(admin only)* | **Administration** |
 | End web session | **LOG OUT** |
 | Stop ROBIN on this machine *(some setups)* | **Quit** — read the warning; closing the **tab** often leaves analysis running. |

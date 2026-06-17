@@ -1257,6 +1257,10 @@ def frame(
                             'color="primary"'
                         ).bind_value(dark_mode_el)
                         ui.separator()
+                        ui.menu_item(
+                            "Change password",
+                            lambda: ui.navigate.to("/change-password?voluntary=1"),
+                        ).classes("text-body-medium")
                         ui.menu_item("Close", menu.close).classes(
                             "text-body-medium"
                         )

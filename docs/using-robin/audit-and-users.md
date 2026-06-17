@@ -21,8 +21,11 @@ Roles are assigned when creating accounts (`robin users create --role user`) or 
 
 1. Open the ROBIN GUI URL (e.g. `http://localhost:8081`).
 2. Enter **username** and **password**.
-3. On first login (or after a consent version change), accept the **research-use agreement**.
-4. Use the app normally; actions are logged to the audit database.
+3. If you were given a **temporary** password (new account or admin reset), choose a **new password** before continuing.
+4. On first login (or after a consent version change), accept the **research-use agreement**.
+5. Use the app normally; actions are logged to the audit database.
+
+Signed-in users can update their password from the menu (**Change password**).
 
 Log out via **LOG OUT** in the menu. This ends your session and records `auth.logout`.
 

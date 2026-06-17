@@ -27,6 +27,7 @@ Exported CSV columns include timestamp, user, event type, target, result, IP, se
 |-------|----------------|
 | `auth.login.success` / `auth.login.failure` | GUI sign-in |
 | `auth.logout` | User logs out |
+| `auth.password.changed` | User sets a new password (forced first-login or voluntary) |
 | `consent.accepted` | User accepts research-use agreement |
 | `sample.viewed` / `sample.list.viewed` | Sample pages opened |
 | `sample.audit.viewed` / `sample.audit.exported` | Per-sample audit history opened or exported |

@@ -717,6 +717,7 @@ class GUILauncher:
             pass
 
         unrestricted_page_routes = set(self._unrestricted_page_routes)
+        launcher = self
 
         @app.add_middleware
         class AuthMiddleware(BaseHTTPMiddleware):
@@ -759,6 +760,19 @@ class GUILauncher:
                         requested_path = f"{requested_path}?{request.url.query}"
                     redirect_to = quote(requested_path, safe="/?=&")
                     return RedirectResponse(url=f"/login?redirect_to={redirect_to}")
+                user_id = app.storage.user.get("user_id")
+                if user_id is not None and path != "/change-password":
+                    try:
+                        if launcher.security_store.user_must_change_password(int(user_id)):
+                            requested_path = path
+                            if request.url.query:
+                                requested_path = f"{requested_path}?{request.url.query}"
+                            redirect_to = quote(requested_path, safe="/?=&")
+                            return RedirectResponse(
+                                url=f"/change-password?redirect_to={redirect_to}"
+                            )
+                    except Exception:
+                        pass
                 return await call_next(request)
 
         self._auth_middleware_registered = True
@@ -781,7 +795,74 @@ class GUILauncher:
         if user is None:
             return None
         roles = self.security_store.get_user_roles(user.id)
-        return {"user_id": user.id, "username": user.username, "roles": roles}
+        return {
+            "user_id": user.id,
+            "username": user.username,
+            "roles": roles,
+            "must_change_password": user.must_change_password,
+        }
+
+    def _user_must_change_password(self) -> bool:
+        user_id = self._get_current_user_id()
+        if user_id is None:
+            return False
+        return self.security_store.user_must_change_password(user_id)
+
+    def _complete_post_login_navigation(self, user_id: int, redirect_to: str) -> None:
+        """Send the user to password change, consent, or their target page after login."""
+        safe_target = (
+            redirect_to
+            if redirect_to and redirect_to not in ("/login", "/change-password")
+            else "/"
+        )
+        if self.security_store.user_must_change_password(user_id):
+            ui.navigate.to(f"/change-password?redirect_to={quote(safe_target, safe='/?=&')}")
+            return
+
+        has_consent = self.security_store.has_consent(user_id, self.consent_version)
+        if has_consent:
+            try:
+                app.storage.user["disclaimer_acknowledged"] = True
+            except Exception:
+                pass
+            ui.navigate.to(safe_target)
+            return
+
+        with ui.dialog().props("persistent") as consent_dialog, ui.card().classes(
+            "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-2xl"
+        ):
+            ui.label("Research use agreement").classes(
+                "classification-insight-heading text-headline-small q-mb-sm"
+            )
+            ui.label(EXTENDED_DISCLAIMER_TEXT).classes("classification-insight-foot q-mb-md")
+
+            def _accept_consent() -> None:
+                ctx = self._get_request_context()
+                self.security_store.record_consent(
+                    int(user_id),
+                    self.consent_version,
+                    ip=ctx["ip"],
+                    user_agent=ctx["user_agent"],
+                    session_id=ctx["session_id"],
+                )
+                self._audit_log(
+                    event_type="consent.accepted",
+                    user_id=int(user_id),
+                    target_type="consent",
+                    target_id=self.consent_version,
+                    details={"consent_version": self.consent_version},
+                )
+                try:
+                    app.storage.user["disclaimer_acknowledged"] = True
+                except Exception:
+                    pass
+                consent_dialog.close()
+                ui.navigate.to(safe_target)
+
+            ui.button("I agree", on_click=_accept_consent, icon="check_circle").props(
+                "color=primary no-caps"
+            )
+        consent_dialog.open()
 
     def _bootstrap_security_from_legacy_password(self) -> bool:
         """Backfill initial admin from legacy GUI password hash if needed."""
@@ -2104,6 +2185,9 @@ class GUILauncher:
                             "user_id": login_result["user_id"],
                             "username": login_result["username"],
                             "roles": login_result["roles"],
+                            "must_change_password": bool(
+                                login_result.get("must_change_password")
+                            ),
                         }
                     )
                     self._audit_log(
@@ -2111,50 +2195,19 @@ class GUILauncher:
                         user_id=int(login_result["user_id"]),
                         target_type="user",
                         target_id=str(login_result["username"]),
-                        details={"roles": login_result["roles"]},
+                        details={
+                            "roles": login_result["roles"],
+                            "must_change_password": bool(
+                                login_result.get("must_change_password")
+                            ),
+                        },
                     )
 
                     safe_target = redirect_to if redirect_to and redirect_to != "/login" else "/"
-                    has_consent = self.security_store.has_consent(
-                        int(login_result["user_id"]), self.consent_version
+                    self._complete_post_login_navigation(
+                        int(login_result["user_id"]),
+                        safe_target,
                     )
-                    if has_consent:
-                        app.storage.user["disclaimer_acknowledged"] = True
-                        ui.navigate.to(safe_target)
-                        return
-
-                    with ui.dialog().props("persistent") as consent_dialog, ui.card().classes(
-                        "robin-dialog-surface p-4 md:p-5 min-w-[18rem] max-w-2xl"
-                    ):
-                        ui.label("Research use agreement").classes(
-                            "classification-insight-heading text-headline-small q-mb-sm"
-                        )
-                        ui.label(EXTENDED_DISCLAIMER_TEXT).classes("classification-insight-foot q-mb-md")
-
-                        def _accept_consent() -> None:
-                            ctx = self._get_request_context()
-                            self.security_store.record_consent(
-                                int(login_result["user_id"]),
-                                self.consent_version,
-                                ip=ctx["ip"],
-                                user_agent=ctx["user_agent"],
-                                session_id=ctx["session_id"],
-                            )
-                            self._audit_log(
-                                event_type="consent.accepted",
-                                user_id=int(login_result["user_id"]),
-                                target_type="consent",
-                                target_id=self.consent_version,
-                                details={"consent_version": self.consent_version},
-                            )
-                            app.storage.user["disclaimer_acknowledged"] = True
-                            consent_dialog.close()
-                            ui.navigate.to(safe_target)
-
-                        ui.button("I agree", on_click=_accept_consent, icon="check_circle").props(
-                            "color=primary no-caps"
-                        )
-                    consent_dialog.open()
 
                 _setup_global_resources()
                 with theme.frame(
@@ -2224,6 +2277,20 @@ class GUILauncher:
                                         ).props("color=primary no-caps").classes(
                                             "w-full"
                                         )
+
+            @ui.page("/change-password")
+            def change_password_page(redirect_to: str = "/", voluntary: str = ""):
+                """Force or voluntary password change for the signed-in user."""
+                _setup_global_resources()
+                if not self._is_authenticated():
+                    return RedirectResponse("/login")
+                from robin.gui.change_password import create_change_password_page
+
+                create_change_password_page(
+                    self,
+                    redirect_to=redirect_to,
+                    voluntary=voluntary.strip().lower() in ("1", "true", "yes"),
+                )
 
             # Create the main workflow monitor page
             @ui.page("/")

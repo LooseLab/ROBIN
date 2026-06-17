@@ -12,6 +12,7 @@ class User:
     is_active: bool
     created_at: str
     last_login_at: Optional[str]
+    must_change_password: bool = False
 
 
 @dataclass(frozen=True)
@@ -21,3 +22,4 @@ class UserPublic:
     is_active: bool
     created_at: str
     last_login_at: Optional[str]
+    must_change_password: bool = False

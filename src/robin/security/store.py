@@ -45,7 +45,8 @@ class SecurityStore:
                     password_hash TEXT NOT NULL,
                     is_active INTEGER NOT NULL DEFAULT 1,
                     created_at TEXT NOT NULL,
-                    last_login_at TEXT
+                    last_login_at TEXT,
+                    must_change_password INTEGER NOT NULL DEFAULT 0
                 );
 
                 CREATE TABLE IF NOT EXISTS roles (
@@ -96,6 +97,17 @@ class SecurityStore:
                 CREATE INDEX IF NOT EXISTS idx_consents_user_version ON consents(user_id, consent_version);
                 """
             )
+            self._migrate_schema()
+
+    def _migrate_schema(self) -> None:
+        cols = {
+            str(row[1])
+            for row in self._conn.execute("PRAGMA table_info(users)").fetchall()
+        }
+        if "must_change_password" not in cols:
+            self._conn.execute(
+                "ALTER TABLE users ADD COLUMN must_change_password INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _ensure_default_roles(self) -> None:
         with self._lock:
@@ -113,12 +125,30 @@ class SecurityStore:
             row = self._conn.execute("SELECT COUNT(*) AS c FROM users").fetchone()
             return bool(row and int(row["c"]) > 0)
 
-    def create_user(self, username: str, password_hash: str, *, is_active: bool = True) -> int:
+    def create_user(
+        self,
+        username: str,
+        password_hash: str,
+        *,
+        is_active: bool = True,
+        must_change_password: bool = True,
+    ) -> int:
         created_at = utc_now_iso()
         with self._lock:
             cur = self._conn.execute(
-                "INSERT INTO users(username, password_hash, is_active, created_at) VALUES (?, ?, ?, ?)",
-                (username.strip(), password_hash, 1 if is_active else 0, created_at),
+                """
+                INSERT INTO users(
+                    username, password_hash, is_active, created_at, must_change_password
+                )
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    username.strip(),
+                    password_hash,
+                    1 if is_active else 0,
+                    created_at,
+                    1 if must_change_password else 0,
+                ),
             )
             return int(cur.lastrowid)
 
@@ -135,44 +165,47 @@ class SecurityStore:
                 (user_id, int(role["id"])),
             )
 
+    def _row_to_user(self, row: sqlite3.Row) -> User:
+        return User(
+            id=int(row["id"]),
+            username=str(row["username"]),
+            password_hash=str(row["password_hash"]),
+            is_active=bool(row["is_active"]),
+            created_at=str(row["created_at"]),
+            last_login_at=str(row["last_login_at"]) if row["last_login_at"] else None,
+            must_change_password=bool(row["must_change_password"]),
+        )
+
+    def _user_select_columns(self) -> str:
+        return "id, username, password_hash, is_active, created_at, last_login_at, must_change_password"
+
     def get_user_by_username(self, username: str) -> Optional[User]:
         with self._lock:
             row = self._conn.execute(
-                "SELECT id, username, password_hash, is_active, created_at, last_login_at FROM users WHERE username = ?",
+                f"SELECT {self._user_select_columns()} FROM users WHERE username = ?",
                 (username.strip(),),
             ).fetchone()
             if row is None:
                 return None
-            return User(
-                id=int(row["id"]),
-                username=str(row["username"]),
-                password_hash=str(row["password_hash"]),
-                is_active=bool(row["is_active"]),
-                created_at=str(row["created_at"]),
-                last_login_at=str(row["last_login_at"]) if row["last_login_at"] else None,
-            )
+            return self._row_to_user(row)
 
     def get_user_by_id(self, user_id: int) -> Optional[User]:
         with self._lock:
             row = self._conn.execute(
-                "SELECT id, username, password_hash, is_active, created_at, last_login_at FROM users WHERE id = ?",
+                f"SELECT {self._user_select_columns()} FROM users WHERE id = ?",
                 (int(user_id),),
             ).fetchone()
             if row is None:
                 return None
-            return User(
-                id=int(row["id"]),
-                username=str(row["username"]),
-                password_hash=str(row["password_hash"]),
-                is_active=bool(row["is_active"]),
-                created_at=str(row["created_at"]),
-                last_login_at=str(row["last_login_at"]) if row["last_login_at"] else None,
-            )
+            return self._row_to_user(row)
 
     def get_user_public(self, user_id: int) -> Optional[UserPublic]:
         with self._lock:
             row = self._conn.execute(
-                "SELECT id, username, is_active, created_at, last_login_at FROM users WHERE id = ?",
+                """
+                SELECT id, username, is_active, created_at, last_login_at, must_change_password
+                FROM users WHERE id = ?
+                """,
                 (int(user_id),),
             ).fetchone()
             if row is None:
@@ -183,15 +216,44 @@ class SecurityStore:
                 is_active=bool(row["is_active"]),
                 created_at=str(row["created_at"]),
                 last_login_at=str(row["last_login_at"]) if row["last_login_at"] else None,
+                must_change_password=bool(row["must_change_password"]),
             )
 
-    def set_user_password_hash(self, username: str, password_hash: str) -> bool:
+    def set_user_password_hash(
+        self,
+        username: str,
+        password_hash: str,
+        *,
+        must_change_password: Optional[bool] = None,
+    ) -> bool:
         with self._lock:
-            cur = self._conn.execute(
-                "UPDATE users SET password_hash = ? WHERE username = ?",
-                (password_hash, username.strip()),
-            )
+            if must_change_password is None:
+                cur = self._conn.execute(
+                    "UPDATE users SET password_hash = ? WHERE username = ?",
+                    (password_hash, username.strip()),
+                )
+            else:
+                cur = self._conn.execute(
+                    """
+                    UPDATE users
+                    SET password_hash = ?, must_change_password = ?
+                    WHERE username = ?
+                    """,
+                    (
+                        password_hash,
+                        1 if must_change_password else 0,
+                        username.strip(),
+                    ),
+                )
             return int(cur.rowcount) > 0
+
+    def user_must_change_password(self, user_id: int) -> bool:
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT must_change_password FROM users WHERE id = ?",
+                (int(user_id),),
+            ).fetchone()
+            return bool(row and row["must_change_password"])
 
     def set_user_active(self, username: str, is_active: bool) -> bool:
         with self._lock:
@@ -204,7 +266,10 @@ class SecurityStore:
     def list_users(self) -> List[UserPublic]:
         with self._lock:
             rows = self._conn.execute(
-                "SELECT id, username, is_active, created_at, last_login_at FROM users ORDER BY username"
+                """
+                SELECT id, username, is_active, created_at, last_login_at, must_change_password
+                FROM users ORDER BY username
+                """
             ).fetchall()
             return [
                 UserPublic(
@@ -213,6 +278,7 @@ class SecurityStore:
                     is_active=bool(row["is_active"]),
                     created_at=str(row["created_at"]),
                     last_login_at=str(row["last_login_at"]) if row["last_login_at"] else None,
+                    must_change_password=bool(row["must_change_password"]),
                 )
                 for row in rows
             ]
