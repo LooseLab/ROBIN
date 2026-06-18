@@ -493,7 +493,7 @@ class CNVSection(ReportSection):
     """Section containing the CNV analysis."""
 
     FULL_PLOT_WIDTH = inch * 7.5
-    FULL_PLOT_HEIGHT = inch * 3.25
+    FULL_PLOT_HEIGHT = inch * 2.5
 
     def add_content(self):
         """Add the CNV analysis content to the report."""
@@ -1109,11 +1109,10 @@ class CNVSection(ReportSection):
                                 f"Individual chromosome plots include lollipop markers for "
                                 f"genes in the <b>{panel_name}</b> target panel "
                                 f"({len(panel_genes_df)} genes). "
-                                "Purple lollipops mark panel target positions on the plot; "
-                                "target names, positions, and ploidy are listed in the "
-                                "table below each chromosome. Amplified targets are "
-                                "highlighted in red; off-scale values are marked with ↑. "
-                                "Shaded regions indicate significant CNV changes."
+                                "Scatter points show bin-level copy number; the dark "
+                                "trace is a rolling median. Panel targets are lollipops; "
+                                "genes are labelled when >2 SD from the chromosome mean "
+                                "or when they fall inside a called gain/loss region."
                             ),
                             ParagraphStyle(
                                 "PanelGeneLegend",
@@ -1137,6 +1136,7 @@ class CNVSection(ReportSection):
                     significant_regions=significant_regions,
                     chromosomes=reportable_chromosomes,
                     panel_genes_df=panel_genes_df,
+                    chromosome_status=chromosome_status,
                 )
                 plot_lookup = dict(chromosome_plots)
                 plotted_chromosomes = [
@@ -1145,23 +1145,6 @@ class CNVSection(ReportSection):
 
                 for chrom in plotted_chromosomes:
                     img_buf = plot_lookup[chrom]
-
-                    status = chromosome_status.get(chrom, "No significant CNV change")
-                    has_change = status != "No significant CNV change"
-                    status_style = ParagraphStyle(
-                        "ChromosomeStatus",
-                        parent=self.styles.styles["Caption"],
-                        fontSize=9,
-                        fontName="Helvetica-Bold" if has_change else "Helvetica-Oblique",
-                        textColor=(
-                            self.styles.COLORS["primary"]
-                            if has_change
-                            else self.styles.COLORS["text"]
-                        ),
-                        alignment=1,
-                        spaceBefore=2,
-                        spaceAfter=8,
-                    )
                     self.elements.append(
                         Image(
                             img_buf,
@@ -1169,16 +1152,7 @@ class CNVSection(ReportSection):
                             height=self.FULL_PLOT_HEIGHT,
                         )
                     )
-                    self.elements.append(
-                        Paragraph(
-                            (
-                                f"<b>Chromosome {chrom.replace('chr', '')}</b> — "
-                                f"{status}"
-                            ),
-                            status_style,
-                        )
-                    )
-                    self.elements.append(Spacer(1, 6))
+                    self.elements.append(Spacer(1, 10))
 
                 # Add detailed CNV table
                 self.elements.append(Spacer(1, 6))
