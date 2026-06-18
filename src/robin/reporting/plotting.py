@@ -16,9 +16,10 @@ from robin.gui import fonts
 import natsort
 
 from matplotlib import gridspec
+from matplotlib.transforms import blended_transform_factory
 
 import logging
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +30,26 @@ MODERN_COLORS = {
     "background": "#F8FAFC",  # Light background (matching table alternate rows)
     "accent": "#3498DB",  # Blue accent
     "grid": "#E2E8F0",  # Grid color
+}
+
+CNV_COLORS = {
+    "points": "#5B7C9D",
+    "median": "#1E3A5F",
+    "diploid": "#3D5A80",
+    "reference": "#C5CDD6",
+    "gain_fill": "#D4EDDA",
+    "loss_fill": "#F8D7DA",
+    "gain_edge": "#3D7A4A",
+    "loss_edge": "#A94442",
+    "gene": "#5C6BC0",
+}
+
+CNV_FONT = {
+    "title": 10,
+    "subtitle": 7.5,
+    "axis": 9,
+    "tick": 7,
+    "annotation": 6.5,
 }
 
 
@@ -81,6 +102,351 @@ def set_modern_style():
             "lines.markersize": 6,
         }
     )
+
+
+def _apply_cnv_chromosome_axes(
+    ax,
+    x_max_mb: float,
+    y_max: float,
+    *,
+    xlabel: str,
+    ylabel: str,
+    show_xlabel: bool = True,
+) -> None:
+    """Pin axes at the origin with no leading x padding."""
+    ax.set_xlim(0, x_max_mb)
+    ax.set_ylim(0, y_max)
+    ax.margins(x=0, y=0)
+    ax.autoscale(enable=False)
+    if show_xlabel:
+        ax.set_xlabel(xlabel, fontsize=CNV_FONT["axis"], color=MODERN_COLORS["primary"])
+    else:
+        ax.set_xlabel("")
+    ax.set_ylabel(ylabel, fontsize=CNV_FONT["axis"], color=MODERN_COLORS["primary"])
+    ax.spines["left"].set_position(("data", 0))
+    ax.spines["bottom"].set_position(("data", 0))
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    ax.xaxis.set_ticks_position("bottom")
+    ax.yaxis.set_ticks_position("left")
+    ax.grid(True, axis="y", color=MODERN_COLORS["grid"], linestyle="--", linewidth=0.4, alpha=0.55)
+    ax.grid(False, axis="x")
+    ax.tick_params(colors=MODERN_COLORS["primary"], labelsize=CNV_FONT["tick"])
+
+
+def _chromosome_display_name(contig: str) -> str:
+    return contig.replace("chr", "")
+
+
+def _plot_cnv_track(ax, cnv_df: pd.DataFrame, x_max_mb: float) -> None:
+    """Render CNV bin values as scatter with a rolling median trace."""
+    ax.scatter(
+        cnv_df["position_mb"],
+        cnv_df["ploidy"],
+        s=4,
+        c=CNV_COLORS["points"],
+        alpha=0.35,
+        linewidths=0,
+        edgecolors="none",
+        rasterized=True,
+        zorder=2,
+    )
+    window = max(5, len(cnv_df) // 35)
+    if len(cnv_df) >= window:
+        median = cnv_df["ploidy"].rolling(window, center=True, min_periods=1).median()
+        ax.plot(
+            cnv_df["position_mb"],
+            median,
+            color=CNV_COLORS["median"],
+            linewidth=1.4,
+            alpha=0.95,
+            solid_capstyle="round",
+            zorder=4,
+        )
+
+
+def _is_gene_cnv_outlier(cnv_val: float, mean_cnv: float, std_cnv: float) -> bool:
+    """Return True when a panel target copy number deviates >2 SD from the chromosome mean."""
+    if std_cnv < 1e-6:
+        return abs(cnv_val - mean_cnv) > 0.5
+    return abs(cnv_val - mean_cnv) > 2 * std_cnv
+
+
+SIGNIFICANT_CNV_REGION_TYPES = {"GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"}
+
+
+def _gene_overlaps_cnv_region(mid_bp: float, regions: List[Dict[str, Any]]) -> bool:
+    """Return True when a gene midpoint falls inside a called gain/loss region."""
+    for region in regions:
+        if region.get("type") not in SIGNIFICANT_CNV_REGION_TYPES:
+            continue
+        start_bp = float(region["start_pos"])
+        end_bp = float(region["end_pos"])
+        if start_bp <= mid_bp <= end_bp:
+            return True
+    return False
+
+
+def _should_label_panel_gene(
+    point: Dict[str, Any],
+    mean_cnv: float,
+    std_cnv: float,
+    regions: List[Dict[str, Any]],
+) -> bool:
+    """Label outliers and panel genes inside called CNV regions."""
+    if _is_gene_cnv_outlier(point["cnv_val"], mean_cnv, std_cnv):
+        return True
+    return _gene_overlaps_cnv_region(point["mid_mb"] * 1_000_000, regions)
+
+
+def _is_highlighted_panel_gene(
+    point: Dict[str, Any],
+    mean_cnv: float,
+    std_cnv: float,
+    regions: List[Dict[str, Any]],
+    off_scale_mode: bool,
+    y_max: float,
+) -> tuple[bool, bool]:
+    """Return (highlight, off_scale) for a panel target."""
+    cnv_val = point["cnv_val"]
+    off_scale = off_scale_mode and cnv_val > y_max * 0.97
+    highlight = off_scale or _should_label_panel_gene(point, mean_cnv, std_cnv, regions)
+    return highlight, off_scale
+
+
+def _add_cnv_regions_on_plot(ax, regions: List[Dict[str, Any]], y_max: float) -> None:
+    """Shade called regions on the main track with edge guides and top brackets."""
+    for region in regions:
+        start_mb = region["start_pos"] / 1_000_000
+        end_mb = region["end_pos"] / 1_000_000
+        is_gain = region["type"] in ("GAIN", "HIGH_GAIN")
+        fill_color = CNV_COLORS["gain_fill"] if is_gain else CNV_COLORS["loss_fill"]
+        edge_color = CNV_COLORS["gain_edge"] if is_gain else CNV_COLORS["loss_edge"]
+
+        ax.axvspan(start_mb, end_mb, color=fill_color, alpha=0.55, zorder=0, linewidth=0)
+        ax.axvline(start_mb, color=edge_color, linestyle="--", linewidth=0.9, alpha=0.75, zorder=1)
+        ax.axvline(end_mb, color=edge_color, linestyle="--", linewidth=0.9, alpha=0.75, zorder=1)
+        _draw_region_bracket(
+            ax, start_mb, end_mb, y_max * 0.992, edge_color, height_frac=y_max * 0.028,
+        )
+
+
+LOLLIPOP_LABEL_TIERS = (-0.040, -0.062, -0.084)
+
+
+def _label_spacing_mb(label: str, x_max_mb: float, rotation: int) -> float:
+    """Estimate horizontal label footprint in megabases."""
+    char_factor = 0.0035 if rotation == 0 else 0.0024
+    return max(x_max_mb * 0.011, len(label) * x_max_mb * char_factor, 1.0)
+
+
+def _layout_gene_lollipop_labels(
+    panel_points: List[Dict[str, Any]],
+    x_max_mb: float,
+    *,
+    rotation: int,
+) -> List[Dict[str, Any]]:
+    """Assign below-axis label tiers to reduce overlap."""
+    occupied: dict[int, list[tuple[float, str]]] = {
+        tier: [] for tier in range(len(LOLLIPOP_LABEL_TIERS))
+    }
+    layouts: List[Dict[str, Any]] = []
+
+    for point in sorted(panel_points, key=lambda item: item["mid_mb"]):
+        label = point["label"]
+        label_y = LOLLIPOP_LABEL_TIERS[0]
+        tier = 0
+        spacing = _label_spacing_mb(label, x_max_mb, rotation)
+        placed = False
+
+        for tier_idx, candidate_y in enumerate(LOLLIPOP_LABEL_TIERS):
+            if all(
+                abs(point["mid_mb"] - other_mb) >= max(
+                    spacing,
+                    _label_spacing_mb(other_label, x_max_mb, rotation),
+                )
+                for other_mb, other_label in occupied[tier_idx]
+            ):
+                tier = tier_idx
+                label_y = candidate_y
+                occupied[tier_idx].append((point["mid_mb"], label))
+                placed = True
+                break
+        if not placed:
+            occupied[0].append((point["mid_mb"], label))
+
+        layouts.append({**point, "tier": tier, "label_y": label_y})
+
+    return layouts
+
+
+def _add_panel_gene_lollipops(
+    ax,
+    panel_points: List[Dict[str, Any]],
+    x_max_mb: float,
+    y_max: float,
+    off_scale_mode: bool,
+    mean_cnv: float,
+    std_cnv: float,
+    regions: List[Dict[str, Any]],
+) -> None:
+    """Draw panel lollipops; label outliers and genes in called CNV regions."""
+    if not panel_points:
+        return
+
+    label_points = [
+        point for point in panel_points
+        if _should_label_panel_gene(point, mean_cnv, std_cnv, regions)
+    ]
+    rotation = 0 if len(label_points) <= 8 else 45
+    trans = blended_transform_factory(ax.transData, ax.transAxes)
+    label_layouts = {
+        (layout["label"], layout["mid_mb"]): layout
+        for layout in _layout_gene_lollipop_labels(label_points, x_max_mb, rotation=rotation)
+    }
+
+    for point in panel_points:
+        mid_mb = point["mid_mb"]
+        cnv_val = point["cnv_val"]
+        highlight, off_scale = _is_highlighted_panel_gene(
+            point, mean_cnv, std_cnv, regions, off_scale_mode, y_max,
+        )
+        color = AMPLIFIED_COLOR if highlight else CNV_COLORS["gene"]
+        y_top = min(cnv_val, y_max * 0.98)
+        stem_alpha = 0.9 if highlight else 0.45
+        stem_width = 1.0 if highlight else 0.6
+
+        ax.plot(
+            [mid_mb, mid_mb],
+            [0.0, y_top],
+            color=color,
+            linewidth=stem_width,
+            alpha=stem_alpha,
+            zorder=5,
+            solid_capstyle="round",
+        )
+
+        if off_scale:
+            ax.scatter(
+                [mid_mb],
+                [y_max * 0.99],
+                s=34,
+                marker="^",
+                color=AMPLIFIED_COLOR,
+                zorder=7,
+                edgecolors="none",
+                clip_on=False,
+            )
+        else:
+            ax.scatter(
+                [mid_mb],
+                [y_top],
+                s=24 if highlight else 12,
+                color=color,
+                zorder=6,
+                edgecolors="white",
+                linewidths=0.35,
+                alpha=0.95 if highlight else 0.7,
+            )
+
+        layout = label_layouts.get((point["label"], mid_mb))
+        if layout is None:
+            continue
+
+        label = point["label"]
+        if off_scale:
+            label = f"{label} ({cnv_val:.1f})"
+        ax.text(
+            mid_mb,
+            layout["label_y"],
+            label,
+            transform=trans,
+            fontsize=CNV_FONT["annotation"],
+            color=color,
+            ha="center",
+            va="top",
+            rotation=rotation,
+            rotation_mode="anchor",
+            zorder=8,
+            clip_on=False,
+        )
+
+
+def _add_cnv_ploidy_reference_lines(ax, y_max: float, x_max_mb: float) -> None:
+    """Add dashed reference lines at integer ploidy values."""
+    for ploidy in (1, 2, 3):
+        if ploidy > y_max:
+            continue
+        is_diploid = ploidy == 2
+        ax.axhline(
+            ploidy,
+            color=CNV_COLORS["diploid"] if is_diploid else CNV_COLORS["reference"],
+            linestyle="--",
+            linewidth=1.3 if is_diploid else 0.7,
+            alpha=0.95 if is_diploid else 0.55,
+            zorder=1,
+        )
+        ax.text(
+            x_max_mb * 0.008,
+            ploidy,
+            str(ploidy),
+            fontsize=CNV_FONT["annotation"],
+            color=CNV_COLORS["diploid"] if is_diploid else CNV_COLORS["reference"],
+            va="center",
+            ha="left",
+            zorder=1,
+        )
+
+
+def _draw_region_bracket(
+    ax,
+    start_mb: float,
+    end_mb: float,
+    y_level: float,
+    color: str,
+    height_frac: float = 0.04,
+) -> None:
+    """Draw a horizontal genomic bracket."""
+    y_top = y_level
+    y_drop = y_level - height_frac
+    ax.plot(
+        [start_mb, start_mb, end_mb, end_mb],
+        [y_drop, y_top, y_top, y_drop],
+        color=color,
+        linewidth=1.1,
+        solid_capstyle="butt",
+        zorder=5,
+        clip_on=False,
+    )
+
+
+def _apply_cnv_axes_style(ax, *, xlabel: str, ylabel: str, title: Optional[str] = None) -> None:
+    """Apply consistent seaborn-inspired styling to a CNV axes."""
+    ax.set_facecolor("white")
+    ax.set_xlabel(xlabel, fontsize=CNV_FONT["axis"], color=MODERN_COLORS["primary"])
+    ax.set_ylabel(ylabel, fontsize=CNV_FONT["axis"], color=MODERN_COLORS["primary"])
+    if title:
+        ax.set_title(title, fontsize=CNV_FONT["title"], color=MODERN_COLORS["primary"], pad=8)
+    sns.despine(ax=ax, top=True, right=True)
+    ax.grid(True, axis="y", color=MODERN_COLORS["grid"], linestyle="--", linewidth=0.4, alpha=0.55)
+    ax.grid(False, axis="x")
+    ax.tick_params(colors=MODERN_COLORS["primary"], labelsize=CNV_FONT["tick"])
+
+
+def _chromosome_cnv_dataframe(positions_mb, values) -> pd.DataFrame:
+    return pd.DataFrame(
+        {"position_mb": positions_mb, "ploidy": pd.Series(values, dtype=float)}
+    )
+
+
+def _add_cnv_reference_lines(ax, mean_cnv: float, std_cnv: float, y_min: float, y_max: float) -> None:
+    """Genome-wide reference guides (mean plus optional spread)."""
+    ax.axhline(y=mean_cnv, color=CNV_COLORS["reference"], linestyle="--", linewidth=0.9, alpha=0.7, zorder=1)
+    for offset in (std_cnv, 2 * std_cnv):
+        if y_min < mean_cnv + offset <= y_max:
+            ax.axhline(y=mean_cnv + offset, color=CNV_COLORS["reference"], linestyle=":", linewidth=0.6, alpha=0.4, zorder=1)
+        if y_min <= mean_cnv - offset < y_max:
+            ax.axhline(y=mean_cnv - offset, color=CNV_COLORS["reference"], linestyle=":", linewidth=0.6, alpha=0.4, zorder=1)
 
 
 def target_distribution_plot(df):
@@ -235,87 +601,109 @@ def create_CNV_plot(result, cnv_dict):
             return _create_empty_cnv_buffer()
 
         # Prepare data for plotting
-        plot_data = []
+        plot_rows = []
         offset = 0
         contig_centers = {}
+        contig_boundaries = []
+        reportable = ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]
+        ordered_contigs = [
+            contig for contig in natsort.natsorted(result.cnv.keys()) if contig in reportable
+        ]
 
-        for contig, values in result.cnv.items():
-            if contig in ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]:
-                start_offset = offset
-                for i, value in enumerate(values):
-                    plot_data.append((contig, i + offset, value))
-                end_offset = offset + len(values) - 1
-                contig_centers[contig] = (
-                    start_offset + end_offset
-                ) / 2  # Calculate central position
-                offset += len(values)  # Increase the offset for the next contig
+        for contig in ordered_contigs:
+            values = result.cnv[contig]
+            start_offset = offset
+            for i, value in enumerate(values):
+                plot_rows.append(
+                    {
+                        "contig": contig,
+                        "bin_index": i + offset,
+                        "position_bp": (i + offset) * cnv_dict["bin_width"],
+                        "ploidy": float(value),
+                    }
+                )
+            end_offset = offset + len(values) - 1
+            contig_centers[contig] = ((start_offset + end_offset) / 2) * cnv_dict["bin_width"]
+            offset += len(values)
+            contig_boundaries.append(offset * cnv_dict["bin_width"])
 
-        # Check if we have any data to plot
-        if not plot_data:
+        if not plot_rows:
             logger.warning("No plot data available for CNV plot")
             return _create_empty_cnv_buffer()
 
-        # Convert to DataFrame
-        df = pd.DataFrame(plot_data, columns=["Contig", "Position", "Value"])
-        df["Position_Corrected"] = df["Position"] * cnv_dict["bin_width"]
+        df = pd.DataFrame(plot_rows)
+        mean_value = float(df["ploidy"].mean())
+        std_value = float(df["ploidy"].std())
+        y_min = max(0.0, float(df["ploidy"].min()) - 0.25)
+        y_max = max(mean_value + (4 * std_value), mean_value * 1.35, 2.5)
 
-        # Calculate the mean and standard deviation of the 'Value' column
-        mean_value = df["Value"].mean()
-        std_value = df["Value"].std()
+        palette = sns.color_palette("muted", n_colors=max(len(ordered_contigs), 3))
+        contig_palette = dict(zip(ordered_contigs, palette))
 
-        # Calculate the threshold
-        threshold = mean_value + 5 * std_value
-
-        # Create scatter plot
         width = 16
-        fig = plt.figure(figsize=(width, width / 4))
+        fig, ax = plt.subplots(figsize=(width, width / 4))
         sns.scatterplot(
             data=df,
-            x="Position_Corrected",
-            y="Value",
-            hue="Contig",
-            palette="Set2",  # Modern color palette
+            x="position_bp",
+            y="ploidy",
+            hue="contig",
+            palette=contig_palette,
+            ax=ax,
             legend=False,
-            s=2,
-            alpha=0.6,
+            s=4,
+            alpha=0.28,
+            linewidth=0,
+            edgecolor=None,
+            rasterized=True,
         )
 
-        min_y = df["Value"].min()  # Minimum y-value
-        label_y_position = 4.5  # Position labels below the minimum y-value
-
-        for contig, center in contig_centers.items():
-            plt.text(
-                center * cnv_dict["bin_width"],
-                label_y_position,
-                contig,
-                fontsize=12,
-                ha="center",
-                va="top",
-                rotation=45,
+        for boundary in contig_boundaries[:-1]:
+            ax.axvline(
+                boundary,
+                color=MODERN_COLORS["grid"],
+                linewidth=0.6,
+                linestyle="-",
+                alpha=0.8,
+                zorder=0,
             )
 
-        plt.ylim(min_y, threshold)  # Set the y-axis limits
-        plt.title("Copy Number Changes")
-        plt.xlabel("Position")
-        plt.ylabel("Estimated ploidy")
-        
-        # Save plot to bytes buffer with error handling
+        _add_cnv_reference_lines(ax, mean_value, std_value, y_min, y_max)
+
+        label_y = y_min + (y_max - y_min) * 0.03
+        for contig, center_bp in contig_centers.items():
+            ax.text(
+                center_bp,
+                label_y,
+                contig.replace("chr", ""),
+                fontsize=7,
+                ha="center",
+                va="bottom",
+                rotation=0,
+                color=MODERN_COLORS["primary"],
+            )
+
+        ax.set_ylim(y_min, y_max)
+        _apply_cnv_axes_style(
+            ax,
+            xlabel="Genomic position (bp)",
+            ylabel="Estimated ploidy",
+            title="Copy number variation across chromosomes",
+        )
+
         buf = io.BytesIO()
-        plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")
+        fig.savefig(buf, format="jpg", dpi=300, bbox_inches="tight", pad_inches=0.08)
         plt.close(fig)
         buf.seek(0)
-        
-        # Validate buffer contains data
+
         if not buf.getvalue():
             logger.warning("Empty buffer for CNV plot")
             return _create_empty_cnv_buffer()
-        
-        # Validate it's a valid JPEG by checking magic bytes
+
         buf_data = buf.getvalue()
         if len(buf_data) < 2 or buf_data[:2] != b'\xff\xd8':
             logger.warning("Invalid JPEG data for CNV plot")
             return _create_empty_cnv_buffer()
-        
+
         buf.seek(0)
         return buf
     except Exception as e:
@@ -324,138 +712,250 @@ def create_CNV_plot(result, cnv_dict):
         return _create_empty_cnv_buffer()
 
 
-def create_CNV_plot_per_chromosome(result, cnv_dict, significant_regions=None):
+REPORTABLE_CHROMOSOMES = ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]
+CNV_CHROMOSOME_FIG_WIDTH = 7.5
+PANEL_Y_EXPANSION_FACTOR = 6.0
+AMPLIFIED_COLOR = "#C62828"
+
+
+def _panel_target_label(gene_row) -> str:
+    """Return the display label for a target-panel region."""
+    for key in ("gene", "name", "target"):
+        if key in gene_row.index and pd.notna(gene_row[key]):
+            raw = str(gene_row[key]).strip()
+            if raw and raw.lower() != "nan":
+                return raw.split(",")[0].strip()
+    return ""
+
+
+def _collect_panel_gene_points(
+    panel_genes_df: Optional[pd.DataFrame],
+    contig: str,
+    values,
+    bin_width: int,
+) -> List[Dict[str, Any]]:
+    """Collect panel target positions and peak CNV across each target region."""
+    if panel_genes_df is None or panel_genes_df.empty:
+        return []
+
+    values_array = np.array(values)
+    genes = panel_genes_df[panel_genes_df["chrom"] == contig].sort_values("start_pos")
+    points: List[Dict[str, Any]] = []
+
+    for _, gene_row in genes.iterrows():
+        label_text = _panel_target_label(gene_row)
+        if not label_text:
+            continue
+
+        start_bp = float(gene_row["start_pos"])
+        end_bp = float(gene_row["end_pos"])
+        mid_bp = (start_bp + end_bp) / 2.0
+        mid_mb = mid_bp / 1_000_000
+        start_bin = max(0, int(start_bp // bin_width))
+        end_bin = min(len(values_array) - 1, int(end_bp // bin_width))
+        if end_bin < start_bin:
+            cnv_val = 0.0
+        else:
+            region_vals = values_array[start_bin : end_bin + 1]
+            cnv_val = float(np.max(region_vals)) if len(region_vals) else 0.0
+
+        points.append(
+            {
+                "label": label_text,
+                "mid_mb": mid_mb,
+                "cnv_val": cnv_val,
+            }
+        )
+
+    merged: Dict[str, Dict[str, Any]] = {}
+    for point in points:
+        existing = merged.get(point["label"])
+        if existing is None or point["cnv_val"] > existing["cnv_val"]:
+            merged[point["label"]] = point
+
+    return list(merged.values())
+
+
+def _compute_cnv_y_limits(
+    values_array: np.ndarray,
+    panel_points: List[Dict[str, Any]],
+) -> tuple[float, float, bool, float, float]:
+    """
+    Choose y-axis limits that preserve bulk CNV detail while surfacing
+    amplified panel targets when feasible.
+    """
+    mean_cnv = float(np.mean(values_array))
+    std_cnv = float(np.std(values_array))
+    baseline_max = max(mean_cnv + (2 * std_cnv), mean_cnv * 1.4, 2.5)
+
+    if not panel_points:
+        return 0.0, baseline_max, False, mean_cnv, std_cnv
+
+    panel_max = max(point["cnv_val"] for point in panel_points)
+    if panel_max <= baseline_max * 1.05:
+        return 0.0, baseline_max, False, mean_cnv, std_cnv
+
+    if panel_max <= baseline_max * PANEL_Y_EXPANSION_FACTOR:
+        return 0.0, panel_max * 1.08, False, mean_cnv, std_cnv
+
+    return 0.0, baseline_max, True, mean_cnv, std_cnv
+
+
+def create_CNV_plot_per_chromosome(
+    result,
+    cnv_dict,
+    significant_regions=None,
+    chromosomes: Optional[List[str]] = None,
+    panel_genes_df: Optional[pd.DataFrame] = None,
+    chromosome_status: Optional[Dict[str, str]] = None,
+):
     """Creates CNV plots per chromosome.
 
     Args:
         result (Result): CNV result object.
         cnv_dict (dict): Dictionary containing CNV data.
         significant_regions (dict): Dictionary mapping chromosomes to lists of significant regions.
-            Each region should be a dict with keys: 'start_pos', 'end_pos', 'type' ('GAIN' or 'LOSS')
+        chromosomes (list, optional): Ordered chromosome names to plot.
+        panel_genes_df (pd.DataFrame, optional): Target panel genes.
+        chromosome_status (dict, optional): Status text keyed by chromosome.
 
     Returns:
         List[Tuple[str, io.BytesIO]]: List of tuples containing chromosome names and plot buffers.
     """
     plots = []
+    chromosome_status = chromosome_status or {}
     try:
         set_modern_style()
 
-        # Check if result has CNV data
         if not hasattr(result, 'cnv') or not result.cnv:
             logger.warning("No CNV data available for per-chromosome plotting")
             return plots
 
-        for contig, values in result.cnv.items():
-            if contig in ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]:
-                # Calculate mean and standard deviation for this chromosome
-                values_array = np.array(values)
-                mean_cnv = np.mean(values_array)
-                std_cnv = np.std(values_array)
+        if chromosomes is None:
+            chromosomes = [
+                contig
+                for contig in natsort.natsorted(result.cnv.keys())
+                if contig in REPORTABLE_CHROMOSOMES
+            ]
 
-                # Set y-axis limits based on mean and standard deviation
-                y_min = 0
-                y_max = mean_cnv + (2 * std_cnv)
+        for contig in chromosomes:
+            if contig not in result.cnv:
+                continue
+            values = result.cnv[contig]
+            if contig not in REPORTABLE_CHROMOSOMES:
+                continue
 
-                # Calculate positions in megabases
-                positions = (
-                    np.arange(len(values)) * cnv_dict["bin_width"] / 1_000_000
-                )  # Convert to Mb
+            values_array = np.array(values)
+            mean_cnv = float(np.mean(values_array))
+            std_cnv = float(np.std(values_array))
+            positions = np.arange(len(values)) * cnv_dict["bin_width"] / 1_000_000
+            x_max_mb = float(positions[-1]) if len(positions) else 1.0
 
-                plt.figure(figsize=(4, 2))
+            panel_points = _collect_panel_gene_points(
+                panel_genes_df, contig, values, cnv_dict["bin_width"],
+            )
+            y_min, y_max, off_scale_mode, mean_cnv, std_cnv = _compute_cnv_y_limits(
+                values_array, panel_points,
+            )
+            y_min = 0.0
+            regions = (significant_regions or {}).get(contig, [])
+            chrom_name = _chromosome_display_name(contig)
+            status_text = chromosome_status.get(contig, "No significant CNV change")
 
-                # If we have significant regions for this chromosome, highlight them
-                if significant_regions and contig in significant_regions:
-                    for region in significant_regions[contig]:
-                        start_mb = region["start_pos"] / 1_000_000  # Convert to Mb
-                        end_mb = region["end_pos"] / 1_000_000  # Convert to Mb
+            label_count = sum(
+                1 for point in panel_points
+                if _should_label_panel_gene(point, mean_cnv, std_cnv, regions)
+            )
+            total_height = CNV_CHROMOSOME_FIG_WIDTH * 0.26
+            fig = plt.figure(figsize=(CNV_CHROMOSOME_FIG_WIDTH, total_height))
+            ax = fig.add_subplot(111)
 
-                        # Choose color based on type
-                        color = (
-                            "#e8f5e9" if region["type"] == "GAIN" else "#ffebee"
-                        )  # Light green for gains, light red for losses
-                        alpha = 0.3
-
-                        # Add shaded region
-                        plt.axvspan(start_mb, end_mb, color=color, alpha=alpha, zorder=1)
-
-                        # Add cytoband label with background
-                        mid_point = (start_mb + end_mb) / 2
-                        y_pos = y_max - (0.1 * (y_max - y_min))  # Position near the top
-
-                        # Create background box for text
-                        bbox_props = dict(
-                            boxstyle="round,pad=0.3",
-                            fc="white",
-                            ec=color.replace("e8", "a5").replace(
-                                "ff", "ef"
-                            ),  # Darker version of highlight color
-                            alpha=0.8,
-                        )
-
-                        # Add text with background
-                        plt.text(
-                            mid_point,
-                            y_pos,
-                            region.get("name", ""),  # Add cytoband name if available
-                            fontsize=8,
-                            fontweight="bold",
-                            ha="center",
-                            va="center",
-                            bbox=bbox_props,
-                            zorder=4,
-                        )
-
-                # Plot CNV data points on top of highlighted regions
-                sns.scatterplot(
-                    x=positions,
-                    y=values,
-                    s=2,
-                    color=MODERN_COLORS["accent"],
-                    alpha=0.6,
-                    zorder=2,
+            bottom_margin = 0.10 if label_count == 0 else min(0.13, 0.095 + label_count * 0.004)
+            fig.subplots_adjust(top=0.86, bottom=bottom_margin)
+            fig.suptitle(
+                f"Chromosome {chrom_name} copy-number profile",
+                fontsize=CNV_FONT["title"],
+                fontweight="bold",
+                color=MODERN_COLORS["primary"],
+                y=0.98,
+            )
+            if status_text and status_text != "No significant CNV change":
+                fig.text(
+                    0.5,
+                    0.91,
+                    status_text,
+                    ha="center",
+                    va="top",
+                    fontsize=CNV_FONT["subtitle"],
+                    color=MODERN_COLORS["primary"],
                 )
 
-                plt.xlabel("Position (Mb)")
-                plt.ylabel("Estimated Ploidy")
-                plt.ylim(y_min, y_max)
+            cnv_df = _chromosome_cnv_dataframe(positions, values)
+            if regions:
+                _add_cnv_regions_on_plot(ax, regions, y_max)
+            _add_cnv_ploidy_reference_lines(ax, y_max, x_max_mb)
+            _plot_cnv_track(ax, cnv_df, x_max_mb)
+            _apply_cnv_chromosome_axes(
+                ax,
+                x_max_mb,
+                y_max,
+                xlabel=f"Position on chromosome {chrom_name} (Mb)",
+                ylabel="Estimated copy number / ploidy",
+                show_xlabel=True,
+            )
+            _add_panel_gene_lollipops(
+                ax, panel_points, x_max_mb, y_max, off_scale_mode, mean_cnv, std_cnv, regions,
+            )
 
-                # Add horizontal lines for mean and standard deviations
-                plt.axhline(y=mean_cnv, color="gray", linestyle="--", alpha=0.5, zorder=3)
-                plt.axhline(
-                    y=mean_cnv + std_cnv, color="gray", linestyle=":", alpha=0.3, zorder=3
+            off_scale_outliers = [
+                point for point in panel_points
+                if _should_label_panel_gene(point, mean_cnv, std_cnv, regions)
+                and off_scale_mode
+                and point["cnv_val"] > y_max * 0.97
+            ]
+            if off_scale_outliers:
+                amp_text = ", ".join(
+                    f"{point['label']} ({point['cnv_val']:.1f})" for point in off_scale_outliers
                 )
-                plt.axhline(
-                    y=mean_cnv + (2 * std_cnv),
-                    color="gray",
-                    linestyle=":",
-                    alpha=0.3,
-                    zorder=3,
+                ax.text(
+                    0.01,
+                    0.99,
+                    f"Off-scale: {amp_text}",
+                    transform=ax.transAxes,
+                    ha="left",
+                    va="top",
+                    fontsize=CNV_FONT["annotation"],
+                    color=AMPLIFIED_COLOR,
+                    bbox=dict(
+                        boxstyle="round,pad=0.25",
+                        facecolor="white",
+                        edgecolor=MODERN_COLORS["grid"],
+                        alpha=0.92,
+                    ),
+                    zorder=9,
                 )
 
-                try:
-                    buf = io.BytesIO()
-                    fig = plt.gcf()
-                    plt.savefig(buf, format="jpg", dpi=300, bbox_inches="tight")
-                    plt.close(fig)
-                    buf.seek(0)
-                    
-                    # Validate buffer contains data
-                    if not buf.getvalue():
-                        logger.warning(f"Empty buffer for chromosome {contig} CNV plot")
-                        continue
-                    
-                    # Validate it's a valid JPEG by checking magic bytes
-                    buf_data = buf.getvalue()
-                    if len(buf_data) < 2 or buf_data[:2] != b'\xff\xd8':
-                        logger.warning(f"Invalid JPEG data for chromosome {contig} CNV plot")
-                        continue
-                    
-                    buf.seek(0)
-                    plots.append((contig, buf))
-                except Exception as e:
-                    logger.error(f"Error creating CNV plot for chromosome {contig}: {str(e)}")
-                    plt.close('all')
+            try:
+                buf = io.BytesIO()
+                fig.savefig(buf, format="jpg", dpi=300, bbox_inches="tight", pad_inches=0.08)
+                plt.close(fig)
+                buf.seek(0)
+
+                if not buf.getvalue():
+                    logger.warning(f"Empty buffer for chromosome {contig} CNV plot")
                     continue
+
+                buf_data = buf.getvalue()
+                if len(buf_data) < 2 or buf_data[:2] != b'\xff\xd8':
+                    logger.warning(f"Invalid JPEG data for chromosome {contig} CNV plot")
+                    continue
+
+                buf.seek(0)
+                plots.append((contig, buf))
+            except Exception as e:
+                logger.error(f"Error creating CNV plot for chromosome {contig}: {str(e)}")
+                plt.close('all')
+                continue
 
     except Exception as e:
         logger.error(f"Error in create_CNV_plot_per_chromosome: {str(e)}")

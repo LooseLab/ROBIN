@@ -12,6 +12,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
 
+from robin.analysis.mnpflex_docker import hierarchy_aggregate_display
+
 from .base import ReportSection
 
 logger = logging.getLogger(__name__)
@@ -289,17 +291,44 @@ class MNPFlexSection(ReportSection):
             self.elements.append(self.create_table(top_rows))
             self.elements.append(Spacer(1, 4))
 
-            # Aggregate scores for top entry
-            top_ref = (top[0].get("reference_group") or {})
-            top_subclass = top_ref.get("molecular_subclass") or top_ref.get("name")
-            top_class = top_ref.get("molecular_class")
-            top_family = top_ref.get("molecular_family")
-            top_superfamily = top_ref.get("molecular_superfamily")
-
-            subclass_sum = self._sum_scores_by_field(scores, "molecular_subclass", top_subclass)
-            class_sum = self._sum_scores_by_field(scores, "molecular_class", top_class)
-            family_sum = self._sum_scores_by_field(scores, "molecular_family", top_family)
-            superfamily_sum = self._sum_scores_by_field(scores, "molecular_superfamily", top_superfamily)
+        hierarchy_preds = hierarchy_aggregate_display(classifier_summary)
+        if hierarchy_preds or scores:
+            if hierarchy_preds:
+                top_subclass = hierarchy_preds.get("molecular_subclass", {}).get("label")
+                top_class = hierarchy_preds.get("molecular_class", {}).get("label")
+                top_family = hierarchy_preds.get("molecular_family", {}).get("label")
+                top_superfamily = hierarchy_preds.get(
+                    "molecular_superfamily", {}
+                ).get("label")
+                subclass_sum = hierarchy_preds.get("molecular_subclass", {}).get("score")
+                class_sum = hierarchy_preds.get("molecular_class", {}).get("score")
+                family_sum = hierarchy_preds.get("molecular_family", {}).get("score")
+                superfamily_sum = hierarchy_preds.get(
+                    "molecular_superfamily", {}
+                ).get("score")
+            else:
+                top = sorted(
+                    scores,
+                    key=lambda item: float(item.get("score", 0) or 0),
+                    reverse=True,
+                )[:1]
+                top_ref = (top[0].get("reference_group") or {}) if top else {}
+                top_subclass = top_ref.get("molecular_subclass") or top_ref.get("name")
+                top_class = top_ref.get("molecular_class")
+                top_family = top_ref.get("molecular_family")
+                top_superfamily = top_ref.get("molecular_superfamily")
+                subclass_sum = self._sum_scores_by_field(
+                    scores, "molecular_subclass", top_subclass
+                )
+                class_sum = self._sum_scores_by_field(
+                    scores, "molecular_class", top_class
+                )
+                family_sum = self._sum_scores_by_field(
+                    scores, "molecular_family", top_family
+                )
+                superfamily_sum = self._sum_scores_by_field(
+                    scores, "molecular_superfamily", top_superfamily
+                )
 
             agg_rows = [
                 ["Level", "Name", "Aggregate Score"],
