@@ -260,6 +260,16 @@ def _cov_tooltip_option() -> Dict[str, Any]:
     }
 
 
+def _cov_target_time_tooltip_option() -> Dict[str, Any]:
+    """Per-series tooltip for target coverage over time (outlier trend)."""
+    return {
+        "trigger": "item",
+        "confine": True,
+        "appendToBody": True,
+        **_cov_tooltip_option(),
+    }
+
+
 def _cov_boxplot_item_style() -> Dict[str, Any]:
     """Box + whisker stroke/fill for chromosome overview (readable in light/dark)."""
     if _cov_ui_dark():
@@ -480,7 +490,6 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
     """Outlier / mean / band chart — sync chrome and theme-dependent series colours."""
     try:
         p = _cov_chrome_palette()
-        tt = _cov_tooltip_option()
         mean_c = _cov_mean_line_color()
         band_fill = _cov_band_fill_rgba()
         dim_c = _cov_dim_muted_line()
@@ -493,23 +502,7 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
         o.setdefault("title", {})
         o["title"]["textStyle"] = {"fontSize": 15, "color": p["title"]}
         o["title"]["subtextStyle"] = {"fontSize": 11, "color": p["axis"]}
-        o["tooltip"] = {
-            "trigger": "axis",
-            "axisPointer": {
-                "type": "line",
-                "axis": "x",
-                "snap": True,
-                "lineStyle": {
-                    "color": p["axis"],
-                    "width": 1,
-                    "type": "solid",
-                    "opacity": 0.55,
-                },
-            },
-            "confine": True,
-            "appendToBody": True,
-            **tt,
-        }
+        o["tooltip"] = _cov_target_time_tooltip_option()
         o.setdefault("legend", {})
         o["legend"]["pageIconColor"] = p["title"]
         o["legend"]["pageTextStyle"] = {"color": p["axis"]}
@@ -529,6 +522,8 @@ def _apply_target_coverage_time_analysis_chrome(ec: Any) -> None:
         o["yAxis"]["nameTextStyle"] = {"color": p["axis"]}
         for s in o.get("series") or []:
             name = str(s.get("name") or "")
+            if s.get("type") == "line" and name != "_band":
+                s["triggerLineEvent"] = True
             if name == "_band":
                 ma = s.get("markArea") or {}
                 ist = ma.get("itemStyle") or {}
@@ -3029,25 +3024,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                                     "color": _cp_t["axis"],
                                 },
                             },
-                            # No JS formatter here — options are JSON-serialised; functions
-                            # become strings and break the tooltip (see classification charts).
-                            "tooltip": {
-                                "trigger": "axis",
-                                "axisPointer": {
-                                    "type": "line",
-                                    "axis": "x",
-                                    "snap": True,
-                                    "lineStyle": {
-                                        "color": _cp_t["axis"],
-                                        "width": 1,
-                                        "type": "solid",
-                                        "opacity": 0.55,
-                                    },
-                                },
-                                "confine": True,
-                                "appendToBody": True,
-                                **_cov_tooltip_option(),
-                            },
+                            # Item trigger: one target per hover (not all series at x).
+                            "tooltip": _cov_target_time_tooltip_option(),
                             "legendHoverLink": True,
                             "legend": {
                                 "type": "scroll",
