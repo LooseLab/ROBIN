@@ -1165,15 +1165,6 @@ def frame(
                             lambda: ui.navigate.to("/watched_folders"),
                         ).classes("text-body-medium")
                         ui.menu_item(
-                            "Activity Monitor",
-                            lambda: ui.navigate.to("/robin"),
-                        ).classes("text-body-medium")
-                        if _current_user_is_admin():
-                            ui.menu_item(
-                                "Administration",
-                                lambda: ui.navigate.to("/admin"),
-                            ).classes("text-body-medium")
-                        ui.menu_item(
                             "Workflow",
                             lambda: ui.navigate.to("/workflow"),
                         ).classes("text-body-medium")
@@ -1183,13 +1174,24 @@ def frame(
                                 "https://looselab.github.io/ROBIN/"
                             ),
                         ).classes("text-body-medium")
+                        if _current_user_is_admin():
+                            ui.separator()
+                            ui.menu_item(
+                                "Activity Monitor",
+                                lambda: ui.navigate.to("/robin"),
+                            ).classes("text-body-medium")
+                            ui.menu_item(
+                                "Administration",
+                                lambda: ui.navigate.to("/admin"),
+                            ).classes("text-body-medium")
                         ui.separator()
-                        ui.switch(
-                            "Allow Remote Access", on_change=use_on_air
-                        ).classes("ml-4 bg-transparent").props(
-                            'color="primary"'
-                        ).bind_value(app.storage.general, "use_on_air")
-                        ui.separator()
+                        if _current_user_is_admin():
+                            ui.switch(
+                                "Allow Remote Access", on_change=use_on_air
+                            ).classes("ml-4 bg-transparent").props(
+                                'color="primary"'
+                            ).bind_value(app.storage.general, "use_on_air")
+                            ui.separator()
                         def _dark_mode_initial() -> bool:
                             """Prefer session (browser) storage so initial value matches first paint."""
                             try:

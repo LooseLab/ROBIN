@@ -631,6 +631,33 @@ class GUILauncher:
         except Exception:
             return False
 
+    def _render_admin_only_denied_page(
+        self,
+        *,
+        navtitle: str,
+        smalltitle: str,
+    ) -> None:
+        """Render a standard access-denied page for admin-only routes."""
+        with theme.frame(
+            navtitle,
+            smalltitle=smalltitle,
+            batphone=False,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-lg mx-auto p-4 gap-3"):
+                ui.label("Access denied").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(
+                    "This page is available to admin users only."
+                ).classes("classification-insight-foot")
+                ui.button(
+                    "Back to home",
+                    on_click=lambda: ui.navigate.to("/"),
+                    icon="home",
+                ).props("color=primary no-caps")
+
     def _open_sample_audit_dialog(self, sample_id: str) -> None:
         from robin.gui.components.sample_audit import open_sample_audit_dialog
 
@@ -2315,6 +2342,20 @@ class GUILauncher:
             def workflow_monitor():
                 """Workflow monitoring page under /robin route."""
                 _setup_global_resources()
+                if not self._is_current_user_admin():
+                    self._audit_log(
+                        event_type="admin.page.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="page",
+                        target_id="/robin",
+                        error_code="not_admin",
+                    )
+                    self._render_admin_only_denied_page(
+                        navtitle="R.O.B.I.N - Workflow Monitor",
+                        smalltitle="Monitor",
+                    )
+                    return
                 self._audit_log(
                     event_type="page.viewed",
                     user_id=self._get_current_user_id(),
@@ -2416,25 +2457,10 @@ class GUILauncher:
                         target_id="/admin",
                         error_code="not_admin",
                     )
-                    with theme.frame(
-                        "R.O.B.I.N - Administration",
+                    self._render_admin_only_denied_page(
+                        navtitle="R.O.B.I.N - Administration",
                         smalltitle="Admin",
-                        batphone=False,
-                        center=self.center,
-                        setup_notifications=self._setup_notification_system,
-                    ):
-                        with ui.column().classes("w-full max-w-lg mx-auto p-4 gap-3"):
-                            ui.label("Access denied").classes(
-                                "classification-insight-heading text-headline-small"
-                            )
-                            ui.label(
-                                "This page is available to admin users only."
-                            ).classes("classification-insight-foot")
-                            ui.button(
-                                "Back to home",
-                                on_click=lambda: ui.navigate.to("/"),
-                                icon="home",
-                            ).props("color=primary no-caps")
+                    )
                     return
                 self._audit_log(
                     event_type="admin.page.viewed",
@@ -2700,17 +2726,18 @@ class GUILauncher:
                             ui.link("View All Samples", "/live_data").classes(
                                 _cta_primary
                             )
-                            ui.link("Open Workflow Monitor", "/robin").classes(
-                                _cta_primary
-                            )
+                            ui.link(
+                                "Generate Sample ID",
+                                "/sample_id_generator",
+                            ).classes(_cta_primary)
                             ui.link(
                                 "Manage watched folders",
                                 "/watched_folders",
                             ).classes(_cta_secondary)
-                            ui.link(
-                                "Generate Sample ID",
-                                "/sample_id_generator",
-                            ).classes(_cta_secondary)
+                            if self._is_current_user_admin():
+                                ui.link("Open Workflow Monitor", "/robin").classes(
+                                    _cta_primary
+                                )
                             ui.link(
                                 "View Documentation",
                                 "https://looselab.github.io/ROBIN/",
