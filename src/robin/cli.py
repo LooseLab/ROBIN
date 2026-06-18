@@ -92,6 +92,7 @@ from robin.utils.sequencing_files import (
     panel_source_available,
     panel_source_filename,
 )
+from robin.workflow_config import merge_workflow_params
 
 
 def _download_missing_models(missing_files, models_dir):
@@ -2592,16 +2593,28 @@ def _display_workflow_config(
 
 
 @main.command()
-@click.argument("path", type=click.Path(exists=True, path_type=Path))
+@click.pass_context
+@click.argument(
+    "path",
+    required=False,
+    type=click.Path(path_type=Path),
+)
+@click.option(
+    "--toml",
+    "-t",
+    "toml_config",
+    type=click.Path(exists=True, path_type=Path),
+    help="Path to a TOML file with workflow settings. CLI flags override values from the file.",
+)
 @click.option(
     "--workflow",
     "-w",
-    required=True,
+    default=None,
     help="Workflow plan. Can be specified in two formats:\n1. With queue prefixes: 'preprocessing:bed_conversion,mgmt:mgmt,classification:sturgeon'\n2. Simplified (auto-queue): 'mgmt,sturgeon' - system automatically determines appropriate queue for each job type and adds bed_conversion when needed",
 )
 @click.option(
     "--center",
-    required=True,
+    default=None,
     help="Center ID running the analysis (e.g., 'Sherwood', 'Auckland', 'New York')",
 )
 @click.option(
@@ -2698,7 +2711,7 @@ def _display_workflow_config(
 @click.option(
     "--reference",
     "-r",
-    type=click.Path(exists=True, path_type=Path),
+    type=click.Path(path_type=Path),
     help="Path to reference genome (FASTA format). Required for SNP calling and some other analyses.",
 )
 @click.option(
@@ -2737,14 +2750,15 @@ def _display_workflow_config(
 )
 @click.option(
     "--target-panel",
-    type=click.Choice(_get_available_panels()),
-    required=True,
+    default=None,
     help="Target gene panel for fusion analysis. Use 'robin add-panel' to add custom panels.",
 )
 def workflow(
-    path: Path,
-    workflow: str,
-    center: str,
+    ctx: click.Context,
+    path: Optional[Path],
+    toml_config: Optional[Path],
+    workflow: Optional[str],
+    center: Optional[str],
     commands: tuple[str, ...],
     verbose: bool,
     no_process_existing: bool,
@@ -2769,10 +2783,83 @@ def workflow(
     no_watch: bool,
     preset: Optional[str],
     ray_dashboard: bool,
-    target_panel: str,
+    target_panel: Optional[str],
 ) -> None:
     """Run various operations on BAM files in a directory. Preprocessing is automatically included as the first step."""
     try:
+        merged = merge_workflow_params(
+            ctx,
+            toml_config,
+            {
+                "path": path,
+                "workflow": workflow,
+                "center": center,
+                "commands": commands,
+                "verbose": verbose,
+                "no_process_existing": no_process_existing,
+                "work_dir": work_dir,
+                "log_level": log_level,
+                "job_log_level": job_log_level,
+                "deduplicate_jobs": deduplicate_jobs,
+                "no_progress": no_progress,
+                "analysis_workers": analysis_workers,
+                "preprocessing_workers": preprocessing_workers,
+                "bed_workers": bed_workers,
+                "legacy_analysis_queue": legacy_analysis_queue,
+                "use_ray": use_ray,
+                "use_ray_core": use_ray_core,
+                "ray_num_cpus": ray_num_cpus,
+                "queue_priority": queue_priority,
+                "show_priorities": show_priorities,
+                "reference": reference,
+                "with_gui": with_gui,
+                "gui_host": gui_host,
+                "gui_port": gui_port,
+                "no_watch": no_watch,
+                "preset": preset,
+                "ray_dashboard": ray_dashboard,
+                "target_panel": target_panel,
+            },
+        )
+        path = merged["path"]
+        workflow = merged["workflow"]
+        center = merged["center"]
+        commands = merged["commands"]
+        verbose = merged["verbose"]
+        no_process_existing = merged["no_process_existing"]
+        work_dir = merged["work_dir"]
+        log_level = merged["log_level"]
+        job_log_level = merged["job_log_level"]
+        deduplicate_jobs = merged["deduplicate_jobs"]
+        no_progress = merged["no_progress"]
+        analysis_workers = merged["analysis_workers"]
+        preprocessing_workers = merged["preprocessing_workers"]
+        bed_workers = merged["bed_workers"]
+        legacy_analysis_queue = merged["legacy_analysis_queue"]
+        use_ray = merged["use_ray"]
+        use_ray_core = merged["use_ray_core"]
+        ray_num_cpus = merged["ray_num_cpus"]
+        queue_priority = merged["queue_priority"]
+        show_priorities = merged["show_priorities"]
+        reference = merged["reference"]
+        with_gui = merged["with_gui"]
+        gui_host = merged["gui_host"]
+        gui_port = merged["gui_port"]
+        no_watch = merged["no_watch"]
+        preset = merged["preset"]
+        ray_dashboard = merged["ray_dashboard"]
+        target_panel = merged["target_panel"]
+
+        if reference is not None and not reference.exists():
+            raise click.BadParameter(f"Reference genome does not exist: {reference}")
+
+        available_panels = _get_available_panels()
+        if target_panel not in available_panels:
+            raise click.BadParameter(
+                f"Invalid target panel '{target_panel}'. "
+                f"Choose from: {', '.join(available_panels)}"
+            )
+
         # Check for required model files first
         _check_models_or_exit()
         

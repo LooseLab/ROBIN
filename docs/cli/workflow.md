@@ -14,16 +14,57 @@ Run the **Little John** orchestrated pipeline on BAM files under a watched direc
 robin workflow <PATH> -w <WORKFLOW> --center <ID> --target-panel <PANEL> [OPTIONS]
 ```
 
+Or load settings from a TOML file:
+
+```bash
+robin workflow --toml my_settings.toml
+```
+
+CLI flags override values from the TOML file when you pass them explicitly. You can also mix both — for example, keep a site-specific config file and override the input directory per run:
+
+```bash
+robin workflow /path/to/bams --toml my_settings.toml
+```
+
 | Argument / option | Required | Description |
 |-------------------|----------|-------------|
-| `PATH` | Yes | Directory containing (or receiving) BAM files. Must exist. |
-| `-w` / `--workflow` | Yes | Comma-separated job types or legacy `queue:job` steps (see [Job types](jobs.md)). |
-| `--center` | Yes | Site or study label (e.g. `Sherwood`, `Auckland`) — used in outputs and reports. |
-| `--target-panel` | Yes | Panel name: built-in (`rCNS2`, `AML`, …) or custom from `robin add-panel`. Run `robin utils sequencing-files --help` to see choices on your install. |
+| `PATH` | Yes* | Directory containing (or receiving) BAM files. Must exist. |
+| `-t` / `--toml` | No | TOML file with workflow settings (see [Configuration file](#configuration-file)). |
+| `-w` / `--workflow` | Yes* | Comma-separated job types or legacy `queue:job` steps (see [Job types](jobs.md)). |
+| `--center` | Yes* | Site or study label (e.g. `Sherwood`, `Auckland`) — used in outputs and reports. |
+| `--target-panel` | Yes* | Panel name: built-in (`rCNS2`, `AML`, …) or custom from `robin add-panel`. Run `robin utils sequencing-files --help` to see choices on your install. |
 | `-d` / `--work-dir` | No | Base directory for all run outputs. |
 | `-r` / `--reference` | No* | Path to reference **FASTA**. If provided, ROBIN validates the file and ensures an index (e.g. `.fai`). Required for analyses that need a reference. |
 
-\* Omit only if your chosen workflow truly does not need a reference; most real pipelines pass `--reference`.
+\* Required on the command line **or** in the TOML file when using `--toml`.
+
+## Configuration file
+
+Use a TOML file to store repeatable run settings. An example ships with the repository at [`examples/workflow.example.toml`](https://github.com/LooseLab/ROBIN/blob/main/examples/workflow.example.toml).
+
+```toml
+path = "empty_folder"
+workflow = "cnv,fusion,target,mgmt,sturgeon,nanodx,pannanodx,random_forest"
+center = "NUH"
+target_panel = "rCNS2"
+
+work_dir = "../../REF_SAMPLES"
+reference = "~/references/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
+
+# Optional
+log_level = "INFO"
+analysis_workers = 2
+with_gui = true
+deduplicate_jobs = ["sturgeon", "mgmt"]
+```
+
+Run:
+
+```bash
+robin workflow --toml my_settings.toml
+```
+
+TOML keys use the same names as long-form CLI flags (`target_panel`, `work_dir`, `no_process_existing`, etc.). List-valued options (`deduplicate_jobs`, `job_log_level`, `commands`, `queue_priority`) can be TOML arrays. `workflow` can be a comma-separated string or a TOML array of job types.
 
 ## Workflow string formats
 
