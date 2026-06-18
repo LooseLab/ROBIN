@@ -19,6 +19,7 @@ from robin.analysis.mnpflex_bed import (
     build_subset_bed_from_parquet,
 )
 from robin.analysis.mnpflex_config import load_mnpflex_config
+from robin.analysis.mnpflex_docker import hierarchy_aggregate_display
 from robin.analysis.mnpflex_runner import run_mnpflex_analysis
 from robin.gui.theme import styled_table
 
@@ -606,9 +607,40 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
             )
             scores = classifier_summary.get("scores") or []
             subclass_sum = class_sum = family_sum = superfamily_sum = None
+            disp_subclass = disp_class = disp_family = disp_superfamily = "--"
             classifier_scores_table.rows = _extract_classifier_rows(classifier_summary)
             classifier_scores_table.update()
-            if scores:
+
+            hierarchy_preds = hierarchy_aggregate_display(classifier_summary)
+            if hierarchy_preds:
+                disp_subclass = (
+                    hierarchy_preds.get("molecular_subclass", {}).get("label") or "N/A"
+                )
+                subclass_sum = hierarchy_preds.get("molecular_subclass", {}).get("score")
+                disp_class = (
+                    hierarchy_preds.get("molecular_class", {}).get("label") or "N/A"
+                )
+                class_sum = hierarchy_preds.get("molecular_class", {}).get("score")
+                disp_family = (
+                    hierarchy_preds.get("molecular_family", {}).get("label") or "N/A"
+                )
+                family_sum = hierarchy_preds.get("molecular_family", {}).get("score")
+                disp_superfamily = (
+                    hierarchy_preds.get("molecular_superfamily", {}).get("label")
+                    or "N/A"
+                )
+                superfamily_sum = hierarchy_preds.get(
+                    "molecular_superfamily", {}
+                ).get("score")
+                agg_subclass_name.set_text(disp_subclass)
+                agg_class_name.set_text(disp_class)
+                agg_family_name.set_text(disp_family)
+                agg_superfamily_name.set_text(disp_superfamily)
+                _set_badge_value(agg_subclass_badge, subclass_sum)
+                _set_badge_value(agg_class_badge, class_sum)
+                _set_badge_value(agg_family_badge, family_sum)
+                _set_badge_value(agg_superfamily_badge, superfamily_sum)
+            elif scores:
                 top = sorted(
                     scores,
                     key=lambda item: float(item.get("score", 0) or 0),

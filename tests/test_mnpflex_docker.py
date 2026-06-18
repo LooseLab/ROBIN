@@ -36,9 +36,38 @@ def test_build_bundle_summary_from_fixture() -> None:
     hierarchy = summary["classifier_summary"]["summary_hierarchical"]
     assert hierarchy
     assert hierarchy[0]["group"] == "Adult-Type Diffuse Gliomas"
+    assert hierarchy[0]["score"] == pytest.approx(0.447505850577727)
+    preds = summary["classifier_summary"]["hierarchy_predictions"]
+    assert preds["molecular_superfamily"]["label"] == "Adult-Type Diffuse Gliomas"
+    assert preds["molecular_family"]["label"] == "Glioblastoma, IDH-Wildtype"
+    assert preds["molecular_class"]["label"] == "Glioblastoma, IDH-Wildtype, RTK2 Type"
+    assert preds["molecular_subclass"]["label"] == "Glioblastoma, IDH-Wildtype, RTK2 Subtype"
+    assert preds["molecular_class"]["score"] == pytest.approx(0.254857897758484)
     scores = summary["classifier_summary"]["scores"]
     assert len(scores) >= 180
-    assert scores[0]["reference_group"]["molecular_subclass"]
+    top_ref = scores[0]["reference_group"]
+    assert top_ref["molecular_class"] == "Glioblastoma, IDH-Wildtype, RTK2 Type"
+    assert top_ref["molecular_family"] == "Glioblastoma, IDH-Wildtype"
+    assert top_ref["molecular_superfamily"] == "Adult-Type Diffuse Gliomas"
+
+
+def test_build_bundle_summary_from_ref_sample_lims_layout() -> None:
+    ref_dir = Path(
+        "/Users/mattloose/GIT/REF_SAMPLES/26D22147/"
+        "mnpflex_results_26D22147/docker_workspace/26D22147.mnpflex"
+    )
+    if not ref_dir.exists():
+        pytest.skip("Reference sample Docker outputs not available locally")
+
+    summary = build_bundle_summary_from_docker_dir(
+        ref_dir, docker_image="mnpflex-synnovis:1.0.0"
+    )
+    preds = summary["classifier_summary"]["hierarchy_predictions"]
+    assert preds["molecular_family"]["label"] == "Glioblastoma, IDH-Wildtype"
+    assert preds["molecular_class"]["label"] == "Glioblastoma, IDH-Wildtype, RTK2 Type"
+    assert summary["classifier_summary"]["summary_hierarchical"][0]["score"] == (
+        pytest.approx(0.447505850577727)
+    )
 
 
 def test_adapt_docker_outputs_writes_bundle_summary(tmp_path: Path) -> None:

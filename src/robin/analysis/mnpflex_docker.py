@@ -120,27 +120,164 @@ def _safe_float(value: Any) -> Optional[float]:
         return None
 
 
-def _build_hierarchy_from_lims(lims_row: Dict[str, str], description: str) -> List[Dict[str, Any]]:
-    levels = [
-        (lims_row.get("Super Family"), lims_row.get("Score")),
-        (lims_row.get("Family"), lims_row.get("Score.1")),
-        (lims_row.get("Class"), lims_row.get("Score.2")),
-        (lims_row.get("Subclass"), lims_row.get("Score.3")),
-    ]
+def _parse_lims_hierarchy(lims_path: Path) -> Dict[str, Dict[str, Any]]:
+    """Parse LIMS CSV hierarchy columns by fixed position (avoids duplicate Score headers)."""
+    with lims_path.open("r", newline="", encoding="utf-8") as fh:
+        reader = csv.reader(fh)
+        next(reader, None)
+        row = next(reader, None)
+    if not row or len(row) < 12:
+        raise ValueError(f"Unexpected LIMS CSV layout in {lims_path}")
 
+    return {
+        "molecular_superfamily": {
+            "label": row[4].strip(),
+            "score": _safe_float(row[5]),
+        },
+        "molecular_family": {
+            "label": row[6].strip(),
+            "score": _safe_float(row[7]),
+        },
+        "molecular_class": {
+            "label": row[8].strip(),
+            "score": _safe_float(row[9]),
+        },
+        "molecular_subclass": {
+            "label": row[10].strip(),
+            "score": _safe_float(row[11]),
+        },
+    }
+
+
+def _parse_all_preds_hierarchy(all_preds_path: Path) -> Dict[str, Dict[str, Any]]:
+    """Parse per-level predictions from Docker all_preds CSV."""
+    mapping = {
+        "methylation superfamily": "molecular_superfamily",
+        "methylation family": "molecular_family",
+        "methylation class": "molecular_class",
+        "methylation subclass": "molecular_subclass",
+    }
+    hierarchy: Dict[str, Dict[str, Any]] = {
+        key: {"label": "", "score": None} for key in mapping.values()
+    }
+    with all_preds_path.open("r", newline="", encoding="utf-8") as fh:
+        reader = csv.DictReader(fh)
+        for row in reader:
+            level_name = ""
+            for key in row:
+                if key in ("Predicted label", "Score"):
+                    continue
+                if key and row.get(key):
+                    level_name = str(row.get(key) or "").strip()
+                    break
+            if not level_name:
+                level_name = str(row.get("") or "").strip()
+            field = mapping.get(level_name.lower())
+            if not field:
+                continue
+            hierarchy[field] = {
+                "label": str(row.get("Predicted label") or "").strip(),
+                "score": _safe_float(row.get("Score")),
+            }
+    return hierarchy
+
+
+def _resolve_hierarchy_predictions(
+    docker_dir: Path,
+    prefix: str,
+    lims_path: Path,
+) -> Dict[str, Dict[str, Any]]:
+    if lims_path.exists():
+        try:
+            return _parse_lims_hierarchy(lims_path)
+        except ValueError:
+            logger.warning("[MNPFlex] Falling back from LIMS layout in %s", lims_path)
+
+    matches = sorted(docker_dir.glob(f"{prefix}_*_missing_sites.mnp-flex_all_preds.csv"))
+    if not matches:
+        matches = sorted(docker_dir.glob(f"{prefix}_*.mnp-flex_all_preds.csv"))
+    if matches:
+        return _parse_all_preds_hierarchy(matches[0])
+
+    return {
+        key: {"label": "", "score": None}
+        for key in (
+            "molecular_superfamily",
+            "molecular_family",
+            "molecular_class",
+            "molecular_subclass",
+        )
+    }
+
+
+def _build_hierarchy_tree(
+    hierarchy_predictions: Dict[str, Dict[str, Any]],
+    description: str,
+) -> List[Dict[str, Any]]:
+    order = (
+        "molecular_superfamily",
+        "molecular_family",
+        "molecular_class",
+        "molecular_subclass",
+    )
     node: Optional[Dict[str, Any]] = None
-    for idx, (group, score) in enumerate(reversed(levels)):
-        group_text = (group or "").strip()
-        if not group_text:
+    for level_key in reversed(order):
+        item = hierarchy_predictions.get(level_key) or {}
+        label = (item.get("label") or "").strip()
+        if not label:
             continue
-        current: Dict[str, Any] = {
-            "group": group_text,
-            "score": _safe_float(score),
-            "description": description if idx == 0 else "",
+        node = {
+            "group": label,
+            "score": item.get("score"),
+            "description": description if node is None else "",
             "members": [node] if node else [],
         }
-        node = current
     return [node] if node else []
+
+
+def _enrich_scores_with_hierarchy(
+    scores: List[Dict[str, Any]],
+    hierarchy_predictions: Dict[str, Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    subclass = hierarchy_predictions.get("molecular_subclass") or {}
+    subclass_label = (subclass.get("label") or "").strip()
+    shared = {
+        "molecular_class": (hierarchy_predictions.get("molecular_class") or {}).get(
+            "label", ""
+        ),
+        "molecular_family": (hierarchy_predictions.get("molecular_family") or {}).get(
+            "label", ""
+        ),
+        "molecular_superfamily": (
+            hierarchy_predictions.get("molecular_superfamily") or {}
+        ).get("label", ""),
+    }
+
+    enriched = False
+    for item in scores:
+        ref = item.setdefault("reference_group", {})
+        if subclass_label and ref.get("molecular_subclass") == subclass_label:
+            ref.update({k: v for k, v in shared.items() if v})
+            enriched = True
+            break
+
+    if not enriched and scores:
+        ref = scores[0].setdefault("reference_group", {})
+        if subclass_label:
+            ref["molecular_subclass"] = subclass_label
+        ref.update({k: v for k, v in shared.items() if v})
+
+    return scores
+
+
+def hierarchy_aggregate_display(
+    classifier_summary: Dict[str, Any],
+) -> Optional[Dict[str, Dict[str, Any]]]:
+    """Return per-level label/score for aggregate cards when available."""
+    preds = classifier_summary.get("hierarchy_predictions")
+    if isinstance(preds, dict) and preds:
+        return preds
+    return None
 
 
 def _build_scores_from_cal(path: Path) -> List[Dict[str, Any]]:
@@ -200,8 +337,10 @@ def build_bundle_summary_from_docker_dir(
     description = (annotation_row.get("Description") or "").strip()
     classifier = _parse_classifier_label(lims_row.get("Classifier", ""))
 
-    hierarchy = _build_hierarchy_from_lims(lims_row, description)
+    hierarchy_predictions = _resolve_hierarchy_predictions(docker_dir, prefix, lims_path)
+    hierarchy = _build_hierarchy_tree(hierarchy_predictions, description)
     scores = _build_scores_from_cal(scores_path) if scores_path.exists() else []
+    scores = _enrich_scores_with_hierarchy(scores, hierarchy_predictions)
 
     return {
         "qc": {
@@ -218,6 +357,7 @@ def build_bundle_summary_from_docker_dir(
             "classifier": classifier,
             "scores": scores,
             "summary_hierarchical": hierarchy,
+            "hierarchy_predictions": hierarchy_predictions,
         },
         "source": "docker",
         "docker_image": docker_image,
