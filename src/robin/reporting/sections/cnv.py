@@ -22,12 +22,109 @@ from ..plotting import create_CNV_plot, create_CNV_plot_per_chromosome
 # )
 
 from robin.analysis.cnv_analysis import Result, moving_average, CNV_Difference
-from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary
+from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary, CNVEvent
 from robin.classification_config import get_cnv_thresholds, is_resolution_sufficient
+from robin.utils.sequencing_files import panel_bed_filename
 
 from robin import resources
 
 logger = logging.getLogger(__name__)
+
+REPORTABLE_CHROMOSOME_RE = re.compile(r"^chr(\d+|X|Y)$")
+SIGNIFICANT_CNV_STATES = {"GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"}
+
+
+def is_reportable_chromosome(chromosome: str) -> bool:
+    """Return True for standard autosomes/sex chromosomes used in CNV reporting."""
+    return chromosome != "chrM" and bool(REPORTABLE_CHROMOSOME_RE.match(chromosome))
+
+
+def load_panel_gene_bed(output_dir: str) -> tuple[str | None, pd.DataFrame]:
+    """Load the target panel gene BED for the sample's analysis panel."""
+    panel = None
+    master_csv = os.path.join(output_dir, "master.csv")
+    if os.path.exists(master_csv):
+        try:
+            master_df = pd.read_csv(master_csv)
+            if not master_df.empty and "analysis_panel" in master_df.columns:
+                panel_val = master_df.iloc[0]["analysis_panel"]
+                if panel_val is not None and str(panel_val).strip().lower() not in ("", "nan"):
+                    panel = str(panel_val).strip()
+        except Exception as exc:
+            logger.debug("Could not read analysis panel from master.csv: %s", exc)
+
+    empty = pd.DataFrame(columns=["chrom", "start_pos", "end_pos", "gene"])
+    if not panel:
+        return None, empty
+
+    bed_path = os.path.join(
+        os.path.dirname(os.path.abspath(resources.__file__)),
+        panel_bed_filename(panel),
+    )
+    if not os.path.exists(bed_path):
+        logger.warning("Target panel BED not found for panel '%s' at %s", panel, bed_path)
+        return panel, empty
+
+    return panel, pd.read_csv(
+        bed_path,
+        sep="\t",
+        header=None,
+        names=["chrom", "start_pos", "end_pos", "gene"],
+    )
+
+
+def format_chromosome_cnv_status(
+    chromosome: str,
+    events: list[CNVEvent],
+    cytoband_analysis: pd.DataFrame,
+) -> str:
+    """Summarize detected CNV changes for an individual chromosome plot caption."""
+    chrom_events = [event for event in events if event.chromosome == chromosome]
+    if chrom_events:
+        parts = []
+        for event in chrom_events:
+            if event.event_type.startswith("WHOLE_CHR_"):
+                parts.append(
+                    f"Whole chromosome {event.event_type.replace('WHOLE_CHR_', '')}"
+                )
+            elif event.arm:
+                parts.append(f"{event.arm}-arm {event.event_type}")
+            else:
+                parts.append(event.event_type)
+        return "; ".join(parts)
+
+    if not cytoband_analysis.empty:
+        regional = [
+            f"{row['cnv_state']}: {row['name']}"
+            for _, row in cytoband_analysis.iterrows()
+            if row["cnv_state"] in SIGNIFICANT_CNV_STATES
+        ]
+        if regional:
+            if len(regional) > 3:
+                return "; ".join(regional[:3]) + f"; +{len(regional) - 3} more"
+            return "; ".join(regional)
+
+    return "No significant CNV change"
+
+
+def build_significant_regions(cytoband_analysis: pd.DataFrame) -> list[dict]:
+    """Convert cytoband analysis rows into plot highlight regions."""
+    regions = []
+    if cytoband_analysis.empty:
+        return regions
+
+    for _, row in cytoband_analysis.iterrows():
+        if row["cnv_state"] not in SIGNIFICANT_CNV_STATES:
+            continue
+        regions.append(
+            {
+                "start_pos": int(row["start_pos"]),
+                "end_pos": int(row["end_pos"]),
+                "type": row["cnv_state"],
+                "name": row.get("name", ""),
+            }
+        )
+    return regions
 
 
 def analyze_cytoband_cnv(
@@ -395,10 +492,8 @@ def calculate_chromosome_stats(result, ref_result, XYestimate):
 class CNVSection(ReportSection):
     """Section containing the CNV analysis."""
 
-    def __init__(self, *args, **kwargs):
-        super().__init__(*args, **kwargs)
-        self.current_row = []
-        self.plots_per_row = 2
+    FULL_PLOT_WIDTH = inch * 7.5
+    FULL_PLOT_HEIGHT = inch * 3.25
 
     def add_content(self):
         """Add the CNV analysis content to the report."""
@@ -684,6 +779,7 @@ class CNVSection(ReportSection):
 
             # Detect CNV events using centralized classification rules
             logger.info("Detecting CNV events using centralized rules")
+            events = []
             
             # Check if resolution is sufficient
             if not is_resolution_sufficient(cnv_dict.get("bin_width", 1000000)):
@@ -976,80 +1072,113 @@ class CNVSection(ReportSection):
                 )
             )
 
-            # Initialize variables for plot layout
-            self.current_row = []
-
+            # Add individual chromosome plots at full page width
             try:
-                # Generate all chromosome plots at once
-                logger.debug("Generating individual chromosome plots")
-                chromosome_plots = create_CNV_plot_per_chromosome(CNVresult, cnv_dict)
-
-                # Filter plots to only show chromosomes with significant changes
-                significant_chromosomes = set()
-                for chrom in natsort.natsorted(CNVresult.cnv.keys()):
-                    if chrom != "chrM" and re.match(r"^chr(\d+|X|Y)$", chrom):
-                        cytoband_analysis = analyze_cytoband_cnv(
-                            result3.cnv,
-                            chrom,
-                            cnv_dict,
-                            cytobands_bed,
-                            centromere_bed,
-                            gene_bed,
-                            XYestimate,
-                        )
-                        if not cytoband_analysis.empty and any(
-                            row["cnv_state"]
-                            in ["GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"]
-                            for _, row in cytoband_analysis.iterrows()
-                        ):
-                            significant_chromosomes.add(chrom)
-
-                filtered_plots = [
-                    (chrom, plot_buf)
-                    for chrom, plot_buf in chromosome_plots
-                    if chrom in significant_chromosomes
+                panel_name, panel_genes_df = load_panel_gene_bed(self.report.output)
+                reportable_chromosomes = [
+                    chrom
+                    for chrom in natsort.natsorted(CNVresult.cnv.keys())
+                    if is_reportable_chromosome(chrom)
                 ]
+                chromosome_status = {}
+                significant_regions = {}
 
-                for chrom, img_buf in filtered_plots:
-                    # Add plot and its caption
-                    plot_elements = [
-                        Image(img_buf, width=inch * 3.5, height=inch * 1.5),
+                for chrom in reportable_chromosomes:
+                    cytoband_analysis = analyze_cytoband_cnv(
+                        result3.cnv,
+                        chrom,
+                        cnv_dict,
+                        cytobands_bed,
+                        centromere_bed,
+                        gene_bed,
+                        XYestimate,
+                    )
+                    chromosome_status[chrom] = format_chromosome_cnv_status(
+                        chrom,
+                        events,
+                        cytoband_analysis,
+                    )
+                    region_list = build_significant_regions(cytoband_analysis)
+                    if region_list:
+                        significant_regions[chrom] = region_list
+
+                if panel_name and not panel_genes_df.empty:
+                    self.elements.append(
                         Paragraph(
-                            f"Chromosome {chrom.replace('chr', '')}",
-                            self.styles.styles["Caption"],
-                        ),
-                    ]
-                    self.current_row.append(
-                        Table(
-                            [[plot_elements[0]], [plot_elements[1]]],
-                            style=[("ALIGN", (0, 0), (-1, -1), "CENTER")],
+                            (
+                                f"Individual chromosome plots include lollipop markers for "
+                                f"genes in the <b>{panel_name}</b> target panel "
+                                f"({len(panel_genes_df)} genes). "
+                                "Purple lollipops mark panel target positions on the plot; "
+                                "target names, positions, and ploidy are listed in the "
+                                "table below each chromosome. Amplified targets are "
+                                "highlighted in red; off-scale values are marked with ↑. "
+                                "Shaded regions indicate significant CNV changes."
+                            ),
+                            ParagraphStyle(
+                                "PanelGeneLegend",
+                                parent=self.styles.styles["Normal"],
+                                fontSize=9,
+                                textColor=self.styles.COLORS["text"],
+                                spaceBefore=3,
+                                spaceAfter=6,
+                            ),
                         )
                     )
 
-                    # When row is full or it's the last plot, add the row to elements
-                    if (
-                        len(self.current_row) == self.plots_per_row
-                        or (chrom, img_buf) == filtered_plots[-1]
-                    ):
-                        # If it's the last row and not full, add empty space
-                        while len(self.current_row) < self.plots_per_row:
-                            self.current_row.append(Spacer(inch * 3.5, inch * 1.8))
+                # Generate all chromosome plots at once
+                logger.debug(
+                    "Generating individual chromosome plots for %d chromosomes",
+                    len(reportable_chromosomes),
+                )
+                chromosome_plots = create_CNV_plot_per_chromosome(
+                    CNVresult,
+                    cnv_dict,
+                    significant_regions=significant_regions,
+                    chromosomes=reportable_chromosomes,
+                    panel_genes_df=panel_genes_df,
+                )
+                plot_lookup = dict(chromosome_plots)
+                plotted_chromosomes = [
+                    chrom for chrom in reportable_chromosomes if chrom in plot_lookup
+                ]
 
-                        # Create row table and add to elements
-                        plot_row = Table(
-                            [self.current_row],
-                            colWidths=[inch * 3.5] * self.plots_per_row,
+                for chrom in plotted_chromosomes:
+                    img_buf = plot_lookup[chrom]
+
+                    status = chromosome_status.get(chrom, "No significant CNV change")
+                    has_change = status != "No significant CNV change"
+                    status_style = ParagraphStyle(
+                        "ChromosomeStatus",
+                        parent=self.styles.styles["Caption"],
+                        fontSize=9,
+                        fontName="Helvetica-Bold" if has_change else "Helvetica-Oblique",
+                        textColor=(
+                            self.styles.COLORS["primary"]
+                            if has_change
+                            else self.styles.COLORS["text"]
+                        ),
+                        alignment=1,
+                        spaceBefore=2,
+                        spaceAfter=8,
+                    )
+                    self.elements.append(
+                        Image(
+                            img_buf,
+                            width=self.FULL_PLOT_WIDTH,
+                            height=self.FULL_PLOT_HEIGHT,
                         )
-                        plot_row.setStyle(
-                            TableStyle(
-                                [
-                                    ("ALIGN", (0, 0), (-1, -1), "CENTER"),
-                                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-                                ]
-                            )
+                    )
+                    self.elements.append(
+                        Paragraph(
+                            (
+                                f"<b>Chromosome {chrom.replace('chr', '')}</b> — "
+                                f"{status}"
+                            ),
+                            status_style,
                         )
-                        self.elements.append(plot_row)
-                        self.current_row = []
+                    )
+                    self.elements.append(Spacer(1, 6))
 
                 # Add detailed CNV table
                 self.elements.append(Spacer(1, 6))
