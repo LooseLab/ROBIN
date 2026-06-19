@@ -1,0 +1,18 @@
+# ROBIN workflow configuration example
+# Run with: robin workflow --toml examples/workflow.example.toml
+# CLI flags override values from this file when explicitly provided.
+
+path = "empty_folder"
+workflow = "cnv,fusion,target,mgmt,sturgeon,nanodx,pannanodx,random_forest"
+center = "NUH"
+target_panel = "rCNS2"
+
+work_dir = "../../REF_SAMPLES"
+reference = "~/references/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
+
+# Optional settings (defaults match CLI)
+# log_level = "ERROR"
+# analysis_workers = 1
+# preset = "standard"
+# with_gui = true
+# use_ray = true
