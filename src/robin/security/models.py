@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Optional
+from dataclasses import dataclass, field
+from typing import Dict, Optional
 
 
 @dataclass(frozen=True)
@@ -13,6 +13,8 @@ class User:
     created_at: str
     last_login_at: Optional[str]
     must_change_password: bool = False
+    metadata: Dict[str, str] = field(default_factory=dict)
+    approvals: Dict[str, bool] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -23,3 +25,5 @@ class UserPublic:
     created_at: str
     last_login_at: Optional[str]
     must_change_password: bool = False
+    metadata: Dict[str, str] = field(default_factory=dict)
+    approvals: Dict[str, bool] = field(default_factory=dict)

@@ -5113,11 +5113,12 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                     # Add export functionality
                     with ui.row().classes("w-full mt-4"):
-                        ui.button(
-                            f"Export {variant_type}s to CSV",
-                            icon="download",
-                            on_click=lambda: _export_variants(filtered_df, variant_type),
-                        ).classes("w-full")
+                        if launcher._current_user_can_export():
+                            ui.button(
+                                f"Export {variant_type}s to CSV",
+                                icon="download",
+                                on_click=lambda: _export_variants(filtered_df, variant_type),
+                            ).classes("w-full")
 
                         # Add row count display
                         ui.label(
@@ -5162,6 +5163,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             # Function to export variants
             def _export_variants(data_df, variant_type):
                 """Export filtered variants to CSV"""
+                if not launcher._require_export_or_notify():
+                    return
                 try:
                     import tempfile
 
@@ -6607,13 +6610,14 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
 
                                     # Add export functionality
                                     with ui.row().classes("w-full mt-4"):
-                                        ui.button(
-                                            "Export Gene Variants to CSV",
-                                            icon="download",
-                                            on_click=lambda: _export_gene_variants(
-                                                variant_data, selected_gene
-                                            ),
-                                        ).classes("w-full")
+                                        if launcher._current_user_can_export():
+                                            ui.button(
+                                                "Export Gene Variants to CSV",
+                                                icon="download",
+                                                on_click=lambda: _export_gene_variants(
+                                                    variant_data, selected_gene
+                                                ),
+                                            ).classes("w-full")
                                 else:
                                     ui.label("No variants found for this gene.").classes(
                                         "text-sm text-gray-500"
@@ -6636,6 +6640,8 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                 # Helper function to export gene variants
                 def _export_gene_variants(variant_data, gene_name):
                     """Export gene variants to CSV"""
+                    if not launcher._require_export_or_notify():
+                        return
                     try:
                         import tempfile
 

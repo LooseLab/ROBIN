@@ -26,8 +26,10 @@ from robin.analysis.bam_preprocessor import (
 )
 from robin.gui.config import (
     get_confidence_level as get_classifier_confidence_level,
-    is_section_enabled,
-    get_enabled_classification_steps,
+    is_section_visible,
+    get_visible_classification_steps,
+    any_classification_visible,
+    launcher_visibility_context,
     CLASSIFICATION_STEPS,
 )
 
@@ -247,11 +249,12 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
     )
     
     # Get workflow steps from launcher if available
-    workflow_steps = launcher.workflow_steps if launcher and hasattr(launcher, 'workflow_steps') else None
-    enabled_classification_steps = get_enabled_classification_steps(workflow_steps)
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
+    enabled_classification_steps = get_visible_classification_steps(
+        workflow_steps, display_config, viewer_role=viewer_role
+    )
     
-    # Only show section if at least one classification step is enabled
-    if workflow_steps and not enabled_classification_steps:
+    if not any_classification_visible(workflow_steps, display_config, viewer_role=viewer_role):
         return
     
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
@@ -260,7 +263,7 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
         )
         with ui.element("div").classes("classification-insight-grid"):
             # Sturgeon
-            if not workflow_steps or "sturgeon" in enabled_classification_steps:
+            if "sturgeon" in enabled_classification_steps:
                 sturgeon_data = classification_data.get("sturgeon", {})
                 _create_classification_dashboard_card_with_data(
                     "Sturgeon",
@@ -274,7 +277,7 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                 )
 
             # NanoDX
-            if not workflow_steps or "nanodx" in enabled_classification_steps:
+            if "nanodx" in enabled_classification_steps:
                 nanodx_data = classification_data.get("nanodx", {})
                 _create_classification_dashboard_card_with_data(
                     "NanoDX",
@@ -288,7 +291,7 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                 )
 
             # PanNanoDX
-            if not workflow_steps or "pannanodx" in enabled_classification_steps:
+            if "pannanodx" in enabled_classification_steps:
                 pannanodx_data = classification_data.get("pannanodx", {})
                 _create_classification_dashboard_card_with_data(
                     "PanNanoDX",
@@ -302,7 +305,7 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
                 )
 
             # Random Forest
-            if not workflow_steps or "random_forest" in enabled_classification_steps:
+            if "random_forest" in enabled_classification_steps:
                 rf_data = classification_data.get("random_forest", {})
                 _create_classification_dashboard_card_with_data(
                     "Random Forest",
@@ -320,21 +323,21 @@ def _classification_section(sample_dir: Path, launcher: Any = None):
 def _analysis_section(sample_dir: Path, launcher: Any = None):
     """Create refreshable analysis section."""
     # Get workflow steps from launcher if available
-    workflow_steps = launcher.workflow_steps if launcher and hasattr(launcher, 'workflow_steps') else None
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
     cache = _get_summary_cache(sample_dir)
     analysis_data = cache.get("analysis_data", {})
-    coverage_data = analysis_data.get("coverage", {}) if not workflow_steps or is_section_enabled("target", workflow_steps) else {}
-    cnv_data = analysis_data.get("cnv", {}) if not workflow_steps or is_section_enabled("cnv", workflow_steps) else {}
-    mgmt_data = analysis_data.get("mgmt", {}) if not workflow_steps or is_section_enabled("mgmt", workflow_steps) else {}
-    fusion_data = analysis_data.get("fusion", {}) if not workflow_steps or is_section_enabled("fusion", workflow_steps) else {}
+    _vis = lambda sid: is_section_visible(sid, workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role)
+    coverage_data = analysis_data.get("coverage", {}) if _vis("target") else {}
+    cnv_data = analysis_data.get("cnv", {}) if _vis("cnv") else {}
+    mgmt_data = analysis_data.get("mgmt", {}) if _vis("mgmt") else {}
+    fusion_data = analysis_data.get("fusion", {}) if _vis("fusion") else {}
     
-    # Check if any analysis section should be shown
-    should_show_target = not workflow_steps or is_section_enabled("target", workflow_steps)
-    should_show_cnv = not workflow_steps or is_section_enabled("cnv", workflow_steps)
-    should_show_mgmt = not workflow_steps or is_section_enabled("mgmt", workflow_steps)
-    should_show_fusion = not workflow_steps or is_section_enabled("fusion", workflow_steps)
+    should_show_target = _vis("target")
+    should_show_cnv = _vis("cnv")
+    should_show_mgmt = _vis("mgmt")
+    should_show_fusion = _vis("fusion")
     
-    if workflow_steps and not any([should_show_target, should_show_cnv, should_show_mgmt, should_show_fusion]):
+    if not any([should_show_target, should_show_cnv, should_show_mgmt, should_show_fusion]):
         return
 
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
@@ -445,7 +448,7 @@ def _refresh_summary_cache_sync(
     sample_dir: Path, sample_id: str, launcher: Any = None
 ) -> Dict[str, Any]:
     """Compute summary data in a background thread."""
-    workflow_steps = launcher.workflow_steps if launcher and hasattr(launcher, "workflow_steps") else None
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
     data: Dict[str, Any] = {
         "run_info": _extract_run_information(sample_dir, sample_id),
         "classification_data": _extract_classification_data(sample_dir),
@@ -454,13 +457,13 @@ def _refresh_summary_cache_sync(
 
     # Analysis data (only compute enabled sections)
     analysis_data: Dict[str, Any] = {}
-    if not workflow_steps or is_section_enabled("target", workflow_steps):
+    if is_section_visible("target", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
         analysis_data["coverage"] = _extract_coverage_data(sample_dir)
-    if not workflow_steps or is_section_enabled("cnv", workflow_steps):
+    if is_section_visible("cnv", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
         analysis_data["cnv"] = _extract_cnv_data(sample_dir)
-    if not workflow_steps or is_section_enabled("mgmt", workflow_steps):
+    if is_section_visible("mgmt", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
         analysis_data["mgmt"] = _extract_mgmt_data(sample_dir)
-    if not workflow_steps or is_section_enabled("fusion", workflow_steps):
+    if is_section_visible("fusion", workflow_steps=workflow_steps, display_config=display_config, viewer_role=viewer_role):
         analysis_data["fusion"] = _extract_fusion_data(sample_dir)
 
     data["analysis_data"] = analysis_data

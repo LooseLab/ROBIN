@@ -29,6 +29,8 @@ class RobinReport:
         center: str,
         progress_callback=None,
         workflow_steps=None,
+        display_config=None,
+        viewer_role=None,
         sample_identifiers=None,
         generated_by=None,
         generated_at=None,
@@ -41,6 +43,8 @@ class RobinReport:
             center: Center ID running the analysis
             progress_callback: Optional callback function for progress updates
             workflow_steps: Optional list of workflow steps to determine which sections to include
+            display_config: Optional admin display configuration for section visibility
+            viewer_role: Role key used to resolve display settings ('user' or 'admin')
             sample_identifiers: Optional dict with first_name, last_name, dob, nhs_number for inclusion in report
             generated_by: Optional username of the person who triggered report generation
             generated_at: Optional report generation timestamp (YYYY-MM-DD HH:MM:SS)
@@ -51,6 +55,10 @@ class RobinReport:
         self.sample_id = os.path.basename(os.path.normpath(output))
         self.progress_callback = progress_callback
         self.workflow_steps = workflow_steps
+        self.display_config = display_config
+        from robin.gui.display_config import DEFAULT_VIEWER_ROLE
+
+        self.viewer_role = viewer_role or DEFAULT_VIEWER_ROLE
         self.sample_identifiers = sample_identifiers
         self.generated_by = (str(generated_by).strip() if generated_by else None) or None
         self.generated_at = (str(generated_at).strip() if generated_at else None) or None
@@ -131,40 +139,70 @@ class RobinReport:
         
         # Import section visibility helpers
         try:
-            from robin.gui.config import is_section_enabled, get_enabled_classification_steps
+            from robin.gui.config import any_classification_visible, is_section_visible
         except ImportError:
-            # Fallback if gui.config is not available
-            is_section_enabled = lambda name, steps: True
-            get_enabled_classification_steps = lambda steps: {"sturgeon", "nanodx", "random_forest", "pannanodx"}
+            def is_section_visible(section_id, **kwargs):  # type: ignore[misc]
+                return True
 
-        # Build sections list conditionally based on workflow_steps
+            def any_classification_visible(**kwargs):  # type: ignore[misc]
+                return True
+
         sections = []
         
-        # Classification section (only if at least one classification step is enabled)
-        if not self.workflow_steps or get_enabled_classification_steps(self.workflow_steps):
+        if any_classification_visible(
+            self.workflow_steps,
+            self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(ClassificationSection(self))
         
-        # CNV section
-        if not self.workflow_steps or is_section_enabled("cnv", self.workflow_steps):
+        if is_section_visible(
+            "cnv",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(CNVSection(self))
         
-        # Variants section (always included if available)
         sections.append(VariantsSection(self))
         
-        # Fusion section
-        if not self.workflow_steps or is_section_enabled("fusion", self.workflow_steps):
+        if is_section_visible(
+            "fusion",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(FusionSection(self))
         
-        # Coverage section (target)
-        if not self.workflow_steps or is_section_enabled("target", self.workflow_steps):
+        if is_section_visible(
+            "target",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(CoverageSection(self))
         
-        # MGMT section
-        if not self.workflow_steps or is_section_enabled("mgmt", self.workflow_steps):
+        if is_section_visible(
+            "mgmt",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
             sections.append(MGMTSection(self))
 
-        # MNP-Flex section (include if results are present)
-        sections.append(MNPFlexSection(self))
+        if is_section_visible(
+            "mnpflex",
+            workflow_steps=self.workflow_steps,
+            display_config=self.display_config,
+            surface="report",
+            viewer_role=self.viewer_role,
+        ):
+            sections.append(MNPFlexSection(self))
         
         # Run data section (always included)
         sections.append(RunDataSection(self))
@@ -498,6 +536,8 @@ def create_pdf(
     export_zip=False,
     progress_callback=None,
     workflow_steps=None,
+    display_config=None,
+    viewer_role=None,
     sample_identifiers=None,
     generated_by=None,
     generated_at=None,
@@ -514,6 +554,8 @@ def create_pdf(
         export_zip: Whether to create ZIP archive
         progress_callback: Optional callback function for progress updates
         workflow_steps: Optional list of workflow steps to determine which sections to include
+        display_config: Optional admin display configuration for section visibility
+        viewer_role: Role key used to resolve display settings ('user' or 'admin')
         sample_identifiers: Optional dict with first_name, last_name, dob, nhs_number for report
         generated_by: Optional username of the person who triggered report generation
         generated_at: Optional report generation timestamp (YYYY-MM-DD HH:MM:SS)
@@ -527,6 +569,8 @@ def create_pdf(
         center,
         progress_callback,
         workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
         sample_identifiers=sample_identifiers,
         generated_by=generated_by,
         generated_at=generated_at,

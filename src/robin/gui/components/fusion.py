@@ -2774,6 +2774,22 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
         logging.warning("[Fusion] ui is None, returning early")
         return
 
+    from robin.gui.config import is_section_visible, launcher_visibility_context
+
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
+    show_target = is_section_visible(
+        "fusion_target",
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
+    )
+    show_genome = is_section_visible(
+        "fusion_genome",
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        viewer_role=viewer_role,
+    )
+
     # Local state for this section
     state: Dict[str, Any] = {
         "target": {
@@ -3427,6 +3443,10 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                     state["summary"]["genome_lbl"] = ui.label(
                         "Genome-wide: -- pairs, -- groups"
                     ).classes("classification-insight-meta w-full")
+                    if not show_target:
+                        state["summary"]["target_lbl"].classes("hidden")
+                    if not show_genome:
+                        state["summary"]["genome_lbl"].classes("hidden")
                     state["summary"]["master_bed_lbl"] = ui.label(
                         "Master BED: (deprecated)"
                     ).classes("hidden")
@@ -3434,29 +3454,31 @@ def add_fusion_section(launcher: Any, sample_dir: Path) -> None:
                         "From supplementary alignments; tables and plots below."
                     ).classes("classification-insight-foot")
 
-            ui.label("Target panel").classes(
-                "target-coverage-panel__meta-label mt-4 mb-1"
-            )
-            state["target"]["summary_table_container"] = ui.column().classes("w-full")
-            state["target"]["groups_table_container"] = ui.column().classes(
-                "w-full mt-2"
-            )
-            state["target"]["plot_container"] = ui.column().classes("w-full")
-            state["target"]["table_container"] = ui.column().classes("w-full mt-2")
-            state["target"]["status_container"] = ui.column().classes("w-full mt-2")
+            if show_target:
+                ui.label("Target panel").classes(
+                    "target-coverage-panel__meta-label mt-4 mb-1"
+                )
+                state["target"]["summary_table_container"] = ui.column().classes("w-full")
+                state["target"]["groups_table_container"] = ui.column().classes(
+                    "w-full mt-2"
+                )
+                state["target"]["plot_container"] = ui.column().classes("w-full")
+                state["target"]["table_container"] = ui.column().classes("w-full mt-2")
+                state["target"]["status_container"] = ui.column().classes("w-full mt-2")
 
-            # Genome-wide
-            ui.separator().classes("mgmt-detail-separator")
-            ui.label("Genome-wide").classes(
-                "target-coverage-panel__meta-label mt-2 mb-1"
-            )
-            state["genome"]["summary_table_container"] = ui.column().classes("w-full")
-            state["genome"]["groups_table_container"] = ui.column().classes(
-                "w-full mt-2"
-            )
-            state["genome"]["plot_container"] = ui.column().classes("w-full")
-            state["genome"]["table_container"] = ui.column().classes("w-full mt-2")
-            state["genome"]["status_container"] = ui.column().classes("w-full mt-2")
+            if show_genome:
+                if show_target:
+                    ui.separator().classes("mgmt-detail-separator")
+                ui.label("Genome-wide").classes(
+                    "target-coverage-panel__meta-label mt-2 mb-1"
+                )
+                state["genome"]["summary_table_container"] = ui.column().classes("w-full")
+                state["genome"]["groups_table_container"] = ui.column().classes(
+                    "w-full mt-2"
+                )
+                state["genome"]["plot_container"] = ui.column().classes("w-full")
+                state["genome"]["table_container"] = ui.column().classes("w-full mt-2")
+                state["genome"]["status_container"] = ui.column().classes("w-full mt-2")
 
             # Master BED Targets section has been deprecated
             # Keep containers initialized for backward compatibility

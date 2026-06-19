@@ -25,11 +25,15 @@ class AuthService:
         *,
         role: str = "user",
         must_change_password: bool = True,
+        metadata: Optional[dict] = None,
+        approvals: Optional[dict] = None,
     ) -> int:
         user_id = self.store.create_user(
             username=username,
             password_hash=self.hash_password(password),
             must_change_password=must_change_password,
+            metadata=metadata,
+            approvals=approvals,
         )
         self.store.assign_role(user_id, role)
         return user_id

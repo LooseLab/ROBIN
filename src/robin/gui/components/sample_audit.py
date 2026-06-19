@@ -113,6 +113,8 @@ def open_sample_audit_dialog(launcher: "GUILauncher", sample_id: str) -> None:
             audit_table.update()
 
         def _export() -> None:
+            if not launcher._require_export_or_notify():
+                return
             payload = _export_sample_audit_csv(launcher, sample_id)
             safe_name = "".join(
                 ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in sample_id
@@ -123,9 +125,10 @@ def open_sample_audit_dialog(launcher: "GUILauncher", sample_id: str) -> None:
             ui.button("Refresh", icon="refresh", on_click=_refresh).props(
                 "flat no-caps outline"
             )
-            ui.button("Export CSV", icon="download", on_click=_export).props(
-                "flat no-caps outline"
-            )
+            if launcher._current_user_can_export():
+                ui.button("Export CSV", icon="download", on_click=_export).props(
+                    "flat no-caps outline"
+                )
             ui.button("Close", on_click=dialog.close).props("color=primary no-caps")
 
     launcher._audit_log(

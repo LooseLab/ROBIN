@@ -521,9 +521,34 @@ def users_bootstrap_admin(username: str, from_legacy_hash: bool) -> None:
 @users.command("create")
 @click.argument("username", type=str)
 @click.option("--role", type=click.Choice(["admin", "user"]), default="user", show_default=True)
-def users_create(username: str, role: str) -> None:
+@click.option("--email", type=str, default="", help="Contact email for this account.")
+@click.option(
+    "--clinical-role",
+    type=str,
+    default="",
+    help="Clinical role label (e.g. Consultant, Scientist).",
+)
+@click.option("--training", is_flag=True, help="Grant training received approval.")
+@click.option("--report-export", is_flag=True, help="Grant report export approval.")
+def users_create(
+    username: str,
+    role: str,
+    email: str,
+    clinical_role: str,
+    training: bool,
+    report_export: bool,
+) -> None:
     """Create a GUI user account."""
     try:
+        from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY
+        from robin.security.user_approvals import (
+            ADMIN_USER_APPROVALS_UPDATED_EVENT,
+            REPORT_EXPORT_KEY,
+            TRAINING_RECEIVED_KEY,
+            approval_audit_details,
+            default_approvals,
+        )
+
         store, auth, audit = _get_security_services()
     except ImportError as e:
         click.echo(f"Security module not available: {e}", err=True)
@@ -535,15 +560,58 @@ def users_create(username: str, role: str) -> None:
         sys.exit(1)
 
     password = click.prompt("Password", hide_input=True, confirmation_prompt=True)
+    metadata = {
+        EMAIL_KEY: email.strip(),
+        CLINICAL_ROLE_KEY: clinical_role.strip(),
+    }
+    approvals = {
+        TRAINING_RECEIVED_KEY: training,
+        REPORT_EXPORT_KEY: report_export,
+    }
     try:
-        user_id = auth.create_user(username, password, role=role)
+        user_id = auth.create_user(
+            username,
+            password,
+            role=role,
+            metadata=metadata,
+            approvals=approvals if role != "admin" else None,
+        )
+        create_details: Dict[str, Any] = {
+            "role": role,
+            "user_id": user_id,
+            "metadata": metadata,
+        }
+        if role != "admin":
+            create_details["initial_approvals"] = approval_audit_details(
+                default_approvals(),
+                approvals,
+                source="cli",
+            )
         audit.log_event(
             event_type="admin.user.created",
             user_id=None,
             target_type="user",
             target_id=username,
-            details={"role": role, "user_id": user_id},
+            details=create_details,
         )
+        if role != "admin" and approval_audit_details(
+            default_approvals(), approvals
+        ).get("changes"):
+            audit.log_event(
+                event_type=ADMIN_USER_APPROVALS_UPDATED_EVENT,
+                user_id=None,
+                target_type="user",
+                target_id=username,
+                details=approval_audit_details(
+                    default_approvals(),
+                    approvals,
+                    source="cli",
+                    extra={"user_id": user_id, "context": "user_created"},
+                ),
+            )
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
     except Exception as e:
         click.echo(f"Failed to create user '{username}': {e}", err=True)
         sys.exit(1)
@@ -586,6 +654,8 @@ def users_set_password(username: str) -> None:
 def users_list() -> None:
     """List configured GUI users."""
     try:
+        from robin.security.user_approvals import REPORT_EXPORT_KEY, TRAINING_RECEIVED_KEY
+
         store, _, _ = _get_security_services()
     except ImportError as e:
         click.echo(f"Security module not available: {e}", err=True)
@@ -597,9 +667,161 @@ def users_list() -> None:
         return
     click.echo("Configured users:")
     for user in users:
+        email = user.metadata.get("email") or "—"
+        clinical_role = user.metadata.get("clinical_role") or "—"
+        training = "yes" if user.approvals.get(TRAINING_RECEIVED_KEY) else "no"
+        report_export = "yes" if user.approvals.get(REPORT_EXPORT_KEY) else "no"
+        if store.user_has_role(user.id, "admin"):
+            training = "yes (admin)"
+            report_export = "yes (admin)"
         click.echo(
-            f" - {user.username} (id={user.id}, active={user.is_active}, last_login={user.last_login_at or 'never'})"
+            f" - {user.username} (id={user.id}, active={user.is_active}, "
+            f"email={email}, clinical_role={clinical_role}, "
+            f"training={training}, report_export={report_export}, "
+            f"last_login={user.last_login_at or 'never'})"
         )
+
+
+@users.command("set-profile")
+@click.argument("username", type=str)
+@click.option("--email", type=str, default=None, help="Contact email.")
+@click.option(
+    "--clinical-role",
+    type=str,
+    default=None,
+    help="Clinical role label (e.g. Consultant, Scientist).",
+)
+@click.option("--notes", type=str, default=None, help="Internal notes about this account.")
+def users_set_profile(
+    username: str,
+    email: Optional[str],
+    clinical_role: Optional[str],
+    notes: Optional[str],
+) -> None:
+    """Update profile metadata for a GUI user account."""
+    try:
+        from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY, NOTES_KEY
+
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    updates = {}
+    if email is not None:
+        updates[EMAIL_KEY] = email
+    if clinical_role is not None:
+        updates[CLINICAL_ROLE_KEY] = clinical_role
+    if notes is not None:
+        updates[NOTES_KEY] = notes
+    if not updates:
+        click.echo("Provide at least one of --email, --clinical-role, or --notes.", err=True)
+        sys.exit(1)
+
+    try:
+        if not store.update_user_metadata(username, updates):
+            click.echo(f"User '{username}' not found.", err=True)
+            sys.exit(1)
+    except ValueError as e:
+        click.echo(str(e), err=True)
+        sys.exit(1)
+
+    audit.log_event(
+        event_type="admin.user.profile_updated",
+        user_id=None,
+        target_type="user",
+        target_id=username,
+        details={"metadata": updates},
+    )
+    click.echo(f"Updated profile metadata for '{username}'.")
+
+
+@users.command("set-approvals")
+@click.argument("username", type=str)
+@click.option(
+    "--training/--no-training",
+    default=None,
+    help="Grant or revoke training received approval.",
+)
+@click.option(
+    "--report-export/--no-report-export",
+    default=None,
+    help="Grant or revoke report export approval.",
+)
+def users_set_approvals(
+    username: str,
+    training: Optional[bool],
+    report_export: Optional[bool],
+) -> None:
+    """Update approval flags for a GUI user account."""
+    try:
+        from robin.security.user_approvals import (
+            ADMIN_USER_APPROVALS_UPDATED_EVENT,
+            REPORT_EXPORT_KEY,
+            TRAINING_RECEIVED_KEY,
+            approval_audit_details,
+            normalize_approvals,
+        )
+
+        store, _, audit = _get_security_services()
+    except ImportError as e:
+        click.echo(f"Security module not available: {e}", err=True)
+        sys.exit(1)
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
+        sys.exit(1)
+
+    user = store.get_user_by_username(username)
+    if user is None:
+        click.echo(f"User '{username}' not found.", err=True)
+        sys.exit(1)
+    if store.user_has_role(user.id, "admin"):
+        click.echo("Administrators always have all approvals; nothing to update.", err=True)
+        sys.exit(1)
+
+    updates = {}
+    if training is not None:
+        updates[TRAINING_RECEIVED_KEY] = training
+    if report_export is not None:
+        updates[REPORT_EXPORT_KEY] = report_export
+    if not updates:
+        click.echo(
+            "Provide at least one of --training/--no-training or "
+            "--report-export/--no-report-export.",
+            err=True,
+        )
+        sys.exit(1)
+
+    previous_approvals = dict(user.approvals)
+    updated_approvals = normalize_approvals(updates, existing=previous_approvals)
+    if not approval_audit_details(previous_approvals, updated_approvals).get("changes"):
+        click.echo("No approval changes to apply.", err=True)
+        sys.exit(1)
+
+    if not store.update_user_approvals(username, updates):
+        click.echo(f"Failed to update approvals for '{username}'.", err=True)
+        sys.exit(1)
+
+    audit.log_event(
+        event_type=ADMIN_USER_APPROVALS_UPDATED_EVENT,
+        user_id=None,
+        target_type="user",
+        target_id=username,
+        details=approval_audit_details(
+            previous_approvals,
+            updated_approvals,
+            source="cli",
+            extra={"user_id": user.id},
+        ),
+    )
+    click.echo(f"Updated approvals for '{username}'.")
 
 
 @users.command("consent-status")

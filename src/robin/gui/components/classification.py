@@ -302,9 +302,14 @@ def _bar_chart_mark_line(
 
 # Import section visibility helpers
 try:
-    from robin.gui.config import get_enabled_classification_steps, CLASSIFICATION_STEPS
+    from robin.gui.config import (
+        get_visible_classification_steps,
+        launcher_visibility_context,
+        CLASSIFICATION_STEPS,
+    )
 except ImportError:
-    get_enabled_classification_steps = lambda steps: {"sturgeon", "nanodx", "random_forest", "pannanodx"}
+    get_visible_classification_steps = lambda *a, **k: {"sturgeon", "nanodx", "random_forest", "pannanodx"}  # type: ignore[assignment]
+    launcher_visibility_context = lambda launcher: (None, None, "user")  # type: ignore[assignment]
     CLASSIFICATION_STEPS = {
         "sturgeon": "Sturgeon",
         "nanodx": "NanoDX",
@@ -316,8 +321,12 @@ except ImportError:
 def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
     """Build the Classification section (Sturgeon, NanoDX, PanNanoDX, RF)."""
     # Get workflow steps from launcher if available
-    workflow_steps = launcher.workflow_steps if launcher and hasattr(launcher, 'workflow_steps') else None
-    enabled_classification_steps = get_enabled_classification_steps(workflow_steps)
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
+    enabled_classification_steps = get_visible_classification_steps(
+        workflow_steps, display_config, viewer_role=viewer_role
+    )
+    if not enabled_classification_steps:
+        return
     
     # Map workflow step names to tool display names
     tool_to_step_map = {
@@ -343,8 +352,8 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
         for tool_name, cfg in tool_to_file.items():
             # Check if this tool should be shown
             tool_step = tool_to_step_map.get(tool_name)
-            if workflow_steps and tool_step and tool_step not in enabled_classification_steps:
-                continue  # Skip this tool if not enabled
+            if tool_step and tool_step not in enabled_classification_steps:
+                continue
             exp = (
                 ui.expansion(tool_name, icon="analytics")
                 .classes("w-full")

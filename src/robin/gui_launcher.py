@@ -57,6 +57,7 @@ from robin.security import (
 )
 
 from robin.reporting.report import create_pdf
+from robin.gui.config import resolve_viewer_role
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
 
@@ -439,6 +440,7 @@ class GUILauncher:
         self.is_running = False
         self.workflow_runner = None
         self.workflow_steps = []
+        self.display_config = None
         self.monitored_directory = ""
         self.reload = reload
         self.center = None  # Center ID for the analysis
@@ -450,6 +452,7 @@ class GUILauncher:
         self.auth_service = AuthService(self.security_store)
         self.audit_service = AuditService(self.security_store)
         self.consent_version = get_consent_version()
+        self.display_config = self._load_display_config()
 
         # Sample status transition timeout (in seconds)
         # Change to 60 for testing (1 minute), 3600 for production (60 minutes)
@@ -656,6 +659,57 @@ class GUILauncher:
                     "Back to home",
                     on_click=lambda: ui.navigate.to("/"),
                     icon="home",
+                ).props("color=primary no-caps")
+
+    def _current_user_has_training(self) -> bool:
+        from robin.security.user_approvals import TRAINING_RECEIVED_KEY, user_has_approval
+
+        return user_has_approval(
+            self.security_store, self._get_current_user_id(), TRAINING_RECEIVED_KEY
+        )
+
+    def _current_user_can_export(self) -> bool:
+        from robin.security.user_approvals import REPORT_EXPORT_KEY, user_has_approval
+
+        return user_has_approval(
+            self.security_store, self._get_current_user_id(), REPORT_EXPORT_KEY
+        )
+
+    def _notify_export_denied(self) -> None:
+        from robin.security.user_approvals import EXPORT_DENIED_MESSAGE
+
+        ui.notify(EXPORT_DENIED_MESSAGE, type="warning")
+
+    def _require_export_or_notify(self) -> bool:
+        if self._current_user_can_export():
+            return True
+        self._notify_export_denied()
+        return False
+
+    def _render_training_required_page(
+        self,
+        *,
+        navtitle: str = "R.O.B.I.N",
+        smalltitle: str = "Training required",
+    ) -> None:
+        from robin.security.user_approvals import TRAINING_REQUIRED_MESSAGE
+
+        with theme.frame(
+            navtitle,
+            smalltitle=smalltitle,
+            batphone=False,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-lg mx-auto p-4 gap-3"):
+                ui.label("Training approval required").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(TRAINING_REQUIRED_MESSAGE).classes("classification-insight-foot")
+                ui.button(
+                    "Back to samples",
+                    on_click=lambda: ui.navigate.to("/live_data"),
+                    icon="view_list",
                 ).props("color=primary no-caps")
 
     def _open_sample_audit_dialog(self, sample_id: str) -> None:
@@ -1438,6 +1492,7 @@ class GUILauncher:
 
         self.workflow_runner = workflow_runner
         self.workflow_steps = workflow_steps or []
+        self.display_config = self._load_display_config()
         self.center = center
 
         # Store absolute monitored directory to avoid relative path issues
@@ -2383,6 +2438,21 @@ class GUILauncher:
             def sample_detail(sample_id: str):
                 """Individual sample detail page."""
                 _setup_global_resources()
+                if not self._current_user_has_training():
+                    self._audit_log(
+                        event_type="sample.access.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sample_id,
+                        details={"page": "detail", "reason": "training_required"},
+                        error_code="training_required",
+                    )
+                    self._render_training_required_page(
+                        navtitle=f"R.O.B.I.N - {sample_id}",
+                        smalltitle=sample_id,
+                    )
+                    return
                 self._audit_log(
                     event_type="sample.viewed",
                     user_id=self._get_current_user_id(),
@@ -2421,6 +2491,21 @@ class GUILauncher:
             def sample_details(sample_id: str):
                 """Sample details page with comprehensive information."""
                 _setup_global_resources()
+                if not self._current_user_has_training():
+                    self._audit_log(
+                        event_type="sample.access.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="sample",
+                        target_id=sample_id,
+                        details={"page": "details", "reason": "training_required"},
+                        error_code="training_required",
+                    )
+                    self._render_training_required_page(
+                        navtitle=f"R.O.B.I.N - {sample_id}",
+                        smalltitle=sample_id,
+                    )
+                    return
                 self._audit_log(
                     event_type="sample.viewed",
                     user_id=self._get_current_user_id(),
@@ -2476,6 +2561,18 @@ class GUILauncher:
                 """Download a file from a sample directory."""
                 try:
                     current_user_id = self._get_current_user_id()
+                    if not self._current_user_can_export():
+                        self._audit_log(
+                            event_type="report.exported",
+                            result="failure",
+                            user_id=current_user_id,
+                            target_type="sample",
+                            target_id=sample_id,
+                            details={"filename": filename},
+                            error_code="export_not_approved",
+                        )
+                        self._notify_export_denied()
+                        return
                     # Security: Only allow alphanumeric characters and common file extensions
                     import re
                     if not re.match(r'^[a-zA-Z0-9._-]+$', filename):
@@ -2790,6 +2887,7 @@ class GUILauncher:
 
                 # Samples table section — outer column keeps mobile scroll behavior
                 with ui.column().classes("w-full max-w-7xl mx-auto gap-3"):
+                    can_export_reports = self._current_user_can_export()
                     # Title + export/SNP actions on one row (must stay visible; a separate row below filters was easy to miss)
                     with ui.row().classes(
                         "w-full items-center justify-between flex-wrap gap-3 mb-2"
@@ -2807,14 +2905,15 @@ class GUILauncher:
                                 size="sm", color="primary"
                             )
                             self.samples_loading_indicator.set_visibility(False)
-                            ui.button(
-                                "Select all",
-                                on_click=lambda: self._samples_select_all_visible_for_export(),
-                            ).props("flat dense no-caps outline")
-                            ui.button(
-                                "Clear selection",
-                                on_click=lambda: self._samples_clear_export_selection(),
-                            ).props("flat dense no-caps outline")
+                            if can_export_reports:
+                                ui.button(
+                                    "Select all",
+                                    on_click=lambda: self._samples_select_all_visible_for_export(),
+                                ).props("flat dense no-caps outline")
+                                ui.button(
+                                    "Clear selection",
+                                    on_click=lambda: self._samples_clear_export_selection(),
+                                ).props("flat dense no-caps outline")
                             self.bulk_snp_button = ui.button(
                                 "SNP: all missing",
                                 icon="biotech",
@@ -2835,13 +2934,16 @@ class GUILauncher:
                             else:
                                 self.bulk_mnpflex_button = None
 
-                            self.export_reports_button = ui.button(
-                                "Export reports",
-                                on_click=lambda: None,
-                            ).props("color=primary").classes(
-                                "rounded-lg px-4 text-title-medium"
-                            )
-                            self.export_reports_button.disable()
+                            if can_export_reports:
+                                self.export_reports_button = ui.button(
+                                    "Export reports",
+                                    on_click=lambda: None,
+                                ).props("color=primary").classes(
+                                    "rounded-lg px-4 text-title-medium"
+                                )
+                                self.export_reports_button.disable()
+                            else:
+                                self.export_reports_button = None
                             logging.info(
                                 "[samples_overview] toolbar controls created "
                                 "(Select all / Clear / SNP / Export)"
@@ -2949,8 +3051,7 @@ class GUILauncher:
                     from robin.gui.theme import styled_table
 
                     # Create samples table
-                    _samples_container, self.samples_table = styled_table(
-                        columns=[
+                    _samples_table_columns = [
                             {
                                 "name": "actions",
                                 "label": "Actions",
@@ -3061,12 +3162,17 @@ class GUILauncher:
                                 "field": "last_seen",
                                 "sortable": True,
                             },
+                    ]
+                    if can_export_reports:
+                        _samples_table_columns.append(
                             {
                                 "name": "export",
                                 "label": "Export",
                                 "field": "export",
-                            },
-                        ],
+                            }
+                        )
+                    _samples_container, self.samples_table = styled_table(
+                        columns=_samples_table_columns,
                         rows=[],
                         pagination=20,
                         class_size="table-xs",
@@ -3217,10 +3323,11 @@ class GUILauncher:
                         )
 
                     # Add export checkbox as rightmost column + header "select all" checkbox
-                    try:
-                        self.samples_table.add_slot(
-                            "header-cell-export",
-                            """
+                    if can_export_reports:
+                        try:
+                            self.samples_table.add_slot(
+                                "header-cell-export",
+                                """
 <q-th :props="props">
   <div class="column items-center q-gutter-xs">
     <span class="text-caption text-slate-500">All</span>
@@ -3232,23 +3339,23 @@ class GUILauncher:
   </div>
 </q-th>
 """,
-                        )
-                        self.samples_table.add_slot(
-                            "body-cell-export",
-                            """
+                            )
+                            self.samples_table.add_slot(
+                                "body-cell-export",
+                                """
 <q-td key=\"export\" :props=\"props\">
   <q-checkbox size=\"sm\"
               :model-value=\"props.row.export === true\"
               @update:model-value=\"$parent.$emit('export-toggled', { id: props.row.sample_id, value: $event })\" />
 </q-td>
 """,
-                        )
-                    except Exception as e:
-                        logging.warning(
-                            "[samples_overview] add_slot export column failed: %s",
-                            e,
-                            exc_info=True,
-                        )
+                            )
+                        except Exception as e:
+                            logging.warning(
+                                "[samples_overview] add_slot export column failed: %s",
+                                e,
+                                exc_info=True,
+                            )
 
                     # Handle finalize-target action
                     def _on_finalize_target(event):
@@ -3284,105 +3391,109 @@ class GUILauncher:
                         )
 
                     # Track multi-selection for batch export via custom checkbox column
-                    try:
-                        self._set_selected_sample_ids(set())
+                    if can_export_reports:
+                        try:
+                            self._set_selected_sample_ids(set())
 
-                        def _on_export_toggled(event):
-                            try:
-                                payload = None
-                                if hasattr(event, "args"):
-                                    payload = getattr(event, "args", None)
-                                elif isinstance(event, dict):
-                                    payload = event
-                                if isinstance(payload, dict):
-                                    sid = payload.get("id")
-                                    val = bool(payload.get("value"))
-                                    if sid:
-                                        selected_ids = self._get_selected_sample_ids()
-                                        if val:
-                                            selected_ids.add(str(sid))
-                                        else:
-                                            selected_ids.discard(str(sid))
-                                        selected_ids = self._set_selected_sample_ids(selected_ids)
-                                        # reflect state back into rows
-                                        try:
-                                            for r in self.samples_table.rows or []:
-                                                if r.get("sample_id") == sid:
-                                                    r["export"] = (
-                                                        str(sid) in selected_ids
-                                                    )
-                                            self.samples_table.update()
-                                        except Exception as ue:
-                                            logging.debug(
-                                                "[samples_overview] export row sync failed: %s",
-                                                ue,
-                                                exc_info=True,
+                            def _on_export_toggled(event):
+                                try:
+                                    payload = None
+                                    if hasattr(event, "args"):
+                                        payload = getattr(event, "args", None)
+                                    elif isinstance(event, dict):
+                                        payload = event
+                                    if isinstance(payload, dict):
+                                        sid = payload.get("id")
+                                        val = bool(payload.get("value"))
+                                        if sid:
+                                            selected_ids = self._get_selected_sample_ids()
+                                            if val:
+                                                selected_ids.add(str(sid))
+                                            else:
+                                                selected_ids.discard(str(sid))
+                                            selected_ids = self._set_selected_sample_ids(
+                                                selected_ids
                                             )
-                                        if selected_ids:
-                                            self.export_reports_button.enable()
+                                            # reflect state back into rows
+                                            try:
+                                                for r in self.samples_table.rows or []:
+                                                    if r.get("sample_id") == sid:
+                                                        r["export"] = (
+                                                            str(sid) in selected_ids
+                                                        )
+                                                self.samples_table.update()
+                                            except Exception as ue:
+                                                logging.debug(
+                                                    "[samples_overview] export row sync failed: %s",
+                                                    ue,
+                                                    exc_info=True,
+                                                )
+                                            if selected_ids:
+                                                if self.export_reports_button is not None:
+                                                    self.export_reports_button.enable()
+                                            elif self.export_reports_button is not None:
+                                                self.export_reports_button.disable()
+                                            logging.info(
+                                                "[samples_overview] export-toggled id=%s value=%s "
+                                                "selected_count=%s",
+                                                sid,
+                                                val,
+                                                len(selected_ids),
+                                            )
+                                except Exception as e:
+                                    logging.warning(
+                                        "[samples_overview] export-toggled handler error: %s",
+                                        e,
+                                        exc_info=True,
+                                    )
+
+                            self.samples_table.on("export-toggled", _on_export_toggled)
+
+                            def _on_export_header_toggle(event):
+                                try:
+                                    logging.info(
+                                        "[samples_overview] export-header-toggle raw_args=%r",
+                                        getattr(event, "args", None)
+                                        if hasattr(event, "args")
+                                        else event,
+                                    )
+                                    val = True
+                                    if hasattr(event, "args"):
+                                        a = getattr(event, "args", None)
+                                        if isinstance(a, (list, tuple)) and len(a) > 0:
+                                            val = bool(a[0])
+                                        elif isinstance(a, dict):
+                                            val = bool(a.get("value", True))
                                         else:
-                                            self.export_reports_button.disable()
-                                        logging.info(
-                                            "[samples_overview] export-toggled id=%s value=%s "
-                                            "selected_count=%s",
-                                            sid,
-                                            val,
-                                            len(selected_ids),
-                                        )
-                            except Exception as e:
-                                logging.warning(
-                                    "[samples_overview] export-toggled handler error: %s",
-                                    e,
-                                    exc_info=True,
-                                )
-
-                        self.samples_table.on("export-toggled", _on_export_toggled)
-
-                        def _on_export_header_toggle(event):
-                            try:
-                                logging.info(
-                                    "[samples_overview] export-header-toggle raw_args=%r",
-                                    getattr(event, "args", None)
-                                    if hasattr(event, "args")
-                                    else event,
-                                )
-                                val = True
-                                if hasattr(event, "args"):
-                                    a = getattr(event, "args", None)
-                                    if isinstance(a, (list, tuple)) and len(a) > 0:
-                                        val = bool(a[0])
-                                    elif isinstance(a, dict):
-                                        val = bool(a.get("value", True))
+                                            val = bool(a)
+                                    elif isinstance(event, dict):
+                                        val = bool(event.get("value", True))
+                                    if val:
+                                        self._samples_select_all_visible_for_export()
                                     else:
-                                        val = bool(a)
-                                elif isinstance(event, dict):
-                                    val = bool(event.get("value", True))
-                                if val:
+                                        self._samples_clear_export_selection()
+                                except Exception as e:
+                                    logging.warning(
+                                        "[samples_overview] export-header-toggle failed (%s); "
+                                        "falling back to select-all",
+                                        e,
+                                        exc_info=True,
+                                    )
                                     self._samples_select_all_visible_for_export()
-                                else:
-                                    self._samples_clear_export_selection()
-                            except Exception as e:
-                                logging.warning(
-                                    "[samples_overview] export-header-toggle failed (%s); "
-                                    "falling back to select-all",
-                                    e,
-                                    exc_info=True,
-                                )
-                                self._samples_select_all_visible_for_export()
 
-                        self.samples_table.on(
-                            "export-header-toggle", _on_export_header_toggle
-                        )
-                        logging.info(
-                            "[samples_overview] export-toggled and export-header-toggle "
-                            "handlers registered"
-                        )
-                    except Exception as e:
-                        logging.warning(
-                            "[samples_overview] export checkbox table.on wiring failed: %s",
-                            e,
-                            exc_info=True,
-                        )
+                            self.samples_table.on(
+                                "export-header-toggle", _on_export_header_toggle
+                            )
+                            logging.info(
+                                "[samples_overview] export-toggled and export-header-toggle "
+                                "handlers registered"
+                            )
+                        except Exception as e:
+                            logging.warning(
+                                "[samples_overview] export checkbox table.on wiring failed: %s",
+                                e,
+                                exc_info=True,
+                            )
 
                     # Batch export selected reports + wire SNP bulk (separate try so one failure does not block the other)
                     try:
@@ -3660,6 +3771,8 @@ class GUILauncher:
                                                     ),
                                                     progress_callback=sample_progress_callback,
                                                     workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                    display_config=self.display_config if hasattr(self, 'display_config') else None,
+                                                    viewer_role=resolve_viewer_role(self),
                                                     generated_by=report_meta["generated_by"] or None,
                                                     generated_at=report_meta["generated_at"],
                                                 )
@@ -3681,6 +3794,8 @@ class GUILauncher:
                                                     ),
                                                     progress_callback=sample_progress_callback,
                                                     workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                                                    display_config=self.display_config if hasattr(self, 'display_config') else None,
+                                                    viewer_role=resolve_viewer_role(self),
                                                     generated_by=report_meta["generated_by"] or None,
                                                     generated_at=report_meta["generated_at"],
                                                 )
@@ -3756,6 +3871,8 @@ class GUILauncher:
                                 "selected=%s",
                                 len(self._get_selected_sample_ids() or []),
                             )
+                            if not self._require_export_or_notify():
+                                return
                             # Ensure there is at least one selection before opening
                             if not self._get_selected_sample_ids():
                                 ui.notify("No samples selected", type="warning")
@@ -4048,7 +4165,8 @@ class GUILauncher:
                             await progress_dialog
 
                         # Wire the button now that handlers exist
-                        self.export_reports_button.on_click(_confirm_bulk_export)
+                        if can_export_reports and self.export_reports_button is not None:
+                            self.export_reports_button.on_click(_confirm_bulk_export)
                         logging.info(
                             "[samples_overview] bulk SNP and Export reports buttons "
                             "on_click wired successfully"
@@ -4787,6 +4905,8 @@ class GUILauncher:
 
         async def confirm_report_generation():
             """Show a confirmation dialog before generating the report."""
+            if not self._require_export_or_notify():
+                return
             report_types = {
                 "summary": "Summary Only",
                 "detailed": "Detailed",
@@ -5151,6 +5271,8 @@ class GUILauncher:
                         export_zip=bool(state.get("export_csv", False)),
                         progress_callback=combined_callback,
                         workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                        display_config=self.display_config if hasattr(self, 'display_config') else None,
+                        viewer_role=resolve_viewer_role(self),
                         sample_identifiers=state.get("sample_identifiers"),
                         generated_by=report_meta["generated_by"] or None,
                         generated_at=report_meta["generated_at"],
@@ -5269,6 +5391,8 @@ class GUILauncher:
                     export_zip=bool(state.get("export_csv", False)),
                     progress_callback=progress_callback,
                     workflow_steps=self.workflow_steps if hasattr(self, 'workflow_steps') else None,
+                    display_config=self.display_config if hasattr(self, 'display_config') else None,
+                    viewer_role=resolve_viewer_role(self),
                     generated_by=report_meta["generated_by"] or None,
                     generated_at=report_meta["generated_at"],
                 )
@@ -5440,22 +5564,28 @@ class GUILauncher:
                             "md:w-auto md:min-w-[12rem] md:items-end"
                         ):
                             if target_bam_exists:
+                                from robin.gui.config import (
+                                    any_sample_details_visible_for_launcher,
+                                )
+
+                                if any_sample_details_visible_for_launcher(self):
+                                    ui.button(
+                                        "More details",
+                                        on_click=lambda: ui.navigate.to(
+                                            f"/live_data/{sample_id}/details"
+                                        ),
+                                    ).classes(
+                                        "rounded-lg border border-slate-300 dark:border-slate-600 "
+                                        "text-title-medium w-full md:w-auto md:min-w-[10rem]"
+                                    ).props("flat no-caps")
+                            if self._current_user_can_export():
                                 ui.button(
-                                    "More details",
-                                    on_click=lambda: ui.navigate.to(
-                                        f"/live_data/{sample_id}/details"
-                                    ),
-                                ).classes(
-                                    "rounded-lg border border-slate-300 dark:border-slate-600 "
-                                    "text-title-medium w-full md:w-auto md:min-w-[10rem]"
-                                ).props("flat no-caps")
-                            ui.button(
-                                "Generate report",
-                                on_click=confirm_report_generation,
-                            ).props("color=primary no-caps").classes(
-                                "rounded-lg px-4 py-2 text-title-medium "
-                                "w-full md:w-auto md:min-w-[10rem]"
-                            )
+                                    "Generate report",
+                                    on_click=confirm_report_generation,
+                                ).props("color=primary no-caps").classes(
+                                    "rounded-lg px-4 py-2 text-title-medium "
+                                    "w-full md:w-auto md:min-w-[10rem]"
+                                )
                             ui.button(
                                 "View audit",
                                 on_click=lambda: self._open_sample_audit_dialog(sample_id),
@@ -5516,12 +5646,28 @@ class GUILauncher:
 
                         # Import section visibility helper
                         try:
-                            from robin.gui.config import is_section_enabled, get_enabled_classification_steps
+                            from robin.gui.config import (
+                                any_classification_visible,
+                                is_section_visible,
+                                resolve_viewer_role,
+                            )
                         except ImportError:
-                            is_section_enabled = lambda name, steps: True
-                            get_enabled_classification_steps = lambda steps: {"sturgeon", "nanodx", "random_forest", "pannanodx"}
+                            def is_section_visible(section_id, **kwargs):  # type: ignore[misc]
+                                return True
 
-                        workflow_steps = self.workflow_steps if hasattr(self, 'workflow_steps') else None
+                            def any_classification_visible(**kwargs):  # type: ignore[misc]
+                                return True
+
+                            def resolve_viewer_role(_launcher):  # type: ignore[misc]
+                                return "user"
+
+                        workflow_steps = (
+                            self.workflow_steps if hasattr(self, "workflow_steps") else None
+                        )
+                        display_config = (
+                            self.display_config if hasattr(self, "display_config") else None
+                        )
+                        viewer_role = resolve_viewer_role(self)
 
                         # Defer heavy analysis sections until after initial render
                         analysis_loading_card = ui.card().classes(
@@ -5554,30 +5700,39 @@ class GUILauncher:
                                 with analysis_container:
                                     t_analysis_start = time.perf_counter()
                                     # MNP-Flex section
-                                    try:
+                                    if is_section_visible(
+                                        "mnpflex",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
-                                            from .gui.components.mnpflex import add_mnpflex_section  # type: ignore
-                                        except ImportError:
-                                            from robin.gui.components.mnpflex import add_mnpflex_section
+                                            try:
+                                                from .gui.components.mnpflex import add_mnpflex_section  # type: ignore
+                                            except ImportError:
+                                                from robin.gui.components.mnpflex import add_mnpflex_section
 
-                                        with _sample_page_section_timer(
-                                            "live_data", sample_id, "mnpflex"
-                                        ):
-                                            add_mnpflex_section(
-                                                self, sample_dir, sample_id
-                                            )
-                                    except Exception as e:
-                                        logging.exception(f"[GUI] MNP-Flex section failed: {e}")
-                                        try:
-                                            ui.notify(
-                                                f"MNP-Flex section failed: {e}", type="warning"
-                                            )
-                                        except Exception:
-                                            pass
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "mnpflex"
+                                            ):
+                                                add_mnpflex_section(
+                                                    self, sample_dir, sample_id
+                                                )
+                                        except Exception as e:
+                                            logging.exception(f"[GUI] MNP-Flex section failed: {e}")
+                                            try:
+                                                ui.notify(
+                                                    f"MNP-Flex section failed: {e}", type="warning"
+                                                )
+                                            except Exception:
+                                                pass
 
                                     # Classification section
-                                    enabled_classification_steps = get_enabled_classification_steps(workflow_steps)
-                                    if not workflow_steps or enabled_classification_steps:
+                                    if any_classification_visible(
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.classification import add_classification_section  # type: ignore
@@ -5604,7 +5759,12 @@ class GUILauncher:
                                                 pass
 
                                     # Coverage section (target)
-                                    if not workflow_steps or is_section_enabled("target", workflow_steps):
+                                    if is_section_visible(
+                                        "target",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.coverage import add_coverage_section  # type: ignore
@@ -5629,7 +5789,12 @@ class GUILauncher:
                                                 pass
 
                                     # MGMT section
-                                    if not workflow_steps or is_section_enabled("mgmt", workflow_steps):
+                                    if is_section_visible(
+                                        "mgmt",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.mgmt import add_mgmt_section  # type: ignore
@@ -5648,7 +5813,12 @@ class GUILauncher:
                                                 pass
 
                                     # CNV section
-                                    if not workflow_steps or is_section_enabled("cnv", workflow_steps):
+                                    if is_section_visible(
+                                        "cnv",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.cnv import add_cnv_section  # type: ignore
@@ -5667,7 +5837,12 @@ class GUILauncher:
                                                 pass
 
                                     # Fusion section + BED coverage
-                                    if not workflow_steps or is_section_enabled("fusion", workflow_steps):
+                                    if is_section_visible(
+                                        "fusion",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
                                         try:
                                             try:
                                                 from .gui.components.fusion import add_fusion_section  # type: ignore
@@ -5691,14 +5866,20 @@ class GUILauncher:
                                             except ImportError:
                                                 from robin.gui.components.bed_coverage import add_bed_coverage_section
 
-                                            with _sample_page_section_timer(
-                                                "live_data",
-                                                sample_id,
+                                            if is_section_visible(
                                                 "bed_coverage",
+                                                workflow_steps=workflow_steps,
+                                                display_config=display_config,
+                                        viewer_role=viewer_role,
                                             ):
-                                                add_bed_coverage_section(
-                                                    self, sample_dir
-                                                )
+                                                with _sample_page_section_timer(
+                                                    "live_data",
+                                                    sample_id,
+                                                    "bed_coverage",
+                                                ):
+                                                    add_bed_coverage_section(
+                                                        self, sample_dir
+                                                    )
                                         except Exception as e:
                                             logging.exception(f"[GUI] BED Coverage section failed: {e}")
                                             try:
@@ -5721,257 +5902,261 @@ class GUILauncher:
                         from robin.gui.theme import styled_table
 
                         # Files in output directory (design.md §9 — insight shell)
-                        with ui.element("div").classes("w-full min-w-0").props(
-                            "id=analysis-detail-output-files"
+                        if is_section_visible(
+                            "output_files",
+                            workflow_steps=workflow_steps,
+                            display_config=display_config,
+                            viewer_role=viewer_role,
                         ):
-                            with ui.element("div").classes(
-                                "classification-insight-shell w-full min-w-0"
+                            with ui.element("div").classes("w-full min-w-0").props(
+                                "id=analysis-detail-output-files"
                             ):
-                                ui.label("Output files").classes(
-                                    "classification-insight-heading text-headline-small"
-                                )
                                 with ui.element("div").classes(
-                                    "classification-insight-card w-full min-w-0"
+                                    "classification-insight-shell w-full min-w-0"
                                 ):
-                                    with ui.column().classes(
-                                        "w-full min-w-0 gap-2 p-2 md:p-3"
+                                    ui.label("Output files").classes(
+                                        "classification-insight-heading text-headline-small"
+                                    )
+                                    with ui.element("div").classes(
+                                        "classification-insight-card w-full min-w-0"
                                     ):
-                                        with ui.row().classes(
-                                            "items-center gap-2 min-w-0"
+                                        with ui.column().classes(
+                                            "w-full min-w-0 gap-2 p-2 md:p-3"
                                         ):
-                                            ui.icon("folder_open").classes(
-                                                "classification-insight-icon"
+                                            with ui.row().classes(
+                                                "items-center gap-2 min-w-0"
+                                            ):
+                                                ui.icon("folder_open").classes(
+                                                    "classification-insight-icon"
+                                                )
+                                                ui.label("Sample output directory").classes(
+                                                    "classification-insight-model flex-1 min-w-0"
+                                                )
+                                            ui.label(sample_id).classes(
+                                                "classification-insight-result w-full"
                                             )
-                                            ui.label("Sample output directory").classes(
-                                                "classification-insight-model flex-1 min-w-0"
+                                            ui.label(str(sample_dir)).classes(
+                                                "classification-insight-meta w-full break-all"
                                             )
-                                        ui.label(sample_id).classes(
-                                            "classification-insight-result w-full"
+                                            ui.label(
+                                                "Browse or download files from this run."
+                                            ).classes("classification-insight-foot")
+
+                                    ui.label("File list").classes(
+                                        "target-coverage-panel__meta-label mt-4 mb-1"
+                                    )
+                                    with ui.row().classes(
+                                        "items-center gap-3 mb-2 w-full flex-wrap"
+                                    ):
+                                        files_search = ui.input("Search files…").props(
+                                            "borderless dense clearable"
                                         )
-                                        ui.label(str(sample_dir)).classes(
-                                            "classification-insight-meta w-full break-all"
-                                        )
-                                        ui.label(
-                                            "Browse or download files from this run."
-                                        ).classes("classification-insight-foot")
 
-                                ui.label("File list").classes(
-                                    "target-coverage-panel__meta-label mt-4 mb-1"
-                                )
-                                with ui.row().classes(
-                                    "items-center gap-3 mb-2 w-full flex-wrap"
-                                ):
-                                    files_search = ui.input("Search files…").props(
-                                        "borderless dense clearable"
-                                    )
-
-                                _files_container, files_table = styled_table(
-                                    columns=[
-                                        {
-                                            "name": "name",
-                                            "label": "File",
-                                            "field": "name",
-                                            "sortable": True,
-                                        },
-                                        {
-                                            "name": "size",
-                                            "label": "Size (bytes)",
-                                            "field": "size",
-                                            "sortable": True,
-                                        },
-                                        {
-                                            "name": "mtime",
-                                            "label": "Last Modified",
-                                            "field": "mtime",
-                                            "sortable": True,
-                                        },
-                                        {
-                                            "name": "actions",
-                                            "label": "Download",
-                                            "field": "actions",
-                                            "sortable": False,
-                                            "align": "center",
-                                        },
-                                    ],
-                                    rows=[],
-                                    pagination=20,
-                                    class_size="table-xs",
-                                )
-                                try:
-                                    files_table.props(
-                                        "multi-sort rows-per-page-options="
-                                        '"[10,20,50,0]"'
-                                    )
-                                    files_search.bind_value(files_table, "filter")
-                                except Exception:
-                                    pass
-
-                                # Add download button slot that emits an event
-                                try:
-                                    files_table.add_slot(
-                                        "body-cell-actions",
-                                        """
-<q-td key="actions" :props="props">
-  <q-btn color="primary" size="sm" icon="download"
-         @click="() => $parent.$emit('download-file', props.row.name)"
-         title="Download file" />
-</q-td>
-""",
-                                    )
-                                except Exception:
-                                    pass
-
-                                try:
-                                    files_table.on(
-                                        "download-file",
-                                        lambda event: _download_file(event.args),
-                                    )
-                                except Exception:
-                                    pass
-
-                    # master.csv fields (BAM counters, etc.) are shown in Run summary (summary.py)
-
-                    # Download method for individual files
-                    def _download_file(filename: str):
-                        """Download a single file from the sample directory."""
-                        try:
-                            if not sample_dir or not sample_dir.exists():
-                                ui.notify("Sample directory not found", type="error")
-                                return
-
-                            file_path = sample_dir / filename
-                            if not file_path.exists() or not file_path.is_file():
-                                ui.notify(f"File {filename} not found", type="error")
-                                return
-
-                            with open(file_path, 'rb') as f:
-                                content = f.read()
-
-                            ui.download(
-                                content,
-                                filename=filename,
-                                media_type='application/octet-stream'
-                            )
-
-                        except Exception as e:
-                            ui.notify(f"Download failed: {e}", type="error")
-
-                    # Periodic refresher for files table
-                    _notify_state = {"files_error": False}
-
-                    def _refresh_files_list_sync() -> List[Dict[str, Any]]:
-                        """Synchronous file list refresh - runs in background thread"""
-                        rows = []
-                        if sample_dir and sample_dir.exists():
-                            for f in sorted(sample_dir.iterdir()):
-                                if f.is_file():
-                                    try:
-                                        stat = f.stat()
-                                        rows.append(
+                                    _files_container, files_table = styled_table(
+                                        columns=[
                                             {
-                                                "name": f.name,
-                                                "size": stat.st_size,
-                                                "mtime": time.strftime(
-                                                    "%Y-%m-%d %H:%M:%S",
-                                                    time.localtime(stat.st_mtime),
-                                                ),
-                                                "actions": f.name,  # Store filename for actions
-                                            }
+                                                "name": "name",
+                                                "label": "File",
+                                                "field": "name",
+                                                "sortable": True,
+                                            },
+                                            {
+                                                "name": "size",
+                                                "label": "Size (bytes)",
+                                                "field": "size",
+                                                "sortable": True,
+                                            },
+                                            {
+                                                "name": "mtime",
+                                                "label": "Last Modified",
+                                                "field": "mtime",
+                                                "sortable": True,
+                                            },
+                                            {
+                                                "name": "actions",
+                                                "label": "Download",
+                                                "field": "actions",
+                                                "sortable": False,
+                                                "align": "center",
+                                            },
+                                        ],
+                                        rows=[],
+                                        pagination=20,
+                                        class_size="table-xs",
+                                    )
+                                    try:
+                                        files_table.props(
+                                            "multi-sort rows-per-page-options="
+                                            '"[10,20,50,0]"'
+                                        )
+                                        files_search.bind_value(files_table, "filter")
+                                    except Exception:
+                                        pass
+
+                                    # Add download button slot that emits an event
+                                    try:
+                                        files_table.add_slot(
+                                            "body-cell-actions",
+                                            """
+    <q-td key="actions" :props="props">
+      <q-btn color="primary" size="sm" icon="download"
+             @click="() => $parent.$emit('download-file', props.row.name)"
+             title="Download file" />
+    </q-td>
+    """,
                                         )
                                     except Exception:
-                                        continue
-                        return rows
+                                        pass
 
-                    async def _refresh_sample_detail_async() -> None:
-                        """Asynchronous version of sample detail refresh"""
-                        try:
-                            # Run file operations in background threads
-                            #import concurrent.futures
-                            # Run file I/O operations in background threads to avoid blocking GUI
-                            import asyncio
-                            files_result = await asyncio.to_thread(_refresh_files_list_sync)
+                                    try:
+                                        files_table.on(
+                                            "download-file",
+                                            lambda event: _download_file(event.args),
+                                        )
+                                    except Exception:
+                                        pass
 
-                            # Update UI with results
-                            files_table.rows = files_result
-                            files_table.update()
+                            # master.csv fields (BAM counters, etc.) are shown in Run summary (summary.py)
 
-                            # Reset error states on success
-                            _notify_state["files_error"] = False
-
-                        except Exception as e:
-                            logging.error(f"Error in async sample detail refresh: {e}")
-                            # Only show error notification once per error type
-                            if not _notify_state["files_error"]:
+                            # Download method for individual files
+                            def _download_file(filename: str):
+                                """Download a single file from the sample directory."""
                                 try:
-                                    ui.notify(
-                                        f"Failed to refresh sample data for {sample_id}: {e}",
-                                        type="warning",
+                                    if not self._require_export_or_notify():
+                                        return
+                                    if not sample_dir or not sample_dir.exists():
+                                        ui.notify("Sample directory not found", type="error")
+                                        return
+
+                                    file_path = sample_dir / filename
+                                    if not file_path.exists() or not file_path.is_file():
+                                        ui.notify(f"File {filename} not found", type="error")
+                                        return
+
+                                    with open(file_path, "rb") as f:
+                                        content = f.read()
+
+                                    ui.download(
+                                        content,
+                                        filename=filename,
+                                        media_type="application/octet-stream",
                                     )
+
+                                except Exception as e:
+                                    ui.notify(f"Download failed: {e}", type="error")
+
+                            # Periodic refresher for files table
+                            _notify_state = {"files_error": False}
+
+                            def _refresh_files_list_sync() -> List[Dict[str, Any]]:
+                                """Synchronous file list refresh - runs in background thread"""
+                                rows = []
+                                if sample_dir and sample_dir.exists():
+                                    for f in sorted(sample_dir.iterdir()):
+                                        if f.is_file():
+                                            try:
+                                                stat = f.stat()
+                                                rows.append(
+                                                    {
+                                                        "name": f.name,
+                                                        "size": stat.st_size,
+                                                        "mtime": time.strftime(
+                                                            "%Y-%m-%d %H:%M:%S",
+                                                            time.localtime(stat.st_mtime),
+                                                        ),
+                                                        "actions": f.name,
+                                                    }
+                                                )
+                                            except Exception:
+                                                continue
+                                return rows
+
+                            async def _refresh_sample_detail_async() -> None:
+                                """Asynchronous version of sample detail refresh"""
+                                try:
+                                    import asyncio
+
+                                    files_result = await asyncio.to_thread(
+                                        _refresh_files_list_sync
+                                    )
+                                    files_table.rows = files_result
+                                    files_table.update()
+                                    _notify_state["files_error"] = False
+                                except Exception as e:
+                                    logging.error(
+                                        f"Error in async sample detail refresh: {e}"
+                                    )
+                                    if not _notify_state["files_error"]:
+                                        try:
+                                            ui.notify(
+                                                f"Failed to refresh sample data for {sample_id}: {e}",
+                                                type="warning",
+                                            )
+                                        except Exception:
+                                            pass
+                                        _notify_state["files_error"] = True
+
+                            def _refresh_sample_detail() -> None:
+                                """Synchronous version - kept for backward compatibility"""
+                                try:
+                                    rows = _refresh_files_list_sync()
+                                    files_table.rows = rows
+                                    files_table.update()
+                                except Exception as e:
+                                    if not _notify_state["files_error"]:
+                                        try:
+                                            ui.notify(
+                                                f"Failed to list output files for {sample_id}: {e}",
+                                                type="warning",
+                                            )
+                                        except Exception:
+                                            pass
+                                        _notify_state["files_error"] = True
+
+                            if show_loading and loading_container:
+                                async def _load_initial_data_and_show():
+                                    try:
+                                        await _refresh_sample_detail_async()
+                                        loading_container.style("display: none")
+                                        content_container.style("display: flex")
+                                    except Exception as e:
+                                        logging.error(f"Error loading initial data: {e}")
+                                        loading_container.style("display: none")
+                                        content_container.style("display: flex")
+
+                                try:
+                                    ui.timer(0.1, _load_initial_data_and_show, once=True)
+                                except Exception:
+                                    loading_container.style("display: none")
+                                    content_container.style("display: flex")
+                            else:
+                                try:
+                                    ui.timer(0.1, _refresh_sample_detail_async, once=True)
                                 except Exception:
                                     pass
-                                _notify_state["files_error"] = True
 
-                    def _refresh_sample_detail() -> None:
-                        """Synchronous version - kept for backward compatibility"""
-                        # Refresh files list
-                        try:
-                            rows = _refresh_files_list_sync()
-                            files_table.rows = rows
-                            files_table.update()
-                        except Exception as e:
-                            if not _notify_state["files_error"]:
-                                try:
-                                    ui.notify(
-                                        f"Failed to list output files for {sample_id}: {e}",
-                                        type="warning",
-                                    )
-                                except Exception:
-                                    pass
-                                _notify_state["files_error"] = True
-
-                    # Show content and hide loading after initial data load (only when showing loading)
-                    if show_loading and loading_container:
-                        async def _load_initial_data_and_show():
-                            """Load initial data asynchronously then show content"""
                             try:
-                                # Load initial data
-                                await _refresh_sample_detail_async()
-
-                                # Show content and hide loading
+                                refresh_timer = ui.timer(
+                                    30.0, _refresh_sample_detail_async
+                                )
+                                try:
+                                    ui.context.client.on_disconnect(
+                                        lambda: refresh_timer.deactivate()
+                                    )
+                                except Exception:
+                                    pass
+                            except Exception:
+                                pass
+                        elif show_loading and loading_container:
+                            def _show_content_without_files() -> None:
                                 loading_container.style("display: none")
                                 content_container.style("display: flex")
 
-                            except Exception as e:
-                                logging.error(f"Error loading initial data: {e}")
-                                # Show content anyway to avoid infinite loading
+                            try:
+                                ui.timer(0.1, _show_content_without_files, once=True)
+                            except Exception:
                                 loading_container.style("display: none")
                                 content_container.style("display: flex")
-
-                        # Start initial data loading
-                        try:
-                            ui.timer(0.1, _load_initial_data_and_show, once=True)
-                        except Exception:
-                            # Fallback: show content immediately if timer fails
-                            loading_container.style("display: none")
-                            content_container.style("display: flex")
-                    else:
-                        # For page refreshes, load data immediately
-                        try:
-                            ui.timer(0.1, _refresh_sample_detail_async, once=True)
-                        except Exception:
-                            pass
-
-                    # Start periodic refresh with async version
-                    try:
-                        refresh_timer = ui.timer(30.0, _refresh_sample_detail_async)
-                        try:
-                            ui.context.client.on_disconnect(
-                                lambda: refresh_timer.deactivate()
-                            )
-                        except Exception:
-                            pass
-                    except Exception:
-                        pass
 
     def _create_sample_details_page(self, sample_id: str):
         """Create the sample details page with comprehensive information."""
@@ -6030,6 +6215,48 @@ class GUILauncher:
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
+            from robin.gui.config import is_section_visible, launcher_visibility_context
+            from robin.gui.display_config import SAMPLE_DETAILS_SURFACE
+
+            workflow_steps, display_config, viewer_role = launcher_visibility_context(self)
+            details_surface = SAMPLE_DETAILS_SURFACE
+            show_details_igv = is_section_visible(
+                "target",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            show_details_target_genes = show_details_igv
+            show_details_snp = is_section_visible(
+                "snp",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            show_fusion_target = is_section_visible(
+                "fusion_target",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            show_fusion_genome = is_section_visible(
+                "fusion_genome",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            show_details_fusion_pairs = is_section_visible(
+                "fusion",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            ) and (show_fusion_target or show_fusion_genome)
+
             with ui.element("div").classes("w-full min-w-0").props("id=sample-details-page"):
                 with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
                     with ui.row().classes(
@@ -6049,10 +6276,23 @@ class GUILauncher:
                             ui.label(details_label).classes(
                                 "classification-insight-meta w-full font-mono break-all"
                             )
-                            ui.label(
-                                "IGV browser, sample identifiers, SNP tables, fusion pairs, "
-                                "and target genes."
-                            ).classes("classification-insight-foot")
+                            details_blurbs: List[str] = []
+                            if show_details_igv:
+                                details_blurbs.append("IGV browser")
+                            if show_details_snp:
+                                details_blurbs.append("SNP tables")
+                            if show_details_fusion_pairs:
+                                details_blurbs.append("fusion pairs")
+                            if show_details_target_genes:
+                                details_blurbs.append("target genes")
+                            if details_blurbs:
+                                ui.label(
+                                    " · ".join(details_blurbs).capitalize() + "."
+                                ).classes("classification-insight-foot")
+                            else:
+                                ui.label(
+                                    "No analysis sections are enabled for this page."
+                                ).classes("classification-insight-foot")
                             ui.button(
                                 "View sample identifiers",
                                 on_click=lambda: self._open_view_identifiers_modal(
@@ -6143,7 +6383,7 @@ class GUILauncher:
                                     )
 
                     # IGV Viewer section - moved to top, before tables
-                    if sample_dir and sample_dir.exists():
+                    if sample_dir and sample_dir.exists() and show_details_igv:
                         from robin.gui.components.coverage import add_igv_viewer
 
                         with _sample_page_section_timer(
@@ -6152,7 +6392,7 @@ class GUILauncher:
                             add_igv_viewer(self, sample_dir)
 
                     # SNP Analysis section
-                    if sample_dir and sample_dir.exists():
+                    if sample_dir and sample_dir.exists() and show_details_snp:
                         from robin.gui.components.snp import add_snp_section
 
                         with _sample_page_section_timer(
@@ -6161,7 +6401,7 @@ class GUILauncher:
                             add_snp_section(self, sample_dir)
 
                     # Fusion Pairs Table section
-                    if sample_dir and sample_dir.exists():
+                    if sample_dir and sample_dir.exists() and show_details_fusion_pairs:
                         _fusion_pairs_t0 = time.perf_counter()
                         from robin.gui.components.fusion import (
                             _load_processed_pickle,
@@ -6195,9 +6435,9 @@ class GUILauncher:
                             target_file_local = sample_dir / "fusion_candidates_master_processed.pkl"
                             genome_file_local = sample_dir / "fusion_candidates_all_processed.pkl"
                             try:
-                                if target_file_local.exists():
+                                if show_fusion_target and target_file_local.exists():
                                     fusion_data_local = _load_processed_pickle(target_file_local)
-                                elif genome_file_local.exists():
+                                elif show_fusion_genome and genome_file_local.exists():
                                     fusion_data_local = _load_processed_pickle(genome_file_local)
                             except Exception as ex:
                                 logging.warning(f"Failed to load fusion data: {ex}")
@@ -6286,12 +6526,11 @@ class GUILauncher:
                         fusion_data = None
                         if not cache_hit:
                             try:
-                                # Try to load target panel data first, then genome-wide
-                                if target_file.exists():
+                                if show_fusion_target and target_file.exists():
                                     fusion_data = _load_processed_pickle(target_file)
                                     if fusion_data and fusion_data.get("annotated_data") is not None:
                                         fusion_data_loaded = True
-                                elif genome_file.exists():
+                                elif show_fusion_genome and genome_file.exists():
                                     fusion_data = _load_processed_pickle(genome_file)
                                     if fusion_data and fusion_data.get("annotated_data") is not None:
                                         fusion_data_loaded = True
@@ -6870,7 +7109,7 @@ title="View in IGV"
                                 fp_elapsed,
                             )
                     # Target Genes Table section
-                    if sample_dir and sample_dir.exists():
+                    if sample_dir and sample_dir.exists() and show_details_target_genes:
                         target_coverage_file = sample_dir / "target_coverage.csv"
                         bed_coverage_file = sample_dir / "bed_coverage_main.csv"
 
@@ -7807,6 +8046,8 @@ title="View in IGV"
     def _export_logs(self):
         """Export logs to a file."""
         try:
+            if not self._require_export_or_notify():
+                return
             # Simple log export functionality
             log_content = "".join(self._log_buffer)
             if log_content:
@@ -8978,6 +9219,8 @@ title="View in IGV"
 
     def _samples_select_all_visible_for_export(self) -> None:
         """Select every sample_id in the current (filtered) table rows for report export."""
+        if getattr(self, "export_reports_button", None) is None:
+            return
         try:
             rows = getattr(self.samples_table, "rows", None) or []
             visible_ids = {str(r.get("sample_id")) for r in rows if r.get("sample_id")}
@@ -9003,6 +9246,8 @@ title="View in IGV"
             )
 
     def _samples_clear_export_selection(self) -> None:
+        if getattr(self, "export_reports_button", None) is None:
+            return
         try:
             self._set_selected_sample_ids(set())
             for r in self._last_samples_rows or []:
@@ -9953,6 +10198,39 @@ title="View in IGV"
         from robin.gui.admin import create_admin_page
 
         create_admin_page(self)
+
+    def _load_display_config(self):
+        """Load persisted sample-page display settings."""
+        from robin.gui.display_config import SAMPLE_DISPLAY_KEY, SampleDisplayConfig
+
+        raw = self.security_store.get_gui_setting(SAMPLE_DISPLAY_KEY)
+        return SampleDisplayConfig.from_dict(raw)
+
+    def save_display_config(self, config, *, user_id: Optional[int] = None) -> None:
+        """Persist sample-page display settings and refresh the in-memory copy."""
+        from robin.gui.display_config import SAMPLE_DISPLAY_KEY
+        from robin.security.store import utc_now_iso
+
+        username = None
+        if user_id is not None:
+            user = self.security_store.get_user_public(user_id)
+            username = user.username if user else None
+        config.updated_at = utc_now_iso()
+        if username:
+            config.updated_by = username
+        self.security_store.set_gui_setting(
+            SAMPLE_DISPLAY_KEY,
+            config.to_dict(),
+            updated_by_user_id=user_id,
+        )
+        self.display_config = config
+        self._audit_log(
+            event_type="admin.display_config.updated",
+            user_id=user_id,
+            target_type="setting",
+            target_id=SAMPLE_DISPLAY_KEY,
+            details={"role_sections": dict(config.role_sections)},
+        )
 
     def _create_sample_id_generator_page(self):
         """Create the page for generating sample identifiers from Test ID, name, and D.O.B."""

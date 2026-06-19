@@ -2,7 +2,10 @@
 Configuration and helper functions for GUI section visibility.
 """
 
-from typing import List, Set, Optional
+from typing import TYPE_CHECKING, List, Optional, Set
+
+if TYPE_CHECKING:
+    from robin.gui.display_config import SampleDisplayConfig
 
 # Re-export get_confidence_level from classification_config for backward compatibility
 try:
@@ -98,3 +101,107 @@ def get_enabled_classification_steps(workflow_steps: Optional[List[str]]) -> Set
     """
     enabled_sections = get_enabled_sections(workflow_steps)
     return enabled_sections.intersection(set(CLASSIFICATION_STEPS.keys()))
+
+
+def is_section_visible(
+    section_id: str,
+    *,
+    workflow_steps: Optional[List[str]] = None,
+    display_config: Optional["SampleDisplayConfig"] = None,
+    surface: str = "sample_page",
+    viewer_role: Optional[str] = None,
+) -> bool:
+    """Check workflow and admin display config for section visibility."""
+    from robin.gui.display_config import (
+        DEFAULT_VIEWER_ROLE,
+        is_section_visible as _resolve,
+    )
+
+    return _resolve(
+        section_id,
+        workflow_steps=workflow_steps,
+        display_config=display_config,
+        surface=surface,
+        viewer_role=viewer_role or DEFAULT_VIEWER_ROLE,
+    )
+
+
+def get_visible_classification_steps(
+    workflow_steps: Optional[List[str]] = None,
+    display_config: Optional["SampleDisplayConfig"] = None,
+    *,
+    surface: str = "sample_page",
+    viewer_role: Optional[str] = None,
+) -> Set[str]:
+    """Classification steps visible on the sample page or in reports."""
+    from robin.gui.display_config import (
+        DEFAULT_VIEWER_ROLE,
+        get_visible_classification_steps as _resolve,
+    )
+
+    return _resolve(
+        workflow_steps,
+        display_config,
+        surface=surface,
+        viewer_role=viewer_role or DEFAULT_VIEWER_ROLE,
+    )
+
+
+def any_classification_visible(
+    workflow_steps: Optional[List[str]] = None,
+    display_config: Optional["SampleDisplayConfig"] = None,
+    *,
+    surface: str = "sample_page",
+    viewer_role: Optional[str] = None,
+) -> bool:
+    from robin.gui.display_config import (
+        DEFAULT_VIEWER_ROLE,
+        any_classification_visible as _resolve,
+    )
+
+    return _resolve(
+        workflow_steps,
+        display_config,
+        surface=surface,
+        viewer_role=viewer_role or DEFAULT_VIEWER_ROLE,
+    )
+
+
+def resolve_viewer_role(launcher: object) -> str:
+    """Map the signed-in GUI user to a display-config role key."""
+    from robin.gui.display_config import DEFAULT_VIEWER_ROLE
+
+    if launcher is None:
+        return DEFAULT_VIEWER_ROLE
+    get_user_id = getattr(launcher, "_get_current_user_id", None)
+    store = getattr(launcher, "security_store", None)
+    if not callable(get_user_id) or store is None:
+        return DEFAULT_VIEWER_ROLE
+    user_id = get_user_id()
+    if user_id is not None and store.user_has_role(int(user_id), "admin"):
+        return "admin"
+    return "user"
+
+
+def launcher_visibility_context(launcher: object, *, surface: str = "sample_page"):
+    """Return (workflow_steps, display_config, viewer_role) from a launcher."""
+    workflow_steps = (
+        launcher.workflow_steps
+        if launcher is not None and hasattr(launcher, "workflow_steps")
+        else None
+    )
+    display_config = (
+        launcher.display_config
+        if launcher is not None and hasattr(launcher, "display_config")
+        else None
+    )
+    return workflow_steps, display_config, resolve_viewer_role(launcher)
+
+
+def any_sample_details_visible_for_launcher(launcher: object) -> bool:
+    from robin.gui.display_config import any_sample_details_visible
+
+    workflow_steps, display_config, viewer_role = launcher_visibility_context(launcher)
+    return any_sample_details_visible(
+        workflow_steps, display_config, viewer_role=viewer_role
+    )
