@@ -9,6 +9,8 @@ from typing import Any, Mapping, MutableMapping, Optional, Sequence
 import click
 from click.core import ParameterSource
 
+from robin.minknow.toml_config import MinKnowWorkflowConfig, extract_minknow_config, load_minknow_toml
+
 WORKFLOW_REQUIRED_KEYS = ("path", "workflow", "center", "target_panel")
 
 _PATH_KEYS = frozenset({"path", "work_dir", "reference", "toml"})
@@ -138,6 +140,22 @@ def merge_workflow_params(
 
     _validate_required_params(merged)
     return merged
+
+
+def load_minknow_from_workflow_toml(path: Path) -> Optional[MinKnowWorkflowConfig]:
+    """Load ``[minknow]`` settings from a workflow TOML file."""
+    try:
+        config = load_workflow_toml(path)
+    except click.BadParameter:
+        return None
+    minknow_raw = config.get("minknow")
+    if not isinstance(minknow_raw, Mapping):
+        return None
+    return load_minknow_toml(
+        path,
+        workflow_config=config,
+        prefer_workflow=True,
+    )
 
 
 def _parameter_from_commandline(ctx: click.Context, param_name: str) -> bool:

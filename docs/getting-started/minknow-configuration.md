@@ -6,6 +6,25 @@
 
 ---
 
+## Optional: programmatic MinKNOW integration
+
+ROBIN can connect to MinKNOW over the API to show live sequencer status and auto-watch BAM output directories. This requires the optional Python client:
+
+```bash
+pip install 'robin[minknow]'
+```
+
+The **`minknow_api`** package **minor version must match MinKNOW Core** on your instrument (check **Host Settings → About**). Examples:
+
+| MinKNOW Core | Install |
+|--------------|---------|
+| 6.8.x | `pip install 'minknow_api>=6.8.0,<6.9.0'` |
+| 6.10.x | `pip install 'minknow_api>=6.10.0,<6.11.0'` |
+
+CLI: `robin minknow status --host <sequencer>`. GUI: **Sequencer (MinKNOW)** card on the workflow and live-data pages. See [MinKNOW integration plan](../development/minknow-integration.md) for auth, auto-watch, and env vars (`MINKNOW_HOST`, `MINKNOW_AUTO_WATCH`, etc.).
+
+---
+
 ## What ROBIN needs
 
 | Area | Requirement |
@@ -73,7 +92,7 @@ Produce **aligned BAMs** against the **same** FASTA files as **`robin workflow -
 
 | Symptom | What to check |
 |---------|----------------|
-| **`minknow_api` errors** | Install a **`minknow-api`** version that matches your MinKNOW install ([Installation](installation.md) if documented). |
+| **`minknow_api` errors** | Install **`robin[minknow]`** and a **`minknow_api`** version whose **minor version matches MinKNOW Core** (see [Optional: programmatic MinKNOW integration](#optional-programmatic-minknow-integration) above). |
 | **Huge BAMs / missed files** | Reduce reads per file; avoid time-only rollover. |
 | **Reference mismatch** | Alignment reference must match **`--reference`**. |
 
