@@ -1055,6 +1055,11 @@ def utils() -> None:
     pass
 
 
+from robin.minknow.cli import minknow as minknow_cli  # noqa: E402
+
+main.add_command(minknow_cli)
+
+
 @utils.command()
 @click.argument("output_dir", type=click.Path(exists=True, path_type=Path))
 @click.option(

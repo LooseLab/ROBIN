@@ -78,6 +78,13 @@ pip install -e .
 
 This installs the `robin` CLI from your working tree.
 
+**Optional extras** (install only if needed):
+
+| Extra | Command | Use |
+|-------|---------|-----|
+| GUI | `pip install -e '.[gui]'` | NiceGUI launcher (often already in `robin.yml`) |
+| MinKNOW API | `pip install -e '.[minknow]'` | `robin minknow status/watch`; pin `minknow_api` to your Core version — see [MinKNOW configuration](minknow-configuration.md#optional-programmatic-minknow-integration) |
+
 ### Step 4: Download models and ClinVar
 
 Assets are SHA256-verified. Set **`GITHUB_TOKEN`** if downloads use private GitHub.

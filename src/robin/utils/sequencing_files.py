@@ -21,6 +21,36 @@ def panel_bed_filename(panel: str) -> str:
     return f"{panel}_panel_name_uniq.bed"
 
 
+def resolve_panel_bed_path(panel: str) -> Optional[Path]:
+    """Return the packaged panel BED path installed with ROBIN, if present."""
+    import importlib.resources as importlib_resources
+
+    name = panel_bed_filename(panel)
+    res = importlib_resources.files("robin.resources").joinpath(name)
+    try:
+        if not res.is_file():
+            return None
+    except Exception:
+        return None
+
+    try:
+        from robin import resources
+
+        bed_path = Path(resources.__file__).resolve().parent / name
+        if bed_path.is_file():
+            return bed_path
+    except Exception:
+        pass
+
+    try:
+        from importlib.resources import as_file
+
+        with as_file(res) as bed_path:
+            return Path(bed_path)
+    except Exception:
+        return None
+
+
 def panel_source_filename(panel: str) -> str:
     """Unprocessed panel BED packaged as ``{panel}_panel_source.bed`` (ship or ``robin add-panel``)."""
     return f"{panel}_panel_source.bed"

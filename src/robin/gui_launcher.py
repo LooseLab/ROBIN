@@ -2885,6 +2885,14 @@ class GUILauncher:
                             "text-body-large text-slate-600 dark:text-slate-400 max-w-3xl"
                         )
 
+                from robin.gui.components.minknow import add_minknow_sequencer_section
+
+                with ui.column().classes("w-full max-w-7xl mx-auto gap-3"):
+                    add_minknow_sequencer_section(
+                        compact=False,
+                        workflow_runner=self.workflow_runner,
+                    )
+
                 # Samples table section — outer column keeps mobile scroll behavior
                 with ui.column().classes("w-full max-w-7xl mx-auto gap-3"):
                     can_export_reports = self._current_user_can_export()
@@ -7636,9 +7644,16 @@ title="View in IGV"
                                     ui.label("Total").classes(
                                         "text-xs workflow-monitor-meta"
                                     )
-                                    self.total_count = ui.label("0").classes(
-                                        "text-xs font-semibold workflow-monitor-num"
-                                    )
+                            self.total_count = ui.label("0").classes(
+                                "text-xs font-semibold workflow-monitor-num"
+                            )
+
+                    from robin.gui.components.minknow import add_minknow_sequencer_section
+
+                    add_minknow_sequencer_section(
+                        compact=True,
+                        workflow_runner=self.workflow_runner,
+                    )
 
                     # File processing progress (per run)
                     with ui.element("div").classes(
