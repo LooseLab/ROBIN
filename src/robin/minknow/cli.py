@@ -15,7 +15,12 @@ from robin.minknow.client import MinKnowConnectionError
 from robin.minknow.config import MinKnowSettings
 from robin.minknow.models import SequencerStatus
 from robin.minknow.monitor import fetch_sequencer_status
-from robin.minknow.run import MinKnowStartError, StartRunRequest, start_protocol_run
+from robin.minknow.run import (
+    MinKnowStartError,
+    StartRunRequest,
+    fetch_basecall_models_for_position,
+    start_protocol_run,
+)
 from robin.minknow.stream_monitor import acquire_stream_monitor
 from robin.minknow.toml_config import load_minknow_toml
 from robin.minknow.workflow_refs import load_workflow_config_for_refs
@@ -230,6 +235,78 @@ def watch(
     sys.exit(exit_code)
 
 
+@minknow.command("models")
+@click.option(
+    "--host",
+    required=True,
+    help="Hostname or IP address of the machine running MinKNOW.",
+)
+@click.option(
+    "--position",
+    required=True,
+    help="Flow cell position name (used to read product code and sample rate).",
+)
+@click.option(
+    "--kit",
+    default="SQK-LSK114",
+    show_default=True,
+    help="Sequencing kit for basecall configuration lookup.",
+)
+@auth_click_options()
+def models(
+    host: str,
+    position: str,
+    kit: str,
+    port: Optional[int],
+    api_token: Optional[str],
+    client_cert_chain: Optional[Path],
+    client_key: Optional[Path],
+    ca_cert: Optional[Path],
+    use_local_token: Optional[bool],
+) -> None:
+    """List basecall simplex and modified models installed on a MinKNOW host."""
+    from robin.minknow.model_resolve import score_simplex_model
+
+    auth = build_auth_config(
+        host,
+        port=port,
+        api_token=api_token,
+        client_cert_chain=client_cert_chain,
+        client_key=client_key,
+        ca_cert=ca_cert,
+        use_local_token=use_local_token,
+    )
+
+    try:
+        result = fetch_basecall_models_for_position(
+            auth,
+            position=position,
+            kit=kit,
+        )
+    except MinKnowConnectionError as exc:
+        raise click.ClickException(f"MinKNOW connection failed: {exc}") from exc
+    except MinKnowStartError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(
+        f"Basecall models for {result.product_code} / {kit} "
+        f"({result.sample_rate} Hz) on {host}:"
+    )
+    if not result.models:
+        click.echo("  (none)")
+        return
+
+    for model in result.models:
+        recommended = score_simplex_model(model.name) >= 140
+        marker = "  [ROBIN methylation]" if recommended else ""
+        click.echo(f"  {model.name}{marker}")
+        if model.modified_models:
+            for modified in model.modified_models:
+                click.echo(f"    + {modified}")
+        else:
+            click.echo("    + (no attachable modified models)")
+
+
 @minknow.command("start")
 @click.option(
     "--host",
@@ -365,6 +442,12 @@ def start(
         click.echo(f"  {line}")
 
     if dry_run:
+        if not skip_model_check:
+            _validate_preset_models_for_start(
+                auth,
+                preset,
+                resolved_position,
+            )
         click.echo("Dry run — protocol not started.")
         return
 
@@ -498,6 +581,88 @@ def _watch_auto_add_paths(settings: MinKnowSettings) -> None:
         release()
         signal.signal(signal.SIGINT, previous_int)
         signal.signal(signal.SIGTERM, previous_term)
+
+
+def _validate_preset_models_for_start(
+    auth: MinKnowAuthConfig,
+    preset,
+    position: str,
+) -> None:
+    """Resolve preset models against the connected host; raise on failure."""
+    import grpc
+
+    from minknow_api.manager import Manager
+    from minknow_api.tools import protocols
+
+    from robin.minknow.model_resolve import resolve_preset_simplex_model
+    from robin.minknow.run import _find_position
+
+    try:
+        manager = Manager(**auth.manager_kwargs())
+    except grpc.RpcError as exc:
+        raise click.ClickException(
+            f"MinKNOW connection failed: {exc.details()}"
+        ) from exc
+
+    try:
+        flow_position = _find_position(manager, position)
+        connection = flow_position.connect()
+        flow_cell = connection.device.get_flow_cell_info()
+        if not getattr(flow_cell, "has_flow_cell", False):
+            raise click.ClickException(
+                f"No flow cell present in position {position}"
+            )
+
+        product_code = (
+            preset.product_code
+            or getattr(flow_cell, "user_specified_product_code", None)
+            or getattr(flow_cell, "product_code", None)
+        )
+        if not product_code:
+            raise click.ClickException("Could not determine flow cell product code")
+
+        protocol = protocols.find_protocol(
+            connection,
+            product_code=product_code,
+            kit=preset.kit,
+            config_name=preset.config_name,
+        )
+        if protocol is None:
+            raise click.ClickException(
+                f"No matching protocol for kit {preset.kit!r} "
+                f"and product code {product_code!r}"
+            )
+
+        sample_rate = int(protocol.tags["sample rate"].int_value)
+        resolved_preset, warnings, errors = resolve_preset_simplex_model(
+            manager,
+            preset,
+            product_code=product_code,
+            sample_rate=sample_rate,
+        )
+        for warning in warnings:
+            click.echo(f"Warning: {warning}")
+        if errors:
+            raise click.ClickException("; ".join(errors))
+
+        if resolved_preset.basecall_simplex_model != preset.basecall_simplex_model:
+            click.echo(
+                "Resolved simplex model: "
+                f"{resolved_preset.basecall_simplex_model}"
+            )
+        if resolved_preset.modified_models != preset.modified_models:
+            if resolved_preset.modified_models:
+                click.echo(
+                    "Resolved modified models: "
+                    f"{', '.join(resolved_preset.modified_models)}"
+                )
+            else:
+                click.echo("Resolved modified models: (none — integrated simplex)")
+    finally:
+        try:
+            manager.close()
+        except Exception:
+            pass
 
 
 def format_sequencer_status(status: SequencerStatus) -> str:
