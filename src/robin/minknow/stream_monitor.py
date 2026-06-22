@@ -21,6 +21,7 @@ from robin.minknow.parsing import (
     merge_instance_yield,
     merge_position_description,
     merge_protocol_run,
+    position_acquisition_active,
     position_status_from_description,
 )
 
@@ -153,7 +154,7 @@ class MinKnowStreamMonitor:
 
         if start_streams and status.running:
             self._ensure_position_workers(description)
-        elif not status.running:
+        elif not status.running and not position_acquisition_active(status):
             self._stop_position_workers(status.name)
 
     def _remove_position(self, name: str) -> None:

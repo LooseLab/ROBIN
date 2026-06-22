@@ -26,6 +26,14 @@ _TERMINAL_ACQUISITION_STATES = frozenset(
     }
 )
 
+_ACTIVE_ACQUISITION_STATES = frozenset(
+    {
+        "acquisition_starting",
+        "acquisition_running",
+        "acquisition_finishing",
+    }
+)
+
 
 def position_status_from_description(
     description: Any,
@@ -68,10 +76,21 @@ def merge_position_description(
         connection_error=None,
     )
 
-    if not incoming.running or incoming.protocol_state in _FINISHED_PROTOCOL_STATES:
+    # Manager ``running`` can flicker during mux/protocol transitions while an
+    # acquisition is still active. Only clear cached run metadata when the
+    # manager reports a terminal protocol state (or acquisition stream does).
+    if incoming.protocol_state in _FINISHED_PROTOCOL_STATES:
         return _clear_activity_fields(merged)
 
     return merged
+
+
+def position_acquisition_active(status: Optional[PositionStatus]) -> bool:
+    """Return whether acquisition lifecycle streams indicate an active run."""
+    if status is None:
+        return False
+    state = (status.acquisition_state or "").lower()
+    return state in _ACTIVE_ACQUISITION_STATES
 
 
 def merge_instance_yield(status: PositionStatus, activity: Any) -> PositionStatus:
@@ -84,9 +103,13 @@ def merge_instance_yield(status: PositionStatus, activity: Any) -> PositionStatu
     passed = getattr(yield_summary, "basecalled_pass_read_count", None)
     failed = getattr(yield_summary, "basecalled_fail_read_count", None)
     if passed is not None:
-        updates["passed_reads"] = int(passed)
+        merged_passed = _merge_monotonic_counter(status.passed_reads, passed)
+        if merged_passed != status.passed_reads:
+            updates["passed_reads"] = merged_passed
     if failed is not None:
-        updates["failed_reads"] = int(failed)
+        merged_failed = _merge_monotonic_counter(status.failed_reads, failed)
+        if merged_failed != status.failed_reads:
+            updates["failed_reads"] = merged_failed
 
     if not updates:
         return status
@@ -272,6 +295,17 @@ def _first_non_empty(*values: Any) -> Optional[str]:
         if text:
             return text
     return None
+
+
+def _merge_monotonic_counter(
+    current: Optional[int],
+    new_value: Any,
+) -> int:
+    """Keep yield counters from decreasing after a yield-stream reconnect."""
+    new_int = int(new_value)
+    if current is None:
+        return new_int
+    return max(current, new_int)
 
 
 def _clear_activity_fields(status: PositionStatus) -> PositionStatus:
