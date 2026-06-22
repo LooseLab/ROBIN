@@ -265,7 +265,7 @@ def models(
     use_local_token: Optional[bool],
 ) -> None:
     """List basecall simplex and modified models installed on a MinKNOW host."""
-    from robin.minknow.model_resolve import score_simplex_model
+    from robin.minknow.model_resolve import recommended_cpg_modified_model, score_simplex_model
 
     auth = build_auth_config(
         host,
@@ -301,8 +301,15 @@ def models(
         marker = "  [ROBIN methylation]" if recommended else ""
         click.echo(f"  {model.name}{marker}")
         if model.modified_models:
+            cpg_modified = recommended_cpg_modified_model(
+                model.name,
+                set(model.modified_models),
+            )
             for modified in model.modified_models:
-                click.echo(f"    + {modified}")
+                suffix = ""
+                if modified == cpg_modified:
+                    suffix = "  [ROBIN CpG 5mC/5hmC]"
+                click.echo(f"    + {modified}{suffix}")
         else:
             click.echo("    + (no attachable modified models)")
 

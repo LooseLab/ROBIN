@@ -93,15 +93,49 @@ def pick_simplex_model(
     return resolved, warnings
 
 
-def pick_modified_model(available: set[str], requested: str) -> Optional[str]:
-    """Match a requested modified model to an installed name (with/without @version)."""
+def pick_modified_model(
+    available: set[str],
+    requested: str,
+    *,
+    simplex_model: Optional[str] = None,
+) -> Optional[str]:
+    """Match a requested modified model to an installed name (with/without @version).
+
+    MinKNOW often exposes compound names such as
+    ``dna_r10.4.1_e8.2_400bps_hac@v5.2.0_5mCG_5hmCG@v2`` rather than ``5mCG_5hmCG``.
+    """
     if requested in available:
         return requested
 
     base = _modified_model_base(requested)
     by_base = sorted(m for m in available if _modified_model_base(m) == base)
     if by_base:
-        return by_base[-1]
+        return _prefer_simplex_prefixed(by_base, simplex_model)
+
+    requested_lower = base.lower()
+    version = _simplex_version(requested)
+    suffix = f"_{base}" if base else ""
+    version_suffix = f"{suffix}@{version}" if version and suffix else ""
+
+    compound_matches = sorted(
+        m
+        for m in available
+        if (
+            (suffix and m.endswith(version_suffix))
+            or (suffix and m.endswith(suffix))
+            or (requested_lower and requested_lower in m.lower())
+        )
+    )
+    if compound_matches:
+        if "5mcg" in requested_lower and "5hmc" in requested_lower:
+            cpg = [
+                m
+                for m in compound_matches
+                if "5mcg" in m.lower() and "5hmc" in m.lower()
+            ]
+            if cpg:
+                return _prefer_simplex_prefixed(cpg, simplex_model)
+        return _prefer_simplex_prefixed(compound_matches, simplex_model)
 
     if "5mcg" in base.lower() or "5hmc" in base.lower():
         cpg_models = sorted(
@@ -110,9 +144,32 @@ def pick_modified_model(available: set[str], requested: str) -> Optional[str]:
             if "5mcg" in m.lower() and "5hmc" in m.lower()
         )
         if cpg_models:
-            return cpg_models[-1]
+            return _prefer_simplex_prefixed(cpg_models, simplex_model)
 
     return None
+
+
+def recommended_cpg_modified_model(
+    simplex_model: str,
+    available_modified: set[str],
+) -> Optional[str]:
+    """Return the CpG 5mC/5hmC modified model paired with ``simplex_model``."""
+    return pick_modified_model(
+        available_modified,
+        "5mCG_5hmCG",
+        simplex_model=simplex_model,
+    )
+
+
+def _prefer_simplex_prefixed(
+    candidates: list[str],
+    simplex_model: Optional[str],
+) -> str:
+    if simplex_model:
+        prefixed = [name for name in candidates if name.startswith(simplex_model)]
+        if prefixed:
+            return prefixed[-1]
+    return candidates[-1]
 
 
 def pick_methylation_simplex(
@@ -249,7 +306,11 @@ def resolve_preset_simplex_model(
         resolved_modified: list[str] = []
         unresolved: list[str] = []
         for model_name in updated.modified_models:
-            picked = pick_modified_model(available_modified, model_name)
+            picked = pick_modified_model(
+                available_modified,
+                model_name,
+                simplex_model=updated.basecall_simplex_model,
+            )
             if picked is not None:
                 resolved_modified.append(picked)
                 if picked != model_name:
