@@ -281,6 +281,12 @@ def watch(
     is_flag=True,
     help="Do not verify basecall models against the sequencer.",
 )
+@click.option(
+    "--simulation-bulk-file",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help="Bulk FAST5 for simulated playback (overrides [minknow.preset].simulation_bulk_file).",
+)
 @auth_click_options()
 def start(
     host: Optional[str],
@@ -292,6 +298,7 @@ def start(
     dry_run: bool,
     check_paths: bool,
     skip_model_check: bool,
+    simulation_bulk_file: Optional[Path],
     port: Optional[int],
     api_token: Optional[str],
     client_cert_chain: Optional[Path],
@@ -321,6 +328,8 @@ def start(
         raise click.ClickException(
             f"No [minknow.preset] section found in {preset_path}"
         )
+    if simulation_bulk_file is not None:
+        preset = preset.with_overrides(simulation_bulk_file=str(simulation_bulk_file))
 
     resolved_host = (host or workflow_config_loaded.settings.host).strip()
     if not resolved_host:

@@ -102,5 +102,7 @@ _PRESET_KEYS = frozenset(
         "alignment_reference",
         "reference",
         "bed_file",
+        "simulation_bulk_file",
+        "simulation",
     }
 )
