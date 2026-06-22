@@ -20,6 +20,12 @@ _FINISHED_PROTOCOL_STATES = frozenset(
     }
 )
 
+_TERMINAL_ACQUISITION_STATES = frozenset(
+    {
+        "acquisition_completed",
+    }
+)
+
 
 def position_status_from_description(
     description: Any,
@@ -68,34 +74,64 @@ def merge_position_description(
     return merged
 
 
+def merge_instance_yield(status: PositionStatus, activity: Any) -> PositionStatus:
+    """Merge live yield counters from ``stream_instance_activity`` only."""
+    yield_summary = getattr(activity, "yield_summary", None)
+    if yield_summary is None:
+        return status
+
+    updates: dict[str, Any] = {}
+    passed = getattr(yield_summary, "basecalled_pass_read_count", None)
+    failed = getattr(yield_summary, "basecalled_fail_read_count", None)
+    if passed is not None:
+        updates["passed_reads"] = int(passed)
+    if failed is not None:
+        updates["failed_reads"] = int(failed)
+
+    if not updates:
+        return status
+    return replace(status, **updates)
+
+
 def merge_instance_activity(
     status: PositionStatus,
     activity: Any,
     *,
     protocol_state_enum: Any = None,
 ) -> PositionStatus:
-    """Merge fields from ``stream_instance_activity`` into a position snapshot."""
+    """Backward-compatible merge: yields plus any non-empty run metadata."""
+    status = merge_instance_yield(status, activity)
     updates: dict[str, Any] = {}
 
     flow_cell = getattr(activity, "flow_cell_info", None)
     if flow_cell is not None and getattr(flow_cell, "has_flow_cell", False):
-        updates["flow_cell_id"] = _first_non_empty(
+        flow_cell_id = _first_non_empty(
             getattr(flow_cell, "user_specified_flow_cell_id", None),
             getattr(flow_cell, "flow_cell_id", None),
         )
-        updates["flow_cell_product_code"] = _first_non_empty(
+        if flow_cell_id:
+            updates["flow_cell_id"] = flow_cell_id
+        product_code = _first_non_empty(
             getattr(flow_cell, "user_specified_product_code", None),
             getattr(flow_cell, "product_code", None),
         )
+        if product_code:
+            updates["flow_cell_product_code"] = product_code
 
     run = getattr(activity, "protocol_run_info", None)
     if run is not None:
-        updates["protocol_run_id"] = _non_empty_string(getattr(run, "run_id", None))
-        updates["protocol_name"] = _non_empty_string(getattr(run, "protocol_id", None))
+        protocol_run_id = _non_empty_string(getattr(run, "run_id", None))
+        if protocol_run_id:
+            updates["protocol_run_id"] = protocol_run_id
+        protocol_name = _non_empty_string(getattr(run, "protocol_id", None))
+        if protocol_name:
+            updates["protocol_name"] = protocol_name
         if protocol_state_enum is not None:
-            updates["protocol_run_state"] = _enum_name(
+            protocol_run_state = _enum_name(
                 protocol_state_enum, getattr(run, "state", None)
             )
+            if protocol_run_state:
+                updates["protocol_run_state"] = protocol_run_state
         run_output = _first_non_empty(
             _non_empty_string(getattr(run, "reported_output_path", None)),
             _non_empty_string(getattr(run, "output_path", None)),
@@ -112,18 +148,27 @@ def merge_instance_activity(
             if group_id:
                 updates["protocol_group_id"] = group_id
 
-    yield_summary = getattr(activity, "yield_summary", None)
-    if yield_summary is not None:
-        passed = getattr(yield_summary, "basecalled_pass_read_count", None)
-        failed = getattr(yield_summary, "basecalled_fail_read_count", None)
-        if passed is not None:
-            updates["passed_reads"] = int(passed)
-        if failed is not None:
-            updates["failed_reads"] = int(failed)
-
     if not updates:
         return status
     return replace(status, **updates)
+
+
+def merge_acquisition_run(
+    status: PositionStatus,
+    acquisition_run: Any,
+    *,
+    state_enum: Any,
+) -> PositionStatus:
+    """Merge fields from ``watch_current_acquisition_run`` into a position snapshot."""
+    acquisition_state = _enum_name(state_enum, getattr(acquisition_run, "state", None))
+    if not acquisition_state:
+        return status
+
+    merged = replace(status, acquisition_state=acquisition_state)
+    if acquisition_state in _TERMINAL_ACQUISITION_STATES:
+        cleared = _clear_activity_fields(merged)
+        return replace(cleared, acquisition_state=acquisition_state)
+    return merged
 
 
 def merge_flow_cell_info(status: PositionStatus, flow_cell: Any) -> PositionStatus:
@@ -239,6 +284,7 @@ def _clear_activity_fields(status: PositionStatus) -> PositionStatus:
         protocol_run_id=None,
         protocol_name=None,
         protocol_run_state=None,
+        acquisition_state=None,
         output_path=None,
         output_reads_path=None,
         output_logs_path=None,
