@@ -18,6 +18,7 @@ from robin.minknow.monitor import MinKnowPollResult
 from robin.minknow.parsing import (
     merge_instance_activity,
     merge_output_directories,
+    merge_position_description,
     position_status_from_description,
 )
 
@@ -138,13 +139,15 @@ class MinKnowStreamMonitor:
             time.sleep(RECONNECT_DELAY_S)
 
     def _upsert_position(self, description: Any, *, start_activity: bool) -> None:
-        status = position_status_from_description(
+        incoming = position_status_from_description(
             description,
             host=self._host,
             credentials=self._credentials,
         )
         with self._positions_lock:
-            self._positions[status.name] = status
+            current = self._positions.get(incoming.name)
+            status = merge_position_description(current, incoming)
+            self._positions[incoming.name] = status
 
         if start_activity and status.running:
             self._ensure_activity_worker(description)
