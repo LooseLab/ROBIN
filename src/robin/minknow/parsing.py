@@ -9,6 +9,17 @@ import minknow_api.manager_pb2 as manager_pb2
 
 from robin.minknow.models import PositionStatus
 
+# Terminal manager protocol states — clear cached run metadata when seen.
+_FINISHED_PROTOCOL_STATES = frozenset(
+    {
+        "protocol_finished",
+        "protocol_finished_successfully",
+        "protocol_finished_failed",
+        "protocol_completed",
+        "protocol_stopped",
+    }
+)
+
 
 def position_status_from_description(
     description: Any,
@@ -27,6 +38,34 @@ def position_status_from_description(
         running=bool(position.running),
         device_type=getattr(position, "device_type", None),
     )
+
+
+def merge_position_description(
+    current: Optional[PositionStatus],
+    incoming: PositionStatus,
+) -> PositionStatus:
+    """Merge a manager position update into an existing snapshot.
+
+    Manager ``watch_flow_cell_positions`` events only carry high-level fields.
+    Activity-stream metadata (sample ID, run ID, output paths, yields) must be
+    preserved across manager ``changes`` updates until the run actually ends.
+    """
+    if current is None or current.name != incoming.name:
+        return incoming
+
+    merged = replace(
+        current,
+        state=incoming.state,
+        protocol_state=incoming.protocol_state,
+        running=incoming.running,
+        device_type=incoming.device_type,
+        connection_error=None,
+    )
+
+    if not incoming.running or incoming.protocol_state in _FINISHED_PROTOCOL_STATES:
+        return _clear_activity_fields(merged)
+
+    return merged
 
 
 def merge_instance_activity(
@@ -188,6 +227,25 @@ def _first_non_empty(*values: Any) -> Optional[str]:
         if text:
             return text
     return None
+
+
+def _clear_activity_fields(status: PositionStatus) -> PositionStatus:
+    return replace(
+        status,
+        flow_cell_id=None,
+        flow_cell_product_code=None,
+        sample_id=None,
+        protocol_group_id=None,
+        protocol_run_id=None,
+        protocol_name=None,
+        protocol_run_state=None,
+        output_path=None,
+        output_reads_path=None,
+        output_logs_path=None,
+        passed_reads=None,
+        failed_reads=None,
+        connection_error=None,
+    )
 
 
 def _enum_name(enum_type: Any, value: Any) -> Optional[str]:
