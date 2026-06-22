@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, Optional
 
 import grpc
@@ -12,6 +13,7 @@ from robin.minknow._deps import require_minknow_api
 from robin.minknow.auth import MinKnowAuthConfig
 from robin.minknow.client import MinKnowConnectionError, _format_grpc_error
 from robin.minknow.model_resolve import resolve_preset_simplex_model
+from robin.minknow.preset import RobinRunPreset
 
 LOGGER = logging.getLogger(__name__)
 
@@ -172,6 +174,13 @@ def start_protocol_run(
             runtime=int(preset.experiment_duration_hours * 60 * 60)
         )
 
+        start_kwargs: dict[str, Any] = {
+            "disable_active_channel_selection": False,
+            "mux_scan_period": preset.mux_scan_period,
+            "stop_criteria": stop_criteria,
+        }
+        start_kwargs.update(_simulation_start_kwargs(preset))
+
         run_id = protocols.start_protocol(
             connection,
             identifier=protocol.identifier,
@@ -184,9 +193,7 @@ def start_protocol_run(
             fast5_arguments=None,
             pod5_arguments=None,
             bam_arguments=bam_arguments,
-            disable_active_channel_selection=False,
-            mux_scan_period=preset.mux_scan_period,
-            stop_criteria=stop_criteria,
+            **start_kwargs,
         )
     finally:
         try:
@@ -288,6 +295,19 @@ def _enum_name(enum_type: Any, value: Any) -> Optional[str]:
         return enum_type.Name(value).lower()
     except Exception:
         return str(value)
+
+
+def _simulation_start_kwargs(preset: RobinRunPreset) -> dict[str, Any]:
+    """Build kwargs for MinKNOW simulated bulk FAST5 playback."""
+    if not preset.simulation_bulk_file:
+        return {}
+
+    bulk = Path(preset.simulation_bulk_file).expanduser()
+    # minknow_api checks simulation_path.exists() on the ROBIN host; when MinKNOW
+    # is remote, pass --simulation via args so only the sequencer needs the file.
+    if bulk.is_file():
+        return {"simulation_path": bulk}
+    return {"args": ["--simulation", str(bulk)]}
 
 
 def _find_position(

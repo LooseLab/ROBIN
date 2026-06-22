@@ -56,6 +56,41 @@ If you use adaptive sampling:
 
 ---
 
+## Simulated playback (full-stack testing)
+
+For end-to-end testing without a live flow cell, use MinKNOW **simulated playback** with a bulk FAST5 file.
+
+1. **Add a simulated device** (once per MinKNOW install):
+
+   ```bash
+   python -m minknow_api.examples.manage_simulated_devices --add MS00000
+   ```
+
+   Or use MinKNOW’s `add_simulated_minion` script from the MinKNOW install `bin/` directory.
+
+2. **Download or copy a bulk FAST5** onto the **MinKNOW host** (often 20–35 GB). Public examples are linked from [Readfish getting started](https://looselab.github.io/readfish/getting-started).
+
+3. **Set in workflow / preset TOML** (`[minknow.preset]`) — see **`examples/workflow.simulation.toml`** for a full combined workflow + MinKNOW simulation file:
+
+   ```toml
+   simulation_bulk_file = "/full/path/on/minknow/host/recording.fast5"
+   ```
+
+   Aliases: `simulation_path`, `simulation`. CLI override: `--simulation-bulk-file`.
+
+4. **Start ROBIN workflow** with auto-watch, then start the run from **View Samples** or:
+
+   ```bash
+   robin minknow start --preset my_settings.toml \
+     --position MS00000 --sample-id YOUR_SAMPLE_ID
+   ```
+
+   Use the simulated position name from step 1. Shorten `experiment_duration_hours` for quick tests.
+
+The bulk file path must exist on the **MinKNOW host**. When ROBIN and MinKNOW run on the same machine, `--check-paths` can verify it locally.
+
+---
+
 ## Alignment
 
 Produce **aligned BAMs** against the **same** FASTA files as **`robin workflow --reference`**.

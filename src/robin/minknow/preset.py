@@ -33,6 +33,7 @@ class RobinRunPreset:
     mux_scan_period: float = 1.5
     enable_basecalling: bool = True
     enable_bam: bool = True
+    simulation_bulk_file: Optional[str] = None
 
     @classmethod
     def from_mapping(cls, data: Mapping[str, Any]) -> RobinRunPreset:
@@ -65,6 +66,11 @@ class RobinRunPreset:
             source.get("read_until_reference", source.get("read_until_ref"))
         )
         read_until_bed_file = _optional_str(source.get("read_until_bed_file"))
+        simulation_bulk_file = (
+            _optional_str(source.get("simulation_bulk_file"))
+            or _optional_str(source.get("simulation_path"))
+            or _optional_str(source.get("simulation"))
+        )
 
         bam_reads = source.get("bam_reads_per_file", ROBIN_DEFAULT_BAM_READS_PER_FILE)
         bam_batch = source.get("bam_batch_duration", ROBIN_DEFAULT_BAM_BATCH_DURATION)
@@ -94,6 +100,7 @@ class RobinRunPreset:
             mux_scan_period=float(source.get("mux_scan_period", 1.5)),
             enable_basecalling=bool(source.get("enable_basecalling", True)),
             enable_bam=bool(source.get("enable_bam", True)),
+            simulation_bulk_file=simulation_bulk_file,
         )
 
     def with_overrides(self, **kwargs: Any) -> RobinRunPreset:
@@ -136,10 +143,29 @@ class RobinRunPreset:
         if not self.enable_bam:
             errors.append("ROBIN requires BAM output (enable_bam must be true)")
 
+        if self.simulation_bulk_file:
+            errors.extend(self._simulation_path_errors(check_paths=check_paths))
+
         if check_paths:
             errors.extend(self._path_errors())
 
         return errors
+
+    def _simulation_path_errors(self, *, check_paths: bool) -> list[str]:
+        path = self.simulation_bulk_file
+        if not path:
+            return []
+        bulk = Path(path).expanduser()
+        if bulk.suffix.lower() != ".fast5":
+            return [
+                f"simulation_bulk_file should be a bulk FAST5 file (.fast5), got {path!r}"
+            ]
+        if check_paths and not bulk.exists():
+            return [
+                f"simulation_bulk_file not found on this machine at {path} "
+                "(bulk file must exist on the MinKNOW host; local check is optional)"
+            ]
+        return []
 
     def _path_errors(self) -> list[str]:
         errors: list[str] = []
@@ -165,6 +191,9 @@ class RobinRunPreset:
     def effective_read_until_bed_file(self) -> Optional[str]:
         return self.read_until_bed_file or self.bed_file
 
+    def simulation_enabled(self) -> bool:
+        return bool(self.simulation_bulk_file)
+
     def adaptive_sampling_enabled(self) -> bool:
         return bool(self.read_until_filter and self.effective_read_until_reference())
 
@@ -188,6 +217,8 @@ class RobinRunPreset:
                 f"Adaptive sampling: {self.read_until_filter} "
                 f"({self.effective_read_until_reference()})"
             )
+        if self.simulation_bulk_file:
+            lines.append(f"Simulated playback: {self.simulation_bulk_file}")
         return lines
 
 
