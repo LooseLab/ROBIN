@@ -444,7 +444,7 @@ class GUILauncher:
         self.monitored_directory = ""
         self.reload = reload
         self.center = None  # Center ID for the analysis
-        self._auth_middleware_registered = False
+        self.workflow_toml_path: Optional[Path] = None
         # /robin_dark_mode: session cookie for theme (must work on /login before auth).
         self._unrestricted_page_routes = {"/login", "/robin_dark_mode"}
         self._password_hash: Optional[str] = None  # cached after first read
@@ -1471,6 +1471,7 @@ class GUILauncher:
         monitored_directory: str = "",
         reload: bool = False,
         center: str = None,
+        workflow_toml: Optional[str] = None,
     ) -> bool:
         """Launch the GUI in a completely isolated background thread.
 
@@ -1494,6 +1495,13 @@ class GUILauncher:
         self.workflow_steps = workflow_steps or []
         self.display_config = self._load_display_config()
         self.center = center
+        if workflow_toml:
+            try:
+                self.workflow_toml_path = Path(workflow_toml).expanduser().resolve()
+            except Exception:
+                self.workflow_toml_path = Path(workflow_toml).expanduser()
+        else:
+            self.workflow_toml_path = None
 
         # Store absolute monitored directory to avoid relative path issues
         try:
@@ -2891,6 +2899,7 @@ class GUILauncher:
                     add_minknow_sequencer_section(
                         compact=False,
                         workflow_runner=self.workflow_runner,
+                        workflow_toml=self.workflow_toml_path,
                     )
 
                 # Samples table section — outer column keeps mobile scroll behavior
@@ -7653,6 +7662,7 @@ title="View in IGV"
                     add_minknow_sequencer_section(
                         compact=True,
                         workflow_runner=self.workflow_runner,
+                        workflow_toml=self.workflow_toml_path,
                     )
 
                     # File processing progress (per run)
@@ -10679,6 +10689,7 @@ def launch_gui(
     workflow_steps: list = None,
     monitored_directory: str = "",
     center: str = None,
+    workflow_toml: Optional[str] = None,
 ) -> GUILauncher:
     """Legacy launch function (kept for backward compatibility).
 
@@ -10695,6 +10706,7 @@ def launch_gui(
         workflow_steps=workflow_steps,
         monitored_directory=monitored_directory,
         center=center,
+        workflow_toml=workflow_toml,
     )
 
 

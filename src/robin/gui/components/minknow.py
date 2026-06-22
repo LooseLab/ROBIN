@@ -28,11 +28,12 @@ from robin.minknow.run import (
 )
 from robin.minknow.sample_id import generate_sample_id_md5
 from robin.minknow.stream_monitor import acquire_stream_monitor
-from robin.minknow.toml_config import load_minknow_toml
+from robin.minknow.toml_config import MinKnowWorkflowConfig, load_minknow_toml
 from robin.minknow.workflow_refs import (
     load_workflow_config_for_refs,
     workflow_context_from_runner,
 )
+from robin.workflow_config import load_minknow_from_workflow_toml
 from robin.minknow.watch import process_auto_watch, watch_position_run
 
 LOGGER = logging.getLogger(__name__)
@@ -76,6 +77,38 @@ _ACTIONS_SLOT = """
 """
 
 
+def _workflow_toml_path(
+    workflow_toml: Optional[Path],
+    *,
+    preset_path: Optional[Path] = None,
+) -> Optional[Path]:
+    if workflow_toml is not None:
+        path = workflow_toml.expanduser()
+        if path.is_file():
+            return path
+    if preset_path is not None:
+        path = preset_path.expanduser()
+        if path.is_file():
+            return path
+    env_path = workflow_toml_from_environ()
+    if env_path is not None and env_path.expanduser().is_file():
+        return env_path.expanduser()
+    preset_env = preset_path_from_environ()
+    if preset_env is not None and preset_env.expanduser().is_file():
+        return preset_env.expanduser()
+    return None
+
+
+def _load_workflow_minknow_config(path: Optional[Path]) -> Optional[MinKnowWorkflowConfig]:
+    if path is None or not path.is_file():
+        return None
+    try:
+        return load_minknow_from_workflow_toml(path)
+    except Exception:
+        LOGGER.debug("Failed to load [minknow] from workflow TOML", exc_info=True)
+        return None
+
+
 def add_minknow_sequencer_section(
     *,
     compact: bool = False,
@@ -84,14 +117,18 @@ def add_minknow_sequencer_section(
     workflow_toml: Optional[Path] = None,
 ) -> None:
     """Add a live MinKNOW status card driven by manager/activity streams."""
-    base_settings = initial_settings or MinKnowSettings.from_environ()
     runner_reference, runner_panel = workflow_context_from_runner(workflow_runner)
-    default_workflow_toml = workflow_toml or workflow_toml_from_environ()
-    default_preset_path = (
-        preset_path_from_environ()
-        or default_workflow_toml
-        or Path("examples/minknow.example.toml")
+    resolved_toml = _workflow_toml_path(
+        workflow_toml,
+        preset_path=preset_path_from_environ(),
     )
+    minknow_from_toml = _load_workflow_minknow_config(resolved_toml)
+    if minknow_from_toml is not None:
+        base_settings = minknow_from_toml.settings
+    else:
+        base_settings = initial_settings or MinKnowSettings.from_environ()
+
+    toml_driven = minknow_from_toml is not None and resolved_toml is not None
     state: dict[str, Any] = {
         "host": base_settings.host,
         "enabled": base_settings.enabled,
@@ -100,8 +137,8 @@ def add_minknow_sequencer_section(
         "unsubscribe": None,
         "last_result": MinKnowPollResult(None, None),
         "last_updated": None,
-        "preset_path": str(default_preset_path),
-        "workflow_toml": str(default_workflow_toml) if default_workflow_toml else "",
+        "workflow_toml": str(resolved_toml) if resolved_toml else "",
+        "toml_driven": toml_driven,
         "runner_reference": runner_reference,
         "runner_panel": runner_panel,
         "cached_preset": None,
@@ -126,18 +163,21 @@ def add_minknow_sequencer_section(
         except Exception:
             LOGGER.info("MinKNOW: %s", message)
 
-    def _workflow_config() -> Optional[dict[str, Any]]:
+    def _preset_toml_path() -> Optional[Path]:
         workflow_path = Path(str(state.get("workflow_toml") or "")).expanduser()
         if workflow_path.is_file():
+            return workflow_path
+        return None
+
+    def _workflow_config() -> Optional[dict[str, Any]]:
+        workflow_path = _preset_toml_path()
+        if workflow_path is not None:
             return load_workflow_config_for_refs(workflow_path)
-        preset_path = Path(str(state.get("preset_path") or "")).expanduser()
-        if preset_path.is_file():
-            return load_workflow_config_for_refs(preset_path)
         return None
 
     def _load_preset() -> Optional[RobinRunPreset]:
-        path = Path(str(state.get("preset_path") or "")).expanduser()
-        if not path.is_file():
+        path = _preset_toml_path()
+        if path is None:
             state["cached_preset"] = None
             return None
         try:
@@ -150,12 +190,41 @@ def add_minknow_sequencer_section(
             )
             preset = config.preset
             state["cached_preset"] = preset
+            if config.settings.host:
+                state["host"] = config.settings.host
+            state["auto_watch"] = config.settings.auto_add_paths
             return preset
         except Exception as exc:
             state["cached_preset"] = None
             LOGGER.debug("Failed to load MinKNOW preset", exc_info=True)
             _notify(f"Preset error: {exc}", kind="negative")
             return None
+
+    def _resolve_start_position(preset: RobinRunPreset) -> Optional[str]:
+        if preset.position:
+            return preset.position.strip()
+        names = _position_names()
+        if len(names) == 1:
+            return names[0]
+        return None
+
+    def _format_run_settings_summary() -> str:
+        preset = state.get("cached_preset") or _load_preset()
+        if preset is None:
+            if state.get("workflow_toml"):
+                return (
+                    f"Workflow TOML: {Path(state['workflow_toml']).name} "
+                    "(add [minknow.preset] to start runs from the GUI)"
+                )
+            return "Start robin workflow with --toml containing [minknow] settings."
+        lines = [
+            f"Host: {state['host']}",
+        ]
+        position = _resolve_start_position(preset)
+        if position:
+            lines.append(f"Position: {position}")
+        lines.extend(preset.summary_lines())
+        return "\n".join(lines)
 
     with ui.element("div").classes("classification-insight-card w-full min-w-0"):
         with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
@@ -175,7 +244,12 @@ def add_minknow_sequencer_section(
                     "watch BAM output, or stop active protocols."
                 ).classes("classification-insight-foot")
 
-            with ui.row().classes("w-full gap-2 flex-wrap items-end"):
+            run_settings_label = ui.label("").classes(
+                "classification-insight-foot w-full whitespace-pre-wrap"
+            )
+
+            manual_controls = ui.row().classes("w-full gap-2 flex-wrap items-end")
+            with manual_controls:
                 host_input = ui.input(
                     "MinKNOW host",
                     value=state["host"],
@@ -193,25 +267,53 @@ def add_minknow_sequencer_section(
                     icon="refresh",
                 ).props("flat dense no-caps outline")
 
+            if toml_driven:
+                manual_controls.set_visibility(False)
+            else:
+                run_settings_label.set_visibility(False)
+
             start_controls: dict[str, Any] = {}
             if not compact:
                 with ui.expansion("Start ROBIN run", icon="play_arrow").classes("w-full"):
                     with ui.column().classes("w-full gap-2"):
-                        preset_input = ui.input(
-                            "Preset TOML",
-                            value=state["preset_path"],
-                        ).props("outlined dense").classes("w-full")
-                        preset_input.on(
-                            "blur",
-                            lambda: state.update(
-                                {"preset_path": (preset_input.value or "").strip()}
-                            ),
-                        )
-
-                        position_input = ui.input(
-                            "Position",
-                            placeholder="e.g. P2S_000000-A",
-                        ).props("outlined dense").classes("w-full")
+                        if not toml_driven:
+                            ui.label(
+                                "Configure sequencing in workflow TOML ([minknow] section) "
+                                "or set host and preset path below."
+                            ).classes("text-xs text-slate-500")
+                            preset_input = ui.input(
+                                "Preset TOML",
+                                value=state.get("workflow_toml") or "",
+                            ).props("outlined dense").classes("w-full")
+                            preset_input.on(
+                                "blur",
+                                lambda: state.update(
+                                    {
+                                        "workflow_toml": (
+                                            preset_input.value or ""
+                                        ).strip()
+                                    }
+                                ),
+                            )
+                            position_input = ui.input(
+                                "Position",
+                                placeholder="e.g. P2S_000000-A",
+                            ).props("outlined dense").classes("w-full")
+                            experiment_group_input = ui.input(
+                                "Experiment group",
+                                value="ROBIN_RUN",
+                            ).props("outlined dense").classes("w-full")
+                            duration_input = ui.number(
+                                "Duration (hours)",
+                                value=24,
+                                min=0.1,
+                                step=0.5,
+                            ).props("outlined dense").classes("w-full")
+                        else:
+                            preset_input = None
+                            position_input = None
+                            experiment_group_input = None
+                            duration_input = None
 
                         sample_id_input = ui.input(
                             "Sample ID",
@@ -257,18 +359,6 @@ def add_minknow_sequencer_section(
                                 "/sample_id_generator",
                             ).classes("text-xs")
 
-                        experiment_group_input = ui.input(
-                            "Experiment group",
-                            value="ROBIN_RUN",
-                        ).props("outlined dense").classes("w-full")
-
-                        duration_input = ui.number(
-                            "Duration (hours)",
-                            value=24,
-                            min=0.1,
-                            step=0.5,
-                        ).props("outlined dense").classes("w-full")
-
                         start_button = ui.button(
                             "Start run…",
                             icon="play_arrow",
@@ -284,6 +374,9 @@ def add_minknow_sequencer_section(
                                 "start_button": start_button,
                             }
                         )
+
+            _load_preset()
+            run_settings_label.set_text(_format_run_settings_summary())
 
             summary_label = ui.label("Waiting for stream connection…").classes(
                 "classification-insight-foot w-full"
@@ -398,12 +491,8 @@ def add_minknow_sequencer_section(
         warning_label.set_text(status.version_warning or "")
         positions_table.rows = position_table_rows(status)
 
-        if not compact and start_controls:
-            pos_input = start_controls.get("position_input")
-            if pos_input is not None and not (pos_input.value or "").strip():
-                names = _position_names()
-                if len(names) == 1:
-                    pos_input.value = names[0]
+        if toml_driven:
+            run_settings_label.set_text(_format_run_settings_summary())
 
         _maybe_auto_watch(result)
 
@@ -461,9 +550,10 @@ def add_minknow_sequencer_section(
         state["host"] = (host_input.value or "").strip() or "localhost"
 
     async def _on_refresh_click() -> None:
-        state["host"] = (host_input.value or "").strip() or "localhost"
-        state["enabled"] = bool(enabled_switch.value)
-        state["auto_watch"] = bool(auto_watch_switch.value)
+        if not state.get("toml_driven"):
+            state["host"] = (host_input.value or "").strip() or "localhost"
+            state["enabled"] = bool(enabled_switch.value)
+            state["auto_watch"] = bool(auto_watch_switch.value)
         await _refresh_snapshot()
 
     def _on_enabled_change(_event=None) -> None:
@@ -556,23 +646,51 @@ def add_minknow_sequencer_section(
     def _open_start_dialog() -> None:
         if compact or not start_controls:
             return
-        state["preset_path"] = (start_controls["preset_input"].value or "").strip()
+
+        if not toml_driven and start_controls.get("preset_input") is not None:
+            state["workflow_toml"] = (
+                start_controls["preset_input"].value or ""
+            ).strip()
+
         preset = _load_preset()
         if preset is None:
-            _notify("Preset TOML not found or invalid.", kind="negative")
+            _notify(
+                "No [minknow.preset] in workflow TOML. "
+                "Add sequencing settings to the file used with robin workflow --toml.",
+                kind="negative",
+            )
             return
 
-        position = (start_controls["position_input"].value or "").strip()
         sample_id = (start_controls["sample_id_input"].value or "").strip()
-        if not position:
-            _notify("Enter a flow cell position.", kind="warning")
-            return
         if not sample_id:
             _notify("Enter or generate a sample ID.", kind="warning")
             return
 
-        duration = float(start_controls["duration_input"].value or preset.experiment_duration_hours)
-        preset_for_run = preset.with_overrides(experiment_duration_hours=duration)
+        if toml_driven:
+            position = _resolve_start_position(preset)
+            if not position:
+                _notify(
+                    "Set position in [minknow.preset] or connect when only one "
+                    "MinKNOW position is visible.",
+                    kind="warning",
+                )
+                return
+            preset_for_run = preset
+            experiment_group = preset.experiment_group
+        else:
+            position = (start_controls["position_input"].value or "").strip()
+            if not position:
+                _notify("Enter a flow cell position.", kind="warning")
+                return
+            duration = float(
+                start_controls["duration_input"].value
+                or preset.experiment_duration_hours
+            )
+            preset_for_run = preset.with_overrides(experiment_duration_hours=duration)
+            experiment_group = (
+                start_controls["experiment_group_input"].value or preset.experiment_group
+            ).strip()
+
         errors = preset_for_run.validate()
         if errors:
             _notify("Preset invalid:\n" + "\n".join(errors), kind="negative")
@@ -582,7 +700,7 @@ def add_minknow_sequencer_section(
             f"Host: {state['host']}",
             f"Position: {position}",
             f"Sample ID: {sample_id}",
-            f"Experiment group: {(start_controls['experiment_group_input'].value or preset.experiment_group).strip()}",
+            f"Experiment group: {experiment_group}",
             "",
             *preset_for_run.summary_lines(),
         ]
@@ -590,9 +708,7 @@ def add_minknow_sequencer_section(
             "preset": preset_for_run,
             "position": position,
             "sample_id": sample_id,
-            "experiment_group": (
-                start_controls["experiment_group_input"].value or preset.experiment_group
-            ).strip(),
+            "experiment_group": experiment_group,
         }
         start_confirm_text.set_text("\n".join(lines))
         start_dialog.open()
