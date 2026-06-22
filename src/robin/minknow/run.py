@@ -12,10 +12,23 @@ import grpc
 from robin.minknow._deps import require_minknow_api
 from robin.minknow.auth import MinKnowAuthConfig
 from robin.minknow.client import MinKnowConnectionError, _format_grpc_error
-from robin.minknow.model_resolve import resolve_preset_simplex_model
+from robin.minknow.model_resolve import (
+    SimplexModelInfo,
+    query_basecall_models,
+    resolve_preset_simplex_model,
+)
 from robin.minknow.preset import RobinRunPreset
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class BasecallModelsResult:
+    """Basecall models available for a flow cell position."""
+
+    product_code: str
+    sample_rate: int
+    models: list[SimplexModelInfo]
 
 
 @dataclass(frozen=True)
@@ -47,6 +60,69 @@ class MinKnowStartError(RuntimeError):
 
 class MinKnowStopError(RuntimeError):
     """Raised when a protocol run cannot be stopped."""
+
+
+def fetch_basecall_models_for_position(
+    auth: MinKnowAuthConfig,
+    *,
+    position: str,
+    kit: str,
+) -> BasecallModelsResult:
+    """List basecall models for the flow cell installed at ``position``."""
+    require_minknow_api()
+    from minknow_api.manager import Manager
+    from minknow_api.tools import protocols
+
+    try:
+        manager = Manager(**auth.manager_kwargs())
+    except grpc.RpcError as exc:
+        raise MinKnowConnectionError(_format_grpc_error(exc)) from exc
+
+    try:
+        flow_position = _find_position(manager, position)
+        connection = flow_position.connect()
+        flow_cell = connection.device.get_flow_cell_info()
+        if not getattr(flow_cell, "has_flow_cell", False):
+            raise MinKnowStartError(f"No flow cell present in position {position}")
+
+        product_code = (
+            getattr(flow_cell, "user_specified_product_code", None)
+            or getattr(flow_cell, "product_code", None)
+        )
+        if not product_code:
+            raise MinKnowStartError("Could not determine flow cell product code")
+
+        protocol = protocols.find_protocol(
+            connection,
+            product_code=product_code,
+            kit=kit,
+        )
+        if protocol is None:
+            raise MinKnowStartError(
+                f"No matching protocol for kit {kit!r} "
+                f"and product code {product_code!r}"
+            )
+
+        sample_rate = int(protocol.tags["sample rate"].int_value)
+        models, error = query_basecall_models(
+            manager,
+            product_code=product_code,
+            kit=kit,
+            sample_rate=sample_rate,
+        )
+        if error:
+            raise MinKnowStartError(error)
+
+        return BasecallModelsResult(
+            product_code=product_code,
+            sample_rate=sample_rate,
+            models=models,
+        )
+    finally:
+        try:
+            manager.close()
+        except Exception:
+            LOGGER.debug("Error closing MinKNOW manager connection", exc_info=True)
 
 
 def validate_preset_models(
