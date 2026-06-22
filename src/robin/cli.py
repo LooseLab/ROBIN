@@ -3413,6 +3413,7 @@ def workflow(
                         workflow_steps=workflow_steps,
                         monitored_directory=str(work_dir) if work_dir else str(path),
                         center=center,
+                        workflow_toml=str(toml_config.resolve()) if toml_config else None,
                     )
 
                     # Now install workflow hooks for real-time monitoring
