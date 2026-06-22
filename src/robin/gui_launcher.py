@@ -445,6 +445,7 @@ class GUILauncher:
         self.reload = reload
         self.center = None  # Center ID for the analysis
         self.workflow_toml_path: Optional[Path] = None
+        self._auth_middleware_registered = False
         # /robin_dark_mode: session cookie for theme (must work on /login before auth).
         self._unrestricted_page_routes = {"/login", "/robin_dark_mode"}
         self._password_hash: Optional[str] = None  # cached after first read
