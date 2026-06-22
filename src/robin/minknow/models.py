@@ -22,6 +22,7 @@ class PositionStatus:
     protocol_run_id: Optional[str] = None
     protocol_name: Optional[str] = None
     protocol_run_state: Optional[str] = None
+    acquisition_state: Optional[str] = None
     output_path: Optional[str] = None
     output_reads_path: Optional[str] = None
     output_logs_path: Optional[str] = None

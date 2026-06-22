@@ -22,12 +22,21 @@ _INACTIVE_PROTOCOL_STATES = frozenset(
     }
 )
 
+_TERMINAL_ACQUISITION_STATES = frozenset(
+    {
+        "acquisition_completed",
+    }
+)
+
 
 def position_has_active_run(position: PositionStatus) -> bool:
     """Return whether a sequencing protocol run is in progress on this position."""
-    if not position.sample_id or not position.protocol_run_id:
+    acquisition_state = (position.acquisition_state or "").strip().lower()
+    if acquisition_state in _TERMINAL_ACQUISITION_STATES:
         return False
     if position.protocol_state in _INACTIVE_PROTOCOL_STATES:
+        return False
+    if not position.sample_id or not position.protocol_run_id:
         return False
     return True
 

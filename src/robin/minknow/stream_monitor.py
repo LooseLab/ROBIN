@@ -1,4 +1,4 @@
-"""Stream-based MinKNOW monitoring via manager and instance activity APIs."""
+"""Stream-based MinKNOW monitoring via manager and per-position gRPC streams."""
 
 from __future__ import annotations
 
@@ -16,9 +16,11 @@ from robin.minknow.config import MinKnowSettings
 from robin.minknow.models import PositionStatus, SequencerStatus
 from robin.minknow.monitor import MinKnowPollResult
 from robin.minknow.parsing import (
-    merge_instance_activity,
-    merge_output_directories,
+    merge_acquisition_run,
+    merge_flow_cell_info,
+    merge_instance_yield,
     merge_position_description,
+    merge_protocol_run,
     position_status_from_description,
 )
 
@@ -29,13 +31,13 @@ RECONNECT_DELAY_S = 5.0
 
 
 @dataclass
-class _ActivityWorker:
-    thread: threading.Thread
+class _PositionStreamWorkers:
+    threads: list[threading.Thread] = field(default_factory=list)
     stop_event: threading.Event = field(default_factory=threading.Event)
 
 
 class MinKnowStreamMonitor:
-    """Listen to MinKNOW manager and per-position activity streams."""
+    """Listen to MinKNOW manager and per-position streaming APIs."""
 
     def __init__(self, settings: MinKnowSettings):
         self.settings = settings
@@ -43,8 +45,8 @@ class MinKnowStreamMonitor:
         self._listeners_lock = threading.Lock()
         self._positions: dict[str, PositionStatus] = {}
         self._positions_lock = threading.Lock()
-        self._activity_workers: dict[str, _ActivityWorker] = {}
-        self._activity_lock = threading.Lock()
+        self._position_workers: dict[str, _PositionStreamWorkers] = {}
+        self._workers_lock = threading.Lock()
         self._host_meta: dict[str, object] = {}
         self._meta_lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -80,7 +82,7 @@ class MinKnowStreamMonitor:
 
     def stop(self) -> None:
         self._stop_event.set()
-        self._stop_all_activity_workers()
+        self._stop_all_position_workers()
         manager = self._manager
         if manager is not None:
             try:
@@ -119,9 +121,9 @@ class MinKnowStreamMonitor:
                     if self._stop_event.is_set():
                         break
                     for description in response.additions:
-                        self._upsert_position(description, start_activity=True)
+                        self._upsert_position(description, start_streams=True)
                     for description in response.changes:
-                        self._upsert_position(description, start_activity=True)
+                        self._upsert_position(description, start_streams=True)
                     for description in response.removals:
                         self._remove_position(description.name)
                     self._emit_current()
@@ -132,13 +134,13 @@ class MinKnowStreamMonitor:
                 self._emit_error(str(exc))
             finally:
                 self._manager = None
-                self._stop_all_activity_workers()
+                self._stop_all_position_workers()
 
             if self._stop_event.is_set():
                 break
             time.sleep(RECONNECT_DELAY_S)
 
-    def _upsert_position(self, description: Any, *, start_activity: bool) -> None:
+    def _upsert_position(self, description: Any, *, start_streams: bool) -> None:
         incoming = position_status_from_description(
             description,
             host=self._host,
@@ -149,54 +151,74 @@ class MinKnowStreamMonitor:
             status = merge_position_description(current, incoming)
             self._positions[incoming.name] = status
 
-        if start_activity and status.running:
-            self._ensure_activity_worker(description)
+        if start_streams and status.running:
+            self._ensure_position_workers(description)
         elif not status.running:
-            self._stop_activity_worker(status.name)
+            self._stop_position_workers(status.name)
 
     def _remove_position(self, name: str) -> None:
-        self._stop_activity_worker(name)
+        self._stop_position_workers(name)
         with self._positions_lock:
             self._positions.pop(name, None)
 
-    def _ensure_activity_worker(self, description: Any) -> None:
+    def _ensure_position_workers(self, description: Any) -> None:
         name = description.name
-        with self._activity_lock:
-            worker = self._activity_workers.get(name)
-            if worker is not None and worker.thread.is_alive():
+        with self._workers_lock:
+            workers = self._position_workers.get(name)
+            if workers is not None and any(
+                thread.is_alive() for thread in workers.threads
+            ):
                 return
             stop_event = threading.Event()
-            thread = threading.Thread(
-                target=self._run_activity_stream,
-                args=(description, stop_event),
-                name=f"minknow-activity-{name}",
-                daemon=True,
+            workers = _PositionStreamWorkers(stop_event=stop_event)
+            stream_targets = (
+                self._run_protocol_stream,
+                self._run_acquisition_stream,
+                self._run_yield_stream,
+                self._run_flow_cell_stream,
             )
-            self._activity_workers[name] = _ActivityWorker(
-                thread=thread, stop_event=stop_event
-            )
-            thread.start()
+            for target in stream_targets:
+                thread = threading.Thread(
+                    target=target,
+                    args=(description, stop_event),
+                    name=f"minknow-{target.__name__}-{name}",
+                    daemon=True,
+                )
+                workers.threads.append(thread)
+                thread.start()
+            self._position_workers[name] = workers
 
-    def _stop_activity_worker(self, name: str) -> None:
-        with self._activity_lock:
-            worker = self._activity_workers.pop(name, None)
-        if worker is not None:
-            worker.stop_event.set()
+    def _stop_position_workers(self, name: str) -> None:
+        with self._workers_lock:
+            workers = self._position_workers.pop(name, None)
+        if workers is not None:
+            workers.stop_event.set()
 
-    def _stop_all_activity_workers(self) -> None:
-        with self._activity_lock:
-            workers = list(self._activity_workers.values())
-            self._activity_workers.clear()
-        for worker in workers:
-            worker.stop_event.set()
+    def _stop_all_position_workers(self) -> None:
+        with self._workers_lock:
+            workers_list = list(self._position_workers.values())
+            self._position_workers.clear()
+        for workers in workers_list:
+            workers.stop_event.set()
 
-    def _run_activity_stream(self, description: Any, stop_event: threading.Event) -> None:
+    def _connect_position(self, description: Any, name: str) -> Any:
+        from minknow_api.manager import FlowCellPosition
+
+        position = FlowCellPosition(description, self._host, self._credentials)
+        return position.connect()
+
+    def _update_position(self, name: str, updated: PositionStatus) -> None:
+        with self._positions_lock:
+            current = self._positions.get(name)
+            if current is None:
+                return
+            self._positions[name] = updated
+        self._emit_current()
+
+    def _run_protocol_stream(self, description: Any, stop_event: threading.Event) -> None:
         name = description.name
         try:
-            from minknow_api.manager import FlowCellPosition
-
-            position = FlowCellPosition(description, self._host, self._credentials)
-            connection = position.connect()
+            connection = self._connect_position(description, name)
         except Exception as exc:
             self._set_connection_error(name, str(exc))
             return
@@ -204,20 +226,68 @@ class MinKnowStreamMonitor:
         try:
             import minknow_api.protocol_pb2 as protocol_pb2
 
-            try:
-                directories = connection.instance.get_output_directories()
+            for run in connection.protocol.watch_current_protocol_run():
+                if stop_event.is_set() or self._stop_event.is_set():
+                    break
                 with self._positions_lock:
                     current = self._positions.get(name)
-                    if current is not None:
-                        self._positions[name] = merge_output_directories(
-                            current, directories
-                        )
+                    if current is None:
+                        continue
+                    updated = merge_protocol_run(
+                        current,
+                        run,
+                        protocol_state_enum=protocol_pb2.ProtocolState,
+                    )
+                    self._positions[name] = updated
                 self._emit_current()
-            except Exception:
-                LOGGER.debug(
-                    "Could not read output directories for %s", name, exc_info=True
-                )
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.CANCELLED:
+                self._set_connection_error(name, _format_grpc_error(exc))
+        except Exception as exc:
+            self._set_connection_error(name, str(exc))
 
+    def _run_acquisition_stream(
+        self, description: Any, stop_event: threading.Event
+    ) -> None:
+        name = description.name
+        try:
+            connection = self._connect_position(description, name)
+        except Exception as exc:
+            self._set_connection_error(name, str(exc))
+            return
+
+        try:
+            import minknow_api.acquisition_pb2 as acquisition_pb2
+
+            for acquisition_run in connection.acquisition.watch_current_acquisition_run():
+                if stop_event.is_set() or self._stop_event.is_set():
+                    break
+                with self._positions_lock:
+                    current = self._positions.get(name)
+                    if current is None:
+                        continue
+                    updated = merge_acquisition_run(
+                        current,
+                        acquisition_run,
+                        state_enum=acquisition_pb2.AcquisitionState,
+                    )
+                    self._positions[name] = updated
+                self._emit_current()
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.CANCELLED:
+                self._set_connection_error(name, _format_grpc_error(exc))
+        except Exception as exc:
+            self._set_connection_error(name, str(exc))
+
+    def _run_yield_stream(self, description: Any, stop_event: threading.Event) -> None:
+        name = description.name
+        try:
+            connection = self._connect_position(description, name)
+        except Exception as exc:
+            self._set_connection_error(name, str(exc))
+            return
+
+        try:
             for activity in connection.instance.stream_instance_activity():
                 if stop_event.is_set() or self._stop_event.is_set():
                     break
@@ -225,11 +295,35 @@ class MinKnowStreamMonitor:
                     current = self._positions.get(name)
                     if current is None:
                         continue
-                    self._positions[name] = merge_instance_activity(
-                        current,
-                        activity,
-                        protocol_state_enum=protocol_pb2.ProtocolState,
-                    )
+                    updated = merge_instance_yield(current, activity)
+                    self._positions[name] = updated
+                self._emit_current()
+        except grpc.RpcError as exc:
+            if exc.code() != grpc.StatusCode.CANCELLED:
+                self._set_connection_error(name, _format_grpc_error(exc))
+        except Exception as exc:
+            self._set_connection_error(name, str(exc))
+
+    def _run_flow_cell_stream(
+        self, description: Any, stop_event: threading.Event
+    ) -> None:
+        name = description.name
+        try:
+            connection = self._connect_position(description, name)
+        except Exception as exc:
+            self._set_connection_error(name, str(exc))
+            return
+
+        try:
+            for flow_cell in connection.device.stream_flow_cell_info():
+                if stop_event.is_set() or self._stop_event.is_set():
+                    break
+                with self._positions_lock:
+                    current = self._positions.get(name)
+                    if current is None:
+                        continue
+                    updated = merge_flow_cell_info(current, flow_cell)
+                    self._positions[name] = updated
                 self._emit_current()
         except grpc.RpcError as exc:
             if exc.code() != grpc.StatusCode.CANCELLED:
@@ -278,6 +372,11 @@ class MinKnowStreamMonitor:
                 listener(result)
             except Exception:
                 LOGGER.debug("MinKNOW listener failed", exc_info=True)
+
+
+# Backward-compatible aliases for tests patching legacy private methods.
+MinKnowStreamMonitor._ensure_activity_worker = MinKnowStreamMonitor._ensure_position_workers  # type: ignore[method-assign]
+MinKnowStreamMonitor._stop_activity_worker = MinKnowStreamMonitor._stop_position_workers  # type: ignore[method-assign]
 
 
 @dataclass
