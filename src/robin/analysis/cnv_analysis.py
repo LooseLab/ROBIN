@@ -633,6 +633,134 @@ def pad_arrays(
     return arr1, arr2
 
 
+def compute_cnv_log2_ratio(
+    sample_cnv: Dict[str, np.ndarray],
+    ref_cnv: Dict[str, np.ndarray],
+) -> Dict[str, np.ndarray]:
+    """Moving-averaged log2(sample/reference) per chromosome."""
+    log2_ratios: Dict[str, np.ndarray] = {}
+    for key, sample_values in sample_cnv.items():
+        if key not in ref_cnv:
+            continue
+        ma1 = moving_average(np.asarray(sample_values, dtype=float))
+        ma2 = moving_average(np.asarray(ref_cnv[key], dtype=float))
+        ma1, ma2 = pad_arrays(ma1, ma2, pad_value=0)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.divide(
+                ma1,
+                ma2,
+                out=np.full_like(ma1, np.nan, dtype=float),
+                where=ma2 > 0,
+            )
+            log2_ratios[key] = np.log2(ratio)
+    return log2_ratios
+
+
+def expected_cnv_ploidy_baseline(
+    chromosome: str,
+    sex_estimate: Optional[str] = None,
+) -> Optional[float]:
+    """Expected normal copy number for log2 ratio from absolute ploidy tracks."""
+    from robin.analysis.cnv_regional import is_reportable_chromosome
+
+    if not is_reportable_chromosome(chromosome):
+        return None
+    sex = str(sex_estimate or "").strip().upper()
+    is_male = sex in ("MALE", "XY", "M")
+    if chromosome == "chrY":
+        return 1.0 if is_male else None
+    if chromosome == "chrX":
+        return 1.0 if is_male else 2.0
+    return 2.0
+
+
+def compute_cnv_log2_from_ploidy(
+    cnv_map: Dict[str, np.ndarray],
+    sex_estimate: Optional[str] = None,
+) -> Dict[str, np.ndarray]:
+    """log2(observed ploidy / expected copy number) per bin.
+
+    Matches the interpretation of the GUI ploidy scatter plot: a region at
+    3 copies on an autosome (expected 2) yields log2(3/2) ≈ 0.585.
+    """
+    log2_ratios: Dict[str, np.ndarray] = {}
+    for chrom, values in cnv_map.items():
+        baseline = expected_cnv_ploidy_baseline(chrom, sex_estimate)
+        if baseline is None or baseline <= 0:
+            continue
+        vals = np.asarray(values, dtype=float)
+        with np.errstate(divide="ignore", invalid="ignore"):
+            ratio = np.divide(
+                vals,
+                baseline,
+                out=np.full_like(vals, np.nan, dtype=float),
+                where=vals > 0,
+            )
+            log2_ratios[chrom] = np.log2(ratio)
+    return log2_ratios
+
+
+CNV_REPORT_GENOME_PLOT_BIN_WIDTH = 500_000
+
+
+def resolve_cnv_plot_bin_width(
+    analysis_bin_width: int,
+    plot_bin_width: Optional[int] = None,
+) -> int:
+    """Resolve display bin width the same way as the GUI CNV plot selector."""
+    if plot_bin_width is None or plot_bin_width <= 0:
+        return int(analysis_bin_width)
+    return max(int(plot_bin_width), int(analysis_bin_width))
+
+
+def downsample_cnv_for_plot(
+    values_1d: np.ndarray,
+    analysis_bin_width: int,
+    plot_bin_width: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Downsample CNV values when plot_bin_width > analysis_bin_width.
+
+    Returns (x_positions_bp, values) where x is in genomic bp within the
+    chromosome. If plot_bin_width <= analysis_bin_width, returns original
+    positions and values unchanged.
+    """
+    values = np.asarray(values_1d, dtype=float)
+    if plot_bin_width <= analysis_bin_width or plot_bin_width <= 0:
+        x_bp = np.arange(len(values), dtype=float) * analysis_bin_width
+        return x_bp, values
+    group_size = int(plot_bin_width / analysis_bin_width)
+    if group_size < 1:
+        x_bp = np.arange(len(values), dtype=float) * analysis_bin_width
+        return x_bp, values
+    n = len(values)
+    n_trim = (n // group_size) * group_size
+    if n_trim == 0:
+        x_bp = np.arange(n, dtype=float) * analysis_bin_width
+        return x_bp, values
+    trimmed = values[:n_trim]
+    grouped = trimmed.reshape(-1, group_size)
+    values_out = np.mean(grouped, axis=1)
+    x_bp = (np.arange(len(values_out)) + 0.5) * plot_bin_width
+    return x_bp, values_out
+
+
+def downsample_cnv_chromosome_track(
+    values_1d: np.ndarray,
+    analysis_bin_width: int,
+    plot_bin_width: Optional[int] = None,
+) -> Tuple[np.ndarray, np.ndarray, float]:
+    """GUI-aligned per-chromosome CNV track for plotting.
+
+    Returns (position_mb, values, x_max_mb). The x-axis maximum is always the
+    full chromosome span from analysis bins, even when display bins are wider.
+    """
+    values = np.asarray(values_1d, dtype=float)
+    resolved_plot_bw = resolve_cnv_plot_bin_width(analysis_bin_width, plot_bin_width)
+    x_bp, plot_values = downsample_cnv_for_plot(values, analysis_bin_width, resolved_plot_bw)
+    x_max_mb = len(values) * analysis_bin_width / 1_000_000.0
+    return x_bp / 1_000_000.0, plot_values, x_max_mb
+
+
 def has_reads(bam_file: str) -> bool:
     """Quickly checks if a BAM file has any reads."""
     try:

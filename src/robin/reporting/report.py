@@ -34,6 +34,8 @@ class RobinReport:
         sample_identifiers=None,
         generated_by=None,
         generated_at=None,
+        cnv_summary_normalized=None,
+        plotting_preferences=None,
     ):
         """Initialize the report generator.
 
@@ -48,6 +50,10 @@ class RobinReport:
             sample_identifiers: Optional dict with first_name, last_name, dob, nhs_number for inclusion in report
             generated_by: Optional username of the person who triggered report generation
             generated_at: Optional report generation timestamp (YYYY-MM-DD HH:MM:SS)
+            cnv_summary_normalized: When True, genome-wide CNV summary uses
+                log2(ploidy / expected copy number). When None (default), uses the admin
+                Plotting preference.
+            plotting_preferences: Optional pre-loaded plotting preferences (GUI).
         """
         self.filename = filename
         self.output = output
@@ -62,6 +68,12 @@ class RobinReport:
         self.sample_identifiers = sample_identifiers
         self.generated_by = (str(generated_by).strip() if generated_by else None) or None
         self.generated_at = (str(generated_at).strip() if generated_at else None) or None
+        from robin.gui.plotting_preferences import resolve_cnv_summary_normalized
+
+        self.cnv_summary_normalized = resolve_cnv_summary_normalized(
+            cnv_summary_normalized,
+            plotting_preferences=plotting_preferences,
+        )
         self.robin_commit = get_git_commit()
 
         # Handle filename with None prefix
@@ -541,6 +553,8 @@ def create_pdf(
     sample_identifiers=None,
     generated_by=None,
     generated_at=None,
+    cnv_summary_normalized=None,
+    plotting_preferences=None,
 ):
     """Create a PDF report from ROBIN analysis results.
 
@@ -559,6 +573,11 @@ def create_pdf(
         sample_identifiers: Optional dict with first_name, last_name, dob, nhs_number for report
         generated_by: Optional username of the person who triggered report generation
         generated_at: Optional report generation timestamp (YYYY-MM-DD HH:MM:SS)
+        cnv_summary_normalized: When True, genome-wide CNV summary uses
+            log2(ploidy / expected copy number). When None (default), uses the admin
+            Plotting preference.
+            When None (default), uses the admin Plotting preference.
+        plotting_preferences: Optional pre-loaded plotting preferences (GUI).
 
     Returns:
         Path to the generated PDF file
@@ -574,6 +593,8 @@ def create_pdf(
         sample_identifiers=sample_identifiers,
         generated_by=generated_by,
         generated_at=generated_at,
+        cnv_summary_normalized=cnv_summary_normalized,
+        plotting_preferences=plotting_preferences,
     )
     return report.generate_report(
         report_type=report_type,

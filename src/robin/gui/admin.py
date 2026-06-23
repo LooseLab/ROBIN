@@ -116,6 +116,7 @@ def create_admin_page(launcher: "GUILauncher") -> None:
                     users_tab = ui.tab("users", label="Users")
                     audit_tab = ui.tab("audit", label="Audit log")
                     display_tab = ui.tab("display", label="Sample display")
+                    plotting_tab = ui.tab("plotting", label="Plotting")
 
                 with ui.tab_panels(tabs, value=users_tab).classes("w-full"):
                     with ui.tab_panel(users_tab):
@@ -124,6 +125,8 @@ def create_admin_page(launcher: "GUILauncher") -> None:
                         _build_audit_panel(launcher, audit_filters)
                     with ui.tab_panel(display_tab):
                         _build_sample_display_panel(launcher)
+                    with ui.tab_panel(plotting_tab):
+                        _build_plotting_preferences_panel(launcher)
 
 
 def _build_users_panel(launcher: "GUILauncher", consent_version: str) -> None:
@@ -312,7 +315,6 @@ def _build_sample_display_panel(launcher: "GUILauncher") -> None:
         return effective_section_map(
             workflow_steps,
             current,
-            surface="sample_page",
             viewer_role=role,
         ).get(section_id, True)
 
@@ -424,6 +426,67 @@ def _build_sample_display_panel(launcher: "GUILauncher") -> None:
                     icon="restart_alt",
                     on_click=_reset_to_workflow,
                 ).props("flat no-caps outline")
+
+            if current.updated_at:
+                by = f" by {current.updated_by}" if current.updated_by else ""
+                status_label.set_text(f"Last saved: {current.updated_at}{by}")
+
+
+def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
+    from robin.gui.plotting_preferences import (
+        CNV_REPORT_SCALE_LABELS,
+        CNV_REPORT_SCALES,
+        PlottingPreferencesConfig,
+    )
+
+    current = (
+        launcher.plotting_preferences
+        if getattr(launcher, "plotting_preferences", None) is not None
+        else PlottingPreferencesConfig()
+    )
+
+    with ui.element("div").classes("classification-insight-card w-full min-w-0"):
+        with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
+            ui.label("Report plotting").classes("classification-insight-model")
+            ui.label(
+                "Global defaults for figures in generated PDF reports. "
+                "CNV plots can use absolute ploidy or log2(ploidy / expected copy number). "
+                "Reports from the GUI and reporting CLI "
+                "use this setting unless --cnv-normalized-difference is passed on the CLI."
+            ).classes("classification-insight-foot mb-2")
+
+            ui.label("Copy number variation (CNV)").classes(
+                "classification-insight-meta font-medium mt-2"
+            )
+            scale_toggle = ui.toggle(
+                {
+                    scale: CNV_REPORT_SCALE_LABELS[scale]
+                    for scale in CNV_REPORT_SCALES
+                },
+                value=current.cnv_report_scale,
+            ).classes("w-full")
+
+            status_label = ui.label("").classes("classification-insight-meta")
+
+            def _save() -> None:
+                nonlocal current
+                scale = str(scale_toggle.value or current.cnv_report_scale)
+                if scale not in CNV_REPORT_SCALES:
+                    scale = current.cnv_report_scale
+                updated = current.with_updates(cnv_report_scale=scale)
+                launcher.save_plotting_preferences(
+                    updated,
+                    user_id=launcher._get_current_user_id(),
+                )
+                current = launcher.plotting_preferences
+                status_label.set_text(
+                    f"Saved at {updated.updated_at or 'now'}"
+                    + (f" by {updated.updated_by}" if updated.updated_by else "")
+                )
+                ui.notify("Plotting preferences saved", type="positive")
+
+            with ui.row().classes("w-full gap-2 flex-wrap mt-2"):
+                ui.button("Save", icon="save", on_click=_save).props("color=primary no-caps")
 
             if current.updated_at:
                 by = f" by {current.updated_by}" if current.updated_by else ""

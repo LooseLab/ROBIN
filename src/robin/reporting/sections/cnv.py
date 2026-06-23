@@ -21,7 +21,7 @@ from ..plotting import create_CNV_plot, create_CNV_plot_per_chromosome
 #    CNVAnalysis
 # )
 
-from robin.analysis.cnv_analysis import Result, moving_average, CNV_Difference
+from robin.analysis.cnv_analysis import Result, moving_average, CNV_Difference, compute_cnv_log2_from_ploidy
 from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary, CNVEvent
 from robin.analysis.cnv_regional import (
     SIGNIFICANT_CNV_STATES,
@@ -32,6 +32,7 @@ from robin.analysis.cnv_regional import (
     format_panel_genes_for_table,
     is_reportable_chromosome,
     load_panel_gene_bed,
+    load_target_coverage_df,
     panel_genes_in_region,
 )
 from robin.classification_config import get_cnv_thresholds, is_resolution_sufficient
@@ -212,6 +213,15 @@ class CNVSection(ReportSection):
                 ).item()
             ).cnv
 
+            use_normalized_summary = getattr(
+                self.report, "cnv_summary_normalized", False
+            )
+            log2_cnv = (
+                compute_cnv_log2_from_ploidy(CNVresult.cnv, XYestimate)
+                if use_normalized_summary
+                else None
+            )
+
             # Initialize CNV_Difference object for normalized values
             result3 = CNV_Difference()
 
@@ -297,6 +307,7 @@ class CNVSection(ReportSection):
             )
 
             panel_name, panel_genes_df = load_panel_gene_bed(self.report.output)
+            target_coverage_df = load_target_coverage_df(self.report.output)
             reportable_chromosomes = [
                 chrom
                 for chrom in natsort.natsorted(result3.cnv.keys())
@@ -522,12 +533,25 @@ class CNVSection(ReportSection):
 
             # Generate genome-wide CNV plot
             logger.debug("Generating genome-wide CNV plot")
-            img_buf = create_CNV_plot(CNVresult, cnv_dict)
+            from robin.gui.plotting_preferences import cnv_report_plot_caption
+
+            use_normalized_summary = getattr(
+                self.report, "cnv_summary_normalized", False
+            )
+            img_buf = create_CNV_plot(
+                CNVresult,
+                cnv_dict,
+                normalized_cnv=log2_cnv,
+                use_normalized_difference=use_normalized_summary,
+            )
+            summary_caption_scale = (
+                "normalized_difference" if use_normalized_summary else "ploidy"
+            )
             width, height = inch * 7.5, inch * 2  # A4 width minus margins
             self.summary_elements.append(Image(img_buf, width=width, height=height))
             self.summary_elements.append(
                 Paragraph(
-                    "Copy number variation across chromosomes",
+                    cnv_report_plot_caption(summary_caption_scale),
                     ParagraphStyle(
                         "PlotCaption",
                         parent=self.styles.styles["Caption"],
@@ -758,14 +782,25 @@ class CNVSection(ReportSection):
                         significant_regions[chrom] = region_list
 
                 if panel_name and not panel_genes_df.empty:
+                    panel_plot_blurb = (
+                        "Scatter points show bin-level log2(ploidy / expected copy number); "
+                        "the dark trace is a rolling median. Panel target lollipops (right axis) show "
+                        "per-target sequencing coverage from 0 to the chromosome maximum."
+                        if use_normalized_summary
+                        else (
+                            "Scatter points show bin-level copy number; the dark "
+                            "trace is a rolling median. Panel target lollipops (right axis) show "
+                            "per-target sequencing coverage from 0 to the chromosome maximum."
+                        )
+                    )
                     self.elements.append(
                         Paragraph(
                             (
                                 f"Individual chromosome plots include lollipop markers for "
                                 f"genes in the <b>{panel_name}</b> target panel "
                                 f"({len(panel_genes_df)} genes). "
-                                "Scatter points show bin-level copy number; the dark "
-                                "trace is a rolling median. Panel targets are lollipops; "
+                                f"{panel_plot_blurb} "
+                                "Panel targets are lollipops; "
                                 "genes are labelled when >2 SD from the chromosome mean "
                                 "or when they fall inside a called gain/loss region."
                             ),
@@ -792,6 +827,9 @@ class CNVSection(ReportSection):
                     chromosomes=reportable_chromosomes,
                     panel_genes_df=panel_genes_df,
                     chromosome_status=chromosome_status,
+                    normalized_cnv=log2_cnv,
+                    target_coverage_df=target_coverage_df,
+                    use_log2_ratio=use_normalized_summary,
                 )
                 plot_lookup = dict(chromosome_plots)
                 plotted_chromosomes = [

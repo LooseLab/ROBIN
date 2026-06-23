@@ -58,6 +58,21 @@ def load_panel_gene_bed(output_dir: str) -> tuple[str | None, pd.DataFrame]:
     )
 
 
+def load_target_coverage_df(output_dir: str) -> pd.DataFrame:
+    """Load per-target coverage for panel gene lollipop plots."""
+    path = os.path.join(output_dir, "target_coverage.csv")
+    empty = pd.DataFrame(
+        columns=["chrom", "startpos", "endpos", "name", "length", "coverage", "bases"]
+    )
+    if not os.path.exists(path):
+        return empty
+    try:
+        return pd.read_csv(path)
+    except Exception as exc:
+        logger.debug("Could not read target coverage from %s: %s", path, exc)
+        return empty
+
+
 def format_chromosome_cnv_status(
     chromosome: str,
     events: list[CNVEvent],

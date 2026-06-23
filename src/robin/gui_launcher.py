@@ -441,6 +441,7 @@ class GUILauncher:
         self.workflow_runner = None
         self.workflow_steps = []
         self.display_config = None
+        self.plotting_preferences = None
         self.monitored_directory = ""
         self.reload = reload
         self.center = None  # Center ID for the analysis
@@ -455,6 +456,7 @@ class GUILauncher:
         self.audit_service = AuditService(self.security_store)
         self.consent_version = get_consent_version()
         self.display_config = self._load_display_config()
+        self.plotting_preferences = self._load_plotting_preferences()
 
         # Sample status transition timeout (in seconds)
         # Change to 60 for testing (1 minute), 3600 for production (60 minutes)
@@ -1506,6 +1508,7 @@ class GUILauncher:
         self.workflow_runner = workflow_runner
         self.workflow_steps = workflow_steps or []
         self.display_config = self._load_display_config()
+        self.plotting_preferences = self._load_plotting_preferences()
         self.center = center
         if workflow_toml:
             try:
@@ -3836,6 +3839,7 @@ class GUILauncher:
                                                     viewer_role=resolve_viewer_role(self),
                                                     generated_by=report_meta["generated_by"] or None,
                                                     generated_at=report_meta["generated_at"],
+                                                    plotting_preferences=self.plotting_preferences,
                                                 )
                                             else:
                                                 # Use custom callback that updates dialog only
@@ -3859,6 +3863,7 @@ class GUILauncher:
                                                     viewer_role=resolve_viewer_role(self),
                                                     generated_by=report_meta["generated_by"] or None,
                                                     generated_at=report_meta["generated_at"],
+                                                    plotting_preferences=self.plotting_preferences,
                                                 )
 
                                             if bool(state.get("export_pdf", True)):
@@ -5760,34 +5765,6 @@ class GUILauncher:
                                 analysis_container.clear()
                                 with analysis_container:
                                     t_analysis_start = time.perf_counter()
-                                    # MNP-Flex section
-                                    if is_section_visible(
-                                        "mnpflex",
-                                        workflow_steps=workflow_steps,
-                                        display_config=display_config,
-                                        viewer_role=viewer_role,
-                                    ):
-                                        try:
-                                            try:
-                                                from .gui.components.mnpflex import add_mnpflex_section  # type: ignore
-                                            except ImportError:
-                                                from robin.gui.components.mnpflex import add_mnpflex_section
-
-                                            with _sample_page_section_timer(
-                                                "live_data", sample_id, "mnpflex"
-                                            ):
-                                                add_mnpflex_section(
-                                                    self, sample_dir, sample_id
-                                                )
-                                        except Exception as e:
-                                            logging.exception(f"[GUI] MNP-Flex section failed: {e}")
-                                            try:
-                                                ui.notify(
-                                                    f"MNP-Flex section failed: {e}", type="warning"
-                                                )
-                                            except Exception:
-                                                pass
-
                                     # Classification section
                                     if any_classification_visible(
                                         workflow_steps=workflow_steps,
@@ -5815,6 +5792,34 @@ class GUILauncher:
                                             try:
                                                 ui.notify(
                                                     f"Classification section failed: {e}", type="warning"
+                                                )
+                                            except Exception:
+                                                pass
+
+                                    # V12 Classifier (MNP-Flex)
+                                    if is_section_visible(
+                                        "mnpflex",
+                                        workflow_steps=workflow_steps,
+                                        display_config=display_config,
+                                        viewer_role=viewer_role,
+                                    ):
+                                        try:
+                                            try:
+                                                from .gui.components.mnpflex import add_mnpflex_section  # type: ignore
+                                            except ImportError:
+                                                from robin.gui.components.mnpflex import add_mnpflex_section
+
+                                            with _sample_page_section_timer(
+                                                "live_data", sample_id, "mnpflex"
+                                            ):
+                                                add_mnpflex_section(
+                                                    self, sample_dir, sample_id
+                                                )
+                                        except Exception as e:
+                                            logging.exception(f"[GUI] MNP-Flex section failed: {e}")
+                                            try:
+                                                ui.notify(
+                                                    f"MNP-Flex section failed: {e}", type="warning"
                                                 )
                                             except Exception:
                                                 pass
@@ -10375,6 +10380,42 @@ title="View in IGV"
             target_type="setting",
             target_id=SAMPLE_DISPLAY_KEY,
             details={"role_sections": dict(config.role_sections)},
+        )
+
+    def _load_plotting_preferences(self):
+        """Load persisted global plotting preferences for reports."""
+        from robin.gui.plotting_preferences import (
+            PLOTTING_PREFERENCES_KEY,
+            PlottingPreferencesConfig,
+        )
+
+        raw = self.security_store.get_gui_setting(PLOTTING_PREFERENCES_KEY)
+        return PlottingPreferencesConfig.from_dict(raw)
+
+    def save_plotting_preferences(self, config, *, user_id: Optional[int] = None) -> None:
+        """Persist plotting preferences and refresh the in-memory copy."""
+        from robin.gui.plotting_preferences import PLOTTING_PREFERENCES_KEY
+        from robin.security.store import utc_now_iso
+
+        username = None
+        if user_id is not None:
+            user = self.security_store.get_user_public(user_id)
+            username = user.username if user else None
+        config.updated_at = utc_now_iso()
+        if username:
+            config.updated_by = username
+        self.security_store.set_gui_setting(
+            PLOTTING_PREFERENCES_KEY,
+            config.to_dict(),
+            updated_by_user_id=user_id,
+        )
+        self.plotting_preferences = config
+        self._audit_log(
+            event_type="admin.plotting_preferences.updated",
+            user_id=user_id,
+            target_type="setting",
+            target_id=PLOTTING_PREFERENCES_KEY,
+            details={"cnv_report_scale": config.cnv_report_scale},
         )
 
     def _create_sample_id_generator_page(self):

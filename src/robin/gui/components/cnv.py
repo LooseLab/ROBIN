@@ -24,6 +24,11 @@ from robin.gui.theme import (
     get_user_dark_mode,
 )
 from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary, CNVEvent
+from robin.analysis.cnv_analysis import (
+    compute_cnv_log2_from_ploidy,
+    downsample_cnv_for_plot,
+    resolve_cnv_plot_bin_width,
+)
 from robin.analysis.cnv_regional import (
     SIGNIFICANT_CNV_STATES,
     analyze_cytoband_cnv,
@@ -43,6 +48,105 @@ CNV_PLOT_CONTIGS = frozenset(
 def _cnv_contig_ok(contig: str) -> bool:
     """True if contig should be included in CNV plots (matches report behaviour)."""
     return contig in CNV_PLOT_CONTIGS
+
+
+def _unwrap_cnv_track_map(raw: Any) -> Optional[Dict[str, np.ndarray]]:
+    if not isinstance(raw, dict):
+        return None
+    if "cnv" in raw:
+        inner = raw["cnv"]
+        return inner if isinstance(inner, dict) else None
+    return raw
+
+
+def _cnv_sex_estimate_label(xy_val: Any) -> str:
+    try:
+        s = str(xy_val).strip().upper()
+        if s in ("MALE", "XY"):
+            return "Male"
+        if s in ("FEMALE", "XX"):
+            return "Female"
+    except Exception:
+        pass
+    return "Unknown"
+
+
+def _recompute_cnv_log2_state(state: Dict[str, Any]) -> None:
+    """log2(ploidy / expected copy number) from the same track as the ploidy plot."""
+    sample = _unwrap_cnv_track_map(state.get("cnv"))
+    if not sample:
+        state.pop("cnv_log2", None)
+        return
+    state["cnv_log2"] = compute_cnv_log2_from_ploidy(
+        sample,
+        _cnv_sex_estimate_label(state.get("xy")),
+    )
+
+
+def _build_cnv_track_scatter_series(
+    track_map: Dict[str, np.ndarray],
+    *,
+    selected: str,
+    binw_analysis: int,
+    plot_bin_width: int,
+    chrom_palette: List[str],
+    filter_finite: bool = False,
+) -> List[Dict[str, Any]]:
+    """Build ECharts scatter series for a per-chromosome CNV track."""
+    series: List[Dict[str, Any]] = []
+    if selected == "All":
+        offset_bp = 0
+        dj = 0
+        for contig, cnv in natsort.natsorted(track_map.items()):
+            if not _cnv_contig_ok(contig):
+                continue
+            x_local, vals = downsample_cnv_for_plot(
+                np.asarray(cnv), binw_analysis, int(plot_bin_width)
+            )
+            x_global = offset_bp + x_local
+            if filter_finite:
+                pts = [
+                    [float(x), float(v)]
+                    for x, v in zip(x_global.tolist(), vals.tolist())
+                    if np.isfinite(v)
+                ]
+            else:
+                pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
+            offset_bp += len(cnv) * binw_analysis
+            series.append(
+                {
+                    "type": "scatter",
+                    "name": contig,
+                    "symbolSize": 3,
+                    "itemStyle": {"color": chrom_palette[dj % len(chrom_palette)]},
+                    "data": pts,
+                }
+            )
+            dj += 1
+    else:
+        cnv = track_map.get(selected)
+        if cnv is not None:
+            x_local, vals = downsample_cnv_for_plot(
+                np.asarray(cnv), binw_analysis, int(plot_bin_width)
+            )
+            if filter_finite:
+                pts = [
+                    [float(x), float(v)]
+                    for x, v in zip(x_local.tolist(), vals.tolist())
+                    if np.isfinite(v)
+                ]
+            else:
+                pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
+            series.append(
+                {
+                    "type": "scatter",
+                    "name": selected,
+                    "symbolSize": 3,
+                    "itemStyle": {"color": chrom_palette[0]},
+                    "data": pts,
+                }
+            )
+    return series
 
 
 def _cnv_load_binary_payload(
@@ -272,6 +376,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
     Uses `launcher._cnv_state` for per-sample cache/state.
     Expects CNV.npy, CNV3.npy, CNV_dict.npy, XYestimate.pkl, cnv_data_array.npy in sample folder.
+    The top chart can toggle between absolute ploidy and log2(ploidy / expected copy number).
 
     Controls now trigger immediate refresh instead of waiting for timer updates.
     """
@@ -322,7 +427,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 ).classes("mt-1")
                 ui.label("Y-axis").classes("classification-insight-meta ml-2")
                 cnv_scale = ui.toggle(
-                    options={"linear": "Linear", "log": "Log"}, value="linear"
+                    options={"linear": "Linear", "log": "Log2 ratio"},
+                    value="linear",
                 ).classes("mt-1")
                 ui.label("Plot bin").classes("classification-insight-meta ml-2")
                 # NiceGUI select with dict uses keys as option values; map key -> bp (None = use data)
@@ -474,6 +580,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         ],
                     }
                 ).classes("w-full h-72")
+            genome_charts = (cnv_abs, cnv_diff)
 
             ui.separator().classes("mgmt-detail-separator")
             regional_cnv_label = ui.label("Regional CNV events").classes(
@@ -859,35 +966,6 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             pass
         return "Unknown"
 
-    def _downsample_cnv_for_plot(
-        values_1d: np.ndarray,
-        analysis_bin_width: int,
-        plot_bin_width: int,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """Downsample CNV values for display when plot_bin_width > analysis_bin_width.
-
-        Returns (x_positions_bp, values) where x is in genomic bp. If plot_bin_width
-        <= analysis_bin_width, returns original positions and values unchanged.
-        """
-        if plot_bin_width <= analysis_bin_width or plot_bin_width <= 0:
-            x_bp = np.arange(len(values_1d), dtype=float) * analysis_bin_width
-            return x_bp, np.asarray(values_1d, dtype=float)
-        group_size = int(plot_bin_width / analysis_bin_width)
-        if group_size < 1:
-            x_bp = np.arange(len(values_1d), dtype=float) * analysis_bin_width
-            return x_bp, np.asarray(values_1d, dtype=float)
-        n = len(values_1d)
-        n_trim = (n // group_size) * group_size
-        if n_trim == 0:
-            x_bp = np.arange(n, dtype=float) * analysis_bin_width
-            return x_bp, np.asarray(values_1d, dtype=float)
-        trimmed = np.asarray(values_1d[:n_trim], dtype=float)
-        grouped = trimmed.reshape(-1, group_size)
-        values_out = np.mean(grouped, axis=1)
-        # Center of each group in bp (within chromosome)
-        x_bp = (np.arange(len(values_out)) + 0.5) * plot_bin_width
-        return x_bp, values_out
-
     def _get_cytoband_cnv_summary(
         cnv_data: Dict[str, np.ndarray],
         chromosome: str,
@@ -1038,8 +1116,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
 
     def _render_cnv_from_state(state: Dict[str, Any]) -> None:
         try:
+            _recompute_cnv_log2_state(state)
             cnv_map = state.get("cnv")
             cnv3_map = state.get("cnv3")
+            cnv_log2_map = _unwrap_cnv_track_map(state.get("cnv_log2"))
             if isinstance(cnv_map, dict) and "cnv" in cnv_map:
                 cnv_map = cnv_map["cnv"]
             if isinstance(cnv3_map, dict) and "cnv" in cnv3_map:
@@ -1051,9 +1131,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             col_high, col_low, col_norm = _cnv_value_mode_colors(dark_ui)
             chrom_divider = _cnv_echart_palette(dark_ui)["muted"]
             binw_analysis = state.get("cnv_dict", {}).get("bin_width", 1_000_000)
-            plot_bin_width = state.get("plot_bin_width") or binw_analysis
-            if plot_bin_width < binw_analysis:
-                plot_bin_width = binw_analysis
+            plot_bin_width = resolve_cnv_plot_bin_width(
+                int(binw_analysis),
+                state.get("plot_bin_width"),
+            )
             binw = plot_bin_width  # used for x positions and padding in the plot
             # Keep plot bin width dropdown in sync with state
             try:
@@ -1071,6 +1152,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 pass
             selected = state.get("selected_chrom", "All")
             use_log = state.get("y_scale", "linear") == "log"
+            abs_plot_map = (
+                cnv_log2_map
+                if use_log and cnv_log2_map
+                else cnv_map
+            )
             raw_color_mode = state.get("color_mode", "chromosome")
             # normalize color mode to expected keys
             lval = str(raw_color_mode).strip().lower()
@@ -1090,13 +1176,39 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             
             # Show/hide breakpoint density y-axis based on selection
             should_show_breakpoint_density = selected != "All"
-            for chart in (cnv_abs, cnv_diff):
+            for chart in genome_charts:
                 if len(chart.options["yAxis"]) > 1:
                     # Index 1 is the "Breakpoint density" axis
                     chart.options["yAxis"][1]["show"] = should_show_breakpoint_density
             
-            cnv_abs.options["yAxis"][0]["type"] = "log" if use_log else "value"
-            cnv_abs.options["yAxis"][0]["logBase"] = 10 if use_log else None
+            cnv_abs.options["yAxis"][0]["type"] = "value"
+            cnv_abs.options["yAxis"][0].pop("logBase", None)
+            if use_log:
+                cnv_abs.options["yAxis"][0]["name"] = "Log2 ratio (ploidy / expected)"
+                cnv_abs.options["title"]["text"] = "CNV scatter plot"
+                cnv_abs.options["title"]["top"] = 4
+                cnv_abs.options["title"]["subtext"] = (
+                    "log2(ploidy / expected copy number); 0 = normal"
+                )
+                cnv_abs.options["grid"]["top"] = "26%"
+                try:
+                    y_dz = cnv_abs.options["dataZoom"][1]
+                    y_dz["startValue"] = -2
+                    y_dz["endValue"] = 2
+                except Exception:
+                    pass
+            else:
+                cnv_abs.options["yAxis"][0]["name"] = "Ploidy"
+                cnv_abs.options["title"]["text"] = "CNV scatter plot"
+                cnv_abs.options["title"]["top"] = 10
+                cnv_abs.options["title"].pop("subtext", None)
+                cnv_abs.options["grid"]["top"] = "20%"
+                try:
+                    y_dz = cnv_abs.options["dataZoom"][1]
+                    y_dz["startValue"] = 0
+                    y_dz["endValue"] = 6
+                except Exception:
+                    pass
             # X-axis is always in genomic base pairs; use actual genome/chromosome length
             # so the scale does not change when plot bin width changes (dataMax would shrink
             # with fewer downsampled points).
@@ -1148,11 +1260,19 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 for contig, cnv in natsort.natsorted(cnv_map.items()):
                     if not _cnv_contig_ok(contig):
                         continue
-                    x_local, vals = _downsample_cnv_for_plot(
-                        np.asarray(cnv), binw_analysis, int(plot_bin_width)
+                    plot_cnv = abs_plot_map.get(contig, cnv)
+                    x_local, vals = downsample_cnv_for_plot(
+                        np.asarray(plot_cnv), binw_analysis, int(plot_bin_width)
                     )
                     x_global = offset_bp + x_local
-                    pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
+                    if use_log:
+                        pts = [
+                            [float(x), float(v)]
+                            for x, v in zip(x_global.tolist(), vals.tolist())
+                            if np.isfinite(v)
+                        ]
+                    else:
+                        pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
                     start_bp = offset_bp
                     end_bp = offset_bp + len(cnv) * binw_analysis
                     chrom_offsets[contig] = start_bp
@@ -1177,20 +1297,34 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         )
                     else:
                         try:
-                            autosome_vals = [
-                                v
-                                for k, arr in cnv_map.items()
-                                if k.startswith("chr") and k[3:].isdigit()
-                                for v in arr
-                            ]
-                            mean_val = (
-                                float(np.mean(autosome_vals)) if autosome_vals else 2.0
-                            )
+                            if use_log:
+                                autosome_vals = [
+                                    v
+                                    for k, arr in abs_plot_map.items()
+                                    if k.startswith("chr") and k[3:].isdigit()
+                                    for v in np.asarray(arr, dtype=float)
+                                    if np.isfinite(v)
+                                ]
+                                mean_val = (
+                                    float(np.mean(autosome_vals))
+                                    if autosome_vals
+                                    else 0.0
+                                )
+                            else:
+                                autosome_vals = [
+                                    v
+                                    for k, arr in cnv_map.items()
+                                    if k.startswith("chr") and k[3:].isdigit()
+                                    for v in arr
+                                ]
+                                mean_val = (
+                                    float(np.mean(autosome_vals)) if autosome_vals else 2.0
+                                )
                             std_val = (
                                 float(np.std(autosome_vals)) if autosome_vals else 1.0
                             )
                         except Exception:
-                            mean_val, std_val = 2.0, 1.0
+                            mean_val, std_val = (0.0, 1.0) if use_log else (2.0, 1.0)
                         high, low, norm = [], [], []
                         for xi, vi in pts:
                             z = (vi - mean_val) / std_val if std_val > 0 else 0.0
@@ -1228,12 +1362,21 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 }
                             )
             else:
-                cnv = cnv_map.get(selected)
-                if cnv is not None:
-                    x_local, vals = _downsample_cnv_for_plot(
-                        np.asarray(cnv), binw_analysis, int(plot_bin_width)
+                plot_cnv = abs_plot_map.get(selected)
+                if plot_cnv is None:
+                    plot_cnv = cnv_map.get(selected)
+                if plot_cnv is not None:
+                    x_local, vals = downsample_cnv_for_plot(
+                        np.asarray(plot_cnv), binw_analysis, int(plot_bin_width)
                     )
-                    pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
+                    if use_log:
+                        pts = [
+                            [float(x), float(v)]
+                            for x, v in zip(x_local.tolist(), vals.tolist())
+                            if np.isfinite(v)
+                        ]
+                    else:
+                        pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
                     if color_mode == "chromosome":
                         series_abs.append(
                             {
@@ -1245,14 +1388,17 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             }
                         )
                     else:
-                        expected = 2.0
-                        try:
-                            if selected in ("chrX", "chrY") and str(
-                                state.get("xy", "")
-                            ).upper().startswith("MALE"):
-                                expected = 1.0
-                        except Exception:
-                            pass
+                        if use_log:
+                            expected = 0.0
+                        else:
+                            expected = 2.0
+                            try:
+                                if selected in ("chrX", "chrY") and str(
+                                    state.get("xy", "")
+                                ).upper().startswith("MALE"):
+                                    expected = 1.0
+                            except Exception:
+                                pass
                         vals = [v for _, v in pts]
                         std_val = float(np.std(vals)) if vals else 1.0
                         high, low, norm = [], [], []
@@ -1298,6 +1444,20 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 if s.get("name") in ("centromeres_highlight", "cytobands_highlight")
             ]
             cnv_abs.options["series"] = series_abs + keep
+            if use_log and series_abs:
+                series_abs[0]["markLine"] = {
+                    "symbol": "none",
+                    "data": [
+                        {
+                            "yAxis": 0,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#888888",
+                                "width": 1,
+                            },
+                        }
+                    ],
+                }
             # Build background chromosome areas and vertical labels when showing All
             try:
                 if selected == "All" and chrom_bounds:
@@ -1665,52 +1825,15 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             
             _apply_cnv_echart_chrome(cnv_abs, _is_dark_mode())
             cnv_abs.update()
-            # Difference plot
+            # Difference plot (linear CNV3)
             if cnv3_map:
-                series_diff = []
-                if selected == "All":
-                    offset_bp = 0
-                    dj = 0
-                    for contig, cnv in natsort.natsorted(cnv3_map.items()):
-                        if not _cnv_contig_ok(contig):
-                            continue
-                        x_local, vals = _downsample_cnv_for_plot(
-                            np.asarray(cnv), binw_analysis, int(plot_bin_width)
-                        )
-                        x_global = offset_bp + x_local
-                        pts = list(zip(x_global.tolist(), [float(v) for v in vals]))
-                        offset_bp += len(cnv) * binw_analysis
-                        series_diff.append(
-                            {
-                                "type": "scatter",
-                                "name": contig,
-                                "symbolSize": 3,
-                                "itemStyle": {
-                                    "color": chrom_palette[
-                                        dj % len(chrom_palette)
-                                    ]
-                                },
-                                "data": pts,
-                            }
-                        )
-                        dj += 1
-                else:
-                    cnv = cnv3_map.get(selected)
-                    if cnv is not None:
-                        x_local, vals = _downsample_cnv_for_plot(
-                            np.asarray(cnv), binw_analysis, int(plot_bin_width)
-                        )
-                        pts = list(zip(x_local.tolist(), [float(v) for v in vals]))
-                        series_diff.append(
-                            {
-                                "type": "scatter",
-                                "name": selected,
-                                "symbolSize": 3,
-                                "itemStyle": {"color": chrom_palette[0]},
-                                "data": pts,
-                            }
-                        )
-                # Preserve highlight series by name
+                series_diff = _build_cnv_track_scatter_series(
+                    cnv3_map,
+                    selected=selected,
+                    binw_analysis=int(binw_analysis),
+                    plot_bin_width=int(plot_bin_width),
+                    chrom_palette=chrom_palette,
+                )
                 try:
                     base_series = cnv_diff.options["series"]
                     keep = [
@@ -1723,54 +1846,53 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     keep = []
                 cnv_diff.options["series"] = series_diff + keep
                 _thin_chart_series(cnv_diff, MAX_POINTS_PER_CHART)
-                
-                # Apply gene zoom to difference chart before updating
-                try:
-                    sel_gene = launcher._cnv_state.setdefault(
-                        str(sample_dir), {}
-                    ).get("selected_gene", "All")
-                    
-                    if sel_gene and sel_gene != "All":
-                        gene_df = _load_gene_bed(sample_dir)
-                        gchr = gene_df[gene_df["chrom"] == selected]
-                        
-                        row = gchr[gchr["gene"] == sel_gene]
-                        if not row.empty:
-                            s_bp = int(row.iloc[0]["start_pos"])
-                            e_bp = int(row.iloc[0]["end_pos"])
-                            # Use 10x analysis bin width for padding (in bp)
-                            pad = 10 * binw_analysis
-                            zoom_start = max(0, s_bp - pad)
-                            zoom_end = e_bp + pad
-                            try:
-                                cnv_diff.options["dataZoom"][0].update(
-                                    {
-                                        "startValue": zoom_start,
-                                        "endValue": zoom_end,
-                                        "start": None,  # Remove percentage-based zoom
-                                        "end": None,    # Remove percentage-based zoom
-                                    }
-                                )
-                            except Exception as e:
-                                pass
-                    else:
-                        # Reset zoom when "All" is selected
-                        try:
-                            if isinstance(cnv_diff.options.get("dataZoom"), list) and cnv_diff.options["dataZoom"]:
-                                dz = cnv_diff.options["dataZoom"][0]
-                                dz.pop("startValue", None)
-                                dz.pop("endValue", None)
-                                dz.update({"start": 0, "end": 100})
-                        except Exception as e:
-                            pass
-                except Exception as e:
-                    pass
-                
                 _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
                 cnv_diff.update()
             else:
                 _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
                 cnv_diff.update()
+
+            # Gene zoom on difference chart (single-chromosome view)
+            try:
+                sel_gene = launcher._cnv_state.setdefault(
+                    str(sample_dir), {}
+                ).get("selected_gene", "All")
+                for rel_chart in (cnv_diff,):
+                    if sel_gene and sel_gene != "All" and selected != "All":
+                        gene_df = _load_gene_bed(sample_dir)
+                        gchr = gene_df[gene_df["chrom"] == selected]
+                        row = gchr[gchr["gene"] == sel_gene]
+                        if not row.empty:
+                            s_bp = int(row.iloc[0]["start_pos"])
+                            e_bp = int(row.iloc[0]["end_pos"])
+                            pad = 10 * binw_analysis
+                            zoom_start = max(0, s_bp - pad)
+                            zoom_end = e_bp + pad
+                            try:
+                                rel_chart.options["dataZoom"][0].update(
+                                    {
+                                        "startValue": zoom_start,
+                                        "endValue": zoom_end,
+                                        "start": None,
+                                        "end": None,
+                                    }
+                                )
+                            except Exception:
+                                pass
+                    else:
+                        try:
+                            if (
+                                isinstance(rel_chart.options.get("dataZoom"), list)
+                                and rel_chart.options["dataZoom"]
+                            ):
+                                dz = rel_chart.options["dataZoom"][0]
+                                dz.pop("startValue", None)
+                                dz.pop("endValue", None)
+                                dz.update({"start": 0, "end": 100})
+                        except Exception:
+                            pass
+            except Exception:
+                pass
 
             # Regional CNV events table (same logic as PDF reports)
             try:
@@ -2007,6 +2129,74 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             "need_load": need_load,
         }
 
+    def _apply_breakpoint_marklines(
+        chart,
+        selected: str,
+        state: Dict[str, Any],
+        breakpoint_lines: List[int],
+        *,
+        reference_at_zero: bool = False,
+    ) -> None:
+        """Attach breakpoint x-lines (and optional y=0 reference) to the main data series."""
+        try:
+            current_series = [
+                s
+                for s in chart.options["series"]
+                if not s.get("name", "").startswith("Breakpoint")
+            ]
+            if selected != "All" and state.get("show_bp", True) and breakpoint_lines:
+                if current_series:
+                    mark_line_data: List[Dict[str, Any]] = []
+                    if reference_at_zero:
+                        mark_line_data.append(
+                            {
+                                "yAxis": 0,
+                                "lineStyle": {
+                                    "type": "dashed",
+                                    "color": "#888888",
+                                    "width": 1,
+                                },
+                            }
+                        )
+                    for bp_pos in breakpoint_lines:
+                        mark_line_data.append(
+                            {
+                                "xAxis": bp_pos,
+                                "lineStyle": {
+                                    "type": "dashed",
+                                    "color": "#ff6b6b",
+                                    "width": 3,
+                                },
+                            }
+                        )
+                    current_series[0]["markLine"] = {
+                        "data": mark_line_data,
+                        "symbol": "none",
+                        "lineStyle": {"type": "dashed", "color": "#ff6b6b", "width": 3},
+                    }
+            elif reference_at_zero and current_series:
+                current_series[0]["markLine"] = {
+                    "symbol": "none",
+                    "data": [
+                        {
+                            "yAxis": 0,
+                            "lineStyle": {
+                                "type": "dashed",
+                                "color": "#888888",
+                                "width": 1,
+                            },
+                        }
+                    ],
+                }
+            else:
+                if current_series:
+                    current_series[0].pop("markLine", None)
+            chart.options["series"] = current_series
+            _apply_cnv_echart_chrome(chart, _is_dark_mode())
+            chart.update()
+        except Exception:
+            pass
+
     def _apply_cnv_refresh_after_load(
         plan: Dict[str, Any], payload: Dict[str, Any]
     ) -> None:
@@ -2033,7 +2223,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         data_array_reload = p["data_array_reload"]
         xy_pkl_changed = p["xy_pkl_changed"]
 
-        changed = ("cnv" in payload or "cnv3" in payload)
+        changed = ("cnv" in payload or "cnv3" in payload or "xy" in payload)
 
         if cnv_dict_npy.exists():
             m = cnv_dict_npy_mtime
@@ -2066,6 +2256,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         if "cnv3" in payload:
             state["cnv3"] = payload["cnv3"]
             state["cnv3_m"] = cnv3_npy_mtime
+        _recompute_cnv_log2_state(state)
 
         if state.get("cnv"):
             if changed:
@@ -2133,39 +2324,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         if selected == "All" or r["name"] == selected:
                             start_pos = int(r["start"])
                             end_pos = int(r["end"])
-                            midpoint = (start_pos + end_pos) // 2
-                            breakpoint_lines.append(midpoint)
-                    current_series = [
-                        s
-                        for s in cnv_diff.options["series"]
-                        if not s.get("name", "").startswith("Breakpoint")
-                    ]
-                    if selected != "All" and state.get("show_bp", True):
-                        if current_series:
-                            main_series = current_series[0]
-                            markLine_data = []
-                            for bp_pos in breakpoint_lines:
-                                markLine_data.append(
-                                    {
-                                        "xAxis": bp_pos,
-                                        "lineStyle": {
-                                            "type": "dashed",
-                                            "color": "#ff6b6b",
-                                            "width": 3,
-                                        },
-                                    }
-                                )
-                            main_series["markLine"] = {
-                                "data": markLine_data,
-                                "symbol": "none",
-                                "lineStyle": {"type": "dashed", "color": "#ff6b6b", "width": 3},
-                            }
-                    else:
-                        if current_series:
-                            current_series[0].pop("markLine", None)
-                    cnv_diff.options["series"] = current_series
-                    _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                    cnv_diff.update()
+                            breakpoint_lines.append((start_pos + end_pos) // 2)
+                    _apply_breakpoint_marklines(
+                        cnv_diff, selected, state, breakpoint_lines
+                    )
                 state["bp_array_mtime"] = data_array_npy_mtime
             except Exception:
                 pass
@@ -2175,45 +2337,16 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     selected = launcher._cnv_state.setdefault(
                         str(sample_dir), {}
                     ).get("selected_chrom", "All")
-                    current_series = [
-                        s
-                        for s in cnv_diff.options["series"]
-                        if not s.get("name", "").startswith("Breakpoint")
-                    ]
-                    if selected != "All" and state.get("show_bp", True):
-                        arr = state["bp_array"]
-                        breakpoint_lines = []
-                        for r in arr:
-                            if selected == "All" or r["name"] == selected:
-                                start_pos = int(r["start"])
-                                end_pos = int(r["end"])
-                                midpoint = (start_pos + end_pos) // 2
-                                breakpoint_lines.append(midpoint)
-                        if current_series:
-                            main_series = current_series[0]
-                            markLine_data = []
-                            for bp_pos in breakpoint_lines:
-                                markLine_data.append(
-                                    {
-                                        "xAxis": bp_pos,
-                                        "lineStyle": {
-                                            "type": "dashed",
-                                            "color": "#ff6b6b",
-                                            "width": 3,
-                                        },
-                                    }
-                                )
-                            main_series["markLine"] = {
-                                "data": markLine_data,
-                                "symbol": "none",
-                                "lineStyle": {"type": "dashed", "color": "#ff6b6b", "width": 3},
-                            }
-                    else:
-                        if current_series:
-                            current_series[0].pop("markLine", None)
-                    cnv_diff.options["series"] = current_series
-                    _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                    cnv_diff.update()
+                    arr = state["bp_array"]
+                    breakpoint_lines = []
+                    for r in arr:
+                        if selected == "All" or r["name"] == selected:
+                            start_pos = int(r["start"])
+                            end_pos = int(r["end"])
+                            breakpoint_lines.append((start_pos + end_pos) // 2)
+                    _apply_breakpoint_marklines(
+                        cnv_diff, selected, state, breakpoint_lines
+                    )
                 except Exception:
                     pass
 
@@ -2334,7 +2467,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             _update_breakpoints_visibility()
             # reset x zoom when switching scope
             try:
-                for chart in (cnv_abs, cnv_diff):
+                for chart in genome_charts:
                     if (
                         isinstance(chart.options.get("dataZoom"), list)
                         and chart.options["dataZoom"]
