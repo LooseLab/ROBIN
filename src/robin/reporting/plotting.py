@@ -737,7 +737,7 @@ def create_CNV_plot(
         use_normalized_difference (bool): When True, plot log2(ploidy / expected) instead of
             absolute ploidy for the genome-wide summary chart.
         plot_bin_width (int, optional): Display bin width in bp for genome-wide plot.
-            Defaults to 500 kb. Values below the analysis bin width are ignored.
+            Defaults to 100 kb. Values below the analysis bin width are ignored.
 
     Returns:
         io.BytesIO: Buffer containing the plot image.
@@ -1092,7 +1092,7 @@ def create_CNV_plot_per_chromosome(
         chromosome_status (dict, optional): Status text keyed by chromosome.
         normalized_cnv (dict, optional): Per-chromosome log2(ploidy / expected) values.
         use_log2_ratio (bool): When True, plot log2(ploidy / expected) instead of absolute ploidy.
-        plot_bin_width (int, optional): Display bin width in bp. Defaults to 500 kb
+        plot_bin_width (int, optional): Display bin width in bp. Defaults to 100 kb
             for report plots (GUI default is the analysis bin width).
 
     Returns:
