@@ -700,7 +700,7 @@ def compute_cnv_log2_from_ploidy(
     return log2_ratios
 
 
-CNV_REPORT_GENOME_PLOT_BIN_WIDTH = 100_000
+CNV_REPORT_GENOME_PLOT_BIN_WIDTH = 500_000
 
 
 def resolve_cnv_plot_bin_width(
