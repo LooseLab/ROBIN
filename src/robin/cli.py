@@ -1732,7 +1732,8 @@ def sequencing_files(
 
     click.echo("")
     click.echo(
-        "Done. Use the source or processed BED as needed for adaptive sampling; "
+        "Done. Use the stranded source BED for adaptive sampling in MinKNOW; "
+        "use the processed unique-gene BED for ROBIN analyses; "
         "use the reference FASTA for alignment."
     )
 
@@ -3263,6 +3264,9 @@ def workflow(
                         gui_port=gui_port,
                         with_gui=with_gui,
                         center=center,
+                        workflow_toml=(
+                            str(toml_config.resolve()) if toml_config else None
+                        ),
                     )
                 )
             except KeyboardInterrupt:
@@ -3434,6 +3438,8 @@ def workflow(
                     print(f"   Welcome page: {base_url}/")
                     print(f"   Workflow monitor: {base_url}/robin")
                     print(f"   Sample tracking: {base_url}/live_data")
+                    if gui_launcher.minknow_gui_enabled:
+                        print(f"   Sequencer (MinKNOW): {base_url}/minknow")
                     print(f"   Individual samples: {base_url}/live_data/sampleID/")
                     print(
                         "   Open your browser to monitor the workflow with the new navigation structure"

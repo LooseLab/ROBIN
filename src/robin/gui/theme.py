@@ -53,6 +53,8 @@ from typing import Callable, Optional, Any, Dict, List
 from nicegui import ui, app, events, core, run, background_tasks
 import nicegui.air
 
+from robin.minknow.toml_config import minknow_gui_available
+
 from robin.gui.session import current_session_is_admin, current_session_username
 
 from pathlib import Path
@@ -1156,6 +1158,11 @@ def frame(
                         ui.menu_item(
                             "View Samples", lambda: ui.navigate.to("/live_data")
                         ).classes("text-body-medium")
+                        if minknow_gui_available():
+                            ui.menu_item(
+                                "Sequencer (MinKNOW)",
+                                lambda: ui.navigate.to("/minknow"),
+                            ).classes("text-body-medium")
                         ui.menu_item(
                             "Generate Sample ID",
                             lambda: ui.navigate.to("/sample_id_generator"),

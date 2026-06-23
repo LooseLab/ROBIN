@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Mapping, Optional
 
 from robin.minknow.preset import RobinRunPreset
-from robin.utils.sequencing_files import resolve_panel_bed_path
+from robin.utils.sequencing_files import resolve_panel_stranded_bed_path
 
 
 def extract_workflow_ref_keys(raw: Mapping[str, Any]) -> dict[str, Any]:
@@ -70,11 +70,16 @@ def resolve_target_panel(
 
 def resolve_panel_bed_file(
     target_panel: Optional[str],
+    *,
+    reference_path: Optional[str] = None,
 ) -> Optional[str]:
-    """Return the panel BED path packaged with ROBIN for ``target_panel``."""
+    """Return the stranded panel BED for MinKNOW / adaptive sampling."""
     if not target_panel:
         return None
-    bed_path = resolve_panel_bed_path(target_panel)
+    bed_path = resolve_panel_stranded_bed_path(
+        target_panel,
+        reference_path=reference_path,
+    )
     return str(bed_path) if bed_path is not None else None
 
 
@@ -133,7 +138,10 @@ def apply_workflow_refs_to_preset(
         workflow_config=workflow_config,
         environ=environ,
     )
-    resolved_bed = resolve_panel_bed_file(resolved_panel)
+    resolved_bed = resolve_panel_bed_file(
+        resolved_panel,
+        reference_path=resolved_reference,
+    )
 
     overrides: dict[str, Any] = {}
     if resolved_reference and (prefer_workflow or not preset.alignment_reference):

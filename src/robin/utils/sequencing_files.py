@@ -23,9 +23,36 @@ def panel_bed_filename(panel: str) -> str:
 
 def resolve_panel_bed_path(panel: str) -> Optional[Path]:
     """Return the packaged panel BED path installed with ROBIN, if present."""
+    return _resolve_packaged_panel_bed(panel, panel_bed_filename(panel))
+
+
+def panel_stranded_bed_filename(panel: str) -> str:
+    """Stranded panel BED for MinKNOW adaptive sampling (``{panel}_panel_source.bed``)."""
+    return panel_source_filename(panel)
+
+
+def resolve_panel_stranded_bed_path(
+    panel: str,
+    *,
+    reference_path: Optional[str | Path] = None,
+) -> Optional[Path]:
+    """Resolve the stranded panel BED used for MinKNOW / adaptive sampling.
+
+    Prefers ``{panel}_panel_source.bed`` next to the workflow reference FASTA
+    (the layout produced by ``robin utils sequencing-files``), then the packaged
+    copy shipped with ROBIN.
+    """
+    name = panel_stranded_bed_filename(panel)
+    if reference_path not in (None, ""):
+        candidate = Path(reference_path).expanduser().resolve().parent / name
+        if candidate.is_file():
+            return candidate
+    return _resolve_packaged_panel_bed(panel, name)
+
+
+def _resolve_packaged_panel_bed(panel: str, name: str) -> Optional[Path]:
     import importlib.resources as importlib_resources
 
-    name = panel_bed_filename(panel)
     res = importlib_resources.files("robin.resources").joinpath(name)
     try:
         if not res.is_file():

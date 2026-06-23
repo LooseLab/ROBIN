@@ -1,4 +1,4 @@
-"""MinKNOW sequencer status panel for the ROBIN GUI."""
+"""MinKNOW sequencer status and run control for the ROBIN GUI."""
 
 from __future__ import annotations
 
@@ -125,8 +125,12 @@ def add_minknow_sequencer_section(
     minknow_from_toml = _load_workflow_minknow_config(resolved_toml)
     if minknow_from_toml is not None:
         base_settings = minknow_from_toml.settings
+    elif initial_settings is not None:
+        base_settings = initial_settings
     else:
-        base_settings = initial_settings or MinKnowSettings.from_environ()
+        raise RuntimeError(
+            "MinKNOW sequencer UI requires workflow TOML or launch-time configuration"
+        )
 
     toml_driven = minknow_from_toml is not None and resolved_toml is not None
     state: dict[str, Any] = {
@@ -143,6 +147,9 @@ def add_minknow_sequencer_section(
         "runner_panel": runner_panel,
         "cached_preset": None,
         "pending_stop": None,
+        "selected_position": "",
+        "last_position_names": [],
+        "position_radio": None,
     }
     update_queue: queue.SimpleQueue[MinKnowPollResult] = queue.SimpleQueue()
 
@@ -200,31 +207,30 @@ def add_minknow_sequencer_section(
             _notify(f"Preset error: {exc}", kind="negative")
             return None
 
+    def _position_names() -> list[str]:
+        result = state.get("last_result")
+        status = result.status if result is not None else None
+        if status is None:
+            return []
+        return [pos.name for pos in status.positions]
+
+    def _find_position_status(name: str):
+        result = state.get("last_result")
+        status = result.status if result is not None else None
+        if status is None:
+            return None
+        return next((item for item in status.positions if item.name == name), None)
+
     def _resolve_start_position(preset: RobinRunPreset) -> Optional[str]:
+        selected = (state.get("selected_position") or "").strip()
+        if selected:
+            return selected
         if preset.position:
             return preset.position.strip()
         names = _position_names()
         if len(names) == 1:
             return names[0]
         return None
-
-    def _format_run_settings_summary() -> str:
-        preset = state.get("cached_preset") or _load_preset()
-        if preset is None:
-            if state.get("workflow_toml"):
-                return (
-                    f"Workflow TOML: {Path(state['workflow_toml']).name} "
-                    "(add [minknow.preset] to start runs from the GUI)"
-                )
-            return "Start robin workflow with --toml containing [minknow] settings."
-        lines = [
-            f"Host: {state['host']}",
-        ]
-        position = _resolve_start_position(preset)
-        if position:
-            lines.append(f"Position: {position}")
-        lines.extend(preset.summary_lines())
-        return "\n".join(lines)
 
     with ui.element("div").classes("classification-insight-card w-full min-w-0"):
         with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
@@ -244,9 +250,11 @@ def add_minknow_sequencer_section(
                     "watch BAM output, or stop active protocols."
                 ).classes("classification-insight-foot")
 
-            run_settings_label = ui.label("").classes(
-                "classification-insight-foot w-full whitespace-pre-wrap"
-            )
+            if toml_driven and state.get("workflow_toml"):
+                ui.label(
+                    f"Defaults from {Path(state['workflow_toml']).name} — "
+                    "edit below for this session only (does not change the TOML file)."
+                ).classes("text-xs text-slate-500 w-full")
 
             manual_controls = ui.row().classes("w-full gap-2 flex-wrap items-end")
             with manual_controls:
@@ -267,53 +275,124 @@ def add_minknow_sequencer_section(
                     icon="refresh",
                 ).props("flat dense no-caps outline")
 
-            if toml_driven:
-                manual_controls.set_visibility(False)
-            else:
-                run_settings_label.set_visibility(False)
+            position_picker_row = None
+            position_fallback_input = None
+            preset_input = None
+            kit_input = None
+            simplex_input = None
+            modified_input = None
+            bam_reads_input = None
+            simulation_input = None
+            experiment_group_input = None
+            duration_input = None
+            reference_label = None
+            bed_label = None
+
+            toml_preset = _load_preset()
+            show_simulation_field = bool(
+                toml_preset and toml_preset.simulation_bulk_file
+            )
 
             start_controls: dict[str, Any] = {}
             if not compact:
-                with ui.expansion("Start ROBIN run", icon="play_arrow").classes("w-full"):
+                with ui.expansion(
+                    "Start ROBIN run",
+                    icon="play_arrow",
+                    value=True,
+                ).classes("w-full"):
                     with ui.column().classes("w-full gap-2"):
-                        if not toml_driven:
-                            ui.label(
-                                "Configure sequencing in workflow TOML ([minknow] section) "
-                                "or set host and preset path below."
-                            ).classes("text-xs text-slate-500")
-                            preset_input = ui.input(
-                                "Preset TOML",
-                                value=state.get("workflow_toml") or "",
-                            ).props("outlined dense").classes("w-full")
-                            preset_input.on(
-                                "blur",
-                                lambda: state.update(
-                                    {
-                                        "workflow_toml": (
-                                            preset_input.value or ""
-                                        ).strip()
-                                    }
-                                ),
-                            )
-                            position_input = ui.input(
-                                "Position",
-                                placeholder="e.g. P2S_000000-A",
-                            ).props("outlined dense").classes("w-full")
-                            experiment_group_input = ui.input(
-                                "Experiment group",
-                                value="ROBIN_RUN",
-                            ).props("outlined dense").classes("w-full")
-                            duration_input = ui.number(
-                                "Duration (hours)",
-                                value=24,
-                                min=0.1,
-                                step=0.5,
-                            ).props("outlined dense").classes("w-full")
-                        else:
-                            preset_input = None
-                            position_input = None
-                            experiment_group_input = None
-                            duration_input = None
+                        ui.label(
+                            "Choose the flow cell position for this run. Connected "
+                            "positions appear as buttons when the monitor is active; "
+                            "otherwise type a name or click a row in the table below."
+                        ).classes("text-xs text-slate-500 w-full")
+
+                        position_picker_row = ui.row().classes(
+                            "w-full gap-2 flex-wrap items-center"
+                        )
+                        position_fallback_input = ui.input(
+                            "Position",
+                            placeholder="e.g. P2S_000000-A",
+                        ).props("outlined dense").classes("w-full")
+
+                        with ui.expansion(
+                            "Run settings",
+                            icon="tune",
+                            value=True,
+                        ).classes("w-full"):
+                            with ui.column().classes("w-full gap-2"):
+                                if not toml_driven:
+                                    ui.label(
+                                        "Configure sequencing in workflow TOML "
+                                        "([minknow] section) or set host and preset "
+                                        "path below."
+                                    ).classes("text-xs text-slate-500")
+                                    preset_input = ui.input(
+                                        "Preset TOML",
+                                        value=state.get("workflow_toml") or "",
+                                    ).props("outlined dense").classes("w-full")
+                                    preset_input.on(
+                                        "blur",
+                                        lambda: state.update(
+                                            {
+                                                "workflow_toml": (
+                                                    preset_input.value or ""
+                                                ).strip()
+                                            }
+                                        ),
+                                    )
+
+                                with ui.row().classes("w-full gap-2 flex-wrap"):
+                                    experiment_group_input = ui.input(
+                                        "Experiment group",
+                                        value="ROBIN_RUN",
+                                    ).props("outlined dense readonly").classes(
+                                        "flex-1 min-w-[12rem]"
+                                    )
+                                    duration_input = ui.number(
+                                        "Duration (hours)",
+                                        value=24,
+                                        min=0.1,
+                                        step=0.5,
+                                    ).props("outlined dense").classes(
+                                        "flex-1 min-w-[10rem]"
+                                    )
+
+                                kit_input = ui.input(
+                                    "Sequencing kit",
+                                    value="SQK-LSK114",
+                                ).props("outlined dense readonly").classes("w-full")
+                                simplex_input = ui.input(
+                                    "Basecall simplex model",
+                                ).props("outlined dense readonly").classes("w-full")
+                                modified_input = ui.input(
+                                    "Modified models (comma-separated)",
+                                ).props("outlined dense readonly").classes("w-full")
+                                with ui.row().classes("w-full gap-2 flex-wrap"):
+                                    bam_reads_input = ui.number(
+                                        "BAM reads per file",
+                                        value=50_000,
+                                        min=1,
+                                        step=1000,
+                                    ).props("outlined dense readonly").classes(
+                                        "flex-1 min-w-[12rem]"
+                                    )
+                                    if show_simulation_field:
+                                        simulation_input = ui.input(
+                                            "Simulation bulk FAST5",
+                                        ).props("outlined dense").classes(
+                                            "flex-1 min-w-[12rem]"
+                                        )
+
+                                reference_label = ui.label("").classes(
+                                    "text-xs text-slate-500 w-full break-all"
+                                )
+                                bed_label = ui.label("").classes(
+                                    "text-xs text-slate-500 w-full break-all"
+                                )
+                                experiment_group_hint = ui.label("").classes(
+                                    "text-xs text-slate-500 w-full"
+                                )
 
                         sample_id_input = ui.input(
                             "Sample ID",
@@ -367,16 +446,134 @@ def add_minknow_sequencer_section(
                         start_controls.update(
                             {
                                 "preset_input": preset_input,
-                                "position_input": position_input,
                                 "sample_id_input": sample_id_input,
                                 "experiment_group_input": experiment_group_input,
                                 "duration_input": duration_input,
+                                "kit_input": kit_input,
+                                "simplex_input": simplex_input,
+                                "modified_input": modified_input,
+                                "bam_reads_input": bam_reads_input,
+                                "simulation_input": simulation_input,
                                 "start_button": start_button,
                             }
                         )
 
-            _load_preset()
-            run_settings_label.set_text(_format_run_settings_summary())
+                def _apply_selected_position(name: str) -> None:
+                    name = (name or "").strip()
+                    if not name:
+                        return
+                    state["selected_position"] = name
+                    radio = state.get("position_radio")
+                    if radio is not None and radio.value != name:
+                        radio.value = name
+                    if position_fallback_input is not None:
+                        position_fallback_input.value = name
+
+                def _sync_position_options() -> None:
+                    if position_picker_row is None:
+                        return
+                    names = _position_names()
+                    preferred = (state.get("selected_position") or "").strip()
+                    preset = state.get("cached_preset")
+                    if not preferred and preset is not None and preset.position:
+                        preferred = preset.position.strip()
+                    if not preferred and len(names) == 1:
+                        preferred = names[0]
+
+                    if list(names) != state.get("last_position_names"):
+                        state["last_position_names"] = list(names)
+                        position_picker_row.clear()
+                        with position_picker_row:
+                            if names:
+                                radio_value = (
+                                    preferred if preferred in names else names[0]
+                                )
+                                state["position_radio"] = ui.radio(
+                                    names,
+                                    value=radio_value,
+                                    on_change=lambda e: _apply_selected_position(
+                                        e.value
+                                    ),
+                                ).props("inline").classes("w-full")
+                                position_fallback_input.set_visibility(False)
+                                _apply_selected_position(radio_value)
+                            else:
+                                state["position_radio"] = None
+                                position_fallback_input.set_visibility(True)
+                                if preferred:
+                                    position_fallback_input.value = preferred
+                                    state["selected_position"] = preferred
+                    elif names and state.get("position_radio"):
+                        radio = state["position_radio"]
+                        if (
+                            preferred
+                            and preferred in names
+                            and radio.value != preferred
+                        ):
+                            radio.value = preferred
+
+                position_fallback_input.on(
+                    "update:model-value",
+                    lambda _e: state.update(
+                        {
+                            "selected_position": (
+                                position_fallback_input.value or ""
+                            ).strip()
+                        }
+                    ),
+                )
+
+                def _populate_form_from_preset(preset: RobinRunPreset) -> None:
+                    experiment_group_input.value = preset.resolve_experiment_group()
+                    if preset.append_experiment_group_date_suffix:
+                        experiment_group_hint.set_text(
+                            "Includes _MON_YY suffix at run start "
+                            f"(base name: {preset.experiment_group})"
+                        )
+                    else:
+                        experiment_group_hint.set_text("")
+                    duration_input.value = preset.experiment_duration_hours
+                    kit_input.value = preset.kit
+                    simplex_input.value = preset.basecall_simplex_model
+                    modified_input.value = ", ".join(preset.modified_models)
+                    bam_reads_input.value = preset.bam_reads_per_file
+                    if simulation_input is not None:
+                        simulation_input.value = preset.simulation_bulk_file or ""
+                    if preset.position:
+                        _apply_selected_position(preset.position.strip())
+                    if reference_label is not None:
+                        reference_label.set_text(
+                            "Alignment reference (from workflow): "
+                            f"{preset.alignment_reference or '—'}"
+                        )
+                    if bed_label is not None:
+                        bed_label.set_text(
+                            f"Stranded panel BED (from workflow): "
+                            f"{preset.bed_file or '—'}"
+                        )
+                    _sync_position_options()
+
+                def _build_preset_from_form(base: RobinRunPreset) -> RobinRunPreset:
+                    if simulation_input is not None:
+                        simulation_path = (
+                            (simulation_input.value or "").strip() or None
+                        )
+                    else:
+                        simulation_path = base.simulation_bulk_file
+                    position = (state.get("selected_position") or "").strip()
+                    if not position and position_fallback_input is not None:
+                        position = (position_fallback_input.value or "").strip()
+                    state["selected_position"] = position
+                    return base.with_overrides(
+                        experiment_duration_hours=float(
+                            duration_input.value or base.experiment_duration_hours
+                        ),
+                        simulation_bulk_file=simulation_path,
+                        position=position or None,
+                    )
+
+                if toml_preset is not None:
+                    _populate_form_from_preset(toml_preset)
 
             summary_label = ui.label("Waiting for stream connection…").classes(
                 "classification-insight-foot w-full"
@@ -397,6 +594,7 @@ def add_minknow_sequencer_section(
                     rows=[],
                     pagination=5 if compact else 10,
                     class_size="table-xs",
+                    row_key="position",
                 )
                 positions_table.classes("w-full")
                 try:
@@ -410,6 +608,27 @@ def add_minknow_sequencer_section(
                     positions_table.add_slot("body-cell-actions", _ACTIONS_SLOT)
                 except Exception:
                     LOGGER.debug("MinKNOW actions slot failed", exc_info=True)
+
+                if not compact:
+                    def _on_position_row_click(event) -> None:
+                        row = event.args
+                        if isinstance(event.args, (list, tuple)) and len(event.args) > 1:
+                            row = event.args[1]
+                        if not isinstance(row, dict):
+                            return
+                        name = (row.get("position") or "").strip()
+                        if name:
+                            _apply_selected_position(name)
+
+                    positions_table.on(
+                        "rowClick",
+                        _on_position_row_click,
+                        [[], ["position"], None],
+                    )
+                    try:
+                        positions_table.props("selection=none")
+                    except Exception:
+                        pass
 
             error_label = ui.label("").classes(
                 "text-sm text-red-600 dark:text-red-400 w-full"
@@ -432,20 +651,6 @@ def add_minknow_sequencer_section(
             stop_confirm_button = ui.button("Stop run", icon="stop").props(
                 "color=negative"
             )
-
-    def _position_names() -> list[str]:
-        result = state.get("last_result")
-        status = result.status if result is not None else None
-        if status is None:
-            return []
-        return [pos.name for pos in status.positions]
-
-    def _find_position_status(name: str):
-        result = state.get("last_result")
-        status = result.status if result is not None else None
-        if status is None:
-            return None
-        return next((item for item in status.positions if item.name == name), None)
 
     def _maybe_auto_watch(result: MinKnowPollResult) -> None:
         if not state.get("auto_watch") or result.status is None:
@@ -490,9 +695,8 @@ def add_minknow_sequencer_section(
         )
         warning_label.set_text(status.version_warning or "")
         positions_table.rows = position_table_rows(status)
-
-        if toml_driven:
-            run_settings_label.set_text(_format_run_settings_summary())
+        if not compact:
+            _sync_position_options()
 
         _maybe_auto_watch(result)
 
@@ -550,10 +754,9 @@ def add_minknow_sequencer_section(
         state["host"] = (host_input.value or "").strip() or "localhost"
 
     async def _on_refresh_click() -> None:
-        if not state.get("toml_driven"):
-            state["host"] = (host_input.value or "").strip() or "localhost"
-            state["enabled"] = bool(enabled_switch.value)
-            state["auto_watch"] = bool(auto_watch_switch.value)
+        state["host"] = (host_input.value or "").strip() or "localhost"
+        state["enabled"] = bool(enabled_switch.value)
+        state["auto_watch"] = bool(auto_watch_switch.value)
         await _refresh_snapshot()
 
     def _on_enabled_change(_event=None) -> None:
@@ -647,13 +850,13 @@ def add_minknow_sequencer_section(
         if compact or not start_controls:
             return
 
-        if not toml_driven and start_controls.get("preset_input") is not None:
+        if start_controls.get("preset_input") is not None:
             state["workflow_toml"] = (
                 start_controls["preset_input"].value or ""
             ).strip()
 
-        preset = _load_preset()
-        if preset is None:
+        preset_base = _load_preset()
+        if preset_base is None:
             _notify(
                 "No [minknow.preset] in workflow TOML. "
                 "Add sequencing settings to the file used with robin workflow --toml.",
@@ -666,30 +869,16 @@ def add_minknow_sequencer_section(
             _notify("Enter or generate a sample ID.", kind="warning")
             return
 
-        if toml_driven:
-            position = _resolve_start_position(preset)
-            if not position:
-                _notify(
-                    "Set position in [minknow.preset] or connect when only one "
-                    "MinKNOW position is visible.",
-                    kind="warning",
-                )
-                return
-            preset_for_run = preset
-            experiment_group = preset.experiment_group
-        else:
-            position = (start_controls["position_input"].value or "").strip()
-            if not position:
-                _notify("Enter a flow cell position.", kind="warning")
-                return
-            duration = float(
-                start_controls["duration_input"].value
-                or preset.experiment_duration_hours
+        preset_for_run = _build_preset_from_form(preset_base)
+        position = _resolve_start_position(preset_for_run)
+        if not position:
+            _notify(
+                "Select a flow cell position (or wait for the monitor to list positions).",
+                kind="warning",
             )
-            preset_for_run = preset.with_overrides(experiment_duration_hours=duration)
-            experiment_group = (
-                start_controls["experiment_group_input"].value or preset.experiment_group
-            ).strip()
+            return
+
+        experiment_group = preset_for_run.resolve_experiment_group()
 
         errors = preset_for_run.validate()
         if errors:

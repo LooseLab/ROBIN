@@ -444,6 +444,8 @@ def start(
     click.echo(f"MinKNOW host: {resolved_host}")
     click.echo(f"Position: {resolved_position}")
     click.echo(f"Sample ID: {sample_id}")
+    resolved_experiment_group = preset.resolve_experiment_group(experiment_group)
+    click.echo(f"Experiment group: {resolved_experiment_group}")
     click.echo("Preset:")
     for line in preset.summary_lines():
         click.echo(f"  {line}")
