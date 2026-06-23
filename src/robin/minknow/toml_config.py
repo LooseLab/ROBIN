@@ -85,6 +85,82 @@ def extract_minknow_config(raw: Mapping[str, Any]) -> MinKnowWorkflowConfig:
     return MinKnowWorkflowConfig(settings=settings, preset=preset)
 
 
+def resolve_minknow_gui_config(
+    workflow_toml: Optional[Path] = None,
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+) -> Optional[MinKnowWorkflowConfig]:
+    """Return MinKNOW GUI settings when explicitly configured via TOML or env.
+
+  The GUI sequencer page is shown only when this returns a config with
+  ``settings.enabled`` true. Sources (in order):
+
+  - ``[minknow]`` in the workflow TOML passed to ``robin workflow --toml``
+  - ``[minknow]`` in ``ROBIN_WORKFLOW_TOML``
+  - ``MINKNOW_PRESET`` pointing at a preset / workflow TOML file
+  - ``MINKNOW_ENABLED=true`` or an explicit ``MINKNOW_HOST`` environment variable
+    """
+    import os
+
+    from robin.minknow.config import (
+        MinKnowSettings,
+        _env_bool,
+        preset_path_from_environ,
+        workflow_toml_from_environ,
+    )
+    from robin.workflow_config import load_minknow_from_workflow_toml
+
+    env = dict(environ or os.environ)
+    workflow_paths: list[Path] = []
+
+    if workflow_toml is not None:
+        workflow_paths.append(workflow_toml.expanduser())
+    env_workflow = workflow_toml_from_environ(env)
+    if env_workflow is not None:
+        candidate = env_workflow.expanduser()
+        if candidate not in workflow_paths:
+            workflow_paths.append(candidate)
+
+    for path in workflow_paths:
+        if not path.is_file():
+            continue
+        config = load_minknow_from_workflow_toml(path)
+        if config is not None and config.settings.enabled:
+            return config
+
+    preset_path = preset_path_from_environ(env)
+    if preset_path is not None and preset_path.is_file():
+        try:
+            config = load_minknow_toml(preset_path)
+        except click.BadParameter:
+            config = None
+        if config is not None and config.settings.enabled:
+            return config
+
+    if _env_bool(env.get("MINKNOW_ENABLED"), default=False):
+        settings = MinKnowSettings.from_environ(env)
+        if settings.enabled:
+            return MinKnowWorkflowConfig(settings=settings)
+
+    if "MINKNOW_HOST" in env and str(env.get("MINKNOW_HOST", "")).strip():
+        settings = MinKnowSettings.from_environ(env)
+        if settings.enabled:
+            return MinKnowWorkflowConfig(settings=settings)
+
+    return None
+
+
+def minknow_gui_available() -> bool:
+    """Return whether the running GUI was started with MinKNOW configured."""
+    try:
+        from robin.gui.app import get_gui_launcher
+
+        launcher = get_gui_launcher()
+    except Exception:
+        return False
+    return launcher is not None and launcher.minknow_gui_enabled
+
+
 def optional_preset_from_mapping(data: Mapping[str, Any]) -> Optional[RobinRunPreset]:
     """Return a preset when ``[minknow.preset]`` or preset keys are present."""
     nested = data.get("preset")

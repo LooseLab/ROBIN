@@ -445,6 +445,7 @@ class GUILauncher:
         self.reload = reload
         self.center = None  # Center ID for the analysis
         self.workflow_toml_path: Optional[Path] = None
+        self._minknow_workflow_config = None
         self._auth_middleware_registered = False
         # /robin_dark_mode: session cookie for theme (must work on /login before auth).
         self._unrestricted_page_routes = {"/login", "/robin_dark_mode"}
@@ -540,6 +541,16 @@ class GUILauncher:
         self._component_state_max_samples = 24
         # Cache last seen queue status so we can populate immediately on page creation
         self._last_queue_status: Dict[str, Any] = {}
+
+    @property
+    def minknow_gui_enabled(self) -> bool:
+        """True when MinKNOW was configured via workflow TOML or env at launch."""
+        return self._minknow_workflow_config is not None
+
+    @property
+    def minknow_workflow_config(self):
+        """Resolved ``[minknow]`` settings for the GUI, if configured."""
+        return self._minknow_workflow_config
 
     def _get_selected_sample_ids(self) -> set[str]:
         """Return per-client export selections, with instance fallback for non-UI contexts."""
@@ -1504,6 +1515,27 @@ class GUILauncher:
         else:
             self.workflow_toml_path = None
 
+        from robin.minknow.toml_config import resolve_minknow_gui_config
+
+        self._minknow_workflow_config = resolve_minknow_gui_config(
+            self.workflow_toml_path
+        )
+        if self._minknow_workflow_config is not None:
+            logging.info(
+                "MinKNOW GUI enabled (host=%s)",
+                self._minknow_workflow_config.settings.host,
+            )
+        elif self.workflow_toml_path is not None:
+            logging.info(
+                "MinKNOW GUI disabled: no [minknow] section in %s",
+                self.workflow_toml_path,
+            )
+        else:
+            logging.info(
+                "MinKNOW GUI disabled: start with --toml containing [minknow], "
+                "or set ROBIN_WORKFLOW_TOML / MINKNOW_HOST"
+            )
+
         # Store absolute monitored directory to avoid relative path issues
         try:
             self.monitored_directory = (
@@ -2428,6 +2460,22 @@ class GUILauncher:
                 )
                 self._create_workflow_monitor()
 
+            # MinKNOW sequencer control (start/stop/monitor runs)
+            @ui.page("/minknow", response_timeout=60.0)
+            def minknow_control():
+                """Dedicated MinKNOW sequencer monitoring and run control page."""
+                _setup_global_resources()
+                if not self.minknow_gui_enabled:
+                    self._render_minknow_not_configured_page()
+                    return
+                self._audit_log(
+                    event_type="page.viewed",
+                    user_id=self._get_current_user_id(),
+                    target_type="page",
+                    target_id="/minknow",
+                )
+                self._create_minknow_page()
+
             # Create the samples overview page
             @ui.page("/live_data", response_timeout=60.0)
             def samples_overview():
@@ -2836,6 +2884,10 @@ class GUILauncher:
                                 "Generate Sample ID",
                                 "/sample_id_generator",
                             ).classes(_cta_primary)
+                            if self.minknow_gui_enabled:
+                                ui.link("Sequencer (MinKNOW)", "/minknow").classes(
+                                    _cta_secondary
+                                )
                             ui.link(
                                 "Manage watched folders",
                                 "/watched_folders",
@@ -2893,15 +2945,6 @@ class GUILauncher:
                         ).classes(
                             "text-body-large text-slate-600 dark:text-slate-400 max-w-3xl"
                         )
-
-                from robin.gui.components.minknow import add_minknow_sequencer_section
-
-                with ui.column().classes("w-full max-w-7xl mx-auto gap-3"):
-                    add_minknow_sequencer_section(
-                        compact=False,
-                        workflow_runner=self.workflow_runner,
-                        workflow_toml=self.workflow_toml_path,
-                    )
 
                 # Samples table section — outer column keeps mobile scroll behavior
                 with ui.column().classes("w-full max-w-7xl mx-auto gap-3"):
@@ -7557,6 +7600,68 @@ title="View in IGV"
                                 tg_elapsed,
                             )
 
+    def _render_minknow_not_configured_page(self) -> None:
+        """Explain that MinKNOW integration was not enabled for this workflow."""
+        with theme.frame(
+            "R.O.B.I.N - Sequencer (MinKNOW)",
+            smalltitle="Sequencer",
+            batphone=False,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-2xl mx-auto p-4 md:p-6 gap-3"):
+                ui.label("MinKNOW not configured").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(
+                    "This ROBIN workflow was not started with MinKNOW settings. "
+                    "Add a [minknow] section to your workflow TOML, set MINKNOW_HOST "
+                    "or MINKNOW_ENABLED, or point MINKNOW_PRESET at a preset file, "
+                    "then restart robin workflow."
+                ).classes("classification-insight-foot")
+                ui.button(
+                    "Back to samples",
+                    icon="arrow_back",
+                    on_click=lambda: ui.navigate.to("/live_data"),
+                ).props("color=primary no-caps outline")
+
+    def _create_minknow_page(self) -> None:
+        """Dedicated MinKNOW sequencer monitoring and run-control page."""
+        from robin.gui.components.minknow import add_minknow_sequencer_section
+
+        config = self.minknow_workflow_config
+        with theme.frame(
+            "R.O.B.I.N - Sequencer (MinKNOW)",
+            smalltitle="Sequencer",
+            batphone=False,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full min-h-[70vh] p-3 md:p-6 gap-4"):
+                with ui.card().classes("w-full max-w-7xl mx-auto overflow-hidden"):
+                    with ui.column().classes(
+                        "w-full min-w-0 p-4 md:p-6 gap-3 bg-gradient-to-b from-slate-50 to-white "
+                        "dark:from-slate-900/80 dark:to-[var(--md-surface)]"
+                    ):
+                        ui.label("Sequencer control").classes(
+                            "text-display-small text-slate-900 dark:text-slate-50"
+                        )
+                        ui.label(
+                            "Monitor Oxford Nanopore flow cells, start ROBIN-compliant "
+                            "sequencing runs, watch BAM output directories, and stop "
+                            "active protocols."
+                        ).classes(
+                            "text-body-large text-slate-600 dark:text-slate-400 max-w-3xl"
+                        )
+
+                with ui.column().classes("w-full max-w-7xl mx-auto gap-3"):
+                    add_minknow_sequencer_section(
+                        compact=False,
+                        initial_settings=config.settings if config else None,
+                        workflow_runner=self.workflow_runner,
+                        workflow_toml=self.workflow_toml_path,
+                    )
+
     def _create_workflow_monitor(self):
         """Create the main workflow monitoring page."""
         with theme.frame(
@@ -7658,13 +7763,27 @@ title="View in IGV"
                                 "text-xs font-semibold workflow-monitor-num"
                             )
 
-                    from robin.gui.components.minknow import add_minknow_sequencer_section
-
-                    add_minknow_sequencer_section(
-                        compact=True,
-                        workflow_runner=self.workflow_runner,
-                        workflow_toml=self.workflow_toml_path,
-                    )
+                    if self.minknow_gui_enabled:
+                        with ui.element("div").classes(
+                            "classification-insight-card w-full min-w-0"
+                        ):
+                            with ui.row().classes(
+                                "w-full min-w-0 gap-3 p-2 md:p-3 items-center flex-wrap"
+                            ):
+                                ui.icon("biotech").classes("classification-insight-icon")
+                                with ui.column().classes("flex-1 min-w-0 gap-1"):
+                                    ui.label("Sequencer (MinKNOW)").classes(
+                                        "classification-insight-model"
+                                    )
+                                    ui.label(
+                                        "Start runs, monitor flow cells, and watch BAM output "
+                                        "on the dedicated sequencer page."
+                                    ).classes("classification-insight-foot")
+                                ui.button(
+                                    "Open sequencer",
+                                    icon="open_in_new",
+                                    on_click=lambda: ui.navigate.to("/minknow"),
+                                ).props("color=primary no-caps outline")
 
                     # File processing progress (per run)
                     with ui.element("div").classes(

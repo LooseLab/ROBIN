@@ -151,7 +151,7 @@ def start_protocol_run(
 ) -> StartRunResult:
     """Connect to MinKNOW and start a ROBIN-compliant protocol run."""
     preset = request.preset
-    experiment_group = request.experiment_group or preset.experiment_group
+    experiment_group = preset.resolve_experiment_group(request.experiment_group)
     model_warnings: list[str] = []
 
     validation_errors = preset.validate(check_paths=check_paths)

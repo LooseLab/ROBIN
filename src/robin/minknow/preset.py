@@ -2,13 +2,53 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, replace
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
 ROBIN_DEFAULT_BAM_READS_PER_FILE = 50_000
 ROBIN_DEFAULT_BAM_BATCH_DURATION = 0
 ROBIN_DEFAULT_EXPERIMENT_DURATION_HOURS = 24.0
+
+_MONTH_ABBREV = (
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+)
+
+_EXPERIMENT_GROUP_DATE_SUFFIX_RE = re.compile(r"_[A-Z]{3}_\d{2}$", re.IGNORECASE)
+
+
+def experiment_group_date_suffix(*, when: Optional[datetime] = None) -> str:
+    """Return ``_MON_YY`` suffix for the given time (default: now, local timezone)."""
+    moment = when or datetime.now()
+    return f"_{_MONTH_ABBREV[moment.month - 1]}_{moment.strftime('%y')}"
+
+
+def format_experiment_group_name(
+    base: str,
+    *,
+    append_date_suffix: bool = False,
+    when: Optional[datetime] = None,
+) -> str:
+    """Build the MinKNOW experiment group name, optionally with a month/year suffix."""
+    name = (base or "").strip()
+    if not name or not append_date_suffix:
+        return name
+    if _EXPERIMENT_GROUP_DATE_SUFFIX_RE.search(name):
+        return name
+    return f"{name}{experiment_group_date_suffix(when=when)}"
 
 
 @dataclass(frozen=True)
@@ -27,6 +67,7 @@ class RobinRunPreset:
     bam_batch_duration: int = ROBIN_DEFAULT_BAM_BATCH_DURATION
     experiment_duration_hours: float = ROBIN_DEFAULT_EXPERIMENT_DURATION_HOURS
     experiment_group: str = "ROBIN_RUN"
+    append_experiment_group_date_suffix: bool = False
     position: Optional[str] = None
     product_code: Optional[str] = None
     config_name: Optional[str] = None
@@ -94,6 +135,9 @@ class RobinRunPreset:
             experiment_group=_optional_str(source.get("experiment_group"))
             or _optional_str(source.get("protocol_group_id"))
             or "ROBIN_RUN",
+            append_experiment_group_date_suffix=bool(
+                source.get("append_experiment_group_date_suffix", False)
+            ),
             position=_optional_str(source.get("position")),
             product_code=_optional_str(source.get("product_code")),
             config_name=_optional_str(source.get("config_name")),
@@ -197,6 +241,20 @@ class RobinRunPreset:
     def adaptive_sampling_enabled(self) -> bool:
         return bool(self.read_until_filter and self.effective_read_until_reference())
 
+    def resolve_experiment_group(
+        self,
+        override: Optional[str] = None,
+        *,
+        when: Optional[datetime] = None,
+    ) -> str:
+        """Return the experiment group sent to MinKNOW, with optional date suffix."""
+        base = (override or self.experiment_group or "ROBIN_RUN").strip()
+        return format_experiment_group_name(
+            base,
+            append_date_suffix=self.append_experiment_group_date_suffix,
+            when=when,
+        )
+
     def summary_lines(self) -> list[str]:
         lines = [
             f"Kit: {self.kit}",
@@ -212,6 +270,11 @@ class RobinRunPreset:
             f"batch duration {self.bam_batch_duration}s"
         )
         lines.append(f"Duration: {self.experiment_duration_hours} h")
+        if self.append_experiment_group_date_suffix:
+            lines.append(
+                "Experiment group date suffix: enabled "
+                f"(e.g. {self.experiment_group}{experiment_group_date_suffix()})"
+            )
         if self.adaptive_sampling_enabled():
             lines.append(
                 f"Adaptive sampling: {self.read_until_filter} "
