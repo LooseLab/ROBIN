@@ -7,6 +7,7 @@ from robin.gui.display_config import (
     SampleDisplayConfig,
     any_sample_details_visible,
     config_from_workflow_steps,
+    effective_section_map,
     get_visible_classification_steps,
     is_section_visible,
 )
@@ -58,6 +59,28 @@ def test_config_from_workflow_steps() -> None:
     assert config.role_sections["user"]["mgmt"] is False
     assert config.role_sections["user"]["sturgeon"] is True
     assert config.role_sections["user"]["nanodx"] is False
+    assert config.role_sections["user"]["snp"] is True
+
+
+def test_migrate_stale_snp_false_to_active() -> None:
+    config = SampleDisplayConfig.from_dict(
+        {
+            "schema_version": 2,
+            "role_sections": {
+                "user": {"snp": False, "cnv": False},
+                "admin": {"snp": False},
+            },
+        }
+    )
+    assert config.schema_version == 3
+    assert "snp" not in config.role_sections["user"]
+    assert config.role_sections["user"]["cnv"] is False
+    assert is_section_visible(
+        "snp",
+        workflow_steps=["cnv"],
+        display_config=config,
+        surface="sample_details",
+    ) is True
 
 
 def test_role_sections_use_viewer_role() -> None:
@@ -107,11 +130,35 @@ def test_any_sample_details_visible() -> None:
         workflow_steps=["snp_analysis"],
         surface="sample_details",
     ) is True
+    # SNP is optional (on-demand) analysis; visibility is admin-controlled, not workflow-gated.
     assert is_section_visible(
         "snp",
         workflow_steps=["cnv"],
         surface="sample_details",
+    ) is True
+    config_hide_snp = SampleDisplayConfig(sections={"snp": False})
+    assert is_section_visible(
+        "snp",
+        workflow_steps=["cnv"],
+        display_config=config_hide_snp,
+        surface="sample_details",
     ) is False
+
+
+def test_effective_section_map_includes_sample_details_sections() -> None:
+    """Admin UI resolves SNP via sample_details surface, not sample_page."""
+    mapping = effective_section_map(workflow_steps=["cnv", "mgmt"])
+    assert mapping["snp"] is True
+    assert mapping["cnv"] is True
+
+
+def test_mnpflex_grouped_under_v12_classifier() -> None:
+    from robin.gui.display_config import DISPLAY_GROUP_LABELS, DISPLAY_GROUP_ORDER, DISPLAY_SECTIONS
+
+    assert DISPLAY_SECTIONS["mnpflex"].group == "v12_classifier"
+    assert DISPLAY_GROUP_ORDER.index("v12_classifier") == 1
+    assert DISPLAY_GROUP_ORDER.index("analysis") == 2
+    assert DISPLAY_GROUP_LABELS["v12_classifier"] == "V12 Classifier"
 
 
 def test_security_store_gui_settings_roundtrip(tmp_path: Path) -> None:

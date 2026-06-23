@@ -135,10 +135,8 @@ def cnv_report_genome_ylabel(scale: str) -> str:
 
 
 def cnv_report_genome_ylabel_mathtext(scale: str) -> str:
-    """Matplotlib-safe axis label (avoids Unicode subscripts missing from report fonts)."""
-    if resolve_cnv_report_scale(scale) == CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE:
-        return r"$\log_2$ ratio (ploidy / expected)"
-    return "Estimated ploidy"
+    """Matplotlib axis label using the same sans-serif family as other report text."""
+    return cnv_report_genome_ylabel(scale)
 
 
 def cnv_report_plot_caption(scale: str) -> str:

@@ -45,29 +45,65 @@ CNV_COLORS = {
 }
 
 CNV_FONT = {
-    "title": 10,
-    "subtitle": 7.5,
-    "axis": 9,
-    "tick": 7,
+    "title": 11,
+    "subtitle": 8,
+    "axis": 9.5,
+    "tick": 7.5,
     "annotation": 6.5,
 }
+
+CNV_TEXT = {
+    "primary": MODERN_COLORS["primary"],
+    "muted": "#5A6B7D",
+}
+
+_CNV_FONT_REGULAR: Optional[fm.FontProperties] = None
+_CNV_FONT_BOLD: Optional[fm.FontProperties] = None
+_CNV_FONTS_READY = False
+
+
+def _setup_cnv_fonts() -> None:
+    """Register report plot fonts with a safe fallback when bundled TTFs are absent."""
+    global _CNV_FONT_REGULAR, _CNV_FONT_BOLD, _CNV_FONTS_READY
+    if _CNV_FONTS_READY:
+        return
+
+    fonts_dir = os.path.dirname(os.path.abspath(fonts.__file__))
+    regular_path = os.path.join(fonts_dir, "fira-sans-v16-latin-regular.ttf")
+    bold_path = os.path.join(fonts_dir, "fira-sans-v16-latin-700.ttf")
+    family = "DejaVu Sans"
+
+    if os.path.isfile(regular_path):
+        try:
+            fm.fontManager.addfont(regular_path)
+            _CNV_FONT_REGULAR = fm.FontProperties(fname=regular_path)
+            family = _CNV_FONT_REGULAR.get_name()
+        except Exception:
+            _CNV_FONT_REGULAR = fm.FontProperties(family=family)
+    else:
+        _CNV_FONT_REGULAR = fm.FontProperties(family=family)
+
+    if os.path.isfile(bold_path):
+        try:
+            fm.fontManager.addfont(bold_path)
+            _CNV_FONT_BOLD = fm.FontProperties(fname=bold_path)
+        except Exception:
+            _CNV_FONT_BOLD = fm.FontProperties(family=family, weight="bold")
+    else:
+        _CNV_FONT_BOLD = fm.FontProperties(family=family, weight="bold")
+
+    plt.rcParams["font.family"] = family
+    # Keep math labels on the same sans family as axis text (no Computer Modern mix).
+    plt.rcParams["mathtext.fontset"] = "dejavusans"
+    _CNV_FONTS_READY = True
 
 
 def set_modern_style():
     """Set consistent modern style for all plots"""
-    # Register FiraSans font
-    font_path = os.path.join(
-        os.path.dirname(os.path.abspath(fonts.__file__)),
-        "fira-sans-v16-latin-regular.ttf",
-    )
-
-    # Add font to matplotlib's font manager
-    fm.fontManager.addfont(font_path)
-    prop = fm.FontProperties(fname=font_path)
-    plt.rcParams["font.family"] = prop.get_name()
+    _setup_cnv_fonts()
 
     plt.style.use("seaborn-v0_8-whitegrid")
-    sns.set_theme(style="whitegrid")
+    sns.set_theme(style="whitegrid", font=plt.rcParams["font.family"])
 
     plt.rcParams.update(
         {
@@ -80,8 +116,8 @@ def set_modern_style():
             "axes.labelcolor": MODERN_COLORS["primary"],
             "axes.titlecolor": MODERN_COLORS["primary"],
             "axes.grid": True,
-            "axes.labelsize": 10,
-            "axes.titlesize": 12,
+            "axes.labelsize": CNV_FONT["axis"],
+            "axes.titlesize": CNV_FONT["title"],
             # Grid settings
             "grid.color": MODERN_COLORS["grid"],
             "grid.linestyle": "--",
@@ -90,13 +126,13 @@ def set_modern_style():
             # Tick settings
             "xtick.color": MODERN_COLORS["primary"],
             "ytick.color": MODERN_COLORS["primary"],
-            "xtick.labelsize": 8,
-            "ytick.labelsize": 8,
+            "xtick.labelsize": CNV_FONT["tick"],
+            "ytick.labelsize": CNV_FONT["tick"],
             # Legend settings
             "legend.frameon": True,
             "legend.facecolor": "white",
             "legend.edgecolor": MODERN_COLORS["grid"],
-            "legend.fontsize": 8,
+            "legend.fontsize": CNV_FONT["tick"],
             # Line settings
             "lines.linewidth": 1.5,
             "lines.markersize": 6,
@@ -115,6 +151,7 @@ def _apply_cnv_chromosome_axes(
     show_xlabel: bool = True,
 ) -> None:
     """Pin axes at the origin with no leading x padding."""
+    _setup_cnv_fonts()
     ax.set_xlim(0, x_max_mb)
     ax.set_ylim(y_min, y_max)
     ax.margins(x=0, y=0)
@@ -123,12 +160,19 @@ def _apply_cnv_chromosome_axes(
         ax.set_xlabel(
             xlabel,
             fontsize=CNV_FONT["axis"],
-            color=MODERN_COLORS["primary"],
-            labelpad=12,
+            color=CNV_TEXT["primary"],
+            labelpad=10,
+            fontproperties=_CNV_FONT_REGULAR,
         )
     else:
         ax.set_xlabel("")
-    ax.set_ylabel(ylabel, fontsize=CNV_FONT["axis"], color=MODERN_COLORS["primary"])
+    ax.set_ylabel(
+        ylabel,
+        fontsize=CNV_FONT["axis"],
+        color=CNV_TEXT["primary"],
+        labelpad=10,
+        fontproperties=_CNV_FONT_REGULAR,
+    )
     ax.spines["left"].set_position(("data", 0))
     if y_min < 0:
         # Keep the Mb axis at the bottom of the panel; log2 reference stays at y=0 inside.
@@ -141,7 +185,7 @@ def _apply_cnv_chromosome_axes(
     ax.yaxis.set_ticks_position("left")
     ax.grid(True, axis="y", color=MODERN_COLORS["grid"], linestyle="--", linewidth=0.4, alpha=0.55)
     ax.grid(False, axis="x")
-    ax.tick_params(colors=MODERN_COLORS["primary"], labelsize=CNV_FONT["tick"])
+    ax.tick_params(colors=CNV_TEXT["primary"], labelsize=CNV_FONT["tick"])
 
 
 def _chromosome_display_name(contig: str) -> str:
@@ -282,10 +326,10 @@ def _chromosome_figure_margins(
     has_coverage_axis: bool,
 ) -> Dict[str, float]:
     return {
-        "top": 0.82 if has_status else 0.90,
-        "bottom": 0.16,
-        "right": 0.86 if has_coverage_axis else 0.97,
-        "left": 0.10,
+        "top": 0.76 if has_status else 0.86,
+        "bottom": 0.18,
+        "right": 0.88 if has_coverage_axis else 0.97,
+        "left": 0.14 if has_coverage_axis else 0.13,
     }
 
 
@@ -344,15 +388,16 @@ def _add_panel_gene_lollipops(
     ax_cov.set_ylabel(
         "Coverage (x)",
         fontsize=CNV_FONT["axis"],
-        color=MODERN_COLORS["primary"],
-        labelpad=6,
+        color=CNV_TEXT["primary"],
+        labelpad=8,
+        fontproperties=_CNV_FONT_REGULAR,
     )
     ax_cov.tick_params(
-        colors=MODERN_COLORS["primary"],
+        colors=CNV_TEXT["primary"],
         labelsize=CNV_FONT["tick"],
         pad=2,
     )
-    ax_cov.spines["right"].set_color(MODERN_COLORS["primary"])
+    ax_cov.spines["right"].set_color(CNV_TEXT["primary"])
     ax_cov.spines["top"].set_visible(False)
     ax_cov.grid(False)
 
@@ -476,15 +521,34 @@ def _draw_region_bracket(
 
 def _apply_cnv_axes_style(ax, *, xlabel: str, ylabel: str, title: Optional[str] = None) -> None:
     """Apply consistent seaborn-inspired styling to a CNV axes."""
+    _setup_cnv_fonts()
     ax.set_facecolor("white")
-    ax.set_xlabel(xlabel, fontsize=CNV_FONT["axis"], color=MODERN_COLORS["primary"])
-    ax.set_ylabel(ylabel, fontsize=CNV_FONT["axis"], color=MODERN_COLORS["primary"])
+    ax.set_xlabel(
+        xlabel,
+        fontsize=CNV_FONT["axis"],
+        color=CNV_TEXT["primary"],
+        labelpad=10,
+        fontproperties=_CNV_FONT_REGULAR,
+    )
+    ax.set_ylabel(
+        ylabel,
+        fontsize=CNV_FONT["axis"],
+        color=CNV_TEXT["primary"],
+        labelpad=10,
+        fontproperties=_CNV_FONT_REGULAR,
+    )
     if title:
-        ax.set_title(title, fontsize=CNV_FONT["title"], color=MODERN_COLORS["primary"], pad=8)
+        ax.set_title(
+            title,
+            fontsize=CNV_FONT["title"],
+            color=CNV_TEXT["primary"],
+            pad=10,
+            fontproperties=_CNV_FONT_BOLD,
+        )
     sns.despine(ax=ax, top=True, right=True)
     ax.grid(True, axis="y", color=MODERN_COLORS["grid"], linestyle="--", linewidth=0.4, alpha=0.55)
     ax.grid(False, axis="x")
-    ax.tick_params(colors=MODERN_COLORS["primary"], labelsize=CNV_FONT["tick"])
+    ax.tick_params(colors=CNV_TEXT["primary"], labelsize=CNV_FONT["tick"])
 
 
 def _chromosome_cnv_dataframe(positions_mb, values) -> pd.DataFrame:
@@ -1137,21 +1201,22 @@ def create_CNV_plot_per_chromosome(
             fig.suptitle(
                 f"Chromosome {chrom_name}",
                 fontsize=CNV_FONT["title"],
-                fontweight="bold",
-                color=MODERN_COLORS["primary"],
-                y=0.98,
+                color=CNV_TEXT["primary"],
+                y=0.99 if has_status else 0.97,
+                fontproperties=_CNV_FONT_BOLD,
             )
             if has_status:
                 wrapped_status = _wrap_chromosome_status_text(status_text)
                 fig.text(
                     0.5,
-                    0.93,
+                    0.90,
                     wrapped_status,
                     ha="center",
                     va="top",
-                    fontsize=7 if "\n" in wrapped_status else CNV_FONT["subtitle"],
-                    color=MODERN_COLORS["primary"],
-                    linespacing=1.15,
+                    fontsize=CNV_FONT["subtitle"],
+                    color=CNV_TEXT["muted"],
+                    linespacing=1.2,
+                    fontproperties=_CNV_FONT_REGULAR,
                 )
 
             cnv_df = _chromosome_cnv_dataframe(positions_mb, plot_values)

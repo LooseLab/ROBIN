@@ -11,6 +11,7 @@ CLASSIFICATION_STEP_IDS = frozenset(
 
 SAMPLE_DISPLAY_KEY = "sample_display"
 SAMPLE_DETAILS_SURFACE = "sample_details"
+DISPLAY_CONFIG_SCHEMA_VERSION = 3
 DISPLAY_ROLES = ("user", "admin")
 DISPLAY_ROLE_LABELS = {
     "user": "Standard users",
@@ -83,12 +84,11 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
     "bed_coverage": DisplaySection(
         "bed_coverage", "BED coverage", "analysis", workflow_step="fusion"
     ),
-    "mnpflex": DisplaySection("mnpflex", "MNP-Flex", "analysis"),
+    "mnpflex": DisplaySection("mnpflex", "MNP-Flex", "v12_classifier"),
     "snp": DisplaySection(
         "snp",
         "SNP analysis",
         "sample_details",
-        workflow_step="snp_analysis",
         surfaces=frozenset({"sample_details"}),
     ),
     "output_files": DisplaySection(
@@ -96,9 +96,10 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
     ),
 }
 
-DISPLAY_GROUP_ORDER = ("classification", "analysis", "sample_details", "other")
+DISPLAY_GROUP_ORDER = ("classification", "v12_classifier", "analysis", "sample_details", "other")
 DISPLAY_GROUP_LABELS = {
     "classification": "Classification",
+    "v12_classifier": "V12 Classifier",
     "analysis": "Analysis",
     "sample_details": "More details page",
     "other": "Other",
@@ -109,7 +110,7 @@ DISPLAY_GROUP_LABELS = {
 class SampleDisplayConfig:
     """Admin-controlled visibility for sample page sections, per role."""
 
-    schema_version: int = 2
+    schema_version: int = DISPLAY_CONFIG_SCHEMA_VERSION
     sections: Dict[str, bool] = field(default_factory=dict)
     role_sections: Dict[str, Dict[str, bool]] = field(default_factory=dict)
     report_sections: Optional[Dict[str, bool]] = None
@@ -142,6 +143,22 @@ class SampleDisplayConfig:
         return out
 
     @classmethod
+    def _migrate_role_sections(
+        cls,
+        role_sections: Dict[str, Dict[str, bool]],
+        schema_version: int,
+    ) -> Dict[str, Dict[str, bool]]:
+        if schema_version >= DISPLAY_CONFIG_SCHEMA_VERSION:
+            return role_sections
+        # v3: SNP was incorrectly forced off by admin UI / workflow bugs; restore default.
+        migrated = {role: dict(mapping) for role, mapping in role_sections.items()}
+        for role in DISPLAY_ROLES:
+            mapping = migrated.setdefault(role, {})
+            if mapping.get("snp") is False:
+                del mapping["snp"]
+        return migrated
+
+    @classmethod
     def from_dict(cls, data: Optional[Dict[str, Any]]) -> "SampleDisplayConfig":
         if not data:
             return cls()
@@ -155,14 +172,23 @@ class SampleDisplayConfig:
                     role_sections[str(role)] = {
                         str(k): bool(v) for k, v in mapping.items()
                     }
-        legacy_sections = data.get("sections") or {}
-        if legacy_sections and "user" not in role_sections:
-            role_sections["user"] = {str(k): bool(v) for k, v in legacy_sections.items()}
+        legacy_sections = {str(k): bool(v) for k, v in (data.get("sections") or {}).items()}
+        if legacy_sections and not role_sections.get("user"):
+            role_sections["user"] = dict(legacy_sections)
         if "admin" not in role_sections:
             role_sections["admin"] = {}
+        schema_version = int(data.get("schema_version") or 1)
+        role_sections = cls._migrate_role_sections(role_sections, schema_version)
+        if schema_version < DISPLAY_CONFIG_SCHEMA_VERSION:
+            if legacy_sections.get("snp") is False:
+                legacy_sections.pop("snp", None)
+            user_map = role_sections.get("user")
+            if user_map is not None and user_map.get("snp") is False:
+                user_map.pop("snp", None)
+        sections = dict(role_sections.get("user") or legacy_sections)
         return cls(
-            schema_version=int(data.get("schema_version") or 1),
-            sections={str(k): bool(v) for k, v in legacy_sections.items()},
+            schema_version=DISPLAY_CONFIG_SCHEMA_VERSION,
+            sections=sections,
             role_sections=role_sections,
             report_sections=(
                 {str(k): bool(v) for k, v in report_sections.items()}
@@ -411,6 +437,17 @@ def config_from_workflow_steps(
     return base.with_role_updates(role, sections)
 
 
+def section_admin_surface(section: DisplaySection) -> str:
+    """Pick the surface used to resolve admin checkbox state for a section."""
+    if "sample_page" in section.surfaces:
+        return "sample_page"
+    if SAMPLE_DETAILS_SURFACE in section.surfaces:
+        return SAMPLE_DETAILS_SURFACE
+    if "report" in section.surfaces:
+        return "report"
+    return "sample_page"
+
+
 def effective_section_map(
     workflow_steps: Optional[List[str]] = None,
     display_config: Optional[SampleDisplayConfig] = None,
@@ -424,7 +461,7 @@ def effective_section_map(
             section_id,
             workflow_steps=workflow_steps,
             display_config=display_config,
-            surface=surface,
+            surface=section_admin_surface(DISPLAY_SECTIONS[section_id]),
             viewer_role=viewer_role,
         )
         for section_id in DISPLAY_SECTIONS

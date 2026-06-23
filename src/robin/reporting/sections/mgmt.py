@@ -4,6 +4,7 @@ MGMT Analysis Section for ROBIN Reports.
 This module handles the MGMT (O6-methylguanine-DNA methyltransferase) promoter methylation analysis section of the report.
 """
 
+import io
 import os
 import pandas as pd
 import natsort
@@ -16,6 +17,21 @@ from ..sections.base import ReportSection
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+def _load_image_buffer(path: str) -> io.BytesIO | None:
+    """Load an image file into memory for ReportLab (avoids late path/casing issues)."""
+    resolved = os.path.realpath(os.path.expanduser(path))
+    if not os.path.isfile(resolved):
+        return None
+    try:
+        with open(resolved, "rb") as fh:
+            buf = io.BytesIO(fh.read())
+        buf.seek(0)
+        return buf
+    except OSError as exc:
+        logger.warning("Failed to read image %s: %s", resolved, exc)
+        return None
 
 
 def _extract_mgmt_specific_sites_from_bed(bed_path: str) -> pd.DataFrame:
@@ -613,19 +629,21 @@ class MGMTSection(ReportSection):
             # Try to add the methylation plot
             plot_added = False
             
-            # First, try to load from existing PNG file
-            if plot_out and os.path.exists(plot_out):
-                try:
-                    self.elements.append(Image(plot_out, width=6 * inch, height=4 * inch))
-                    self.elements.append(
-                        Paragraph(
-                            "MGMT promoter methylation plot showing methylation levels across CpG sites",
-                            self.styles.styles["Caption"],
+            # First, try to load from existing PNG file (e.g. final_mgmt.png)
+            if plot_out:
+                plot_buf = _load_image_buffer(plot_out)
+                if plot_buf is not None:
+                    try:
+                        self.elements.append(Image(plot_buf, width=6 * inch, height=4 * inch))
+                        self.elements.append(
+                            Paragraph(
+                                "MGMT promoter methylation plot showing methylation levels across CpG sites",
+                                self.styles.styles["Caption"],
+                            )
                         )
-                    )
-                    plot_added = True
-                except Exception as e:
-                    logger.warning(f"Failed to load MGMT plot from file: {e}")
+                        plot_added = True
+                    except Exception as e:
+                        logger.warning(f"Failed to load MGMT plot from file: {e}")
             
             # If not found, try to generate from BAM file using locus_figure
             if not plot_added:
@@ -655,23 +673,26 @@ class MGMTSection(ReportSection):
                             mods="m",
                         )
                         
-                        # Save to a file in the report output directory
-                        plot_path = os.path.join(self.report.output, "mgmt_report_plot.png")
-                        # Suppress GridSpec warnings when saving figure
+                        # Embed in memory (same pattern as CNV/coverage sections).
+                        # Avoids ReportLab failing later if path casing differs on disk.
+                        plot_buf = io.BytesIO()
                         with warnings.catch_warnings():
                             warnings.simplefilter("ignore", UserWarning)
-                            fig.savefig(plot_path, dpi=150, bbox_inches='tight')
+                            fig.savefig(plot_buf, format="png", dpi=150, bbox_inches="tight")
+                        plot_buf.seek(0)
                         plt.close(fig)
-                        
-                        # Add to report
-                        self.elements.append(Image(plot_path, width=6 * inch, height=4 * inch))
-                        self.elements.append(
-                            Paragraph(
-                                "MGMT promoter methylation plot showing methylation levels across CpG sites",
-                                self.styles.styles["Caption"],
+
+                        if plot_buf.getbuffer().nbytes > 0:
+                            self.elements.append(Image(plot_buf, width=6 * inch, height=4 * inch))
+                            self.elements.append(
+                                Paragraph(
+                                    "MGMT promoter methylation plot showing methylation levels across CpG sites",
+                                    self.styles.styles["Caption"],
+                                )
                             )
-                        )
-                        plot_added = True
+                            plot_added = True
+                        else:
+                            logger.warning("MGMT plot generation produced empty image data")
                             
                     except Exception as e:
                         logger.warning(f"Failed to generate MGMT plot from BAM: {e}")

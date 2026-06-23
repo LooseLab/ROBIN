@@ -54,7 +54,6 @@ For account setup and auditing, see [Users, consent, and auditing](audit-and-use
 | Pipeline status | **Activity Monitor** |
 | Published docs (new tab) | **Documentation** |
 | Dark theme | **Dark Mode** |
-| Remote access (advanced) | **Allow Remote Access** |
 | Update your password | **Change password** |
 | User accounts and audit log *(admin only)* | **Administration** |
 | End web session | **LOG OUT** |
