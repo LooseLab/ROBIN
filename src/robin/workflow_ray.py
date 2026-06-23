@@ -5802,6 +5802,7 @@ async def run(
     center: str = None,
     enable_batching: bool = True,
     with_gui: bool = True,
+    workflow_toml: Optional[str] = None,
 ):
     global GLOBAL_LOG_LEVEL, _GLOBAL_OBSERVER, _GLOBAL_WATCHER, _GLOBAL_WATCH_CONTEXT, _GLOBAL_WATCHED_PATHS
     GLOBAL_LOG_LEVEL = (log_level or "INFO").upper()
@@ -5912,6 +5913,7 @@ async def run(
                 workflow_steps=plan,
                 monitored_directory=work_dir,
                 center=center,
+                workflow_toml=workflow_toml,
             )
             gui_launcher = launcher
             try:
@@ -5921,6 +5923,11 @@ async def run(
                     else "http://localhost:8081"
                 )
                 _print_styled(f"GUI launched successfully on {url}", level="success")
+                if getattr(launcher, "minknow_gui_enabled", False):
+                    _print_styled(
+                        f"Sequencer (MinKNOW): {url}/minknow",
+                        level="info",
+                    )
             except Exception:
                 _print_styled("GUI launched successfully", level="success")
 
