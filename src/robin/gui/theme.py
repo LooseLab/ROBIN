@@ -7,7 +7,7 @@ design system (see ``design.md``): clear hierarchy, slate neutrals, emerald acce
 It includes:
 
 - A context manager `frame` to create a custom page frame with navigation, header, and footer.
-- Utility functions to handle dark mode and remote access toggling.
+- Utility functions to handle dark mode toggling.
 - Material Design 3 color tokens, typography scale, and spacing system.
 - Modern component styling with proper elevation and surface treatments.
 - Responsive design patterns and accessibility improvements.
@@ -17,7 +17,6 @@ Functions:
 - frame(navtitle: str): Context manager for creating a consistent page layout with header, footer, and navigation.
 - cleanup_and_exit(): Handles cleanup operations before shutting down the application.
 - dark_mode(event: events.ValueChangeEventArguments): Toggles dark mode based on the event argument.
-- use_on_air(args: events.ValueChangeEventArguments): Toggles remote access based on the event argument.
 
 Constants:
 
@@ -29,7 +28,7 @@ Constants:
 External Dependencies:
 
 - contextlib.contextmanager
-- nicegui (ui, app, events, core, air)
+- nicegui (ui, app, events)
 - pathlib.Path
 - robin.images
 - os
@@ -50,8 +49,7 @@ import json
 from typing import Callable, Optional, Any, Dict, List
 
 
-from nicegui import ui, app, events, core, run, background_tasks
-import nicegui.air
+from nicegui import ui, app, events, run
 
 from robin.minknow.toml_config import minknow_gui_available
 
@@ -599,10 +597,6 @@ async def check_version():
 
 # Module-level variables
 quitdialog = None
-_remote_access_initialized = False
-_remote_access_target = False
-_remote_access_task = None
-_remote_access_request_id = 0
 _logout_callback: Optional[Callable[[], None]] = None
 
 def _is_local_client() -> bool:
@@ -714,9 +708,6 @@ def frame(
     global quitdialog
     if batphone:
         navtitle = f"BATMAN & {navtitle}"
-
-    # Initialize remote access policy once at app launch (global runtime state).
-    initialize_remote_access_once()
 
     # Store center in app storage if provided
     if center:
@@ -1192,13 +1183,6 @@ def frame(
                                 lambda: ui.navigate.to("/admin"),
                             ).classes("text-body-medium")
                         ui.separator()
-                        if _current_user_is_admin():
-                            ui.switch(
-                                "Allow Remote Access", on_change=use_on_air
-                            ).classes("ml-4 bg-transparent").props(
-                                'color="primary"'
-                            ).bind_value(app.storage.general, "use_on_air")
-                            ui.separator()
                         def _dark_mode_initial() -> bool:
                             """Prefer session (browser) storage so initial value matches first paint."""
                             try:
@@ -1459,92 +1443,6 @@ async def cleanup_and_exit():
     # Shutdown the application
     logging.info("Application shutdown initiated")
     app.shutdown()
-
-
-def set_remote_access(enabled: bool) -> None:
-    print(f"[ROBIN] Setting remote access to {enabled}")
-    """Queue a global NiceGUI On Air state change."""
-    global _remote_access_target, _remote_access_task, _remote_access_request_id
-    _remote_access_target = bool(enabled)
-    _remote_access_request_id += 1
-    request_id = _remote_access_request_id
-    if _remote_access_task is not None and not _remote_access_task.done():
-        _remote_access_task.cancel()
-    _remote_access_task = background_tasks.create(
-        _apply_remote_access_state(request_id=request_id, target=_remote_access_target)
-    )
-
-
-async def _apply_remote_access_state(request_id: int, target: bool) -> None:
-    """Apply one requested On Air state; stale requests are ignored."""
-    global _remote_access_task
-    try:
-        if request_id != _remote_access_request_id:
-            print("[ROBIN] Ignoring stale On Air request")
-            return
-
-        if target:
-            if core.air is None:
-                print("[ROBIN] Activating On Air: creating Air instance")
-                core.air = nicegui.air.Air("")
-            # Air has an internal reconnect timer; re-enable connect path when toggled on.
-            core.air.connecting = False
-            print("[ROBIN] Activating On Air: connecting")
-            await core.air.connect()
-            return
-
-        air_instance = core.air
-        if air_instance is not None:
-            # Air starts an internal timer(5, self.connect); keep connecting=True to block auto-reconnect.
-            air_instance.connecting = True
-            print("[ROBIN] Removing On Air: disconnecting")
-            await air_instance.disconnect()
-            print("[ROBIN] Removing On Air: auto-reconnect blocked")
-        else:
-            print("[ROBIN] On Air already inactive")
-    except asyncio.CancelledError:
-        print("[ROBIN] Cancelled stale On Air transition")
-        raise
-    finally:
-        _remote_access_task = None
-
-
-def initialize_remote_access_once() -> None:
-    """Set initial remote access state once per process launch."""
-    global _remote_access_initialized
-    if _remote_access_initialized:
-        return
-    _remote_access_initialized = True
-    set_remote_access(False)
-    try:
-        app.storage.general["use_on_air"] = False
-    except RuntimeError:
-        # Storage may not be available in some contexts.
-        pass
-
-
-def use_on_air(args: events.ValueChangeEventArguments):
-    """
-    Enable or disable remote access based on the value of the event argument.
-
-    Args:
-        args (events.ValueChangeEventArguments): The event argument containing the value for remote access toggle.
-
-    Returns:
-        None
-
-    Example:
-        >>> args = events.ValueChangeEventArguments(value=True)
-        >>> use_on_air(args)
-        None
-    """
-    value = args.value
-    if isinstance(value, str):
-        enabled = value.strip().lower() in {"1", "true", "yes", "on"}
-    else:
-        enabled = bool(value)
-    print(f"[ROBIN] Allow Remote Access toggle is {'ON' if enabled else 'OFF'}")
-    set_remote_access(enabled)
 
 
 def create_home_page():
