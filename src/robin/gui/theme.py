@@ -83,11 +83,14 @@ def ui_element_exists(element: Any) -> bool:
     try:
         if getattr(element, "_deleted", False):
             return False
-        if getattr(element, "client", None) is None:
-            return False
+        _ = element.client
         # Access id to force resolution for stale/disconnected elements.
         _ = element.id
         return True
+    except RuntimeError as exc:
+        if "deleted" in str(exc).lower():
+            return False
+        raise
     except Exception:
         return False
 

@@ -10222,7 +10222,10 @@ title="View in IGV"
                                 )
 
                                 def refresh_pending_paths():
-                                    pending_paths_container.clear()
+                                    if not self._safe_clear_container(
+                                        pending_paths_container
+                                    ):
+                                        return
                                     with pending_paths_container:
                                         for selected_path in pending_paths:
                                             with ui.row().classes(
@@ -10626,6 +10629,16 @@ title="View in IGV"
             if "deleted" not in str(e).lower():
                 raise
 
+    def _safe_clear_container(self, container) -> bool:
+        """Clear a UI container; return False if the browser session is gone."""
+        try:
+            container.clear()
+            return True
+        except RuntimeError as exc:
+            if "deleted" in str(exc).lower():
+                return False
+            raise
+
     async def _do_add_folder(
         self,
         path_input,
@@ -10766,7 +10779,8 @@ title="View in IGV"
 
     def _refresh_watched_list(self, watched_container, remove_watch_path, get_watched_paths):
         """Refresh the list of watched paths in the dialog."""
-        watched_container.clear()
+        if not self._safe_clear_container(watched_container):
+            return
         with watched_container:
             paths = get_watched_paths()
             if paths:
