@@ -24,6 +24,7 @@ from robin.security import get_consent_version
 from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY, NOTES_KEY
 from robin.security.user_approvals import (
     ADMIN_USER_APPROVALS_UPDATED_EVENT,
+    MINKNOW_REMOTE_CONTROL_KEY,
     REPORT_EXPORT_KEY,
     TRAINING_RECEIVED_KEY,
     USER_APPROVAL_FIELDS,
@@ -55,6 +56,9 @@ def _user_table_rows(launcher: "GUILauncher") -> List[Dict[str, Any]]:
                 "roles": ", ".join(roles) or "—",
                 "training": "yes" if effective.get(TRAINING_RECEIVED_KEY) else "no",
                 "report_export": "yes" if effective.get(REPORT_EXPORT_KEY) else "no",
+                "minknow_remote_control": (
+                    "yes" if effective.get(MINKNOW_REMOTE_CONTROL_KEY) else "no"
+                ),
                 "active": "yes" if user.is_active else "no",
                 "password": "must change" if user.must_change_password else "ok",
                 "last_login": user.last_login_at or "never",
@@ -163,6 +167,12 @@ def _build_users_panel(launcher: "GUILauncher", consent_version: str) -> None:
                     "name": "report_export",
                     "label": "Report export",
                     "field": "report_export",
+                    "align": "left",
+                },
+                {
+                    "name": "minknow_remote_control",
+                    "label": "MinKNOW control",
+                    "field": "minknow_remote_control",
                     "align": "left",
                 },
                 {"name": "roles", "label": "Roles", "field": "roles", "align": "left"},

@@ -530,6 +530,11 @@ def users_bootstrap_admin(username: str, from_legacy_hash: bool) -> None:
 )
 @click.option("--training", is_flag=True, help="Grant training received approval.")
 @click.option("--report-export", is_flag=True, help="Grant report export approval.")
+@click.option(
+    "--minknow-remote-control",
+    is_flag=True,
+    help="Grant MinKNOW remote control approval.",
+)
 def users_create(
     username: str,
     role: str,
@@ -537,12 +542,14 @@ def users_create(
     clinical_role: str,
     training: bool,
     report_export: bool,
+    minknow_remote_control: bool,
 ) -> None:
     """Create a GUI user account."""
     try:
         from robin.security.user_metadata import CLINICAL_ROLE_KEY, EMAIL_KEY
         from robin.security.user_approvals import (
             ADMIN_USER_APPROVALS_UPDATED_EVENT,
+            MINKNOW_REMOTE_CONTROL_KEY,
             REPORT_EXPORT_KEY,
             TRAINING_RECEIVED_KEY,
             approval_audit_details,
@@ -567,6 +574,7 @@ def users_create(
     approvals = {
         TRAINING_RECEIVED_KEY: training,
         REPORT_EXPORT_KEY: report_export,
+        MINKNOW_REMOTE_CONTROL_KEY: minknow_remote_control,
     }
     try:
         user_id = auth.create_user(
@@ -654,7 +662,11 @@ def users_set_password(username: str) -> None:
 def users_list() -> None:
     """List configured GUI users."""
     try:
-        from robin.security.user_approvals import REPORT_EXPORT_KEY, TRAINING_RECEIVED_KEY
+        from robin.security.user_approvals import (
+            MINKNOW_REMOTE_CONTROL_KEY,
+            REPORT_EXPORT_KEY,
+            TRAINING_RECEIVED_KEY,
+        )
 
         store, _, _ = _get_security_services()
     except ImportError as e:
@@ -671,13 +683,18 @@ def users_list() -> None:
         clinical_role = user.metadata.get("clinical_role") or "—"
         training = "yes" if user.approvals.get(TRAINING_RECEIVED_KEY) else "no"
         report_export = "yes" if user.approvals.get(REPORT_EXPORT_KEY) else "no"
+        minknow_remote_control = (
+            "yes" if user.approvals.get(MINKNOW_REMOTE_CONTROL_KEY) else "no"
+        )
         if store.user_has_role(user.id, "admin"):
             training = "yes (admin)"
             report_export = "yes (admin)"
+            minknow_remote_control = "yes (admin)"
         click.echo(
             f" - {user.username} (id={user.id}, active={user.is_active}, "
             f"email={email}, clinical_role={clinical_role}, "
             f"training={training}, report_export={report_export}, "
+            f"minknow_remote_control={minknow_remote_control}, "
             f"last_login={user.last_login_at or 'never'})"
         )
 
@@ -753,15 +770,22 @@ def users_set_profile(
     default=None,
     help="Grant or revoke report export approval.",
 )
+@click.option(
+    "--minknow-remote-control/--no-minknow-remote-control",
+    default=None,
+    help="Grant or revoke MinKNOW remote control approval.",
+)
 def users_set_approvals(
     username: str,
     training: Optional[bool],
     report_export: Optional[bool],
+    minknow_remote_control: Optional[bool],
 ) -> None:
     """Update approval flags for a GUI user account."""
     try:
         from robin.security.user_approvals import (
             ADMIN_USER_APPROVALS_UPDATED_EVENT,
+            MINKNOW_REMOTE_CONTROL_KEY,
             REPORT_EXPORT_KEY,
             TRAINING_RECEIVED_KEY,
             approval_audit_details,
@@ -791,10 +815,13 @@ def users_set_approvals(
         updates[TRAINING_RECEIVED_KEY] = training
     if report_export is not None:
         updates[REPORT_EXPORT_KEY] = report_export
+    if minknow_remote_control is not None:
+        updates[MINKNOW_REMOTE_CONTROL_KEY] = minknow_remote_control
     if not updates:
         click.echo(
-            "Provide at least one of --training/--no-training or "
-            "--report-export/--no-report-export.",
+            "Provide at least one of --training/--no-training, "
+            "--report-export/--no-report-export, or "
+            "--minknow-remote-control/--no-minknow-remote-control.",
             err=True,
         )
         sys.exit(1)

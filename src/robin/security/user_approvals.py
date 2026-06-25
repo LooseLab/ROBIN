@@ -11,6 +11,7 @@ if TYPE_CHECKING:
 
 TRAINING_RECEIVED_KEY = "training_received"
 REPORT_EXPORT_KEY = "report_export"
+MINKNOW_REMOTE_CONTROL_KEY = "minknow_remote_control"
 ADMIN_USER_APPROVALS_UPDATED_EVENT = "admin.user.approvals_updated"
 
 TRAINING_REQUIRED_MESSAGE = (
@@ -18,6 +19,10 @@ TRAINING_REQUIRED_MESSAGE = (
 )
 EXPORT_DENIED_MESSAGE = (
     "You need report export approval from an administrator on this ROBIN instance."
+)
+MINKNOW_REMOTE_CONTROL_DENIED_MESSAGE = (
+    "You need MinKNOW remote control approval from an administrator on this ROBIN "
+    "instance."
 )
 
 
@@ -31,6 +36,7 @@ class UserApprovalField:
 USER_APPROVAL_FIELDS = (
     UserApprovalField(TRAINING_RECEIVED_KEY, "Training Received"),
     UserApprovalField(REPORT_EXPORT_KEY, "Report Export"),
+    UserApprovalField(MINKNOW_REMOTE_CONTROL_KEY, "MinKNOW Remote Control"),
 )
 
 

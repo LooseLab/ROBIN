@@ -161,6 +161,17 @@ def minknow_gui_available() -> bool:
     return launcher is not None and launcher.minknow_gui_enabled
 
 
+def minknow_gui_accessible() -> bool:
+    """Return whether MinKNOW is configured and allowed for the signed-in user."""
+    try:
+        from robin.gui.app import get_gui_launcher
+
+        launcher = get_gui_launcher()
+    except Exception:
+        return False
+    return launcher is not None and launcher.minknow_gui_accessible()
+
+
 def optional_preset_from_mapping(data: Mapping[str, Any]) -> Optional[RobinRunPreset]:
     """Return a preset when ``[minknow.preset]`` or preset keys are present."""
     nested = data.get("preset")

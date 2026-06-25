@@ -1,4 +1,4 @@
-src/robin/gui/components/minknow.py"""MinKNOW sequencer status and run control for the ROBIN GUI."""
+"""MinKNOW sequencer status and run control for the ROBIN GUI."""
 
 from __future__ import annotations
 

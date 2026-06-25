@@ -15,6 +15,7 @@ from .user_metadata import (
 )
 from .user_approvals import (
     ADMIN_USER_APPROVALS_UPDATED_EVENT,
+    MINKNOW_REMOTE_CONTROL_KEY,
     REPORT_EXPORT_KEY,
     TRAINING_RECEIVED_KEY,
     USER_APPROVAL_FIELDS,
@@ -42,6 +43,7 @@ __all__ = [
     "normalize_metadata",
     "TRAINING_RECEIVED_KEY",
     "REPORT_EXPORT_KEY",
+    "MINKNOW_REMOTE_CONTROL_KEY",
     "ADMIN_USER_APPROVALS_UPDATED_EVENT",
     "USER_APPROVAL_FIELDS",
     "approval_audit_details",

@@ -51,7 +51,7 @@ from typing import Callable, Optional, Any, Dict, List
 
 from nicegui import ui, app, events, run
 
-from robin.minknow.toml_config import minknow_gui_available
+from robin.minknow.toml_config import minknow_gui_accessible
 
 from robin.gui.session import current_session_is_admin, current_session_username
 
@@ -1149,7 +1149,7 @@ def frame(
                         ui.menu_item(
                             "View Samples", lambda: ui.navigate.to("/live_data")
                         ).classes("text-body-medium")
-                        if minknow_gui_available():
+                        if minknow_gui_accessible():
                             ui.menu_item(
                                 "Sequencer (MinKNOW)",
                                 lambda: ui.navigate.to("/minknow"),

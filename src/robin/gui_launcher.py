@@ -689,6 +689,22 @@ class GUILauncher:
             self.security_store, self._get_current_user_id(), REPORT_EXPORT_KEY
         )
 
+    def _current_user_can_remote_control_minknow(self) -> bool:
+        from robin.security.user_approvals import (
+            MINKNOW_REMOTE_CONTROL_KEY,
+            user_has_approval,
+        )
+
+        return user_has_approval(
+            self.security_store,
+            self._get_current_user_id(),
+            MINKNOW_REMOTE_CONTROL_KEY,
+        )
+
+    def minknow_gui_accessible(self) -> bool:
+        """MinKNOW is configured and the signed-in user may use remote control."""
+        return self.minknow_gui_enabled and self._current_user_can_remote_control_minknow()
+
     def _notify_export_denied(self) -> None:
         from robin.security.user_approvals import EXPORT_DENIED_MESSAGE
 
@@ -720,6 +736,29 @@ class GUILauncher:
                     "classification-insight-heading text-headline-small"
                 )
                 ui.label(TRAINING_REQUIRED_MESSAGE).classes("classification-insight-foot")
+                ui.button(
+                    "Back to samples",
+                    on_click=lambda: ui.navigate.to("/live_data"),
+                    icon="view_list",
+                ).props("color=primary no-caps")
+
+    def _render_minknow_approval_required_page(self) -> None:
+        from robin.security.user_approvals import MINKNOW_REMOTE_CONTROL_DENIED_MESSAGE
+
+        with theme.frame(
+            "R.O.B.I.N - Sequencer (MinKNOW)",
+            smalltitle="Approval required",
+            batphone=False,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-lg mx-auto p-4 gap-3"):
+                ui.label("MinKNOW remote control approval required").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(MINKNOW_REMOTE_CONTROL_DENIED_MESSAGE).classes(
+                    "classification-insight-foot"
+                )
                 ui.button(
                     "Back to samples",
                     on_click=lambda: ui.navigate.to("/live_data"),
@@ -2471,6 +2510,18 @@ class GUILauncher:
                 if not self.minknow_gui_enabled:
                     self._render_minknow_not_configured_page()
                     return
+                if not self._current_user_can_remote_control_minknow():
+                    self._audit_log(
+                        event_type="page.access.denied",
+                        result="failure",
+                        user_id=self._get_current_user_id(),
+                        target_type="page",
+                        target_id="/minknow",
+                        details={"reason": "minknow_remote_control_required"},
+                        error_code="minknow_remote_control_required",
+                    )
+                    self._render_minknow_approval_required_page()
+                    return
                 self._audit_log(
                     event_type="page.viewed",
                     user_id=self._get_current_user_id(),
@@ -2887,7 +2938,7 @@ class GUILauncher:
                                 "Generate Sample ID",
                                 "/sample_id_generator",
                             ).classes(_cta_primary)
-                            if self.minknow_gui_enabled:
+                            if self.minknow_gui_accessible():
                                 ui.link("Sequencer (MinKNOW)", "/minknow").classes(
                                     _cta_secondary
                                 )
@@ -7768,7 +7819,7 @@ title="View in IGV"
                                 "text-xs font-semibold workflow-monitor-num"
                             )
 
-                    if self.minknow_gui_enabled:
+                    if self.minknow_gui_accessible():
                         with ui.element("div").classes(
                             "classification-insight-card w-full min-w-0"
                         ):
