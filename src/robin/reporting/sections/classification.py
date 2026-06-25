@@ -23,6 +23,11 @@ import seaborn as sns
 import io
 
 from robin.classification_config import get_confidence_status
+from robin.analysis.mnpflex_hierarchy import mnpflex_hierarchy_has_content
+from robin.reporting.mnpflex_hierarchy import (
+    append_mnpflex_classifier_prediction,
+    append_mnpflex_top_path_paragraph,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -241,7 +246,7 @@ class ClassificationSection(ReportSection):
                 mgmt = summary.get("mgmt", {}) or {}
                 classifier_summary = summary.get("classifier_summary", {}) or {}
                 hierarchy = classifier_summary.get("summary_hierarchical", []) or []
-                has_hierarchical_summary = len(hierarchy) > 0
+                has_hierarchical_summary = mnpflex_hierarchy_has_content(hierarchy)
 
                 # Build legend text (QC, MGMT) for table caption
                 legend_text = (
@@ -279,33 +284,24 @@ class ClassificationSection(ReportSection):
                     )
                     self.summary_elements.append(Spacer(1, 8))
                 else:
-                    # Has hierarchical summary - table with legend
+                    # Has hierarchical summary - nested tree with legend
                     self.summary_elements.append(
                         Paragraph("MNP-Flex Hierarchical Summary", self.styles.styles["Heading3"])
                     )
                     self.summary_elements.append(Spacer(1, 6))
-                    flat = mnpflex._flatten_hierarchy(hierarchy)
-                    if flat:
-                        best_score, best_path = max(flat, key=lambda x: x[0] or 0)
-                        self.summary_elements.append(
-                            Paragraph(
-                                f"<b>Top path</b>: {' > '.join(best_path)} "
-                                f"({mnpflex._format_score(best_score)})",
-                                self.styles.styles["Normal"],
-                            )
-                        )
-                        self.summary_elements.append(Spacer(1, 6))
-                    table_rows = [["Group", "Score", "Description"]]
-                    for node in hierarchy:
-                        table_rows.append(
-                            [
-                                node.get("group", "Unknown"),
-                                mnpflex._format_score(node.get("score")),
-                                mnpflex._collect_descriptions(node),
-                            ]
-                        )
-                    self.summary_elements.append(self.create_table(table_rows))
-                    self.summary_elements.append(Spacer(1, 4))
+                    append_mnpflex_classifier_prediction(
+                        self.summary_elements,
+                        hierarchy,
+                        styles=self.styles,
+                        page_width=self.report.doc.width,
+                        include_heading=False,
+                    )
+                    append_mnpflex_top_path_paragraph(
+                        self.summary_elements,
+                        hierarchy,
+                        styles=self.styles,
+                        format_score=mnpflex._format_score,
+                    )
                     # Table legend
                     self.summary_elements.append(
                         Paragraph(

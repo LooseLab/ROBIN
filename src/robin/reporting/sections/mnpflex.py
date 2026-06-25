@@ -7,12 +7,21 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
 from reportlab.platypus import Paragraph, Spacer
 from reportlab.lib.units import inch
 
 from robin.analysis.mnpflex_docker import hierarchy_aggregate_display
+from robin.analysis.mnpflex_hierarchy import (
+    best_mnpflex_hierarchy_path,
+    mnpflex_hierarchy_export_rows,
+    mnpflex_hierarchy_has_content,
+)
+from robin.reporting.mnpflex_hierarchy import (
+    append_mnpflex_classifier_prediction,
+    append_mnpflex_top_path_paragraph,
+)
 
 from .base import ReportSection
 
@@ -68,40 +77,6 @@ class MNPFlexSection(ReportSection):
         except (TypeError, ValueError):
             return str(value)
 
-    def _collect_descriptions(self, node: Dict[str, Any]) -> str:
-        descriptions: List[str] = []
-        desc = (node.get("description") or "").strip()
-        if desc:
-            descriptions.append(desc)
-        for member in node.get("members") or []:
-            member_desc = self._collect_descriptions(member)
-            if member_desc:
-                descriptions.append(member_desc)
-        seen = set()
-        combined = []
-        for text in descriptions:
-            if text not in seen:
-                seen.add(text)
-                combined.append(text)
-        return " ".join(combined).strip()
-
-    def _flatten_hierarchy(
-        self, nodes: List[Dict[str, Any]], path: Optional[List[str]] = None
-    ) -> List[Tuple[Optional[float], List[str]]]:
-        if path is None:
-            path = []
-        flat = []
-        for node in nodes or []:
-            group = node.get("group", "Unknown")
-            score = node.get("score")
-            current = path + [group]
-            members = node.get("members") or []
-            if members:
-                flat.extend(self._flatten_hierarchy(members, current))
-            else:
-                flat.append((score, current))
-        return flat
-
     def _sum_scores_by_field(
         self, scores: List[Dict[str, Any]], field_name: str, match_value: Optional[str]
     ) -> Optional[float]:
@@ -130,7 +105,7 @@ class MNPFlexSection(ReportSection):
         classifier_summary = summary.get("classifier_summary", {}) or {}
         classifier = classifier_summary.get("classifier", {}) or {}
         hierarchy = classifier_summary.get("summary_hierarchical", []) or []
-        has_hierarchical_summary = len(hierarchy) > 0
+        has_hierarchical_summary = mnpflex_hierarchy_has_content(hierarchy)
 
         # Summary card removed - MNP-Flex legend now appears as table legend
         # in ClassificationSection (with MNP-Flex Hierarchical Summary)
@@ -161,8 +136,6 @@ class MNPFlexSection(ReportSection):
         self.elements.append(Spacer(1, 4))
 
         # Hierarchical summary
-        flat = self._flatten_hierarchy(hierarchy)
-
         if not has_hierarchical_summary:
             self.elements.append(
                 Paragraph(
@@ -173,41 +146,26 @@ class MNPFlexSection(ReportSection):
             )
             self.elements.append(Spacer(1, 6))
 
-        if flat:
-            best_score, best_path = max(flat, key=lambda x: x[0] or 0)
-            self.elements.append(
-                Paragraph(
-                    f"<b>Top path</b>: {' > '.join(best_path)} "
-                    f"({self._format_score(best_score)})",
-                    self.styles.styles["Normal"],
-                )
+        if has_hierarchical_summary:
+            append_mnpflex_classifier_prediction(
+                self.elements,
+                hierarchy,
+                styles=self.styles,
+                page_width=self.report.doc.width,
             )
-            self.elements.append(Spacer(1, 4))
-
-        if hierarchy:
-            hierarchy_rows = [
-                ["Group", "Score", "Description"],
-            ]
-            for node in hierarchy:
-                hierarchy_rows.append(
-                    [
-                        node.get("group", "Unknown"),
-                        self._format_score(node.get("score")),
-                        self._collect_descriptions(node),
-                    ]
-                )
-            self.elements.append(self.create_table(hierarchy_rows))
-            self.elements.append(Spacer(1, 6))
+            append_mnpflex_top_path_paragraph(
+                self.elements,
+                hierarchy,
+                styles=self.styles,
+                format_score=self._format_score,
+            )
 
         # Export frames for CSV/XLSX/ZIP artifacts
         try:
             import pandas as pd
 
-            top_path = ""
-            top_score = None
-            if flat:
-                top_score, best_path = max(flat, key=lambda x: x[0] or 0)
-                top_path = " > ".join(best_path)
+            top_score, best_path = best_mnpflex_hierarchy_path(hierarchy)
+            top_path = " > ".join(best_path) if best_path else ""
 
             self.export_frames["mnpflex_summary"] = pd.DataFrame(
                 [
@@ -231,14 +189,7 @@ class MNPFlexSection(ReportSection):
 
             if hierarchy:
                 self.export_frames["mnpflex_hierarchy"] = pd.DataFrame(
-                    [
-                        {
-                            "group": node.get("group", "Unknown"),
-                            "score": node.get("score"),
-                            "description": self._collect_descriptions(node),
-                        }
-                        for node in hierarchy
-                    ]
+                    mnpflex_hierarchy_export_rows(hierarchy)
                 )
 
             scores = classifier_summary.get("scores") or []

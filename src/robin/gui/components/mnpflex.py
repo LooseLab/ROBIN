@@ -23,6 +23,10 @@ from robin.analysis.mnpflex_docker import (
     format_mnpflex_runtime_error,
     hierarchy_aggregate_display,
 )
+from robin.analysis.mnpflex_hierarchy import (
+    format_mnpflex_hierarchy_score,
+    mnpflex_hierarchy_has_content,
+)
 from robin.analysis.mnpflex_runner import preflight_mnpflex_runtime, run_mnpflex_analysis
 from robin.gui.theme import styled_table
 
@@ -180,22 +184,11 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 with ui.column().classes("w-full gap-2 p-2 md:p-3"):
                     with ui.row().classes("items-center gap-2 min-w-0"):
                         ui.icon("account_tree").classes("classification-insight-icon")
-                        ui.label("Hierarchical summary").classes(
+                        ui.label("Classifier prediction").classes(
                             "classification-insight-model flex-1 min-w-0"
                         )
-                    _, hierarchy_table = styled_table(
-                        columns=[
-                            {"name": "group", "label": "Group", "field": "group"},
-                            {"name": "score", "label": "Score", "field": "score"},
-                            {
-                                "name": "description",
-                                "label": "Description",
-                                "field": "description",
-                            },
-                        ],
-                        rows=[],
-                        pagination=0,
-                        class_size="table-xs",
+                    hierarchy_tree_container = ui.element("div").classes(
+                        "mnpflex-hierarchy-tree w-full min-w-0"
                     )
                 with ui.row().classes(
                     "w-full items-center gap-2 mt-4 flex-wrap"
@@ -496,36 +489,44 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                     flat.append((score, current))
             return flat
 
-        def _collect_descriptions(node) -> str:
-            descriptions = []
-            desc = (node.get("description") or "").strip()
-            if desc:
-                descriptions.append(desc)
-            for member in node.get("members") or []:
-                member_desc = _collect_descriptions(member)
-                if member_desc:
-                    descriptions.append(member_desc)
-            # Deduplicate while preserving order
-            seen = set()
-            combined = []
-            for text in descriptions:
-                if text not in seen:
-                    seen.add(text)
-                    combined.append(text)
-            return " ".join(combined).strip()
-
-        def _extract_hierarchy_rows(nodes, limit: int = 10):
-            rows = []
+        def _render_hierarchy_nodes(
+            nodes: List[Dict[str, Any]],
+            *,
+            depth: int = 0,
+        ) -> None:
             for node in nodes or []:
-                rows.append(
-                    {
-                        "group": node.get("group", "Unknown"),
-                        "score": _format_score(node.get("score")),
-                        "description": _collect_descriptions(node),
-                    }
-                )
-            rows.sort(key=lambda r: float(r["score"]) if r["score"] != "--" else -1, reverse=True)
-            return rows[:limit]
+                group = (node.get("group") or "Unknown").strip() or "Unknown"
+                score = node.get("score")
+                description = (node.get("description") or "").strip()
+                members = node.get("members") or []
+                depth_class = f"mnpflex-hierarchy-node--depth-{min(depth, 3)}"
+                with ui.element("div").classes(
+                    f"mnpflex-hierarchy-node {depth_class} w-full min-w-0"
+                ).style(f"padding-left: {depth * 1.25}rem"):
+                    with ui.row().classes(
+                        "mnpflex-hierarchy-node__row items-start w-full min-w-0"
+                    ):
+                        ui.label(group).classes(
+                            "mnpflex-hierarchy-node__label flex-1 min-w-0"
+                        )
+                        ui.badge(format_mnpflex_hierarchy_score(score)).classes(
+                            f"{_score_badge_classes(score)} flex-shrink-0"
+                        )
+                    if description:
+                        ui.label(description).classes(
+                            "mnpflex-hierarchy-node__description"
+                        )
+                if members:
+                    _render_hierarchy_nodes(members, depth=depth + 1)
+
+        def _populate_hierarchy_tree(nodes: List[Dict[str, Any]]) -> None:
+            hierarchy_tree_container.clear()
+            has_nodes = mnpflex_hierarchy_has_content(nodes)
+            hierarchy_tree_container.set_visibility(has_nodes)
+            if not has_nodes:
+                return
+            with hierarchy_tree_container:
+                _render_hierarchy_nodes(nodes)
 
         def _update_labels(summary: Optional[Dict[str, Any]], summary_path: Optional[Path]) -> None:
             has_results = summary is not None
@@ -552,8 +553,7 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
 
                 classifier_scores_table.rows = []
                 classifier_scores_table.update()
-                hierarchy_table.rows = []
-                hierarchy_table.update()
+                _populate_hierarchy_tree([])
                 top_path_value.set_text("--")
                 _set_badge_value(top_path_badge, None)
                 agg_subclass_name.set_text("--")
@@ -688,10 +688,8 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
                 _set_badge_value(agg_superfamily_badge, None)
 
             hierarchy = classifier_summary.get("summary_hierarchical", []) or []
-            hierarchy_rows = _extract_hierarchy_rows(hierarchy)
-            hierarchy_table.rows = hierarchy_rows
-            hierarchy_table.update()
-            has_hierarchical_summary = len(hierarchy_rows) > 0
+            _populate_hierarchy_tree(hierarchy)
+            has_hierarchical_summary = mnpflex_hierarchy_has_content(hierarchy)
             flat = _flatten_hierarchy(hierarchy)
             if flat:
                 best_score, best_path = max(flat, key=lambda x: x[0] or 0)

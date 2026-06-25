@@ -1,4 +1,4 @@
-"""MinKNOW sequencer status and run control for the ROBIN GUI."""
+src/robin/gui/components/minknow.py"""MinKNOW sequencer status and run control for the ROBIN GUI."""
 
 from __future__ import annotations
 
@@ -643,9 +643,13 @@ def add_minknow_sequencer_section(
                 "color=primary"
             )
 
-    with ui.dialog() as stop_dialog, ui.card().classes("min-w-[18rem]"):
-        ui.label("Stop sequencing run?").classes("text-lg font-medium")
-        stop_confirm_text = ui.label("").classes("text-sm")
+    with ui.dialog() as stop_dialog, ui.card().classes("min-w-[20rem]"):
+        with ui.row().classes("items-center gap-2"):
+            ui.icon("warning", color="warning").classes("text-2xl")
+            ui.label("Remotely stop sequencing run?").classes("text-lg font-medium")
+        stop_confirm_text = ui.label("").classes(
+            "text-sm whitespace-pre-wrap text-slate-700 dark:text-slate-300"
+        )
         with ui.row().classes("w-full justify-end gap-2 mt-2"):
             ui.button("Cancel", on_click=stop_dialog.close).props("flat")
             stop_confirm_button = ui.button("Stop run", icon="stop").props(
@@ -809,7 +813,9 @@ def add_minknow_sequencer_section(
             "sample_id": position.sample_id or "—",
         }
         stop_confirm_text.set_text(
-            f"Stop the run on {position_name}?\n"
+            "Are you sure you wish to remotely stop this run? "
+            "This will terminate sequencing on the instrument.\n\n"
+            f"Position: {position_name}\n"
             f"Sample: {position.sample_id or '—'}\n"
             f"Run ID: {position.protocol_run_id or '—'}"
         )
