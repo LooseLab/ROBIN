@@ -8,6 +8,10 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 ## [Unreleased]
 
 ### Added
+- **ClinVar significance for SNPs:** Variant classification now considers germline pathogenicity (`CLNSIG`), oncogenicity (`ONC`), and somatic clinical impact (`SCI` tiers I/II) via shared `variant_classification` logic. The SNP GUI table adds ONC/SCI columns and a **ClinVar significant only** filter.
+- **ClinVar re-annotation:** The SNP analysis section shows which ClinVar release annotated the sample versus what is installed locally, warns when stale, and offers **Re-annotate with current ClinVar** to re-run snpEff/SnpSift on existing Clair3 outputs without re-calling variants (`annotation_only` workflow path).
+- **SnpSift contig normalization:** VCF chromosomes are normalized from UCSC-style `chrN` to ClinVar GRCh38 naming before SnpSift and restored afterward, so tabix lookups succeed and variants are not dropped.
+- **ClinVar tabix index maintenance:** Stale or corrupt `.tbi` indices are detected (including smoke queries) and rebuilt automatically when the ClinVar VCF is newer than its index.
 - **Multi-user GUI authentication and audit:** Named user accounts with `admin` and `user` roles, stored in `~/.config/robin/security.db`. The GUI login page uses username and password (Argon2); per-user research-use consent is collected at sign-in and recorded with IP, session, and consent version.
 - **Audit trail:** Append-only audit events for sign-in/out, consent, sample page views, report generation and export, analysis runs (including MNP-Flex and SNP), and admin/CLI user management. Query with `robin audit list` / `robin audit export`, or the GUI **Administration** page (`/admin`, admin role).
 - **CLI user and audit commands:** `robin users bootstrap-admin`, `create`, `set-password`, `list`, `activate`, `deactivate`, `grant-role`, `revoke-role`, `consent-status`; `robin audit list` and `robin audit export`.
@@ -43,6 +47,8 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **Version:** Package and application metadata are aligned to `0.5.3`.
 
 ### Fixed
+- Fixed SnpSift ClinVar annotation failing silently when the tabix index was older than `clinvar.vcf.gz` (SnpSift exited 0 but added no `CLNSIG`/`ONC`/`SCI` fields).
+- Fixed SnpSift dropping most variants and missing known pathogenic sites (for example IDH1 R132H) when sample VCF contigs used `chrN` but ClinVar used numeric chromosome names.
 - Fixed GUI logout crashing when a callback was stored in NiceGUI general storage (not JSON-serializable).
 - Fixed periodic system metrics updates crashing when `psutil.virtual_memory()` returned an unexpected shape.
 - **Ray coordinator deadlocks:** Fixed Ray coordinator deadlocks and frozen completion counters when waiting queues reached or briefly exceeded their configured capacity.

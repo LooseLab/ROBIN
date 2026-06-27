@@ -8757,19 +8757,27 @@ title="View in IGV"
                                 ref = str(row.get("REF", "") or "").strip()
                                 alt = str(row.get("ALT", "") or "").strip()
                                 gene = str(
-                                    row.get("SYMBOL", "")
+                                    row.get("Gene_Name", "")
+                                    or row.get("SYMBOL", "")
                                     or row.get("GENE", "")
                                     or row.get("GENEINFO", "")
                                     or ""
                                 ).strip()
                                 clnsig = str(row.get("CLNSIG", "") or "").strip()
+                                onc = str(row.get("ONC", "") or "").strip()
+                                sci = str(row.get("SCI", "") or "").strip()
+                                significance = clnsig or onc or sci
                                 locus = f"{chrom}:{pos}" if chrom and pos else ""
                                 allele = f"{ref}>{alt}" if ref and alt else ""
-                                item_parts = [p for p in [locus, allele, gene, clnsig] if p]
+                                item_parts = [p for p in [locus, allele, gene, significance] if p]
                                 if item_parts:
                                     formatted.append("|".join(item_parts))
                             # Keep deterministic + compact while still "listing" all hits.
                             return "; ".join(formatted)
+
+                        from robin.analysis.variant_classification import (
+                            is_clinvar_significant_from_info,
+                        )
 
                         clair_dir = sample_dir / "clair3"
                         snp_display_path = clair_dir / "snpsift_output_display.json"
@@ -8779,14 +8787,20 @@ title="View in IGV"
                             summary_dict = snp_display.get("summary", {}) or {}
                             rows_all = snp_display.get("rows_all", []) or []
                             rows_pathogenic = snp_display.get("rows_pathogenic", []) or []
+                            rows_significant = (
+                                snp_display.get("rows_clinvar_significant") or rows_pathogenic
+                            )
                             variant_data["snp_total_variants"] = summary_dict.get(
                                 "total_variants", len(rows_all)
                             )
                             variant_data["snp_pathogenic_variants"] = summary_dict.get(
-                                "pathogenic_variants", len(rows_pathogenic)
+                                "clinvar_significant_variants",
+                                summary_dict.get(
+                                    "pathogenic_variants", len(rows_significant)
+                                ),
                             )
                             variant_data["snp_pathogenic_list"] = _format_pathogenic_rows(
-                                rows_pathogenic
+                                rows_significant
                             )
 
                         # INDEL summary (from ClinVar-annotated display if available)
@@ -8797,14 +8811,21 @@ title="View in IGV"
                             indel_summary = indel_display.get("summary", {}) or {}
                             indel_rows_all = indel_display.get("rows_all", []) or []
                             indel_rows_pathogenic = indel_display.get("rows_pathogenic", []) or []
+                            indel_rows_significant = (
+                                indel_display.get("rows_clinvar_significant")
+                                or indel_rows_pathogenic
+                            )
                             variant_data["indel_total_variants"] = indel_summary.get(
                                 "total_variants", len(indel_rows_all)
                             )
                             variant_data["indel_pathogenic_variants"] = indel_summary.get(
-                                "pathogenic_variants", len(indel_rows_pathogenic)
+                                "clinvar_significant_variants",
+                                indel_summary.get(
+                                    "pathogenic_variants", len(indel_rows_significant)
+                                ),
                             )
                             variant_data["indel_pathogenic_list"] = _format_pathogenic_rows(
-                                indel_rows_pathogenic
+                                indel_rows_significant
                             )
                         else:
                             # Fallback: count records from annotated INDEL VCF if present
@@ -8818,9 +8839,10 @@ title="View in IGV"
                                         if not line or line.startswith("#"):
                                             continue
                                         total_indel += 1
-                                        if "CLNSIG=Pathogenic" in line or "CLNSIG=Likely_pathogenic" in line:
+                                        fields = line.strip().split("\t")
+                                        info_str = fields[7] if len(fields) > 7 else ""
+                                        if is_clinvar_significant_from_info(info_str):
                                             pathogenic_indel += 1
-                                            fields = line.strip().split("\t")
                                             if len(fields) >= 5:
                                                 chrom, pos, _vid, ref, alt = fields[:5]
                                                 pathogenic_indel_items.append(

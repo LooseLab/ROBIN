@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+q#!/usr/bin/env python3
 """
 Lightweight Gene Analysis Module for robin
 
@@ -65,6 +65,7 @@ import numpy as np
 import pandas as pd
 import pysam
 from robin.logging_config import get_job_logger
+from robin.analysis.variant_classification import is_clinvar_significant_from_mapping
 
 
 @dataclass
@@ -249,36 +250,9 @@ class LightweightGeneAnalysis:
         )
 
     def _is_pathogenic(self, record) -> bool:
-        """Check if a ClinVar variant is pathogenic."""
+        """Check if a ClinVar variant is clinically significant."""
         try:
-            # Check clinical significance
-            if "CLNSIG" in record.info:
-                clnsig = record.info["CLNSIG"]
-                if isinstance(clnsig, (list, tuple)):
-                    clnsig = "|".join(clnsig)
-
-                pathogenic_terms = [
-                    "pathogenic",
-                    "likely_pathogenic",
-                    "pathogenic/likely_pathogenic",
-                ]
-                return any(term in clnsig.lower() for term in pathogenic_terms)
-
-            # Check oncogenicity for cancer variants
-            if "ONC" in record.info:
-                onc = record.info["ONC"]
-                if isinstance(onc, (list, tuple)):
-                    onc = "|".join(onc)
-
-                oncogenic_terms = [
-                    "oncogenic",
-                    "likely_oncogenic",
-                    "oncogenic/likely_oncogenic",
-                ]
-                return any(term in onc.lower() for term in oncogenic_terms)
-
-            return False
-
+            return is_clinvar_significant_from_mapping(record.info)
         except Exception:
             return False
 
@@ -300,6 +274,8 @@ class LightweightGeneAnalysis:
         # Add oncogenicity if available
         if "ONC" in record.info:
             info["oncogenicity"] = record.info["ONC"]
+        if "SCI" in record.info:
+            info["somatic_impact"] = record.info["SCI"]
 
         return info
 

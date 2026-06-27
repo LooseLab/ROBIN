@@ -2248,6 +2248,7 @@ class WorkflowRunner:
         reference: str = None,
         threads: int = 4,
         force_regenerate: bool = False,
+        annotation_only: bool = False,
     ) -> bool:
         """
         Submit a SNP analysis job for an existing sample directory.
@@ -2261,6 +2262,7 @@ class WorkflowRunner:
             reference: Path to reference genome (optional, will auto-detect if not provided)
             threads: Number of threads to use for processing (default: 4)
             force_regenerate: Whether to force regeneration of existing results (default: False)
+            annotation_only: Re-run snpEff/SnpSift only using existing Clair3 outputs (default: False)
 
         Returns:
             True if job was successfully submitted, False otherwise
@@ -2293,6 +2295,7 @@ class WorkflowRunner:
                 "bam_metadata": {"sample_id": sample_id},
                 "threads": threads,
                 "force_regenerate": force_regenerate,
+                "annotation_only": annotation_only,
             }
 
             if target_panel:

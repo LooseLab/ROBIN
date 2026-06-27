@@ -7,20 +7,10 @@ import logging
 import numpy as np
 import pandas as pd
 
+from robin.analysis.variant_classification import classify_clinvar_significance
+
 
 logger = logging.getLogger(__name__)
-
-
-def _is_pathogenic(info_str: str) -> bool:
-    """Determine if a variant is pathogenic based on the CLNSIG field."""
-    if "CLNSIG=" not in info_str:
-        return False
-
-    for field in info_str.split(";"):
-        if field.startswith("CLNSIG="):
-            clnsig_value = field.split("=")[1]
-            return "PATHOGENIC" in clnsig_value.upper()
-    return False
 
 
 def _process_annotations(record: Dict[str, Any]) -> Tuple[Dict[int, Dict[str, Any]], Dict[str, Any]]:
@@ -34,7 +24,13 @@ def _process_annotations(record: Dict[str, Any]) -> Tuple[Dict[int, Dict[str, An
         return {}, {}
 
     annotations = record["INFO"]
-    rec_dict: Dict[str, Any] = {"is_pathogenic": _is_pathogenic(annotations)}
+    significance = classify_clinvar_significance(annotations)
+    rec_dict: Dict[str, Any] = {
+        "is_pathogenic": significance.is_pathogenic,
+        "is_clinvar_significant": significance.is_clinvar_significant,
+        "is_oncogenic": significance.is_oncogenic,
+        "is_somatic_significant": significance.is_somatic_significant,
+    }
     ann_dict: Dict[int, Dict[str, Any]] = {}
 
     for ann in annotations.split(";"):
@@ -180,7 +176,12 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
         "CLNSIG",
         "CLNREVSTAT",
         "CLNDN",
+        "ONC",
+        "ONCDN",
+        "SCI",
+        "SCIDN",
         "is_pathogenic",
+        "is_clinvar_significant",
     ]
 
     added_fields: set[str] = set()
@@ -189,10 +190,20 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
         if field_name in added_fields:
             return
         added_fields.add(field_name)
+        label_overrides = {
+            "is_clinvar_significant": "ClinVar significant",
+            "is_pathogenic": "Germline pathogenic",
+            "ONCDN": "Oncogenic disease",
+            "SCIDN": "Somatic disease",
+            "CLNDN": "Germline disease",
+            "CLNSIG": "CLNSIG (germline)",
+            "ONC": "ONC (oncogenic)",
+            "SCI": "SCI (somatic tier)",
+        }
         columns.append(
             {
                 "name": field_name,
-                "label": field_name.replace("_", " "),
+                "label": label_overrides.get(field_name, field_name.replace("_", " ")),
                 "field": field_name,
                 "sortable": True,
             }
@@ -210,7 +221,7 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
     for col in remaining_columns:
         add_column(col)
 
-    if "is_pathogenic" in vcf_df.columns:
+    if "is_clinvar_significant" in vcf_df.columns or "is_pathogenic" in vcf_df.columns:
         columns.append(
             {
                 "name": "action",
@@ -222,7 +233,15 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
 
     rows_all: List[Dict[str, Any]] = []
     rows_pathogenic: List[Dict[str, Any]] = []
+    rows_clinvar_significant: List[Dict[str, Any]] = []
     snp_regions_map: Dict[str, Dict[str, int]] = {}
+
+    def _as_bool_flag(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().upper() in {"YES", "TRUE", "1", "PATHOGENIC"}
+        return False
 
     for _, variant in vcf_df.iterrows():
         row_dict: Dict[str, Any] = {}
@@ -238,18 +257,21 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
             else:
                 row_dict[field] = str(value)
 
-        is_pathogenic_value = variant.get("is_pathogenic", False)
-        if isinstance(is_pathogenic_value, str):
-            is_pathogenic_value = is_pathogenic_value.upper() in {"YES", "TRUE", "1"}
-        elif not isinstance(is_pathogenic_value, bool):
-            is_pathogenic_value = False
+        is_pathogenic_value = _as_bool_flag(variant.get("is_pathogenic", False))
+        is_significant_value = _as_bool_flag(
+            variant.get("is_clinvar_significant", is_pathogenic_value)
+        )
 
         row_dict["is_pathogenic"] = "Yes" if is_pathogenic_value else "No"
-        row_dict["action"] = "🔍" if is_pathogenic_value else ""
+        row_dict["is_clinvar_significant"] = "Yes" if is_significant_value else "No"
+        row_dict["action"] = "🔍" if is_significant_value else ""
         rows_all.append(row_dict)
 
         if is_pathogenic_value:
             rows_pathogenic.append(dict(row_dict))
+
+        if is_significant_value:
+            rows_clinvar_significant.append(dict(row_dict))
             chrom = row_dict.get("CHROM")
             pos_str = row_dict.get("POS", "")
             try:
@@ -264,12 +286,14 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
     summary = {
         "total_variants": len(rows_all),
         "pathogenic_variants": len(rows_pathogenic),
+        "clinvar_significant_variants": len(rows_clinvar_significant),
     }
 
     return {
         "columns": columns,
         "rows_all": rows_all,
         "rows_pathogenic": rows_pathogenic,
+        "rows_clinvar_significant": rows_clinvar_significant,
         "summary": summary,
         "snp_regions_map": snp_regions_map,
     }

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+import os
+import threading
+from typing import Any, Callable, Dict, List, Optional
 from pathlib import Path
 import logging
 import json
 from robin.analysis.snp_processing import parse_vcf
+from robin.utils.clinvar_manager import compare_sample_clinvar_to_installed
 
 try:
     from nicegui import ui
@@ -15,6 +18,79 @@ logger = logging.getLogger(__name__)
 
 _TABLE_PREVIEW_THRESHOLD = 50_000
 _TABLE_PREVIEW_LIMIT = 5_000
+
+# Default SNP/INDEL table and detail views for ClinVar-annotated variants.
+VARIANT_TABLE_FIELDS = [
+    "CHROM",
+    "POS",
+    "REF",
+    "ALT",
+    "Gene_Name",
+    "HGVS.p",
+    "Annotation",
+    "Annotation_Impact",
+    "CLNSIG",
+    "ONC",
+    "SCI",
+    "ONCDN",
+    "SCIDN",
+    "FILTER",
+    "QUAL",
+    "GT",
+    "is_clinvar_significant",
+    "details",
+    "action",
+]
+VARIANT_WIDE_FIELDS = {
+    "Gene_Name",
+    "Annotation",
+    "HGVS.p",
+    "CLNSIG",
+    "ONC",
+    "SCI",
+    "ONCDN",
+    "SCIDN",
+}
+VARIANT_DETAIL_FIELDS = [
+    "CHROM",
+    "POS",
+    "ID",
+    "REF",
+    "ALT",
+    "Gene_Name",
+    "HGVS.c",
+    "HGVS.p",
+    "Annotation",
+    "Annotation_Impact",
+    "is_clinvar_significant",
+    "CLNSIG",
+    "ONC",
+    "SCI",
+    "ONCDN",
+    "SCIDN",
+    "CLNDN",
+    "is_pathogenic",
+    "FILTER",
+    "QUAL",
+    "GT",
+]
+VARIANT_COLUMN_LABELS = {
+    "is_clinvar_significant": "ClinVar significant",
+    "is_pathogenic": "Germline pathogenic",
+    "ONCDN": "Oncogenic disease",
+    "SCIDN": "Somatic disease",
+    "CLNDN": "Germline disease",
+    "CLNSIG": "CLNSIG (germline)",
+    "ONC": "ONC (oncogenic)",
+    "SCI": "SCI (somatic tier)",
+}
+
+
+def _apply_variant_column_labels(columns: List[Dict[str, Any]]) -> None:
+    for col in columns:
+        field = col.get("field")
+        if field in VARIANT_COLUMN_LABELS:
+            col["label"] = VARIANT_COLUMN_LABELS[field]
 
 
 def navigate_igv_to_snp(chrom: str, pos: int, flank: int = 100) -> None:
@@ -66,10 +142,170 @@ def navigate_igv_to_snp(chrom: str, pos: int, flank: int = 100) -> None:
         logger.error(f"Error navigating IGV to SNP {chrom}:{pos}: {e}")
 
 
+def _resolve_reference_genome(launcher: Any) -> Optional[str]:
+    reference_genome = None
+    workflow_runner = getattr(launcher, "workflow_runner", None)
+    if workflow_runner is not None:
+        reference_genome = getattr(workflow_runner, "reference", None)
+    if not reference_genome:
+        env_reference = os.environ.get("robin_REFERENCE")
+        if env_reference and os.path.exists(env_reference):
+            reference_genome = env_reference
+    return reference_genome
+
+
+def _submit_snp_workflow_job(
+    launcher: Any,
+    sample_dir: Path,
+    *,
+    annotation_only: bool = False,
+    force_regenerate: bool = False,
+) -> bool:
+    """Queue SNP analysis or annotation-only rerun through the workflow runner."""
+    from robin.analysis.target_analysis import snp_analysis_handler
+    from robin.workflow_simple import Job, WorkflowContext
+
+    work_dir = str(sample_dir.parent)
+    sample_id = sample_dir.name
+    reference_genome = _resolve_reference_genome(launcher)
+
+    metadata: Dict[str, Any] = {
+        "work_dir": work_dir,
+        "threads": 4,
+        "force_regenerate": force_regenerate,
+        "annotation_only": annotation_only,
+        "reference": reference_genome,
+    }
+
+    try:
+        master_csv = sample_dir / "master.csv"
+        if master_csv.exists():
+            import csv
+
+            with master_csv.open("r", newline="", encoding="utf-8") as fh:
+                reader = csv.DictReader(fh)
+                first_row = next(reader, None)
+                if first_row:
+                    panel = str(first_row.get("analysis_panel", "") or "").strip()
+                    if panel:
+                        metadata["target_panel"] = panel
+    except Exception:
+        pass
+
+    context = WorkflowContext(filepath=str(sample_dir), metadata=metadata)
+    context.get_sample_id = lambda: sample_id
+    context.add_result = lambda key, value: None
+    context.add_error = lambda key, value: None
+
+    job = Job(
+        job_id=hash(f"snp_analysis_{sample_id}_{annotation_only}") % 1000000,
+        job_type="snp_analysis",
+        context=context,
+        origin="manual",
+        workflow=["slow:snp_analysis"],
+    )
+
+    workflow_runner = getattr(launcher, "workflow_runner", None)
+    if workflow_runner is not None and hasattr(workflow_runner, "submit_snp_analysis_job"):
+        try:
+            success = workflow_runner.submit_snp_analysis_job(
+                sample_dir=str(sample_dir),
+                sample_id=sample_id,
+                reference=str(reference_genome) if reference_genome else None,
+                threads=4,
+                force_regenerate=force_regenerate,
+                annotation_only=annotation_only,
+            )
+            if success:
+                return True
+        except Exception as exc:
+            logger.warning("Workflow SNP submission failed: %s", exc)
+
+    def _run_handler() -> None:
+        try:
+            snp_analysis_handler(job, work_dir=work_dir)
+        except Exception as exc:
+            logger.error("Direct SNP handler failed: %s", exc)
+
+    threading.Thread(target=_run_handler, daemon=True).start()
+    return True
+
+
+def _add_clinvar_annotation_controls(
+    launcher: Any,
+    sample_dir: Path,
+    *,
+    compact: bool = False,
+    on_status_change: Optional[Callable[[str, str], None]] = None,
+) -> None:
+    """Render ClinVar provenance labels and optional re-annotation trigger."""
+    if ui is None:
+        return
+
+    status = compare_sample_clinvar_to_installed(sample_dir)
+    installed_label = status.get("installed_label", "ClinVar (version unknown)")
+    sample_label = status.get("sample_label", "Annotation release not recorded")
+    is_stale = bool(status.get("is_stale"))
+    can_reannotate = bool(status.get("can_reannotate"))
+
+    def _set_status(text: str, tone: str = "meta") -> None:
+        if on_status_change is not None:
+            on_status_change(text, tone)
+
+    with ui.row().classes(
+        "w-full gap-2 mb-2 flex-wrap items-center"
+        if not compact
+        else "w-full gap-2 mb-2 flex-wrap items-center"
+    ):
+        ui.label(f"Annotated with: {sample_label}").classes("classification-insight-meta")
+        ui.label(f"Installed: {installed_label}").classes(
+            "classification-insight-level classification-insight-level--low w-auto"
+            if is_stale
+            else "classification-insight-meta"
+        )
+        if is_stale:
+            ui.label("Newer ClinVar is installed").classes(
+                "classification-insight-level classification-insight-level--low w-auto"
+            )
+
+        if not compact:
+
+            def _start_reannotation() -> None:
+                if not can_reannotate:
+                    ui.notify(
+                        "Existing Clair3 outputs were not found. Run full SNP analysis first.",
+                        type="warning",
+                    )
+                    return
+                submitted = _submit_snp_workflow_job(
+                    launcher,
+                    sample_dir,
+                    annotation_only=True,
+                )
+                if submitted:
+                    ui.notify(
+                        "ClinVar re-annotation started (snpEff/SnpSift). "
+                        "Refresh this page when the job completes.",
+                        type="info",
+                    )
+                    _set_status("ClinVar re-annotation running…", "running")
+                else:
+                    ui.notify("Could not start ClinVar re-annotation.", type="negative")
+                    _set_status("Failed to start ClinVar re-annotation", "error")
+
+            reannotate_button = ui.button(
+                "Re-annotate with current ClinVar",
+                on_click=_start_reannotation,
+            ).props("dense no-caps outline color=secondary")
+            if not can_reannotate:
+                reannotate_button.disable()
+                reannotate_button.props('title="Requires clair3/output_done.vcf.gz"')
+
+
 def add_snp_section(launcher: Any, sample_dir: Path) -> None:
     """
     Add SNP analysis section to the sample details page.
-    
+
     Args:
         launcher: The GUI launcher instance
         sample_dir: Path to the sample directory
@@ -121,11 +357,23 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
     total_variants = summary.get("total_variants", len(rows_all))
     pathogenic_count = summary.get("pathogenic_variants")
+    significant_count = summary.get("clinvar_significant_variants")
+    if significant_count is None:
+        significant_count = pathogenic_count
     if pathogenic_count is None:
         pathogenic_count = sum(
             1
             for row in rows_all
             if str(row.get("is_pathogenic", "")).strip().upper()
+            in {"YES", "TRUE", "1", "PATHOGENIC"}
+        )
+    if significant_count is None:
+        significant_count = sum(
+            1
+            for row in rows_all
+            if str(row.get("is_clinvar_significant", row.get("is_pathogenic", "")))
+            .strip()
+            .upper()
             in {"YES", "TRUE", "1", "PATHOGENIC"}
         )
 
@@ -168,25 +416,8 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             return value
         return str(value).strip().upper() in {"YES", "TRUE", "1", "PATHOGENIC"}
 
-    # Keep the SNP table readable by showing a concise default column set.
-    preferred_display_fields = [
-        "CHROM",
-        "POS",
-        "REF",
-        "ALT",
-        "Gene_Name",
-        "HGVS.p",
-        "Annotation",
-        "Annotation_Impact",
-        "CLNSIG",
-        "FILTER",
-        "QUAL",
-        "GT",
-        "is_pathogenic",
-        "details",
-        "action",
-    ]
-    wide_fields = {"Gene_Name", "Annotation", "HGVS.p", "CLNSIG"}
+    preferred_display_fields = list(VARIANT_TABLE_FIELDS)
+    wide_fields = VARIANT_WIDE_FIELDS
     max_field_length = 80
 
     column_lookup = {
@@ -220,6 +451,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                 "sortable": False,
             }
         )
+    _apply_variant_column_labels(display_columns)
 
     def _compact_row(row: Dict[str, Any]) -> Dict[str, Any]:
         compact: Dict[str, Any] = {}
@@ -245,6 +477,31 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             "classification-insight-heading text-headline-small"
         )
 
+        snp_clinvar_status_label: Dict[str, Any] = {"element": None}
+
+        def _update_snp_clinvar_status(text: str, tone: str = "meta") -> None:
+            label = snp_clinvar_status_label.get("element")
+            if label is None:
+                return
+            label.text = text
+            classes = "classification-insight-meta"
+            if tone == "running":
+                classes = "text-sm text-blue-600"
+            elif tone == "error":
+                classes = "classification-insight-level classification-insight-level--low w-full"
+            label.classes(replace=classes)
+
+        with ui.element("div").classes("classification-insight-card w-full min-w-0"):
+            with ui.column().classes("w-full min-w-0 gap-2 p-2 md:p-3"):
+                _add_clinvar_annotation_controls(
+                    launcher,
+                    sample_dir,
+                    on_status_change=_update_snp_clinvar_status,
+                )
+                snp_clinvar_status_label["element"] = ui.label("").classes(
+                    "classification-insight-meta"
+                )
+
         with ui.row().classes("w-full gap-3 mb-3 flex-wrap items-baseline"):
             shown_total = len(snp_rows_source)
             ui.label(f"Total variants: {total_variants}").classes(
@@ -254,7 +511,11 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                 ui.label(
                     f"Preview mode: showing first {shown_total:,} rows (dataset too large). Use filters/search to narrow."
                 ).classes("classification-insight-level classification-insight-level--low w-full")
-            if pathogenic_count > 0:
+            if significant_count > 0:
+                ui.label(f"ClinVar significant variants: {significant_count}").classes(
+                    "classification-insight-level classification-insight-level--low w-auto"
+                )
+            elif pathogenic_count > 0:
                 ui.label(f"Pathogenic variants: {pathogenic_count}").classes(
                     "classification-insight-level classification-insight-level--low w-auto"
                 )
@@ -269,7 +530,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
         with ui.row().classes("w-full gap-2 mb-2 flex-wrap items-end"):
             snp_pass_only = ui.checkbox("PASS only").props("dense")
-            snp_pathogenic_only = ui.checkbox("Pathogenic only").props("dense")
+            snp_significant_only = ui.checkbox("ClinVar significant only").props("dense")
             snp_min_qual = ui.number("Min QUAL", value=None).props(
                 "dense outlined clearable"
             ).classes("w-32")
@@ -336,7 +597,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
         def _apply_snp_filters() -> None:
             pass_only = bool(getattr(snp_pass_only, "value", False))
-            pathogenic_only = bool(getattr(snp_pathogenic_only, "value", False))
+            significant_only = bool(getattr(snp_significant_only, "value", False))
             min_qual = _to_float(getattr(snp_min_qual, "value", None))
             min_dp = _to_float(getattr(snp_min_dp, "value", None)) if snp_has_dp else None
             search_text = str(getattr(snp_search, "value", "") or "").strip().lower()
@@ -346,7 +607,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
                 if pass_only and str(full_row.get("FILTER", "")).strip().upper() != "PASS":
                     continue
-                if pathogenic_only and not _is_truthy(full_row.get("is_pathogenic", "")):
+                if significant_only and not _is_truthy(
+                    full_row.get("is_clinvar_significant", full_row.get("is_pathogenic", ""))
+                ):
                     continue
 
                 qual = _to_float(full_row.get("QUAL"))
@@ -380,7 +643,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             _fill_snp_from_pagination(pag)
 
         snp_pass_only.on("update:model-value", lambda _e: _apply_snp_filters())
-        snp_pathogenic_only.on("update:model-value", lambda _e: _apply_snp_filters())
+        snp_significant_only.on("update:model-value", lambda _e: _apply_snp_filters())
         snp_min_qual.on("update:model-value", lambda _e: _apply_snp_filters())
         if snp_has_dp and snp_min_dp is not None:
             snp_min_dp.on("update:model-value", lambda _e: _apply_snp_filters())
@@ -388,7 +651,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
         snp_reset_button.on_click(
             lambda: (
                 setattr(snp_pass_only, "value", False),
-                setattr(snp_pathogenic_only, "value", False),
+                setattr(snp_significant_only, "value", False),
                 setattr(snp_min_qual, "value", None),
                 snp_has_dp and setattr(snp_min_dp, "value", None),
                 setattr(snp_search, "value", ""),
@@ -422,28 +685,12 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                         return
 
                     details_container.clear()
-                    detail_fields = [
-                        "CHROM",
-                        "POS",
-                        "ID",
-                        "REF",
-                        "ALT",
-                        "Gene_Name",
-                        "HGVS.c",
-                        "HGVS.p",
-                        "Annotation",
-                        "Annotation_Impact",
-                        "CLNSIG",
-                        "FILTER",
-                        "QUAL",
-                        "GT",
-                    ]
-                    ui_only_fields = {"action", "details", "__row_id"}
-                    ordered_fields = detail_fields + sorted(
+                    ui_only_fields = {"action", "details", "__row_id", "__row_idx"}
+                    ordered_fields = list(VARIANT_DETAIL_FIELDS) + sorted(
                         [
                             k
                             for k in row_data.keys()
-                            if k not in detail_fields and k not in ui_only_fields
+                            if k not in VARIANT_DETAIL_FIELDS and k not in ui_only_fields
                         ]
                     )
                     with details_container:
@@ -451,8 +698,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                             value = row_data.get(field, "")
                             if value is None or str(value) == "":
                                 continue
+                            label = VARIANT_COLUMN_LABELS.get(field, field.replace("_", " "))
                             with ui.row().classes("w-full items-start gap-2"):
-                                ui.label(f"{field}:").classes(
+                                ui.label(f"{label}:").classes(
                                     "text-xs font-semibold min-w-[180px]"
                                 )
                                 ui.label(str(value)).classes(
@@ -546,6 +794,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
         ui.label("INDEL analysis").classes(
             "classification-insight-heading text-headline-small"
         )
+        _add_clinvar_annotation_controls(launcher, sample_dir, compact=True)
 
         if not indel_vcf.exists():
             ui.label(
@@ -602,6 +851,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                     "sortable": False,
                 }
             )
+        _apply_variant_column_labels(indel_display_columns)
 
         def _indel_cell_to_text(value: Any) -> str:
             if value is None:
@@ -616,6 +866,11 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             for field in indel_df.columns:
                 row_data[str(field)] = _indel_cell_to_text(row.get(field))
             # Normalize boolean display consistency for filtering and details.
+            row_data["is_clinvar_significant"] = (
+                "Yes"
+                if _is_truthy(row_data.get("is_clinvar_significant", row_data.get("is_pathogenic", "")))
+                else "No"
+            )
             row_data["is_pathogenic"] = (
                 "Yes"
                 if _is_truthy(row_data.get("is_pathogenic", ""))
@@ -643,6 +898,19 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             _TABLE_PREVIEW_LIMIT if indel_preview_mode else total_indel_rows_all
         )
         pathogenic_indel_count = 0
+        significant_indel_count = 0
+        if "is_clinvar_significant" in indel_df.columns:
+            try:
+                significant_indel_count = int(
+                    indel_df["is_clinvar_significant"]
+                    .astype(str)
+                    .str.strip()
+                    .str.upper()
+                    .isin({"YES", "TRUE", "1", "PATHOGENIC"})
+                    .sum()
+                )
+            except Exception:
+                significant_indel_count = 0
         if "is_pathogenic" in indel_df.columns:
             try:
                 pathogenic_indel_count = int(
@@ -655,6 +923,8 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                 )
             except Exception:
                 pathogenic_indel_count = 0
+        if significant_indel_count == 0:
+            significant_indel_count = pathogenic_indel_count
 
         with ui.row().classes("w-full gap-3 mb-3 flex-wrap items-baseline"):
             ui.label(f"Total variants: {total_indel_rows_all}").classes(
@@ -664,7 +934,13 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                 ui.label(
                     f"Preview mode: showing first {total_indel_rows:,} rows (dataset too large). Use filters/search to narrow."
                 ).classes("classification-insight-level classification-insight-level--low w-full")
-            if pathogenic_indel_count:
+            if significant_indel_count:
+                ui.label(
+                    f"ClinVar significant variants: {significant_indel_count}"
+                ).classes(
+                    "classification-insight-level classification-insight-level--low w-auto"
+                )
+            elif pathogenic_indel_count:
                 ui.label(
                     f"Pathogenic variants: {pathogenic_indel_count}"
                 ).classes(
@@ -681,7 +957,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
         with ui.row().classes("w-full gap-2 mb-2 flex-wrap items-end"):
             indel_pass_only = ui.checkbox("PASS only").props("dense")
-            indel_pathogenic_only = ui.checkbox("Pathogenic only").props("dense")
+            indel_significant_only = ui.checkbox("ClinVar significant only").props("dense")
             indel_min_qual = ui.number("Min QUAL", value=None).props(
                 "dense outlined clearable"
             ).classes("w-32")
@@ -749,7 +1025,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
         def _apply_indel_filters() -> None:
             pass_only = bool(getattr(indel_pass_only, "value", False))
-            pathogenic_only = bool(getattr(indel_pathogenic_only, "value", False))
+            significant_only = bool(getattr(indel_significant_only, "value", False))
             min_qual = _to_float(getattr(indel_min_qual, "value", None))
             min_dp = (
                 _to_float(getattr(indel_min_dp, "value", None)) if indel_has_dp else None
@@ -762,7 +1038,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
 
                 if pass_only and str(full_row.get("FILTER", "")).strip().upper() != "PASS":
                     continue
-                if pathogenic_only and not _is_truthy(full_row.get("is_pathogenic", "")):
+                if significant_only and not _is_truthy(
+                    full_row.get("is_clinvar_significant", full_row.get("is_pathogenic", ""))
+                ):
                     continue
 
                 qual = _to_float(full_row.get("QUAL"))
@@ -796,7 +1074,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
             _fill_indel_from_pagination(pag)
 
         indel_pass_only.on("update:model-value", lambda _e: _apply_indel_filters())
-        indel_pathogenic_only.on("update:model-value", lambda _e: _apply_indel_filters())
+        indel_significant_only.on("update:model-value", lambda _e: _apply_indel_filters())
         indel_min_qual.on("update:model-value", lambda _e: _apply_indel_filters())
         if indel_has_dp and indel_min_dp is not None:
             indel_min_dp.on("update:model-value", lambda _e: _apply_indel_filters())
@@ -804,7 +1082,7 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
         indel_reset_button.on_click(
             lambda: (
                 setattr(indel_pass_only, "value", False),
-                setattr(indel_pathogenic_only, "value", False),
+                setattr(indel_significant_only, "value", False),
                 setattr(indel_min_qual, "value", None),
                 indel_has_dp and setattr(indel_min_dp, "value", None),
                 setattr(indel_search, "value", ""),
@@ -832,28 +1110,12 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                 return
             row_data = _indel_row_text_map(row_idx)
             indel_details_container.clear()
-            detail_fields = [
-                "CHROM",
-                "POS",
-                "ID",
-                "REF",
-                "ALT",
-                "Gene_Name",
-                "HGVS.c",
-                "HGVS.p",
-                "Annotation",
-                "Annotation_Impact",
-                "CLNSIG",
-                "FILTER",
-                "QUAL",
-                "GT",
-            ]
             ui_only_fields = {"action", "details", "__row_id", "__row_idx"}
-            ordered_fields = detail_fields + sorted(
+            ordered_fields = list(VARIANT_DETAIL_FIELDS) + sorted(
                 [
                     k
                     for k in row_data.keys()
-                    if k not in detail_fields and k not in ui_only_fields
+                    if k not in VARIANT_DETAIL_FIELDS and k not in ui_only_fields
                 ]
             )
             with indel_details_container:
@@ -861,8 +1123,9 @@ def add_snp_section(launcher: Any, sample_dir: Path) -> None:
                     value = row_data.get(field, "")
                     if value in (None, ""):
                         continue
+                    label = VARIANT_COLUMN_LABELS.get(field, field.replace("_", " "))
                     with ui.row().classes("w-full items-start gap-2"):
-                        ui.label(f"{field}:").classes("text-xs font-semibold min-w-[180px]")
+                        ui.label(f"{label}:").classes("text-xs font-semibold min-w-[180px]")
                         ui.label(str(value)).classes("text-xs whitespace-pre-wrap break-all flex-1")
             indel_details_dialog.open()
 

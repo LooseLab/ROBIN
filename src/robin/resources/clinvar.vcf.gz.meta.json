@@ -1,0 +1,12 @@
+{
+  "file_date": "2026-06-21",
+  "source": "ClinVar",
+  "reference": "GRCh38",
+  "url": "https://ftp.ncbi.nlm.nih.gov/pub/clinvar/vcf_GRCh38/clinvar.vcf.gz",
+  "local_path": "/Users/mattloose/GIT/robin_dev/ROBIN/src/robin/resources/clinvar.vcf.gz",
+  "file_size_bytes": 192272329,
+  "file_mtime_unix": 1782399474.5377133,
+  "recorded_at": "2026-06-25T15:38:21.310639+00:00",
+  "remote_last_modified_unix": 1782138156.0,
+  "remote_last_modified": "Mon, 22 Jun 2026 14:22:36 GMT"
+}

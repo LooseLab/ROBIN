@@ -1202,13 +1202,23 @@ def update_clinvar() -> None:
     """Update ClinVar to the newest available NCBI version (best-effort)."""
 
     try:
-        from robin.utils.clinvar_manager import update_clinvar_if_newer
+        from robin.utils.clinvar_manager import (
+            format_clinvar_version_label,
+            get_clinvar_metadata,
+            update_clinvar_if_newer,
+        )
 
         updated = update_clinvar_if_newer(download_if_missing=True)
+        metadata = get_clinvar_metadata()
         if updated:
             click.echo("ClinVar updated successfully.")
         else:
             click.echo("ClinVar is already up to date.")
+        click.echo(format_clinvar_version_label(metadata))
+        if metadata.get("sha256"):
+            click.echo(f"SHA256: {metadata['sha256']}")
+        if metadata.get("remote_last_modified"):
+            click.echo(f"NCBI Last-Modified: {metadata['remote_last_modified']}")
     except Exception as e:
         click.echo(f"Failed to update ClinVar: {e}", err=True)
         sys.exit(1)

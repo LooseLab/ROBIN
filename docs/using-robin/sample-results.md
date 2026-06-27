@@ -194,16 +194,17 @@ This is a **separate URL** from the main sample dashboard: `/live_data/<library-
 ### SNP analysis
 
 - Appears when SNP processing has written **`clair3/snpsift_output_display.json`**.  
-- **Summary** text may include total variants and counts of **pathogenic** variants.  
-- **Filters:** **PASS only** (keep rows with `FILTER` = PASS), **Pathogenic only**, optional **Min QUAL**, and **Reset** to clear filters. A **search** box filters the visible rows. The footer may show how many variants match (e.g. “Showing *n* of *N*”).  
-- The **table** lists columns such as chromosome, position, **REF** / **ALT**, gene, **HGVS.p**, annotation, annotation impact, **ClinVar** significance (**CLNSIG**), **FILTER**, **QUAL**, genotype (**GT**), whether the row is **pathogenic**, **Details** (expand full fields), and **View in IGV**.  
+- **Summary** text may include total variants and counts of **ClinVar significant** variants (germline pathogenic, oncogenic, or somatic tier I/II).  
+- **Filters:** **PASS only** (keep rows with `FILTER` = PASS), **ClinVar significant only**, optional **Min QUAL**, and **Reset** to clear filters. A **search** box filters the visible rows. The footer may show how many variants match (e.g. “Showing *n* of *N*”).  
+- **ClinVar version:** each table shows which **ClinVar release** was used to annotate the sample and which release is **currently installed** in ROBIN. If a newer ClinVar is installed after annotation, a warning is shown and **Re-annotate with current ClinVar** re-runs **snpEff/SnpSift** on the existing Clair3 outputs (no variant re-calling).  
+- The **table** lists columns such as chromosome, position, **REF** / **ALT**, gene, **HGVS.p**, annotation, annotation impact, **CLNSIG** (germline), **ONC** (oncogenic), **SCI** (somatic clinical impact tier), associated disease names (**ONCDN**, **SCIDN**), whether the row is **ClinVar significant**, **FILTER**, **QUAL**, genotype (**GT**), **Details** (expand full fields including germline-only **is_pathogenic** when present), and **View in IGV**.  
 
-![SNP analysis: PASS only and Pathogenic only enabled, filtered table and summary counts](../images/SNPexample.png)
+![SNP analysis: PASS only and ClinVar significant only enabled, filtered table and summary counts](../images/SNPexample.png)
 
 *Example only: variant shown is from anonymised quality-control data; your counts and rows will differ.*
 
 - **View in IGV** centres the embedded **IGV browser** (above on the page) on that variant for **pileup review**.  
-- A separate **indel** table may appear when indel display rows exist, with the same filters; **View in IGV** there jumps the browser to the indel locus in the **same target-scoped BAM**.  
+- A separate **indel** table may appear when indel display rows exist, with the same filters and ClinVar columns; **View in IGV** there jumps the browser to the indel locus in the **same target-scoped BAM**.  
 - If SNP analysis has not finished or the JSON is missing, you see a short **data not found** message instead of the table.
 
 ### Fusion pairs

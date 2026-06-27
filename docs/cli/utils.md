@@ -48,6 +48,8 @@ robin utils update-clinvar
 
 Pair with `update-models` when setting up a new environment.
 
+After updating ClinVar, open a sample’s **SNP analysis** section in the GUI and use **Re-annotate with current ClinVar** to re-run **snpEff/SnpSift** on existing Clair3 outputs (no variant re-calling). The table shows which release annotated the sample versus what is installed.
+
 ---
 
 ## `robin utils sequencing-files`
