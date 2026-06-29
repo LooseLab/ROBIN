@@ -1,9 +1,10 @@
-from __future__ import annotations
+git addfrom __future__ import annotations
 
 from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 
 import asyncio
+import json
 import natsort
 import numpy as np
 from functools import lru_cache
@@ -81,6 +82,78 @@ def _recompute_cnv_log2_state(state: Dict[str, Any]) -> None:
         sample,
         _cnv_sex_estimate_label(state.get("xy")),
     )
+
+
+def _cnv_genome_x_extent_bp(
+    cnv_map: Dict[str, Any],
+    binw_analysis: int,
+    selected: str = "All",
+) -> int:
+    """Full genomic span in bp for the CNV scatter x-axis (independent of plot bin)."""
+    if selected == "All":
+        return sum(
+            len(cnv_map[c]) * int(binw_analysis)
+            for c in natsort.natsorted(cnv_map.keys())
+            if _cnv_contig_ok(c)
+        )
+    chr_cnv = cnv_map.get(selected)
+    return len(chr_cnv) * int(binw_analysis) if chr_cnv is not None else 0
+
+
+def _cnv_set_genome_x_axis(chart: Any, x_axis_max: int) -> None:
+    """Pin the x-axis to the full chromosome span (not downsampled data extent)."""
+    xa = chart.options.setdefault("xAxis", {})
+    if not isinstance(xa, dict):
+        return
+    xa.pop("max", None)  # drop dataMax so merges cannot keep a stale auto scale
+    xa["type"] = "value"
+    xa["min"] = 0
+    xa["max"] = int(x_axis_max)
+
+
+def _cnv_echarts_option_to_json(obj: Any) -> Any:
+    """Convert ECharts option fragments to JSON-serializable form."""
+    if isinstance(obj, dict):
+        return {k: _cnv_echarts_option_to_json(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_cnv_echarts_option_to_json(x) for x in obj]
+    if isinstance(obj, (np.floating, np.integer)):
+        v = float(obj) if isinstance(obj, np.floating) else int(obj)
+        return None if (isinstance(obj, np.floating) and np.isnan(obj)) else v
+    if isinstance(obj, float) and np.isnan(obj):
+        return None
+    return obj
+
+
+def _cnv_echart_push_update(chart: Any, *, chart_class: str) -> None:
+    """Update CNV charts and replace series/xAxis so plot-bin changes cannot leave stale data."""
+    chart.update()
+    if ui is None:
+        return
+    try:
+        options_clean = _cnv_echarts_option_to_json(chart.options)
+        options_json = json.dumps(options_clean)
+        options_escaped = json.dumps(options_json)
+        ui.run_javascript(
+            f"""
+            (function() {{
+              var el = document.querySelector('.{chart_class}');
+              if (!el) return;
+              var inst = echarts.getInstanceByDom(el);
+              if (!inst) {{
+                var child = el.querySelector('div');
+                if (child) inst = echarts.getInstanceByDom(child);
+              }}
+              if (!inst) return;
+              try {{
+                var options = JSON.parse({options_escaped});
+                inst.setOption(options, {{ replaceMerge: ['series', 'xAxis'] }});
+              }} catch (e) {{ console.warn('CNV chart replaceMerge:', e); }}
+            }})();
+            """
+        )
+    except Exception:
+        pass
 
 
 def _build_cnv_track_scatter_series(
@@ -472,7 +545,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             "containLabel": True,
                         },
                         "tooltip": {"trigger": "axis"},
-                        "xAxis": {"type": "value", "max": "dataMax"},
+                        "xAxis": {"type": "value", "min": 0},
                         "yAxis": [
                             {"type": "value", "name": "Ploidy"},
                             {
@@ -516,7 +589,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             },
                         ],
                     }
-                ).classes("w-full h-72")
+                ).classes("w-full h-72 cnv-genome-abs-chart")
             with ui.element("div").classes("w-full target-coverage-panel__plot-wrap mt-2"):
                 cnv_diff = ui.echart(
                     {
@@ -530,7 +603,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             "containLabel": True,
                         },
                         "tooltip": {"trigger": "axis"},
-                        "xAxis": {"type": "value", "max": "dataMax"},
+                        "xAxis": {"type": "value", "min": 0},
                         "yAxis": [
                             {"type": "value", "name": "Relative"},
                             {
@@ -579,7 +652,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             },
                         ],
                     }
-                ).classes("w-full h-72")
+                ).classes("w-full h-72 cnv-genome-diff-chart")
             genome_charts = (cnv_abs, cnv_diff)
 
             ui.separator().classes("mgmt-detail-separator")
@@ -1135,7 +1208,6 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 int(binw_analysis),
                 state.get("plot_bin_width"),
             )
-            binw = plot_bin_width  # used for x positions and padding in the plot
             # Keep plot bin width dropdown in sync with state
             try:
                 pb = state.get("plot_bin_width")
@@ -1212,19 +1284,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             # X-axis is always in genomic base pairs; use actual genome/chromosome length
             # so the scale does not change when plot bin width changes (dataMax would shrink
             # with fewer downsampled points).
-            if selected == "All":
-                x_axis_max = sum(
-                    len(cnv_map[c]) * binw_analysis
-                    for c in natsort.natsorted(cnv_map.keys())
-                    if _cnv_contig_ok(c)
-                )
-            else:
-                chr_cnv = cnv_map.get(selected)
-                x_axis_max = len(chr_cnv) * binw_analysis if chr_cnv is not None else 0
-            cnv_abs.options["xAxis"]["min"] = 0
-            cnv_abs.options["xAxis"]["max"] = x_axis_max
-            cnv_diff.options["xAxis"]["min"] = 0
-            cnv_diff.options["xAxis"]["max"] = x_axis_max
+            x_axis_max = _cnv_genome_x_extent_bp(cnv_map, int(binw_analysis), selected)
+            _cnv_set_genome_x_axis(cnv_abs, x_axis_max)
+            _cnv_set_genome_x_axis(cnv_diff, x_axis_max)
             # Clear any previous zoom constraints when viewing All
             if selected == "All":
                 try:
@@ -1824,7 +1886,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 pass
             
             _apply_cnv_echart_chrome(cnv_abs, _is_dark_mode())
-            cnv_abs.update()
+            _cnv_echart_push_update(cnv_abs, chart_class="cnv-genome-abs-chart")
             # Difference plot (linear CNV3)
             if cnv3_map:
                 series_diff = _build_cnv_track_scatter_series(
@@ -1847,10 +1909,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv_diff.options["series"] = series_diff + keep
                 _thin_chart_series(cnv_diff, MAX_POINTS_PER_CHART)
                 _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                cnv_diff.update()
+                _cnv_echart_push_update(cnv_diff, chart_class="cnv-genome-diff-chart")
             else:
                 _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                cnv_diff.update()
+                _cnv_echart_push_update(cnv_diff, chart_class="cnv-genome-diff-chart")
 
             # Gene zoom on difference chart (single-chromosome view)
             try:
