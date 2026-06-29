@@ -45,6 +45,58 @@ CNV_PLOT_CONTIGS = frozenset(
     ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]
 )
 
+_CNV_PLOT_BIN_KEY_DEFAULT = "Data default"
+_CNV_PLOT_BIN_OPTIONS = {
+    _CNV_PLOT_BIN_KEY_DEFAULT: "Data default",
+    "500 kb": "500 kb",
+    "1 Mb": "1 Mb",
+    "2 Mb": "2 Mb",
+    "5 Mb": "5 Mb",
+    "10 Mb": "10 Mb",
+}
+_CNV_PLOT_BIN_KEY_TO_BP = {
+    _CNV_PLOT_BIN_KEY_DEFAULT: None,
+    "500 kb": 500_000,
+    "1 Mb": 1_000_000,
+    "2 Mb": 2_000_000,
+    "5 Mb": 5_000_000,
+    "10 Mb": 10_000_000,
+}
+_CNV_PLOT_BIN_KEYS_ORDERED = list(_CNV_PLOT_BIN_KEY_TO_BP.keys())
+
+
+def _cnv_plot_bin_key_from_ui(value: Any) -> str:
+    """Resolve NiceGUI select value (key, index, or event payload) to a plot-bin option key."""
+    if value is None:
+        return _CNV_PLOT_BIN_KEY_DEFAULT
+    if isinstance(value, dict):
+        inner = value.get("value", value.get("label"))
+        if inner is not None and inner is not value:
+            return _cnv_plot_bin_key_from_ui(inner)
+    if isinstance(value, int) and not isinstance(value, bool):
+        if 0 <= value < len(_CNV_PLOT_BIN_KEYS_ORDERED):
+            return _CNV_PLOT_BIN_KEYS_ORDERED[value]
+    if isinstance(value, str):
+        if value in _CNV_PLOT_BIN_KEY_TO_BP:
+            return value
+        for key, label in _CNV_PLOT_BIN_OPTIONS.items():
+            if value == label:
+                return key
+    return _CNV_PLOT_BIN_KEY_DEFAULT
+
+
+def _cnv_plot_bin_bp_from_ui(value: Any) -> Optional[int]:
+    return _CNV_PLOT_BIN_KEY_TO_BP.get(_cnv_plot_bin_key_from_ui(value))
+
+
+def _cnv_plot_bin_key_from_bp(bp: Optional[int]) -> str:
+    if bp is None:
+        return _CNV_PLOT_BIN_KEY_DEFAULT
+    for key, width in _CNV_PLOT_BIN_KEY_TO_BP.items():
+        if width == bp:
+            return key
+    return _CNV_PLOT_BIN_KEY_DEFAULT
+
 
 def _cnv_contig_ok(contig: str) -> bool:
     """True if contig should be included in CNV plots (matches report behaviour)."""
@@ -504,27 +556,9 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     value="linear",
                 ).classes("mt-1")
                 ui.label("Plot bin").classes("classification-insight-meta ml-2")
-                # NiceGUI select with dict uses keys as option values; map key -> bp (None = use data)
-                _PLOT_BIN_KEY_DEFAULT = "Data default"
-                _PLOT_BIN_OPTIONS = {
-                    _PLOT_BIN_KEY_DEFAULT: "Data default",
-                    "500 kb": "500 kb",
-                    "1 Mb": "1 Mb",
-                    "2 Mb": "2 Mb",
-                    "5 Mb": "5 Mb",
-                    "10 Mb": "10 Mb",
-                }
-                _PLOT_BIN_KEY_TO_BP = {
-                    _PLOT_BIN_KEY_DEFAULT: None,
-                    "500 kb": 500_000,
-                    "1 Mb": 1_000_000,
-                    "2 Mb": 2_000_000,
-                    "5 Mb": 5_000_000,
-                    "10 Mb": 10_000_000,
-                }
                 cnv_plot_bin = ui.select(
-                    options=_PLOT_BIN_OPTIONS,
-                    value=_PLOT_BIN_KEY_DEFAULT,
+                    options=_CNV_PLOT_BIN_OPTIONS,
+                    value=_CNV_PLOT_BIN_KEY_DEFAULT,
                 ).style("width: 120px")
                 cnv_bp_label = ui.label("Breakpoints").classes(
                     "classification-insight-meta ml-2"
@@ -1211,15 +1245,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             # Keep plot bin width dropdown in sync with state
             try:
                 pb = state.get("plot_bin_width")
-                if pb is None:
-                    cnv_plot_bin.value = _PLOT_BIN_KEY_DEFAULT
-                else:
-                    key = next(
-                        (k for k, v in _PLOT_BIN_KEY_TO_BP.items() if v == pb),
-                        _PLOT_BIN_KEY_DEFAULT,
-                    )
-                    cnv_plot_bin.value = key
-                cnv_plot_bin.update()
+                want_key = _cnv_plot_bin_key_from_bp(pb)
+                if getattr(cnv_plot_bin, "value", None) != want_key:
+                    cnv_plot_bin.value = want_key
+                    cnv_plot_bin.update()
             except Exception:
                 pass
             selected = state.get("selected_chrom", "All")
@@ -2069,9 +2098,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 ui_changed = True
             ui_plot_bin = getattr(cnv_plot_bin, "value", None)
             if ui_plot_bin is not None:
-                want_bin = _PLOT_BIN_KEY_TO_BP.get(
-                    ui_plot_bin, _PLOT_BIN_KEY_TO_BP[_PLOT_BIN_KEY_DEFAULT]
-                )
+                want_bin = _cnv_plot_bin_bp_from_ui(ui_plot_bin)
                 if want_bin != state.get("plot_bin_width"):
                     state["plot_bin_width"] = want_bin
                     ui_changed = True
@@ -2576,16 +2603,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             v = getattr(ev, "args", None) if hasattr(ev, "args") else getattr(ev, "value", None)
             if v is None and hasattr(ev, "value"):
                 v = ev.value
-            # NiceGUI may pass a dict {'value': index, 'label': '...'} instead of the key
-            if isinstance(v, dict):
-                keys_ordered = list(_PLOT_BIN_KEY_TO_BP.keys())
-                idx = v.get("value", 0)
-                key = keys_ordered[idx] if 0 <= idx < len(keys_ordered) else _PLOT_BIN_KEY_DEFAULT
-            else:
-                key = v
-            st["plot_bin_width"] = _PLOT_BIN_KEY_TO_BP.get(
-                key, _PLOT_BIN_KEY_TO_BP[_PLOT_BIN_KEY_DEFAULT]
-            )
+            st["plot_bin_width"] = _cnv_plot_bin_bp_from_ui(v)
             st["_force_chrom_refresh"] = True  # force re-render with new bin width
             ui.timer(0.1, _refresh_cnv, once=True)
 
