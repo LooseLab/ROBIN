@@ -740,7 +740,8 @@ def downsample_cnv_for_plot(
     trimmed = values[:n_trim]
     grouped = trimmed.reshape(-1, group_size)
     values_out = np.mean(grouped, axis=1)
-    x_bp = (np.arange(len(values_out)) + 0.5) * plot_bin_width
+    # Centre each display bin in analysis-bin coordinates (not nominal plot_bin_width).
+    x_bp = (np.arange(len(values_out)) * group_size + (group_size / 2.0)) * analysis_bin_width
     return x_bp, values_out
 
 

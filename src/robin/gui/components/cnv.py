@@ -161,6 +161,24 @@ def _cnv_set_genome_x_axis(chart: Any, x_axis_max: int) -> None:
     xa["type"] = "value"
     xa["min"] = 0
     xa["max"] = int(x_axis_max)
+    xa["scale"] = True
+
+
+def _cnv_reset_genome_x_data_zoom(chart: Any) -> None:
+    """Reset the horizontal dataZoom to the full pinned x-axis span."""
+    try:
+        dz_list = chart.options.get("dataZoom")
+        if not isinstance(dz_list, list) or not dz_list:
+            return
+        dz = dz_list[0]
+        if not isinstance(dz, dict):
+            return
+        dz.pop("startValue", None)
+        dz.pop("endValue", None)
+        dz["start"] = 0
+        dz["end"] = 100
+    except Exception:
+        pass
 
 
 def _cnv_echarts_option_to_json(obj: Any) -> Any:
@@ -177,35 +195,17 @@ def _cnv_echarts_option_to_json(obj: Any) -> Any:
     return obj
 
 
-def _cnv_echart_push_update(chart: Any, *, chart_class: str) -> None:
-    """Update CNV charts and replace series/xAxis so plot-bin changes cannot leave stale data."""
-    chart.update()
-    if ui is None:
-        return
+def _cnv_echart_push_update(chart: Any) -> None:
+    """Replace the full ECharts option (NiceGUI merges by default and leaves stale scatter data)."""
+    options_clean = _cnv_echarts_option_to_json(chart.options)
+    opts_json = json.dumps(options_clean)
     try:
-        options_clean = _cnv_echarts_option_to_json(chart.options)
-        options_json = json.dumps(options_clean)
-        options_escaped = json.dumps(options_json)
-        ui.run_javascript(
-            f"""
-            (function() {{
-              var el = document.querySelector('.{chart_class}');
-              if (!el) return;
-              var inst = echarts.getInstanceByDom(el);
-              if (!inst) {{
-                var child = el.querySelector('div');
-                if (child) inst = echarts.getInstanceByDom(child);
-              }}
-              if (!inst) return;
-              try {{
-                var options = JSON.parse({options_escaped});
-                inst.setOption(options, {{ replaceMerge: ['series', 'xAxis'] }});
-              }} catch (e) {{ console.warn('CNV chart replaceMerge:', e); }}
-            }})();
-            """
-        )
+        # Do not call chart.update() here: NiceGUI's update_chart uses setOption merge
+        # unless the series count changes, which leaves stale per-chromosome scatter data
+        # when only the plot bin width changes.
+        chart.run_chart_method(":setOption", opts_json, '{"notMerge": true}')
     except Exception:
-        pass
+        logging.debug("CNV chart notMerge setOption failed", exc_info=True)
 
 
 def _build_cnv_track_scatter_series(
@@ -1318,25 +1318,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             _cnv_set_genome_x_axis(cnv_diff, x_axis_max)
             # Clear any previous zoom constraints when viewing All
             if selected == "All":
-                try:
-                    if (
-                        isinstance(cnv_abs.options.get("dataZoom"), list)
-                        and cnv_abs.options["dataZoom"]
-                    ):
-                        dz = cnv_abs.options["dataZoom"][0]
-                        dz.pop("startValue", None)
-                        dz.pop("endValue", None)
-                        dz.update({"start": 0, "end": 100})
-                    if (
-                        isinstance(cnv_diff.options.get("dataZoom"), list)
-                        and cnv_diff.options["dataZoom"]
-                    ):
-                        dz2 = cnv_diff.options["dataZoom"][0]
-                        dz2.pop("startValue", None)
-                        dz2.pop("endValue", None)
-                        dz2.update({"start": 0, "end": 100})
-                except Exception:
-                    pass
+                _cnv_reset_genome_x_data_zoom(cnv_abs)
+                _cnv_reset_genome_x_data_zoom(cnv_diff)
             logging.debug(
                 f"CNV render: selected={selected}, y_scale={state.get('y_scale')}, color_mode={state.get('color_mode')}"
             )
@@ -1915,7 +1898,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 pass
             
             _apply_cnv_echart_chrome(cnv_abs, _is_dark_mode())
-            _cnv_echart_push_update(cnv_abs, chart_class="cnv-genome-abs-chart")
+            _cnv_echart_push_update(cnv_abs)
             # Difference plot (linear CNV3)
             if cnv3_map:
                 series_diff = _build_cnv_track_scatter_series(
@@ -1938,10 +1921,10 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 cnv_diff.options["series"] = series_diff + keep
                 _thin_chart_series(cnv_diff, MAX_POINTS_PER_CHART)
                 _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                _cnv_echart_push_update(cnv_diff, chart_class="cnv-genome-diff-chart")
+                _cnv_echart_push_update(cnv_diff)
             else:
                 _apply_cnv_echart_chrome(cnv_diff, _is_dark_mode())
-                _cnv_echart_push_update(cnv_diff, chart_class="cnv-genome-diff-chart")
+                _cnv_echart_push_update(cnv_diff)
 
             # Gene zoom on difference chart (single-chromosome view)
             try:
@@ -2282,7 +2265,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     current_series[0].pop("markLine", None)
             chart.options["series"] = current_series
             _apply_cnv_echart_chrome(chart, _is_dark_mode())
-            chart.update()
+            _cnv_echart_push_update(chart)
         except Exception:
             pass
 
@@ -2646,8 +2629,8 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         _apply_cnv_echart_chrome(cnv_abs, dark)
         _apply_cnv_echart_chrome(cnv_diff, dark)
         try:
-            cnv_abs.update()
-            cnv_diff.update()
+            _cnv_echart_push_update(cnv_abs)
+            _cnv_echart_push_update(cnv_diff)
         except Exception:
             pass
         launcher._cnv_state.setdefault(key, {})["cnv_plot_theme_dark"] = dark
