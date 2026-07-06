@@ -63,9 +63,83 @@ def test_create_cnv_plot_log2_ratio_mode_returns_jpeg() -> None:
         normalized_cnv=log2_ratios,
         use_normalized_difference=True,
         plot_bin_width=1_000_000,
+        sex_estimate="Female",
     )
     data = buf.getvalue()
     assert data[:2] == b"\xff\xd8"
+
+
+def test_cnv_plot_point_state_uses_calling_thresholds() -> None:
+    from robin.reporting.plotting import _cnv_plot_point_state
+
+    assert _cnv_plot_point_state(0.5, "chr7", "Female") == "gain"
+    assert _cnv_plot_point_state(-0.5, "chr7", "Female") == "loss"
+    assert _cnv_plot_point_state(0.1, "chr7", "Female") == "neutral"
+
+
+def test_collect_genome_significant_panel_points_offsets_by_chromosome() -> None:
+    from robin.reporting.plotting import _collect_genome_significant_panel_points
+
+    panel_genes = pd.DataFrame(
+        {
+            "chrom": ["chr1", "chr2"],
+            "start_pos": [1_000_000, 1_000_000],
+            "end_pos": [2_000_000, 2_000_000],
+            "gene": ["GENE1", "GENE2"],
+        }
+    )
+    cnv_source = {
+        "chr1": np.full(100, 0.6, dtype=float),
+        "chr2": np.full(80, -0.6, dtype=float),
+    }
+    chrom_offsets = {"chr1": 0.0, "chr2": 100_000_000.0}
+    target_coverage = pd.DataFrame(
+        {
+            "chrom": ["chr1", "chr2"],
+            "startpos": [1_000_000, 1_000_000],
+            "endpos": [2_000_000, 2_000_000],
+            "name": ["GENE1", "GENE2"],
+            "length": [1_000_000, 1_000_000],
+            "coverage": [30.0, 25.0],
+            "bases": [30_000_000, 25_000_000],
+        }
+    )
+    significant_regions = {
+        "chr1": [
+            {
+                "start_pos": 0,
+                "end_pos": 250_000_000,
+                "type": "GAIN",
+                "name": "p",
+            }
+        ],
+        "chr2": [
+            {
+                "start_pos": 0,
+                "end_pos": 250_000_000,
+                "type": "LOSS",
+                "name": "p",
+            }
+        ],
+    }
+
+    points = _collect_genome_significant_panel_points(
+        panel_genes,
+        cnv_source,
+        ["chr1", "chr2"],
+        chrom_offsets,
+        1_000_000,
+        significant_regions,
+        target_coverage,
+        use_log2=True,
+    )
+
+    assert len(points) == 2
+    by_label = {point["label"]: point for point in points}
+    assert by_label["GENE1"]["direction"] == "gain"
+    assert by_label["GENE2"]["direction"] == "loss"
+    assert by_label["GENE1"]["position_bp"] == 1_500_000
+    assert by_label["GENE2"]["position_bp"] == 101_500_000
 
 
 def test_downsample_cnv_for_plot_groups_values() -> None:

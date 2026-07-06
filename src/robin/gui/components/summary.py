@@ -19,6 +19,10 @@ except ImportError:  # pragma: no cover
     background_tasks = None
 
 from robin.classification_config import get_confidence_ui_tier
+from robin.analysis.cnv_classification import (
+    detect_cnv_events_for_sample,
+    format_cnv_events_card_lines,
+)
 from robin.analysis.bam_preprocessor import (
     _get_modbase_model_warning,
     _get_modbase_model_warning_level,
@@ -361,8 +365,12 @@ def _analysis_section(sample_dir: Path, launcher: Any = None):
                     cnv_data.get("genetic_sex", "Not available"),
                     cnv_data.get("bin_width", "Not available"),
                     cnv_data.get("variance", "Not available"),
-                    cnv_data.get("gained", 0),
-                    cnv_data.get("lost", 0),
+                    cnv_data.get(
+                        "whole_chromosome_summary", "Whole chromosome: none detected"
+                    ),
+                    cnv_data.get("arm_summary", "Arm-level: none detected"),
+                    int(cnv_data.get("whole_chromosome_count", 0)),
+                    int(cnv_data.get("arm_count", 0)),
                     anchor_key="cnv",
                 )
 
@@ -732,18 +740,19 @@ def _create_cnv_dashboard_card_with_data(
     genetic_sex: str,
     bin_width: str,
     variance: str,
-    gained: int,
-    lost: int,
+    whole_chromosome_summary: str,
+    arm_summary: str,
+    whole_chromosome_count: int = 0,
+    arm_count: int = 0,
     anchor_key: str = "cnv",
 ) -> None:
     """CNV insight card — design.md §9."""
-    total = int(gained) + int(lost)
-    total_denom = str(total) if total > 0 else "—"
-
     def _on_click() -> None:
         _scroll_to_analysis_detail(anchor_key)
 
     _gs = genetic_sex.replace('"', "'")
+    _whole = whole_chromosome_summary.replace('"', "'")
+    _arm = arm_summary.replace('"', "'")
     with (
         ui.element("div")
         .classes(
@@ -761,18 +770,21 @@ def _create_cnv_dashboard_card_with_data(
             ui.label(genetic_sex).classes("classification-insight-result w-full").props(
                 f'title="{_gs}"'
             )
-            ui.label(f"Gained vs total: {gained} / {total_denom}").classes(
-                "classification-insight-meta w-full"
-            )
+            ui.label(whole_chromosome_summary).classes(
+                "classification-insight-meta w-full truncate"
+            ).props(f'title="{_whole}"')
+            ui.label(arm_summary).classes(
+                "classification-insight-meta w-full truncate"
+            ).props(f'title="{_arm}"')
             with ui.column().classes("w-full gap-1"):
                 ui.label(f"Bin width: {bin_width}").classes("classification-insight-meta")
                 ui.label(f"Variance: {variance}").classes("classification-insight-meta")
             with ui.row().classes("gap-1 flex-wrap"):
-                ui.label(f"Gained: {gained}").classes(
+                ui.label(f"Whole chr: {whole_chromosome_count}").classes(
                     "analysis-insight-pill analysis-insight-pill--emerald"
                 )
-                ui.label(f"Lost: {lost}").classes(
-                    "analysis-insight-pill analysis-insight-pill--rose"
+                ui.label(f"Arm: {arm_count}").classes(
+                    "analysis-insight-pill analysis-insight-pill--sky"
                 )
             ui.label(
                 "Copy number across the genome with breakpoint detection"
@@ -1317,12 +1329,14 @@ def _extract_coverage_data(sample_dir: Path) -> Dict[str, Any]:
 
 def _extract_cnv_data(sample_dir: Path) -> Dict[str, Any]:
     """Extract CNV analysis data using the same methods as the CNV component."""
-    cnv_data = {
+    cnv_data: Dict[str, Any] = {
         "genetic_sex": "Not available",
         "bin_width": "Not available",
         "variance": "Not available",
-        "gained": 0,
-        "lost": 0,
+        "whole_chromosome_summary": "Whole chromosome: none detected",
+        "arm_summary": "Arm-level: none detected",
+        "whole_chromosome_count": 0,
+        "arm_count": 0,
     }
 
     try:
@@ -1343,7 +1357,7 @@ def _extract_cnv_data(sample_dir: Path) -> Dict[str, Any]:
                         if isinstance(variance, (int, float)):
                             cnv_data["variance"] = f"{variance:.3f}"
             except Exception as e:
-                logging.debug(f"   MGMT: <access denied>: {e}")
+                logging.debug(f"   CNV dict load failed: {e}")
                 pass
 
         # Load XYestimate.pkl for genetic sex (same as CNV component)
@@ -1357,55 +1371,22 @@ def _extract_cnv_data(sample_dir: Path) -> Dict[str, Any]:
                 if xy:
                     cnv_data["genetic_sex"] = str(xy)
             except Exception as e:
-                logging.debug(f"   MGMT: <access denied>: {e}")
+                logging.debug(f"   XY estimate load failed: {e}")
                 pass
 
-        # Look for CNV result files for gained/lost counts
-        cnv_files = [
-            "cnv_analysis_counter.txt",
-            "cnv_results.csv",
-            "cnv_summary.txt",
-            "cnv_analysis_results.pkl",
-        ]
-
-        for cnv_file in cnv_files:
-            file_path = sample_dir / cnv_file
-            if file_path.exists():
-                if cnv_file.endswith(".txt"):
-                    try:
-                        with open(file_path, "r") as f:
-                            content = f.read().strip()
-                            # Parse counter file for basic CNV info
-                            if content.isdigit():
-                                cnv_data["gained"] = int(
-                                    content
-                                )  # Assume this is gained regions
-                                cnv_data["lost"] = 0  # Default value
-                    except Exception as e:
-                        logging.debug(f"   MGMT: <access denied>: {e}")
-                        pass
-                elif cnv_file.endswith(".csv"):
-                    try:
-                        with open(file_path, "r") as f:
-                            reader = csv.DictReader(f)
-                            for row in reader:
-                                if "genetic_sex" in row:
-                                    cnv_data["genetic_sex"] = row["genetic_sex"]
-                                if "bin_width" in row:
-                                    cnv_data["bin_width"] = row["bin_width"]
-                                if "variance" in row:
-                                    cnv_data["variance"] = row["variance"]
-                                if "gained" in row:
-                                    cnv_data["gained"] = int(row["gained"])
-                                if "lost" in row:
-                                    cnv_data["lost"] = int(row["lost"])
-                    except Exception as e:
-                        logging.debug(f"   MGMT: <access denied>: {e}")
-                        pass
-                break
+        events = detect_cnv_events_for_sample(sample_dir)
+        whole_text, arm_text = format_cnv_events_card_lines(events)
+        cnv_data["whole_chromosome_summary"] = whole_text
+        cnv_data["arm_summary"] = arm_text
+        cnv_data["whole_chromosome_count"] = sum(
+            1 for event in events if event.event_type.startswith("WHOLE_CHR_")
+        )
+        cnv_data["arm_count"] = sum(
+            1 for event in events if not event.event_type.startswith("WHOLE_CHR_")
+        )
 
     except Exception as e:
-        logging.debug(f"   MGMT: <access denied>: {e}")
+        logging.debug(f"   CNV summary extraction failed: {e}")
         pass
 
     return cnv_data

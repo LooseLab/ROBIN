@@ -107,10 +107,14 @@ def get_confidence_status(classifier: str, confidence: float) -> tuple[str, str]
         return "Low", "#DC2626"  # Red
 
 # CNV Analysis Configuration
+# Thresholds apply to log2(ploidy / expected copy number); 0 = normal.
+# Call thresholds are set for shifts visible on the genome-wide log2 plot
+# (moderate aneuploidy / subclonal). Full single-copy anchors: gain log2(3/2)≈0.58,
+# loss log2(1/2)=−1.0.
 CNV_THRESHOLDS = {
     "autosomes": {
-        "gain": 0.4,
-        "loss": -0.4,
+        "gain": 0.3,
+        "loss": -0.3,
     },
     "chrX": {
         "male": {
@@ -118,18 +122,18 @@ CNV_THRESHOLDS = {
             "loss": -0.3,
         },
         "female": {
-            "gain": 0.75,
-            "loss": -0.75,
+            "gain": 0.3,
+            "loss": -0.3,
         }
     },
     "chrY": {
         "male": {
-            "gain": 0.5,
-            "loss": -0.5,
+            "gain": 0.3,
+            "loss": -0.3,
         },
         "female": {
-            "gain": 0.2,  # Fixed: positive threshold for gains
-            "loss": -1.0,
+            "gain": 0.3,
+            "loss": -0.3,
         }
     }
 }
@@ -174,78 +178,72 @@ def get_cnv_thresholds(chromosome: str, sex_estimate: str) -> Tuple[float, float
     return thresholds["gain"], thresholds["loss"]
 
 def is_whole_chromosome_event(
-    p_arm_mean: float, 
-    q_arm_mean: float, 
-    p_arm_proportion: float, 
-    q_arm_proportion: float,
+    p_arm_mean: float,
+    q_arm_mean: float,
+    p_arm_proportion_gain: float,
+    p_arm_proportion_loss: float,
+    q_arm_proportion_gain: float,
+    q_arm_proportion_loss: float,
     gain_threshold: float,
-    loss_threshold: float
+    loss_threshold: float,
 ) -> Tuple[bool, str]:
     """
     Determine if a chromosome shows a whole chromosome event.
-    
-    Args:
-        p_arm_mean: Mean CNV value for p-arm
-        q_arm_mean: Mean CNV value for q-arm  
-        p_arm_proportion: Proportion of p-arm affected
-        q_arm_proportion: Proportion of q-arm affected
-        gain_threshold: Gain threshold for this chromosome
-        loss_threshold: Loss threshold for this chromosome
-    
-    Returns:
-        Tuple of (is_whole_chr_event, event_type) where event_type is 'GAIN', 'LOSS', or 'NORMAL'
+
+    Proportion checks are direction-specific (gain bins vs loss bins) so a
+    uniform log2 shift across an arm counts toward the call.
     """
     rules = CNV_EVENT_RULES["whole_chromosome"]
-    
-    # Check for gains - both arms must show gains, but with more nuanced proportion requirements
+
     both_arms_gained = (
         p_arm_mean > gain_threshold
         and q_arm_mean > gain_threshold
-        and (p_arm_proportion > rules["min_proportion_affected"] or q_arm_proportion > rules["min_proportion_affected"])  # At least one arm > 70%
-        and (p_arm_proportion > rules["min_arm_proportion"] and q_arm_proportion > rules["min_arm_proportion"])  # Both arms > 40%
+        and (
+            p_arm_proportion_gain > rules["min_proportion_affected"]
+            or q_arm_proportion_gain > rules["min_proportion_affected"]
+        )
+        and (
+            p_arm_proportion_gain > rules["min_arm_proportion"]
+            and q_arm_proportion_gain > rules["min_arm_proportion"]
+        )
     )
-    
-    # Check for losses - both arms must show losses, but with more nuanced proportion requirements
+
     both_arms_lost = (
         p_arm_mean < loss_threshold
         and q_arm_mean < loss_threshold
-        and (p_arm_proportion > rules["min_proportion_affected"] or q_arm_proportion > rules["min_proportion_affected"])  # At least one arm > 70%
-        and (p_arm_proportion > rules["min_arm_proportion"] and q_arm_proportion > rules["min_arm_proportion"])  # Both arms > 40%
+        and (
+            p_arm_proportion_loss > rules["min_proportion_affected"]
+            or q_arm_proportion_loss > rules["min_proportion_affected"]
+        )
+        and (
+            p_arm_proportion_loss > rules["min_arm_proportion"]
+            and q_arm_proportion_loss > rules["min_arm_proportion"]
+        )
     )
-    
+
     if both_arms_gained:
         return True, "GAIN"
-    elif both_arms_lost:
+    if both_arms_lost:
         return True, "LOSS"
-    else:
-        return False, "NORMAL"
+    return False, "NORMAL"
 
 def is_arm_event(
     arm_mean: float,
-    arm_proportion: float,
+    arm_proportion_gain: float,
+    arm_proportion_loss: float,
     gain_threshold: float,
     loss_threshold: float
 ) -> Tuple[bool, str]:
     """
     Determine if a chromosome arm shows a significant event.
-    
-    Args:
-        arm_mean: Mean CNV value for the arm
-        arm_proportion: Proportion of arm affected
-        gain_threshold: Gain threshold for this chromosome
-        loss_threshold: Loss threshold for this chromosome
-    
-    Returns:
-        Tuple of (is_arm_event, event_type) where event_type is 'GAIN', 'LOSS', or 'NORMAL'
     """
     rules = CNV_EVENT_RULES["arm_specific"]
-    
-    if arm_proportion > rules["min_proportion_affected"]:
-        if arm_mean > gain_threshold:
-            return True, "GAIN"
-        elif arm_mean < loss_threshold:
-            return True, "LOSS"
-    
+
+    if arm_mean > gain_threshold and arm_proportion_gain > rules["min_proportion_affected"]:
+        return True, "GAIN"
+    if arm_mean < loss_threshold and arm_proportion_loss > rules["min_proportion_affected"]:
+        return True, "LOSS"
+
     return False, "NORMAL"
 
 def is_resolution_sufficient(bin_width: int) -> bool:

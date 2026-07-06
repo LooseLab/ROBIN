@@ -143,6 +143,13 @@ def cnv_report_plot_caption(scale: str) -> str:
     if resolve_cnv_report_scale(scale) == CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE:
         return (
             "Copy number variation across chromosomes "
-            "(log2 ratio of observed ploidy to expected copy number; 0 = normal)"
+            "(log2 ratio of observed ploidy to expected copy number; 0 = normal; "
+            "red = gain, blue = loss, grey = within ±0.3). "
+            "Panel target lollipops (right axis) mark significantly amplified or lost "
+            "genes; stem height shows sequencing coverage depth."
         )
-    return "Copy number variation across chromosomes"
+    return (
+        "Copy number variation across chromosomes. "
+        "Panel target lollipops (right axis) mark significantly altered genes; "
+        "stem height shows sequencing coverage depth."
+    )

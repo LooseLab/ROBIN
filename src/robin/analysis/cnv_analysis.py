@@ -700,7 +700,76 @@ def compute_cnv_log2_from_ploidy(
     return log2_ratios
 
 
-CNV_REPORT_GENOME_PLOT_BIN_WIDTH = 500_000
+def resolve_cnv_calling_track(
+    cnv_map: Dict[str, np.ndarray],
+    sex_estimate: Optional[str] = None,
+) -> Dict[str, np.ndarray]:
+    """Bin-level track for arm/whole-chromosome CNV event calling.
+
+    Returns log2(observed ploidy / expected copy number) per chromosome; 0 is
+    normal for that chromosome and sex. Matches the GUI CNV log2 ratio plot.
+    """
+    return compute_cnv_log2_from_ploidy(cnv_map, sex_estimate)
+
+
+CNV_CALLING_MIN_BIN_WIDTH = 1_000_000
+
+
+def resolve_cnv_calling_bin_width(
+    analysis_bin_width: int,
+    min_calling_bin_width: int = CNV_CALLING_MIN_BIN_WIDTH,
+) -> int:
+    """Effective bin width for arm/whole-chromosome calling (at least 1 Mb)."""
+    analysis_bw = max(int(analysis_bin_width), 1)
+    return max(analysis_bw, int(min_calling_bin_width))
+
+
+def coarsen_cnv_track_values(
+    values_1d: np.ndarray,
+    analysis_bin_width: int,
+    calling_bin_width: int,
+) -> np.ndarray:
+    """Average adjacent analysis bins up to the calling bin width."""
+    values = np.asarray(values_1d, dtype=float)
+    if calling_bin_width <= analysis_bin_width:
+        return values
+    group_size = max(1, int(np.ceil(calling_bin_width / analysis_bin_width)))
+    effective_bw = group_size * analysis_bin_width
+    if effective_bw <= analysis_bin_width:
+        return values
+    _, coarsened = downsample_cnv_for_plot(values, analysis_bin_width, effective_bw)
+    return coarsened
+
+
+def coarsen_cnv_track(
+    cnv_map: Dict[str, np.ndarray],
+    analysis_bin_width: int,
+    calling_bin_width: Optional[int] = None,
+) -> Dict[str, np.ndarray]:
+    """Coarsen per-chromosome CNV arrays for event calling."""
+    calling_bw = resolve_cnv_calling_bin_width(
+        analysis_bin_width,
+        calling_bin_width or CNV_CALLING_MIN_BIN_WIDTH,
+    )
+    out: Dict[str, np.ndarray] = {}
+    for chrom, values in cnv_map.items():
+        out[chrom] = coarsen_cnv_track_values(values, analysis_bin_width, calling_bw)
+    return out
+
+
+def prepare_cnv_calling_track(
+    cnv_map: Dict[str, np.ndarray],
+    analysis_bin_width: int,
+    sex_estimate: Optional[str] = None,
+    min_calling_bin_width: int = CNV_CALLING_MIN_BIN_WIDTH,
+) -> Tuple[Dict[str, np.ndarray], int]:
+    """Log2 calling track coarsened to at least ``min_calling_bin_width``."""
+    log2_track = resolve_cnv_calling_track(cnv_map, sex_estimate)
+    calling_bw = resolve_cnv_calling_bin_width(analysis_bin_width, min_calling_bin_width)
+    return coarsen_cnv_track(log2_track, analysis_bin_width, calling_bw), calling_bw
+
+
+CNV_REPORT_GENOME_PLOT_BIN_WIDTH = 1_000_000
 
 
 def resolve_cnv_plot_bin_width(

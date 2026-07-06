@@ -44,8 +44,6 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **Theme and IGV:** Stabilized per-user dark-mode persistence and table theme synchronization. IGV remains a deliberately light panel in either app theme and reports clearer loading/ready states.
 - **Documentation:** MinKNOW and quickstart guidance now explicitly requires 5mC/5hmC modified-base calling in **CpG contexts only** and warns against all-context models.
 - **Dependencies:** Raised the PyArrow requirement from `16.1` to `>=23.0.1` for the updated Parquet processing paths.
-- **Version:** Package and application metadata are aligned to `0.5.3`.
-
 ### Fixed
 - Fixed SnpSift ClinVar annotation failing silently when the tabix index was older than `clinvar.vcf.gz` (SnpSift exited 0 but added no `CLNSIG`/`ONC`/`SCI` fields).
 - Fixed SnpSift dropping most variants and missing known pathogenic sites (for example IDH1 R132H) when sample VCF contigs used `chrN` but ClinVar used numeric chromosome names.
@@ -59,6 +57,24 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - Fixed `--no-gui` workflows starting the GUI.
 - Replaced additional noisy diagnostic `print` output with structured logging.
 - Moved `[SamplePage]` section timing messages to debug logging so they are hidden during normal operation.
+
+## [0.5.4] - 2026-07-06
+
+### Added
+- **Log2 arm/whole-chromosome CNV calling:** Arm and whole-chromosome events are detected from `log2(ploidy / expected copy number)` on bins coarsened to at least **1 Mb** (`prepare_cnv_calling_track()`), aligned with the GUI log2 plot and PDF reporting.
+- **CNV summary insight card:** The sample overview CNV card reports whole-chromosome and arm-level events (for example `chr7 GAIN`, `chr4p LOSS`) instead of gained/lost gene-region counts.
+- **Genome-wide PDF CNV plot enhancements:** Points are coloured by calling thresholds (red = gain, blue = loss, grey = within ±0.3). Significantly amplified or lost panel genes are shown as **lollipops** on a right-hand **coverage depth** axis, using the same significance rules as per-chromosome plots.
+- **Tests:** Added `tests/test_cnv_calling_track.py` and extended GUI/reporting CNV plot tests.
+
+### Changed
+- **CNV calling thresholds:** Arm and whole-chromosome gain/loss thresholds are **±0.3 log2** (previously ±0.4).
+- **Event de-duplication:** Arm-level events are no longer reported when a whole-chromosome gain or loss is already called on that chromosome.
+- **PDF genome-wide CNV plot:** Display bins are **1 Mb** (was 500 kb). The x-axis label is **Chromosome** (numeric genomic ticks hidden); the y-axis crosses at genomic position 0 and log2 ratio 0.
+- **Sample tracking export:** CNV TSV fields updated for the new summary-card event columns.
+- **Version:** Package and application metadata are aligned to `0.5.4`.
+
+### Fixed
+- **CNV proportion checks:** Whole-chromosome and arm calling use direction-specific gain/loss bin proportions so uniform log2 shifts are counted correctly toward calls.
 
 ## [0.5.2] - 2026-05-05
 

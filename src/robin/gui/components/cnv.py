@@ -24,10 +24,17 @@ from robin.gui.theme import (
     register_theme_sync_callback,
     get_user_dark_mode,
 )
-from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary, CNVEvent
+from robin.analysis.cnv_classification import (
+    CNVEvent,
+    detect_cnv_events,
+    format_cnv_events_card_lines,
+    format_cnv_events_section_summary,
+)
 from robin.analysis.cnv_analysis import (
     compute_cnv_log2_from_ploidy,
     downsample_cnv_for_plot,
+    prepare_cnv_calling_track,
+    resolve_cnv_calling_track,
     resolve_cnv_plot_bin_width,
 )
 from robin.analysis.cnv_regional import (
@@ -130,7 +137,7 @@ def _recompute_cnv_log2_state(state: Dict[str, Any]) -> None:
     if not sample:
         state.pop("cnv_log2", None)
         return
-    state["cnv_log2"] = compute_cnv_log2_from_ploidy(
+    state["cnv_log2"] = resolve_cnv_calling_track(
         sample,
         _cnv_sex_estimate_label(state.get("xy")),
     )
@@ -206,6 +213,41 @@ def _cnv_echart_push_update(chart: Any) -> None:
         chart.run_chart_method(":setOption", opts_json, '{"notMerge": true}')
     except Exception:
         logging.debug("CNV chart notMerge setOption failed", exc_info=True)
+
+
+def _cnv_sample_relative_stats(
+    cnv_map: Dict[str, np.ndarray],
+    abs_plot_map: Optional[Dict[str, np.ndarray]],
+    *,
+    use_log: bool,
+) -> Tuple[float, float]:
+    """Sample-relative baseline from autosomes only, shared by all Up/Down coloring."""
+    source_map = abs_plot_map if use_log and abs_plot_map else cnv_map
+    default_mean = 0.0 if use_log else 2.0
+    autosome_vals: List[float] = []
+    for chrom, arr in source_map.items():
+        if not chrom.startswith("chr") or not chrom[3:].isdigit():
+            continue
+        vals = np.asarray(arr, dtype=float)
+        autosome_vals.extend(float(v) for v in vals if np.isfinite(v))
+    if not autosome_vals:
+        return default_mean, 1.0
+    return float(np.mean(autosome_vals)), float(np.std(autosome_vals))
+
+
+def _cnv_split_points_by_zscore(
+    pts: List[List[float]],
+    mean_val: float,
+    std_val: float,
+) -> Tuple[List[List[float]], List[List[float]], List[List[float]]]:
+    """Partition points into high / low / normal by z-score."""
+    high: List[List[float]] = []
+    low: List[List[float]] = []
+    norm: List[List[float]] = []
+    for xi, vi in pts:
+        z = (vi - mean_val) / std_val if std_val > 0 else 0.0
+        (high if z > 0.5 else low if z < -0.5 else norm).append([xi, vi])
+    return high, low, norm
 
 
 def _build_cnv_track_scatter_series(
@@ -523,6 +565,12 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                         "classification-insight-result w-full"
                     )
                     cnv_xy = ui.label("Genetic sex: --").classes(
+                        "classification-insight-meta w-full"
+                    )
+                    cnv_whole_chr_summary = ui.label("Whole chromosome: --").classes(
+                        "classification-insight-meta w-full"
+                    )
+                    cnv_arm_summary = ui.label("Arm-level: --").classes(
                         "classification-insight-meta w-full"
                     )
                     with ui.row().classes(
@@ -1153,24 +1201,25 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
         """Update CNV events analysis using centralized classification rules."""
         try:
             cnv_map = state.get("cnv")
-            cnv3_map = state.get("cnv3")
             if isinstance(cnv_map, dict) and "cnv" in cnv_map:
                 cnv_map = cnv_map["cnv"]
-            if isinstance(cnv3_map, dict) and "cnv" in cnv3_map:
-                cnv3_map = cnv3_map["cnv"]
-            
+
             if not cnv_map:
                 cnv_events_table.rows = []
                 cnv_events_summary.set_text("No CNV data available")
+                cnv_whole_chr_summary.set_text("Whole chromosome: --")
+                cnv_arm_summary.set_text("Arm-level: --")
                 return
-            
+
             binw = state.get("cnv_dict", {}).get("bin_width", 1000000)
             sex_lbl = _sex_label(state.get("xy"))
-            
-            # Use difference map (CNV3) for calling if available, otherwise absolute
-            data = cnv3_map if isinstance(cnv3_map, dict) else cnv_map
-            
-            if data and binw:
+            data, calling_binw = prepare_cnv_calling_track(
+                cnv_map,
+                int(binw),
+                _cnv_sex_estimate_label(state.get("xy")),
+            )
+
+            if data and calling_binw:
                 # Load cytobands and genes
                 cyto_df = _load_cytobands_df()
                 gene_df = _load_gene_bed(sample_dir)
@@ -1178,7 +1227,7 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 # Detect CNV events using centralized rules
                 events = detect_cnv_events(
                     cnv_data=data,
-                    bin_width=int(binw),
+                    bin_width=int(calling_binw),
                     sex_estimate=sex_lbl,
                     cytobands_df=cyto_df,
                     gene_df=gene_df
@@ -1198,27 +1247,21 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                 except Exception:
                     pass
                 
-                # Update summary
-                summary = get_cnv_summary(events)
-                if summary["total_events"] > 0:
-                    summary_text = f"Detected {summary['total_events']} CNV events: "
-                    parts = []
-                    if summary["whole_chromosome_events"]:
-                        parts.append(f"{len(summary['whole_chromosome_events'])} whole chromosome")
-                    if summary["arm_events"]:
-                        parts.append(f"{len(summary['arm_events'])} arm-specific")
-                    if summary["gene_containing_events"]:
-                        parts.append(f"{summary['total_genes_affected']} genes affected")
-                    summary_text += ", ".join(parts)
-                    cnv_events_summary.set_text(summary_text)
-                else:
-                    cnv_events_summary.set_text("No threshold triggered CNV events detected")
+                # Update summaries (insight card + events section)
+                whole_text, arm_text = format_cnv_events_card_lines(events)
+                cnv_whole_chr_summary.set_text(whole_text)
+                cnv_arm_summary.set_text(arm_text)
+                cnv_events_summary.set_text(format_cnv_events_section_summary(events))
             else:
                 cnv_events_table.rows = []
+                cnv_whole_chr_summary.set_text("Whole chromosome: --")
+                cnv_arm_summary.set_text("Arm-level: --")
                 cnv_events_summary.set_text("CNV data not available")
         except Exception as e:
             logging.error(f"Error updating CNV events analysis: {e}")
             cnv_events_table.rows = []
+            cnv_whole_chr_summary.set_text("Whole chromosome: --")
+            cnv_arm_summary.set_text("Arm-level: --")
             cnv_events_summary.set_text("Error analyzing CNV events")
 
     def _render_cnv_from_state(state: Dict[str, Any]) -> None:
@@ -1323,6 +1366,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
             logging.debug(
                 f"CNV render: selected={selected}, y_scale={state.get('y_scale')}, color_mode={state.get('color_mode')}"
             )
+            sample_rel_mean, sample_rel_std = _cnv_sample_relative_stats(
+                cnv_map,
+                abs_plot_map if isinstance(abs_plot_map, dict) else None,
+                use_log=use_log,
+            )
             # Absolute plot
             series_abs = []
             # Prepare chromosome partitions for labels/areas when viewing All
@@ -1370,41 +1418,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             }
                         )
                     else:
-                        try:
-                            if use_log:
-                                autosome_vals = [
-                                    v
-                                    for k, arr in abs_plot_map.items()
-                                    if k.startswith("chr") and k[3:].isdigit()
-                                    for v in np.asarray(arr, dtype=float)
-                                    if np.isfinite(v)
-                                ]
-                                mean_val = (
-                                    float(np.mean(autosome_vals))
-                                    if autosome_vals
-                                    else 0.0
-                                )
-                            else:
-                                autosome_vals = [
-                                    v
-                                    for k, arr in cnv_map.items()
-                                    if k.startswith("chr") and k[3:].isdigit()
-                                    for v in arr
-                                ]
-                                mean_val = (
-                                    float(np.mean(autosome_vals)) if autosome_vals else 2.0
-                                )
-                            std_val = (
-                                float(np.std(autosome_vals)) if autosome_vals else 1.0
-                            )
-                        except Exception:
-                            mean_val, std_val = (0.0, 1.0) if use_log else (2.0, 1.0)
-                        high, low, norm = [], [], []
-                        for xi, vi in pts:
-                            z = (vi - mean_val) / std_val if std_val > 0 else 0.0
-                            (high if z > 0.5 else low if z < -0.5 else norm).append(
-                                [xi, vi]
-                            )
+                        high, low, norm = _cnv_split_points_by_zscore(
+                            pts,
+                            sample_rel_mean,
+                            sample_rel_std,
+                        )
                         if high:
                             series_abs.append(
                                 {
@@ -1462,25 +1480,11 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                             }
                         )
                     else:
-                        if use_log:
-                            expected = 0.0
-                        else:
-                            expected = 2.0
-                            try:
-                                if selected in ("chrX", "chrY") and str(
-                                    state.get("xy", "")
-                                ).upper().startswith("MALE"):
-                                    expected = 1.0
-                            except Exception:
-                                pass
-                        vals = [v for _, v in pts]
-                        std_val = float(np.std(vals)) if vals else 1.0
-                        high, low, norm = [], [], []
-                        for xi, vi in pts:
-                            z = (vi - expected) / std_val if std_val > 0 else 0
-                            (high if z > 0.5 else low if z < -0.5 else norm).append(
-                                [xi, vi]
-                            )
+                        high, low, norm = _cnv_split_points_by_zscore(
+                            pts,
+                            sample_rel_mean,
+                            sample_rel_std,
+                        )
                         if high:
                             series_abs.append(
                                 {
@@ -1687,13 +1691,20 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                                 try:
                                     sex_lbl = _sex_label(state.get("xy"))
                                     gene_df = _load_gene_bed(sample_dir)
-                                    events = detect_cnv_events(
-                                        cnv_data={selected: vals},
-                                        bin_width=int(binw_analysis),
-                                        sex_estimate=sex_lbl,
-                                        cytobands_df=cyto_df,
-                                        gene_df=gene_df
+                                    calling_map, calling_binw = prepare_cnv_calling_track(
+                                        cnv_map,
+                                        int(binw_analysis),
+                                        _cnv_sex_estimate_label(state.get("xy")),
                                     )
+                                    call_vals = calling_map.get(selected)
+                                    if call_vals is not None:
+                                        events = detect_cnv_events(
+                                            cnv_data={selected: np.asarray(call_vals)},
+                                            bin_width=int(calling_binw),
+                                            sex_estimate=sex_lbl,
+                                            cytobands_df=cyto_df,
+                                            gene_df=gene_df,
+                                        )
                                 except Exception:
                                     pass
                                 

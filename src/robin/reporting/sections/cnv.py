@@ -21,7 +21,14 @@ from ..plotting import create_CNV_plot, create_CNV_plot_per_chromosome
 #    CNVAnalysis
 # )
 
-from robin.analysis.cnv_analysis import Result, moving_average, CNV_Difference, compute_cnv_log2_from_ploidy
+from robin.analysis.cnv_analysis import (
+    Result,
+    moving_average,
+    CNV_Difference,
+    compute_cnv_log2_from_ploidy,
+    prepare_cnv_calling_track,
+    resolve_cnv_calling_bin_width,
+)
 from robin.analysis.cnv_classification import detect_cnv_events, get_cnv_summary, CNVEvent
 from robin.analysis.cnv_regional import (
     SIGNIFICANT_CNV_STATES,
@@ -444,15 +451,21 @@ class CNVSection(ReportSection):
             events = []
             
             # Check if resolution is sufficient
-            if not is_resolution_sufficient(cnv_dict.get("bin_width", 1000000)):
+            analysis_binw = int(cnv_dict.get("bin_width", 1000000))
+            calling_binw = resolve_cnv_calling_bin_width(analysis_binw)
+            if not is_resolution_sufficient(calling_binw):
                 logger.warning("Resolution insufficient for CNV calling")
                 summary_whole_chr_events = []
                 summary_arm_events = []
             else:
-                # Use centralized CNV event detection
+                # Arm/whole-chromosome events: log2(ploidy / expected), ≥1 Mb bins
+                analysis_binw = int(cnv_dict.get("bin_width", 1000000))
+                calling_cnv, calling_binw = prepare_cnv_calling_track(
+                    CNVresult.cnv, analysis_binw, XYestimate
+                )
                 events = detect_cnv_events(
-                    cnv_data=result3.cnv,
-                    bin_width=cnv_dict.get("bin_width", 1000000),
+                    cnv_data=calling_cnv,
+                    bin_width=calling_binw,
                     sex_estimate=XYestimate,
                     cytobands_df=cytobands_bed,
                     gene_df=gene_bed
@@ -535,6 +548,14 @@ class CNVSection(ReportSection):
             logger.debug("Generating genome-wide CNV plot")
             from robin.gui.plotting_preferences import cnv_report_plot_caption
 
+            significant_regions: dict[str, list[dict]] = {}
+            for chrom in reportable_chromosomes:
+                cytoband_analysis = cytoband_analysis_by_chrom.get(chrom)
+                if cytoband_analysis is not None and not cytoband_analysis.empty:
+                    region_list = build_significant_regions(cytoband_analysis)
+                    if region_list:
+                        significant_regions[chrom] = region_list
+
             use_normalized_summary = getattr(
                 self.report, "cnv_summary_normalized", False
             )
@@ -543,6 +564,10 @@ class CNVSection(ReportSection):
                 cnv_dict,
                 normalized_cnv=log2_cnv,
                 use_normalized_difference=use_normalized_summary,
+                sex_estimate=str(XYestimate),
+                panel_genes_df=panel_genes_df,
+                target_coverage_df=target_coverage_df,
+                significant_regions=significant_regions,
             )
             summary_caption_scale = (
                 "normalized_difference" if use_normalized_summary else "ploidy"
@@ -767,7 +792,6 @@ class CNVSection(ReportSection):
 
             # Add individual chromosome plots at full page width
             try:
-                significant_regions = {}
                 chromosome_status = {}
 
                 for chrom in reportable_chromosomes:
@@ -777,9 +801,6 @@ class CNVSection(ReportSection):
                         events,
                         cytoband_analysis,
                     )
-                    region_list = build_significant_regions(cytoband_analysis)
-                    if region_list:
-                        significant_regions[chrom] = region_list
 
                 if panel_name and not panel_genes_df.empty:
                     panel_plot_blurb = (

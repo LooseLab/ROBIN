@@ -2985,7 +2985,7 @@ class GUILauncher:
             with ui.column().classes("w-full min-h-[70vh] p-3 md:p-6 gap-4"):
                 # Anchor: bold headline + secondary copy (Digital Curator hierarchy)
                 # w-full on inner column so the gradient spans the full card (not content width)
-                with ui.card().classes("w-full max-w-7xl mx-auto overflow-hidden"):
+                with ui.card().classes("w-full overflow-hidden"):
                     with ui.column().classes(
                         "w-full min-w-0 p-4 md:p-6 gap-3 bg-gradient-to-b from-slate-50 to-white "
                         "dark:from-slate-900/80 dark:to-[var(--md-surface)]"
@@ -3001,7 +3001,7 @@ class GUILauncher:
                         )
 
                 # Samples table section — outer column keeps mobile scroll behavior
-                with ui.column().classes("w-full max-w-7xl mx-auto gap-3"):
+                with ui.column().classes("w-full gap-3"):
                     can_export_reports = self._current_user_can_export()
                     # Title + export/SNP actions on one row (must stay visible; a separate row below filters was easy to miss)
                     with ui.row().classes(
@@ -3270,6 +3270,8 @@ class GUILauncher:
                                 "label": "Job Types",
                                 "field": "job_types",
                                 "sortable": True,
+                                "style": "min-width: 11rem;",
+                                "headerStyle": "min-width: 11rem;",
                             },
                             {
                                 "name": "last_seen",
@@ -3417,15 +3419,24 @@ class GUILauncher:
                             exc_info=True,
                         )
 
-                    # Job types: allow wrapping (comma+space separated in row data)
+                    # Job types: compact chips for every job type seen on the sample
                     try:
                         self.samples_table.add_slot(
                             "body-cell-job_types",
                             """
 <q-td key="job_types" :props="props">
-  <div class="text-xs whitespace-normal break-words max-w-[min(28rem,50vw)]"
-       style="word-break: break-word;">
-    {{ props.row.job_types }}
+  <div class="flex flex-wrap items-center gap-0.5" style="min-width: 10rem;">
+    <q-chip
+      v-for="(jt, idx) in (props.row.job_types_list || [])"
+      :key="jt + '-' + idx"
+      dense
+      square
+      size="sm"
+      class="text-[9px] leading-tight"
+      style="white-space: nowrap;"
+    >
+      {{ jt }}
+    </q-chip>
   </div>
 </q-td>
 """,
@@ -4506,18 +4517,21 @@ class GUILauncher:
             except Exception:
                 return ""
 
-    def _format_job_types_display(self, job_types: Any) -> str:
-        """Normalize job types to comma + space separated text so cells wrap in the table."""
+    def _parse_job_types_list(self, job_types: Any) -> List[str]:
+        """Normalize job types to a sorted list of unique tokens."""
         if job_types is None:
-            return ""
+            return []
         if isinstance(job_types, (list, set, tuple)):
-            parts = sorted({str(x).strip() for x in job_types if str(x).strip()})
-            return ", ".join(parts)
+            return sorted({str(x).strip() for x in job_types if str(x).strip()})
         s = str(job_types).strip()
         if not s:
-            return ""
+            return []
         parts = [p.strip() for p in s.replace(", ", ",").split(",") if p.strip()]
-        return ", ".join(parts)
+        return parts
+
+    def _format_job_types_display(self, job_types: Any) -> str:
+        """Normalize job types to comma + space separated text for sorting/filtering."""
+        return ", ".join(self._parse_job_types_list(job_types))
 
     def _get_samples_search_query(self) -> str:
         try:
@@ -4562,7 +4576,9 @@ class GUILauncher:
                 continue
             jt = r.get("job_types")
             r = dict(r)
-            r["job_types"] = self._format_job_types_display(jt)
+            parts = self._parse_job_types_list(jt)
+            r["job_types"] = ", ".join(parts)
+            r["job_types_list"] = parts
             normalized.append(r)
         return normalized
 
@@ -8632,7 +8648,15 @@ title="View in IGV"
             classification_models = ["sturgeon", "nanodx", "pannanodx", "random_forest"]
             analysis_fields = {
                 "coverage": ["quality", "global_coverage", "target_coverage", "enrichment"],
-                "cnv": ["genetic_sex", "bin_width", "variance", "gained", "lost"],
+                "cnv": [
+                    "genetic_sex",
+                    "bin_width",
+                    "variance",
+                    "whole_chromosome_summary",
+                    "arm_summary",
+                    "whole_chromosome_count",
+                    "arm_count",
+                ],
                 "cnv_broad": [
                     "whole_chromosome_events",
                     "arm_events",
