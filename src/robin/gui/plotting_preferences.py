@@ -145,11 +145,12 @@ def cnv_report_plot_caption(scale: str) -> str:
             "Copy number variation across chromosomes "
             "(log2 ratio of observed ploidy to expected copy number; 0 = normal; "
             "red = gain, blue = loss, grey = within ±0.3). "
-            "Panel target lollipops (right axis) mark significantly amplified or lost "
-            "genes; stem height shows sequencing coverage depth."
+            "Panel target points (right axis) mark significantly amplified or lost "
+            "genes at their sequencing coverage depth, labelled by gene name; "
+            "dashed line = mean coverage."
         )
     return (
         "Copy number variation across chromosomes. "
-        "Panel target lollipops (right axis) mark significantly altered genes; "
-        "stem height shows sequencing coverage depth."
+        "Panel target points (right axis) mark significantly altered genes at "
+        "sequencing coverage depth, labelled by gene name; dashed line = mean coverage."
     )

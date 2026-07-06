@@ -222,38 +222,26 @@ def _plot_cnv_track(ax, cnv_df: pd.DataFrame, x_max_mb: float) -> None:
         )
 
 
+PANEL_GENE_CNV_OUTLIER_SD = 3
+
+
 def _is_gene_cnv_outlier(cnv_val: float, mean_cnv: float, std_cnv: float) -> bool:
-    """Return True when a panel target copy number deviates >2 SD from the chromosome mean."""
+    """Return True when a panel target copy number deviates >3 SD from the chromosome mean."""
     if std_cnv < 1e-6:
         return abs(cnv_val - mean_cnv) > 0.5
-    return abs(cnv_val - mean_cnv) > 2 * std_cnv
+    return abs(cnv_val - mean_cnv) > PANEL_GENE_CNV_OUTLIER_SD * std_cnv
 
 
 SIGNIFICANT_CNV_REGION_TYPES = {"GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"}
-
-
-def _gene_overlaps_cnv_region(mid_bp: float, regions: List[Dict[str, Any]]) -> bool:
-    """Return True when a gene midpoint falls inside a called gain/loss region."""
-    for region in regions:
-        if region.get("type") not in SIGNIFICANT_CNV_REGION_TYPES:
-            continue
-        start_bp = float(region["start_pos"])
-        end_bp = float(region["end_pos"])
-        if start_bp <= mid_bp <= end_bp:
-            return True
-    return False
 
 
 def _should_label_panel_gene(
     point: Dict[str, Any],
     mean_cnv: float,
     std_cnv: float,
-    regions: List[Dict[str, Any]],
 ) -> bool:
-    """Label outliers and panel genes inside called CNV regions."""
-    if _is_gene_cnv_outlier(point["cnv_val"], mean_cnv, std_cnv):
-        return True
-    return _gene_overlaps_cnv_region(point["mid_mb"] * 1_000_000, regions)
+    """Label panel genes more than 3 SD from the chromosome mean."""
+    return _is_gene_cnv_outlier(point["cnv_val"], mean_cnv, std_cnv)
 
 
 def _is_highlighted_panel_gene(
@@ -272,7 +260,7 @@ def _is_highlighted_panel_gene(
         off_scale = off_scale_mode and abs(cnv_val) > y_max * 0.97
     else:
         off_scale = off_scale_mode and cnv_val > y_max * 0.97
-    highlight = off_scale or _should_label_panel_gene(point, mean_cnv, std_cnv, regions)
+    highlight = off_scale or _should_label_panel_gene(point, mean_cnv, std_cnv)
     return highlight, off_scale
 
 
@@ -366,6 +354,36 @@ def _layout_coverage_head_labels(
     return layouts
 
 
+def _layout_genome_coverage_point_labels(
+    coverage_points: List[Dict[str, Any]],
+    cov_ylim: float,
+    x_max_bp: float,
+) -> Dict[tuple[str, float], float]:
+    """Place gene labels above each marker, staggering overlaps in coverage space."""
+    layouts: Dict[tuple[str, float], float] = {}
+    occupied: List[tuple[float, float]] = []
+    x_spacing = max(x_max_bp * 0.020, 1_800_000.0)
+    y_step = cov_ylim * 0.055
+
+    for point in sorted(coverage_points, key=lambda item: item["position_bp"]):
+        x_pos = float(point["position_bp"])
+        y_top = min(float(point["coverage_val"]), cov_ylim * 0.90)
+        label_y = y_top + cov_ylim * 0.025
+        attempts = 0
+        while any(
+            abs(x_pos - ox) < x_spacing and abs(label_y - oy) < y_step
+            for ox, oy in occupied
+        ):
+            label_y += y_step
+            attempts += 1
+            if attempts > 8:
+                break
+        label_y = min(label_y, cov_ylim * 0.97)
+        occupied.append((x_pos, label_y))
+        layouts[(point["label"], x_pos)] = label_y
+    return layouts
+
+
 def _add_panel_gene_lollipops(
     fig: plt.Figure,
     ax_cnv,
@@ -409,7 +427,7 @@ def _add_panel_gene_lollipops(
     for point in coverage_points:
         mid_mb = point["mid_mb"]
         coverage_val = float(point["coverage_val"])
-        highlight = _should_label_panel_gene(point, mean_cnv, std_cnv, regions)
+        highlight = _should_label_panel_gene(point, mean_cnv, std_cnv)
         color = AMPLIFIED_COLOR if highlight else CNV_COLORS["gene"]
         stem_alpha = 0.9 if highlight else 0.45
         stem_width = 1.0 if highlight else 0.6
@@ -476,34 +494,100 @@ def _gene_cnv_direction(
     return "gain" if cnv_val >= 0.0 else "loss"
 
 
-def _layout_genome_coverage_head_labels(
-    coverage_points: List[Dict[str, Any]],
-    cov_ylim: float,
+def _add_genome_panel_coverage_points(
+    ax_cnv,
+    panel_points: List[Dict[str, Any]],
     x_max_bp: float,
-) -> Dict[tuple[str, float], float]:
-    """Stagger lollipop labels on the genome-wide coverage axis."""
-    layouts: Dict[tuple[str, float], float] = {}
-    occupied: List[tuple[float, float]] = []
-    x_spacing = max(x_max_bp * 0.008, 5_000_000.0)
-    y_step = cov_ylim * 0.055
+) -> bool:
+    """Plot significant panel genes as coverage-scaled points on a right-hand axis."""
+    coverage_points = [
+        point
+        for point in panel_points
+        if point.get("coverage_val") is not None and np.isfinite(point["coverage_val"])
+    ]
+    if not coverage_points:
+        return False
 
-    for point in sorted(coverage_points, key=lambda item: item["position_bp"]):
+    ax_cov = ax_cnv.twinx()
+    coverage_vals = np.asarray(
+        [float(point["coverage_val"]) for point in coverage_points], dtype=float
+    )
+    mean_cov = float(np.mean(coverage_vals))
+    cov_max = float(np.max(coverage_vals))
+    cov_ylim = max(cov_max * 1.22, cov_max + 1.0, mean_cov * 1.1)
+    ax_cov.set_ylim(0.0, cov_ylim)
+    ax_cov.set_xlim(0.0, x_max_bp)
+    ax_cov.set_ylabel(
+        "Coverage (x)",
+        fontsize=CNV_FONT["axis"],
+        color=CNV_TEXT["primary"],
+        labelpad=8,
+        fontproperties=_CNV_FONT_REGULAR,
+    )
+    ax_cov.tick_params(
+        colors=CNV_TEXT["primary"],
+        labelsize=CNV_FONT["tick"],
+        pad=2,
+    )
+    ax_cov.spines["right"].set_color(CNV_TEXT["primary"])
+    ax_cov.spines["top"].set_visible(False)
+    ax_cov.spines["left"].set_visible(False)
+    ax_cov.spines["bottom"].set_visible(False)
+    ax_cov.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
+    ax_cov.grid(False)
+
+    ax_cov.axhline(
+        mean_cov,
+        color=CNV_TEXT["muted"],
+        linestyle="--",
+        linewidth=0.9,
+        alpha=0.75,
+        zorder=4,
+        clip_on=True,
+    )
+
+    for direction, color in (
+        ("gain", CNV_COLORS["plot_gain"]),
+        ("loss", CNV_COLORS["plot_loss"]),
+    ):
+        subset = [p for p in coverage_points if p.get("direction") == direction]
+        if not subset:
+            continue
+        ax_cov.scatter(
+            [float(point["position_bp"]) for point in subset],
+            [float(point["coverage_val"]) for point in subset],
+            s=18,
+            color=color,
+            zorder=6,
+            edgecolors="white",
+            linewidths=0.35,
+            alpha=0.9,
+            clip_on=True,
+        )
+
+    head_label_y = _layout_genome_coverage_point_labels(
+        coverage_points, cov_ylim, x_max_bp
+    )
+    for point in coverage_points:
         x_pos = float(point["position_bp"])
-        y_top = min(float(point["coverage_val"]), cov_ylim * 0.90)
-        label_y = y_top + cov_ylim * 0.025
-        attempts = 0
-        while any(
-            abs(x_pos - ox) < x_spacing and abs(label_y - oy) < y_step
-            for ox, oy in occupied
-        ):
-            label_y += y_step
-            attempts += 1
-            if attempts > 8:
-                break
-        label_y = min(label_y, cov_ylim * 0.97)
-        occupied.append((x_pos, label_y))
-        layouts[(point["label"], x_pos)] = label_y
-    return layouts
+        color = (
+            CNV_COLORS["plot_gain"]
+            if point.get("direction") == "gain"
+            else CNV_COLORS["plot_loss"]
+        )
+        ax_cov.text(
+            x_pos,
+            head_label_y[(point["label"], x_pos)],
+            _truncate_panel_label(point["label"]),
+            ha="center",
+            va="bottom",
+            fontsize=LOLLIPOP_LABEL_FONT_SIZE,
+            color=color,
+            fontweight="bold",
+            zorder=8,
+            clip_on=False,
+        )
+    return True
 
 
 def _collect_genome_significant_panel_points(
@@ -546,7 +630,7 @@ def _collect_genome_significant_panel_points(
 
         chrom_offset = float(chrom_start_offsets.get(contig, 0.0))
         for point in panel_points:
-            if not _should_label_panel_gene(point, mean_cnv, std_cnv, regions):
+            if not _should_label_panel_gene(point, mean_cnv, std_cnv):
                 continue
             coverage_val = point.get("coverage_val")
             if coverage_val is None or not np.isfinite(coverage_val):
@@ -560,96 +644,6 @@ def _collect_genome_significant_panel_points(
             )
 
     return genome_points
-
-
-def _add_genome_panel_gene_lollipops(
-    ax_cnv,
-    panel_points: List[Dict[str, Any]],
-    x_max_bp: float,
-) -> bool:
-    """Draw significant panel-gene lollipops on a right-hand coverage axis."""
-    coverage_points = [
-        point
-        for point in panel_points
-        if point.get("coverage_val") is not None and np.isfinite(point["coverage_val"])
-    ]
-    if not coverage_points:
-        return False
-
-    ax_cov = ax_cnv.twinx()
-    cov_max = max(float(point["coverage_val"]) for point in coverage_points)
-    cov_ylim = max(cov_max * 1.22, cov_max + 1.0)
-    ax_cov.set_ylim(0.0, cov_ylim)
-    ax_cov.set_xlim(0.0, x_max_bp)
-    ax_cov.set_ylabel(
-        "Coverage (x)",
-        fontsize=CNV_FONT["axis"],
-        color=CNV_TEXT["primary"],
-        labelpad=8,
-        fontproperties=_CNV_FONT_REGULAR,
-    )
-    ax_cov.tick_params(
-        colors=CNV_TEXT["primary"],
-        labelsize=CNV_FONT["tick"],
-        pad=2,
-    )
-    ax_cov.spines["right"].set_color(CNV_TEXT["primary"])
-    ax_cov.spines["top"].set_visible(False)
-    ax_cov.spines["left"].set_visible(False)
-    ax_cov.spines["bottom"].set_visible(False)
-    ax_cov.tick_params(axis="x", which="both", bottom=False, labelbottom=False)
-    ax_cov.grid(False)
-
-    head_label_y = _layout_genome_coverage_head_labels(
-        coverage_points, cov_ylim, x_max_bp
-    )
-
-    for point in coverage_points:
-        x_pos = float(point["position_bp"])
-        coverage_val = float(point["coverage_val"])
-        color = (
-            CNV_COLORS["plot_gain"]
-            if point.get("direction") == "gain"
-            else CNV_COLORS["plot_loss"]
-        )
-        y_top = min(coverage_val, cov_ylim * 0.90)
-
-        ax_cov.plot(
-            [x_pos, x_pos],
-            [0.0, y_top],
-            color=color,
-            linewidth=1.0,
-            alpha=0.9,
-            zorder=5,
-            solid_capstyle="round",
-            clip_on=True,
-        )
-        ax_cov.scatter(
-            [x_pos],
-            [y_top],
-            s=24,
-            color=color,
-            zorder=6,
-            edgecolors="white",
-            linewidths=0.35,
-            alpha=0.95,
-        )
-
-        short_label = _truncate_panel_label(point["label"])
-        label_y = head_label_y[(point["label"], x_pos)]
-        ax_cov.text(
-            x_pos,
-            label_y,
-            short_label,
-            ha="center",
-            va="bottom",
-            fontsize=LOLLIPOP_LABEL_FONT_SIZE,
-            color=color,
-            fontweight="bold",
-            zorder=8,
-            clip_on=False,
-        )
-    return True
 
 
 def _add_cnv_log2_reference_line(ax, x_max_mb: float) -> None:
@@ -1213,7 +1207,7 @@ def create_CNV_plot(
             x_max_bp=offset_bp,
         )
         if has_lollipops:
-            _add_genome_panel_gene_lollipops(ax, genome_panel_points, offset_bp)
+            _add_genome_panel_coverage_points(ax, genome_panel_points, offset_bp)
 
         buf = io.BytesIO()
         fig.savefig(buf, format="jpg", dpi=300, bbox_inches="tight", pad_inches=0.08)

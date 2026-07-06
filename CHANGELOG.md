@@ -63,7 +63,7 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 ### Added
 - **Log2 arm/whole-chromosome CNV calling:** Arm and whole-chromosome events are detected from `log2(ploidy / expected copy number)` on bins coarsened to at least **1 Mb** (`prepare_cnv_calling_track()`), aligned with the GUI log2 plot and PDF reporting.
 - **CNV summary insight card:** The sample overview CNV card reports whole-chromosome and arm-level events (for example `chr7 GAIN`, `chr4p LOSS`) instead of gained/lost gene-region counts.
-- **Genome-wide PDF CNV plot enhancements:** Points are coloured by calling thresholds (red = gain, blue = loss, grey = within ±0.3). Significantly amplified or lost panel genes are shown as **lollipops** on a right-hand **coverage depth** axis, using the same significance rules as per-chromosome plots.
+- **Genome-wide PDF CNV plot enhancements:** Points are coloured by calling thresholds (red = gain, blue = loss, grey = within ±0.3). Significantly amplified or lost panel genes are shown as **coverage-scaled points** with **gene name labels** on a right-hand axis, plus a **dashed mean coverage** reference line; panel genes are highlighted only when **>3 SD** from the chromosome mean. Per-chromosome plots still use labelled lollipops.
 - **Tests:** Added `tests/test_cnv_calling_track.py` and extended GUI/reporting CNV plot tests.
 
 ### Changed

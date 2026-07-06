@@ -88,9 +88,13 @@ def test_collect_genome_significant_panel_points_offsets_by_chromosome() -> None
             "gene": ["GENE1", "GENE2"],
         }
     )
+    chr1_vals = np.zeros(100, dtype=float)
+    chr1_vals[1] = 1.0
+    chr2_vals = np.zeros(80, dtype=float)
+    chr2_vals[1] = -1.0
     cnv_source = {
-        "chr1": np.full(100, 0.6, dtype=float),
-        "chr2": np.full(80, -0.6, dtype=float),
+        "chr1": chr1_vals,
+        "chr2": chr2_vals,
     }
     chrom_offsets = {"chr1": 0.0, "chr2": 100_000_000.0}
     target_coverage = pd.DataFrame(
@@ -104,24 +108,7 @@ def test_collect_genome_significant_panel_points_offsets_by_chromosome() -> None
             "bases": [30_000_000, 25_000_000],
         }
     )
-    significant_regions = {
-        "chr1": [
-            {
-                "start_pos": 0,
-                "end_pos": 250_000_000,
-                "type": "GAIN",
-                "name": "p",
-            }
-        ],
-        "chr2": [
-            {
-                "start_pos": 0,
-                "end_pos": 250_000_000,
-                "type": "LOSS",
-                "name": "p",
-            }
-        ],
-    }
+    significant_regions = {}
 
     points = _collect_genome_significant_panel_points(
         panel_genes,
@@ -140,6 +127,58 @@ def test_collect_genome_significant_panel_points_offsets_by_chromosome() -> None
     assert by_label["GENE2"]["direction"] == "loss"
     assert by_label["GENE1"]["position_bp"] == 1_500_000
     assert by_label["GENE2"]["position_bp"] == 101_500_000
+
+
+def test_layout_genome_coverage_point_labels_staggers_overlapping_genes() -> None:
+    from robin.reporting.plotting import _layout_genome_coverage_point_labels
+
+    points = [
+        {"label": "A", "position_bp": 1_000_000.0, "coverage_val": 30.0},
+        {"label": "B", "position_bp": 1_100_000.0, "coverage_val": 30.0},
+    ]
+    layouts = _layout_genome_coverage_point_labels(points, cov_ylim=50.0, x_max_bp=250_000_000.0)
+    y_a = layouts[("A", 1_000_000.0)]
+    y_b = layouts[("B", 1_100_000.0)]
+    assert y_b > y_a
+
+
+def test_should_label_panel_gene_ignores_called_regions_without_outlier() -> None:
+    from robin.reporting.plotting import _should_label_panel_gene
+
+    point = {"cnv_val": 0.1, "mid_mb": 1.5}
+    assert _should_label_panel_gene(point, mean_cnv=0.0, std_cnv=0.1) is False
+
+
+def test_is_gene_cnv_outlier_uses_three_standard_deviations() -> None:
+    from robin.reporting.plotting import _is_gene_cnv_outlier
+
+    mean_cnv = 0.0
+    std_cnv = 0.1
+    assert _is_gene_cnv_outlier(0.25, mean_cnv, std_cnv) is False
+    assert _is_gene_cnv_outlier(0.35, mean_cnv, std_cnv) is True
+
+
+def test_add_genome_panel_coverage_points_draws_scatter_and_mean_line() -> None:
+    from unittest.mock import MagicMock
+
+    from robin.reporting.plotting import _add_genome_panel_coverage_points
+
+    ax_cnv = MagicMock()
+    ax_cov = MagicMock()
+    ax_cnv.twinx.return_value = ax_cov
+
+    panel_points = [
+        {"position_bp": 1_000_000.0, "coverage_val": 20.0, "direction": "gain", "label": "GENE1"},
+        {"position_bp": 2_000_000.0, "coverage_val": 40.0, "direction": "loss", "label": "GENE2"},
+        {"position_bp": 3_000_000.0, "coverage_val": 30.0, "direction": "gain", "label": "GENE3"},
+    ]
+
+    assert _add_genome_panel_coverage_points(ax_cnv, panel_points, 250_000_000.0) is True
+    ax_cnv.twinx.assert_called_once()
+    ax_cov.axhline.assert_called_once()
+    assert ax_cov.axhline.call_args[0][0] == 30.0  # mean of 20, 40, 30
+    assert ax_cov.scatter.call_count == 2
+    assert ax_cov.text.call_count == 3
 
 
 def test_downsample_cnv_for_plot_groups_values() -> None:

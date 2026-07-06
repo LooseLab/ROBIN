@@ -822,8 +822,7 @@ class CNVSection(ReportSection):
                                 f"({len(panel_genes_df)} genes). "
                                 f"{panel_plot_blurb} "
                                 "Panel targets are lollipops; "
-                                "genes are labelled when >2 SD from the chromosome mean "
-                                "or when they fall inside a called gain/loss region."
+                                "genes are labelled when >3 SD from the chromosome mean."
                             ),
                             ParagraphStyle(
                                 "PanelGeneLegend",
