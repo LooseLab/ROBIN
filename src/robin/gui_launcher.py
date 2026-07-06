@@ -4195,6 +4195,9 @@ class GUILauncher:
                                                 # Update the current sample's progress bar
                                                 if sample_id and sample_id in sample_progress_bars:
                                                     if progress is not None:
+                                                        from robin.gui.report_progress import normalize_report_progress
+
+                                                        progress = normalize_report_progress(progress)
                                                         sample_progress_bars[sample_id].value = progress
                                                         sample_progress_labels[sample_id].text = f"{int(progress * 100)}% - {message}"
                                                     else:
@@ -5275,6 +5278,9 @@ class GUILauncher:
                                 progress = update.get("progress", 0.0)
 
                                 if progress is not None:
+                                    from robin.gui.report_progress import normalize_report_progress
+
+                                    progress = normalize_report_progress(progress)
                                     progress_bar.value = progress
                                     progress_text.text = f"{int(progress * 100)}% - {message}"
                                 else:

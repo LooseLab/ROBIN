@@ -112,10 +112,12 @@ class RobinReport:
         """Emit a progress update if callback is available."""
         if self.progress_callback:
             try:
+                from robin.gui.report_progress import normalize_report_progress
+
                 self.progress_callback({
                     'stage': stage,
                     'message': message,
-                    'progress': progress
+                    'progress': normalize_report_progress(progress),
                 })
             except Exception as e:
                 logger.error(f"Error emitting progress: {e}")
