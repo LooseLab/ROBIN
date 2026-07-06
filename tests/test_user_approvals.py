@@ -4,6 +4,7 @@ from pathlib import Path
 
 from robin.security import SecurityStore
 from robin.security.user_approvals import (
+    MINKNOW_REMOTE_CONTROL_KEY,
     REPORT_EXPORT_KEY,
     TRAINING_RECEIVED_KEY,
     approval_audit_details,
@@ -18,10 +19,12 @@ def test_normalize_approvals_defaults_false() -> None:
     assert normalize_approvals(None) == {
         TRAINING_RECEIVED_KEY: False,
         REPORT_EXPORT_KEY: False,
+        MINKNOW_REMOTE_CONTROL_KEY: False,
     }
     assert normalize_approvals({TRAINING_RECEIVED_KEY: True}) == {
         TRAINING_RECEIVED_KEY: True,
         REPORT_EXPORT_KEY: False,
+        MINKNOW_REMOTE_CONTROL_KEY: False,
     }
 
 
@@ -72,9 +75,11 @@ def test_admin_has_all_approvals_without_stored_flags(tmp_path: Path) -> None:
 
     assert user_has_approval(store, user_id, TRAINING_RECEIVED_KEY)
     assert user_has_approval(store, user_id, REPORT_EXPORT_KEY)
+    assert user_has_approval(store, user_id, MINKNOW_REMOTE_CONTROL_KEY)
     effective = effective_approvals(store, user_id)
     assert effective[TRAINING_RECEIVED_KEY] is True
     assert effective[REPORT_EXPORT_KEY] is True
+    assert effective[MINKNOW_REMOTE_CONTROL_KEY] is True
 
 
 def test_inactive_user_has_no_approvals(tmp_path: Path) -> None:
