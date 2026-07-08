@@ -109,8 +109,15 @@ After restarting ROBIN:
    **Run MNP-Flex analysis**.
 
 The samples overview shows **mnpflex run all** when Docker or API analysis is
-configured. ROBIN may automatically submit a completed sample when its analysis
-jobs have finished and no MNP-Flex result is present.
+configured. ROBIN automatically submits a completed sample when its analysis
+jobs have finished, no new data has arrived for **15 minutes**, and no MNP-Flex
+result is present (while the sample page is open, or via the bulk action).
+
+Optional:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `MNPFLEX_IDLE_SECONDS` | `900` | Seconds without new sample data before automatic MNP-Flex may run |
 
 ## Inputs and outputs
 

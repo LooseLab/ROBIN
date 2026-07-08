@@ -26,6 +26,11 @@ from collections import deque
 import csv
 from datetime import datetime
 from robin.analysis.master_csv_manager import MasterCSVManager
+from robin.analysis.mnpflex_eligibility import (
+    DEFAULT_MNPFLEX_IDLE_SECONDS,
+    sample_ready_for_mnpflex_auto_run,
+    sample_ready_for_mnpflex_auto_run_from_dir,
+)
 
 from typing import Optional, Dict, Any, List, Set
 from pathlib import Path
@@ -390,7 +395,7 @@ class GUILauncher:
 
         # Sample status transition timeout (in seconds)
         # Change to 60 for testing (1 minute), 3600 for production (60 minutes)
-        self.completion_timeout_seconds = 15 * 60  # 15 minutes
+        self.completion_timeout_seconds = DEFAULT_MNPFLEX_IDLE_SECONDS
 
         # Message queue for non-blocking communication
         self.update_queue = queue.PriorityQueue()
@@ -8450,22 +8455,7 @@ title="View in IGV"
                 ):
                     continue
 
-                try:
-                    total_jobs = int(r.get("total_jobs") or 0)
-                    completed_jobs = int(r.get("completed_jobs") or 0)
-                    active_jobs = int(r.get("active_jobs") or 0)
-                    pending_jobs = int(r.get("pending_jobs") or 0)
-                except Exception:
-                    continue
-
-                # Only run once the sample workflow is fully complete/inactive.
-                if total_jobs <= 0:
-                    continue
-                if not (
-                    active_jobs == 0
-                    and pending_jobs == 0
-                    and completed_jobs >= total_jobs
-                ):
+                if not sample_ready_for_mnpflex_auto_run(r):
                     continue
 
                 if self._mnpflex_parquet_path_for_sample(sample_dir, sid) is None:
@@ -9326,6 +9316,14 @@ title="View in IGV"
                 if parquet_path is None:
                     skipped += 1
                     logging.warning("Bulk MNP-Flex skip %s: no parquet file", sid)
+                    continue
+
+                if not sample_ready_for_mnpflex_auto_run_from_dir(sample_dir):
+                    skipped += 1
+                    logging.info(
+                        "Bulk MNP-Flex skip %s: workflow not finished or data still arriving",
+                        sid,
+                    )
                     continue
 
                 try:

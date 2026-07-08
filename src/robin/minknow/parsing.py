@@ -5,8 +5,6 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any, Optional
 
-import minknow_api.manager_pb2 as manager_pb2
-
 from robin.minknow.models import PositionStatus
 
 # Terminal manager protocol states — clear cached run metadata when seen.
@@ -273,6 +271,8 @@ def merge_output_directories(status: PositionStatus, directories: Any) -> Positi
 
 
 def simple_protocol_state_name(value: Any) -> str:
+    import minknow_api.manager_pb2 as manager_pb2
+
     return _enum_name(manager_pb2.SimpleProtocolState, value) or "no_protocol_state"
 
 

@@ -27,6 +27,9 @@ from robin.analysis.mnpflex_hierarchy import (
     format_mnpflex_hierarchy_score,
     mnpflex_hierarchy_has_content,
 )
+from robin.analysis.mnpflex_eligibility import (
+    sample_ready_for_mnpflex_auto_run_from_dir,
+)
 from robin.analysis.mnpflex_runner import preflight_mnpflex_runtime, run_mnpflex_analysis
 from robin.gui.theme import styled_table
 
@@ -49,28 +52,6 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
         "auto_fetch_attempted": False,
         "bed_build_queue": queue.Queue(),
     }
-
-    def _sample_is_complete() -> bool:
-        master_csv = sample_dir / "master.csv"
-        if not master_csv.exists():
-            return False
-        try:
-            import csv
-
-            with master_csv.open("r", newline="") as fh:
-                reader = csv.DictReader(fh)
-                first_row = next(reader, None)
-            if not first_row:
-                return False
-            active_jobs = int(first_row.get("samples_overview_active_jobs", 0) or 0)
-            pending_jobs = int(first_row.get("samples_overview_pending_jobs", 0) or 0)
-            total_jobs = int(first_row.get("samples_overview_total_jobs", 0) or 0)
-            completed_jobs = int(
-                first_row.get("samples_overview_completed_jobs", 0) or 0
-            )
-            return total_jobs > 0 and completed_jobs >= total_jobs and active_jobs == 0 and pending_jobs == 0
-        except Exception:
-            return False
 
     def _find_results_dir() -> Optional[Path]:
         candidates = [
@@ -1016,7 +997,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
 
             if not state["auto_fetch_attempted"] and analysis_available:
                 results_dir = _find_results_dir()
-                if results_dir is None and _sample_is_complete():
+                if results_dir is None and sample_ready_for_mnpflex_auto_run_from_dir(
+                    sample_dir
+                ):
                     state["auto_fetch_attempted"] = True
                     _run_fetch(auto=True)
             _apply_mnpflex_disk_payload(_load_mnpflex_disk_payload())
@@ -1032,7 +1015,9 @@ def add_mnpflex_section(launcher: Any, sample_dir: Path, sample_id: str) -> None
 
             if not state["auto_fetch_attempted"] and analysis_available:
                 results_dir = _find_results_dir()
-                if results_dir is None and _sample_is_complete():
+                if results_dir is None and sample_ready_for_mnpflex_auto_run_from_dir(
+                    sample_dir
+                ):
                     state["auto_fetch_attempted"] = True
                     _run_fetch(auto=True)
             payload = await asyncio.to_thread(_load_mnpflex_disk_payload)

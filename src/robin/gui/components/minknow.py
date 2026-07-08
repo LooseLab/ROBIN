@@ -449,9 +449,10 @@ def add_minknow_sequencer_section(
                             gen_last = ui.input("Last name (optional)").props(
                                 "outlined dense"
                             ).classes("w-full")
-                            gen_dob = ui.input(
-                                "Date of birth (YYYY-MM-DD; required when encrypting)"
-                            ).props("outlined dense").classes("w-full")
+                            gen_dob = ui.date_input(
+                                "Date of birth (required when encrypting)",
+                                value=None,
+                            ).classes("w-full")
                             gen_nhs = ui.input(
                                 "Hospital number (optional)"
                             ).props("outlined dense").classes("w-full")
