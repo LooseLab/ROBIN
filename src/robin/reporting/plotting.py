@@ -494,12 +494,33 @@ def _gene_cnv_direction(
     return "gain" if cnv_val >= 0.0 else "loss"
 
 
+def _mean_target_coverage(
+    target_coverage_df: Optional[pd.DataFrame],
+) -> Optional[float]:
+    """Mean sequencing coverage across all panel targets."""
+    if target_coverage_df is None or target_coverage_df.empty:
+        return None
+    if "coverage" not in target_coverage_df.columns:
+        return None
+    vals = np.asarray(target_coverage_df["coverage"], dtype=float)
+    vals = vals[np.isfinite(vals)]
+    if len(vals) == 0:
+        return None
+    return float(np.mean(vals))
+
+
 def _add_genome_panel_coverage_points(
     ax_cnv,
     panel_points: List[Dict[str, Any]],
     x_max_bp: float,
+    *,
+    mean_cov: Optional[float] = None,
 ) -> bool:
-    """Plot significant panel genes as coverage-scaled points on a right-hand axis."""
+    """Plot significant panel genes as coverage-scaled points on a right-hand axis.
+
+    The dashed reference line uses ``mean_cov`` (mean of all panel targets) when
+    provided; otherwise it falls back to the mean of the plotted outlier points.
+    """
     coverage_points = [
         point
         for point in panel_points
@@ -512,7 +533,10 @@ def _add_genome_panel_coverage_points(
     coverage_vals = np.asarray(
         [float(point["coverage_val"]) for point in coverage_points], dtype=float
     )
-    mean_cov = float(np.mean(coverage_vals))
+    if mean_cov is None or not np.isfinite(mean_cov):
+        mean_cov = float(np.mean(coverage_vals))
+    else:
+        mean_cov = float(mean_cov)
     cov_max = float(np.max(coverage_vals))
     cov_ylim = max(cov_max * 1.22, cov_max + 1.0, mean_cov * 1.1)
     ax_cov.set_ylim(0.0, cov_ylim)
@@ -1207,7 +1231,12 @@ def create_CNV_plot(
             x_max_bp=offset_bp,
         )
         if has_lollipops:
-            _add_genome_panel_coverage_points(ax, genome_panel_points, offset_bp)
+            _add_genome_panel_coverage_points(
+                ax,
+                genome_panel_points,
+                offset_bp,
+                mean_cov=_mean_target_coverage(target_coverage_df),
+            )
 
         buf = io.BytesIO()
         fig.savefig(buf, format="jpg", dpi=300, bbox_inches="tight", pad_inches=0.08)

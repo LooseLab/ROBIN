@@ -158,7 +158,50 @@ def test_is_gene_cnv_outlier_uses_three_standard_deviations() -> None:
     assert _is_gene_cnv_outlier(0.35, mean_cnv, std_cnv) is True
 
 
+def test_mean_target_coverage_uses_all_targets() -> None:
+    from robin.reporting.plotting import _mean_target_coverage
+
+    df = pd.DataFrame(
+        {
+            "chrom": ["chr1", "chr1", "chr2"],
+            "coverage": [10.0, 20.0, 30.0],
+        }
+    )
+    assert _mean_target_coverage(df) == 20.0
+    assert _mean_target_coverage(None) is None
+    assert _mean_target_coverage(pd.DataFrame()) is None
+
+
 def test_add_genome_panel_coverage_points_draws_scatter_and_mean_line() -> None:
+    from unittest.mock import MagicMock
+
+    from robin.reporting.plotting import _add_genome_panel_coverage_points
+
+    ax_cnv = MagicMock()
+    ax_cov = MagicMock()
+    ax_cnv.twinx.return_value = ax_cov
+
+    # Plotted points are outliers only; all-target mean is passed separately.
+    panel_points = [
+        {"position_bp": 1_000_000.0, "coverage_val": 20.0, "direction": "gain", "label": "GENE1"},
+        {"position_bp": 2_000_000.0, "coverage_val": 40.0, "direction": "loss", "label": "GENE2"},
+        {"position_bp": 3_000_000.0, "coverage_val": 30.0, "direction": "gain", "label": "GENE3"},
+    ]
+
+    assert (
+        _add_genome_panel_coverage_points(
+            ax_cnv, panel_points, 250_000_000.0, mean_cov=15.0
+        )
+        is True
+    )
+    ax_cnv.twinx.assert_called_once()
+    ax_cov.axhline.assert_called_once()
+    assert ax_cov.axhline.call_args[0][0] == 15.0  # all-target mean, not outlier mean
+    assert ax_cov.scatter.call_count == 2
+    assert ax_cov.text.call_count == 3
+
+
+def test_add_genome_panel_coverage_points_falls_back_to_outlier_mean() -> None:
     from unittest.mock import MagicMock
 
     from robin.reporting.plotting import _add_genome_panel_coverage_points
@@ -174,11 +217,7 @@ def test_add_genome_panel_coverage_points_draws_scatter_and_mean_line() -> None:
     ]
 
     assert _add_genome_panel_coverage_points(ax_cnv, panel_points, 250_000_000.0) is True
-    ax_cnv.twinx.assert_called_once()
-    ax_cov.axhline.assert_called_once()
-    assert ax_cov.axhline.call_args[0][0] == 30.0  # mean of 20, 40, 30
-    assert ax_cov.scatter.call_count == 2
-    assert ax_cov.text.call_count == 3
+    assert ax_cov.axhline.call_args[0][0] == 30.0  # fallback: mean of 20, 40, 30
 
 
 def test_downsample_cnv_for_plot_groups_values() -> None:
