@@ -279,6 +279,8 @@ class RobinReport:
                     summary_lines.append(f"Date of birth: {si['dob']}<br/>")
                 if si.get("nhs_number"):
                     summary_lines.append(f"Hospital Number: {si['nhs_number']}<br/>")
+                if si.get("notes"):
+                    summary_lines.append(f"Notes: {si['notes']}<br/>")
             summary_lines.extend([
                 f"Centre ID: {self.centreID if self.centreID else 'Not specified'}<br/>",
                 f"Report Type: {report_type.title()}<br/>",

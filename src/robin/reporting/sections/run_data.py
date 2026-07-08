@@ -195,6 +195,8 @@ class RunDataSection(ReportSection):
                 ]
                 if si.get("nhs_number"):
                     sample_info.append(("Hospital Number", si["nhs_number"]))
+                if si.get("notes"):
+                    sample_info.append(("Notes", si["notes"]))
                 self.elements.append(
                     self._create_info_table(sample_info, "Sample Identifiers")
                 )

@@ -18,7 +18,6 @@ warnings.filterwarnings(
 
 import asyncio
 from contextlib import contextmanager
-import hashlib
 import logging
 import queue
 import threading
@@ -90,21 +89,16 @@ COMPLETION_JOB_PATTERNS: Dict[str, List[str]] = {
     ],
 }
 
-# Manifest written when a sample ID is generated from Test ID / name / DOB (for matching sequencer data).
-SAMPLE_IDENTIFIER_MANIFEST_FILENAME = "sample_identifier_manifest.json"
-
-
-def _get_test_id_from_manifest(sample_dir: Path) -> str:
-    """Read test_id from sample_identifier_manifest.json in the sample directory if present."""
-    manifest_path = sample_dir / SAMPLE_IDENTIFIER_MANIFEST_FILENAME
-    if not manifest_path.exists():
-        return ""
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        return str(data.get("test_id", "") or "").strip()
-    except Exception:
-        return ""
+from robin.minknow.sample_id import (
+    SAMPLE_IDENTIFIER_MANIFEST_FILENAME,
+    build_sample_registration,
+    decrypt_identifier_manifest_field as _decrypt_identifier_manifest_field,
+    get_test_id_from_manifest as _get_test_id_from_manifest,
+    load_manifest_encrypted_fields as _load_manifest_encrypted_fields,
+    normalize_dob,
+    save_sample_identifier_manifest,
+    save_sample_registration,
+)
 
 
 @contextmanager
@@ -122,70 +116,6 @@ def _sample_page_section_timer(page: str, sample_id: str, section: str):
             section,
             elapsed,
         )
-
-
-# Salt for deriving encryption key from DOB (fixed so the same DOB always produces the same key).
-_IDENTIFIER_MANIFEST_KEY_SALT = b"robin_sample_manifest_v1"
-
-
-def _derive_key_from_dob(dob: str) -> bytes:
-    """Derive a Fernet key from the date of birth for encrypting manifest fields."""
-    import base64
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    from cryptography.hazmat.primitives import hashes
-
-    kdf = PBKDF2HMAC(
-        algorithm=hashes.SHA256(),
-        length=32,
-        salt=_IDENTIFIER_MANIFEST_KEY_SALT,
-        iterations=100_000,
-    )
-    key_bytes = kdf.derive(dob.encode("utf-8"))
-    return base64.urlsafe_b64encode(key_bytes)
-
-
-def _encrypt_identifier_manifest_field(plaintext: str, dob: str) -> str:
-    """Encrypt a string using a key derived from DOB; returns base64-encoded ciphertext."""
-    from cryptography.fernet import Fernet
-
-    key = _derive_key_from_dob(dob)
-    f = Fernet(key)
-    ciphertext = f.encrypt(plaintext.encode("utf-8"))
-    return ciphertext.decode("ascii")
-
-
-def _decrypt_identifier_manifest_field(ciphertext_b64: str, dob: str) -> str:
-    """Decrypt a base64-encoded ciphertext using a key derived from DOB."""
-    from cryptography.fernet import Fernet
-
-    key = _derive_key_from_dob(dob)
-    f = Fernet(key)
-    plaintext = f.decrypt(ciphertext_b64.encode("ascii"))
-    return plaintext.decode("utf-8")
-
-
-def _load_manifest_encrypted_fields(sample_dir: Optional[Path]) -> Optional[Dict[str, str]]:
-    """Load encrypted first_name, last_name, dob, nhs_number (hospital number) from sample_identifier_manifest.json if present."""
-    if not sample_dir or not sample_dir.exists():
-        return None
-    manifest_path = sample_dir / SAMPLE_IDENTIFIER_MANIFEST_FILENAME
-    if not manifest_path.exists():
-        return None
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        fn = data.get("first_name")
-        ln = data.get("last_name")
-        dob_enc = data.get("dob")
-        if fn and ln and dob_enc:
-            out: Dict[str, str] = {"first_name": fn, "last_name": ln, "dob": dob_enc}
-            nhs_enc = data.get("nhs_number")
-            if nhs_enc:
-                out["nhs_number"] = nhs_enc
-            return out
-    except Exception:
-        pass
-    return None
 
 
 try:
@@ -4967,34 +4897,28 @@ class GUILauncher:
 
             def on_show() -> None:
                 _v = dob_input.value
-                dob_val = (_v.strftime("%Y-%m-%d") if hasattr(_v, "strftime") else (str(_v).strip() if _v else ""))
+                dob_val = normalize_dob(_v)
                 if not dob_val:
                     ui.notify("Please enter date of birth.", type="warning")
                     return
                 result_container.clear()
                 with result_container:
                     try:
-                        fn = _decrypt_identifier_manifest_field(
-                            encrypted["first_name"], dob_val
-                        )
-                        ln = _decrypt_identifier_manifest_field(
-                            encrypted["last_name"], dob_val
-                        )
-                        dob_plain = _decrypt_identifier_manifest_field(
-                            encrypted["dob"], dob_val
-                        )
-                        ui.label("First name:").classes("font-semibold text-sm")
-                        ui.label(fn or "—").classes("mb-2")
-                        ui.label("Last name:").classes("font-semibold text-sm")
-                        ui.label(ln or "—").classes("mb-2")
-                        ui.label("Date of birth:").classes("font-semibold text-sm")
-                        ui.label(dob_plain or "—").classes("mb-2")
-                        if "nhs_number" in encrypted:
-                            nhs_plain = _decrypt_identifier_manifest_field(
-                                encrypted["nhs_number"], dob_val
+                        labels = [
+                            ("first_name", "First name"),
+                            ("last_name", "Last name"),
+                            ("dob", "Date of birth"),
+                            ("nhs_number", "Hospital Number"),
+                            ("notes", "Notes"),
+                        ]
+                        for key, label in labels:
+                            if key not in encrypted:
+                                continue
+                            plain = _decrypt_identifier_manifest_field(
+                                encrypted[key], dob_val
                             )
-                            ui.label("Hospital Number:").classes("font-semibold text-sm")
-                            ui.label(nhs_plain or "—").classes("mb-2")
+                            ui.label(f"{label}:").classes("font-semibold text-sm")
+                            ui.label(plain or "—").classes("mb-2")
                     except InvalidToken:
                         ui.label("Incorrect date of birth. Please try again.").classes(
                             "text-red-600 dark:text-red-400"
@@ -5190,23 +5114,21 @@ class GUILauncher:
                     if encrypted:
                         try:
                             from cryptography.fernet import InvalidToken
-                            decrypted = {
-                                "first_name": _decrypt_identifier_manifest_field(
-                                    encrypted["first_name"], dob_val
-                                ),
-                                "last_name": _decrypt_identifier_manifest_field(
-                                    encrypted["last_name"], dob_val
-                                ),
-                                "dob": _decrypt_identifier_manifest_field(
-                                    encrypted["dob"], dob_val
-                                ),
+                            decrypted: Dict[str, str] = {
+                                "sample_id": sample_id,
+                                "test_id": _get_test_id_from_manifest(sample_dir),
                             }
-                            if "nhs_number" in encrypted:
-                                decrypted["nhs_number"] = _decrypt_identifier_manifest_field(
-                                    encrypted["nhs_number"], dob_val
-                                )
-                            decrypted["sample_id"] = sample_id
-                            decrypted["test_id"] = _get_test_id_from_manifest(sample_dir)
+                            for key in (
+                                "first_name",
+                                "last_name",
+                                "dob",
+                                "nhs_number",
+                                "notes",
+                            ):
+                                if key in encrypted:
+                                    decrypted[key] = _decrypt_identifier_manifest_field(
+                                        encrypted[key], dob_val
+                                    )
                             state["sample_identifiers"] = decrypted
                         except InvalidToken:
                             ui.notify(
@@ -7738,6 +7660,7 @@ title="View in IGV"
                         initial_settings=config.settings if config else None,
                         workflow_runner=self.workflow_runner,
                         workflow_toml=self.workflow_toml_path,
+                        work_directory=self.monitored_directory or "",
                     )
 
     def _create_workflow_monitor(self):
@@ -10401,53 +10324,35 @@ title="View in IGV"
     def _save_sample_identifier_manifest(
         self,
         sample_id: str,
-        test_id: str,
-        first_name: str,
-        last_name: str,
-        dob: str,
+        test_id: str = "",
+        first_name: str = "",
+        last_name: str = "",
+        dob: str = "",
         nhs_number: str = "",
+        notes: str = "",
+        *,
+        id_source: str = "md5",
+        derived_md5: str = "",
     ) -> tuple[bool, str]:
         """
         Create the sample output folder and write the identifier manifest.
-        test_id is stored in plain text; first_name, last_name, dob and hospital number (nhs_number)
-        are encrypted with a key derived from the date of birth.
-        Returns (success, message).
+
+        Registers ``sample_id`` under the work directory so a later run with the
+        same MinKNOW sample ID links to this folder. Optional PII/notes fields
+        require DOB and are stored encrypted under a DOB-derived key.
         """
-        if not (self.monitored_directory or "").strip():
-            return False, "No output directory configured (work directory not set)."
-        base = Path(self.monitored_directory)
-        try:
-            sample_dir = base / sample_id
-            sample_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as e:
-            return False, f"Cannot create sample folder: {e}"
-
-        try:
-            first_name_enc = _encrypt_identifier_manifest_field(first_name, dob)
-            last_name_enc = _encrypt_identifier_manifest_field(last_name, dob)
-            dob_enc = _encrypt_identifier_manifest_field(dob, dob)
-            nhs_number_enc = _encrypt_identifier_manifest_field(nhs_number, dob) if nhs_number else ""
-        except Exception as e:
-            return False, f"Encryption failed: {e}"
-
-        manifest: Dict[str, Any] = {
-            "sample_id": sample_id,
-            "test_id": test_id,
-            "first_name": first_name_enc,
-            "last_name": last_name_enc,
-            "dob": dob_enc,
-            "created_utc": datetime.utcnow().isoformat() + "Z",
-        }
-        if nhs_number_enc:
-            manifest["nhs_number"] = nhs_number_enc
-
-        manifest_path = sample_dir / SAMPLE_IDENTIFIER_MANIFEST_FILENAME
-        try:
-            with open(manifest_path, "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2)
-        except OSError as e:
-            return False, f"Cannot write manifest: {e}"
-        return True, f"Manifest saved to {sample_dir}"
+        return save_sample_identifier_manifest(
+            self.monitored_directory,
+            sample_id,
+            test_id=test_id,
+            first_name=first_name,
+            last_name=last_name,
+            dob=dob,
+            nhs_number=nhs_number,
+            notes=notes,
+            id_source=id_source,
+            derived_md5=derived_md5,
+        )
 
     def _create_admin_page(self) -> None:
         """Administration page for user management and audit review."""
@@ -10525,7 +10430,7 @@ title="View in IGV"
         )
 
     def _create_sample_id_generator_page(self):
-        """Create the page for generating sample identifiers from Test ID, name, and D.O.B."""
+        """Create the page for registering sample IDs (MD5 or custom) with optional encrypted PII."""
         with theme.frame(
             "R.O.B.I.N - Generate Sample Identifier",
             smalltitle="Sample ID Generator",
@@ -10557,20 +10462,56 @@ title="View in IGV"
                                     ui.icon("fingerprint").classes(
                                         "classification-insight-icon"
                                     )
-                                    ui.label("Generate a sample identifier").classes(
+                                    ui.label("Register a sample identifier").classes(
                                         "classification-insight-model flex-1 min-w-0"
                                     )
                                 ui.label(
-                                    "Test ID is required. First name, last name, date of birth, "
-                                    "and hospital number are optional. The sample name is the MD5 "
-                                    "hash of test ID, first name, last name, and D.O.B. "
-                                    "(pipe-separated); empty optional fields use an empty string."
+                                    "Choose an MD5 run name (from Test ID and optional "
+                                    "name/DOB) or enter your own MinKNOW run ID. Use that "
+                                    "exact value as the sample ID for the Nanopore run so "
+                                    "ROBIN can link identifier data to it when the run "
+                                    "appears. To store name, hospital number, or notes "
+                                    "encrypted alongside the sample, provide a date of birth."
                                 ).classes("classification-insight-foot")
 
-                                test_id = ui.input(
-                                    label="Test ID (required)",
-                                    placeholder="e.g. LAB-2024-001",
-                                ).classes("w-full")
+                                id_mode = ui.toggle(
+                                    {
+                                        "custom": "Use my sample ID",
+                                        "md5": "Generate MD5 ID",
+                                    },
+                                    value="custom",
+                                ).props("no-caps dense").classes("w-full")
+
+                                md5_fields = ui.column().classes("w-full min-w-0 gap-3")
+                                with md5_fields:
+                                    test_id = ui.input(
+                                        label="Test ID (required for MD5)",
+                                        placeholder="e.g. LAB-2024-001",
+                                    ).classes("w-full")
+                                md5_fields.set_visibility(False)
+
+                                custom_fields = ui.column().classes(
+                                    "w-full min-w-0 gap-3"
+                                )
+                                with custom_fields:
+                                    custom_sample_id = ui.input(
+                                        label="MinKNOW RUN ID (required)",
+                                        placeholder="e.g. HOSP-2024-8841",
+                                    ).classes("w-full font-mono")
+                                    custom_test_id = ui.input(
+                                        label="Test ID (optional)",
+                                        placeholder="e.g. LAB-2024-001",
+                                    ).classes("w-full")
+
+                                ui.separator().classes("mgmt-detail-separator")
+                                ui.label("Optional encrypted identifiers").classes(
+                                    "target-coverage-panel__meta-label mt-1 mb-1"
+                                )
+                                ui.label(
+                                    "Leave these blank to register only the sample ID. "
+                                    "If you enter a name, hospital number, or notes, date "
+                                    "of birth is required and those fields are stored encrypted."
+                                ).classes("classification-insight-foot")
 
                                 first_name = ui.input(
                                     label="First name (optional)",
@@ -10583,7 +10524,7 @@ title="View in IGV"
                                 ).classes("w-full")
 
                                 dob = ui.date_input(
-                                    "Date of birth (optional)",
+                                    "Date of birth (required when encrypting identifiers)",
                                     value=None,
                                 ).classes("w-full")
 
@@ -10592,9 +10533,14 @@ title="View in IGV"
                                     placeholder="e.g. 123 456 7890",
                                 ).classes("w-full")
 
+                                notes = ui.textarea(
+                                    label="Notes (optional)",
+                                    placeholder="Free-text notes stored encrypted with the identifiers",
+                                ).classes("w-full").props("outlined dense autogrow")
+
                                 ui.separator().classes("mgmt-detail-separator")
 
-                                ui.label("Generated identifier").classes(
+                                ui.label("Sample identifier").classes(
                                     "target-coverage-panel__meta-label mt-1 mb-1"
                                 )
                                 result_label = ui.label("").classes(
@@ -10602,69 +10548,82 @@ title="View in IGV"
                                 )
                                 result_label.set_visibility(False)
                                 result_input = ui.input(
-                                    label="Sample ID (MD5)",
-                                    placeholder="Click Generate to create an ID",
-                                ).classes("w-full font-mono").props("readonly outlined dense")
+                                    label="Sample ID",
+                                    placeholder="Register to create or confirm an ID",
+                                ).classes("w-full font-mono").props(
+                                    "readonly outlined dense"
+                                )
 
-                                def generate_sample_id():
-                                    _dob_val = dob.value
-                                    dob_str = (
-                                        _dob_val.strftime("%Y-%m-%d")
-                                        if hasattr(_dob_val, "strftime")
-                                        else (str(_dob_val).strip() if _dob_val else "")
-                                    )
-                                    parts = [
-                                        (test_id.value or "").strip(),
-                                        (first_name.value or "").strip(),
-                                        (last_name.value or "").strip(),
-                                        dob_str,
-                                    ]
-                                    if not parts[0]:
-                                        ui.notify("Please enter Test ID.", type="warning")
+                                def _sync_id_mode() -> None:
+                                    is_md5 = id_mode.value == "md5"
+                                    md5_fields.set_visibility(is_md5)
+                                    custom_fields.set_visibility(not is_md5)
+                                    # Clear registered ID so users don't copy the wrong mode's value.
+                                    result_input.value = ""
+                                    result_label.set_text("")
+                                    result_label.set_visibility(False)
+
+                                id_mode.on_value_change(lambda _: _sync_id_mode())
+
+                                def register_sample_id() -> None:
+                                    try:
+                                        registration = build_sample_registration(
+                                            mode=id_mode.value or "custom",
+                                            custom_sample_id=custom_sample_id.value or "",
+                                            test_id=(
+                                                (test_id.value or "").strip()
+                                                if id_mode.value == "md5"
+                                                else (custom_test_id.value or "").strip()
+                                            ),
+                                            first_name=first_name.value or "",
+                                            last_name=last_name.value or "",
+                                            dob=dob.value,
+                                            nhs_number=nhs_number.value or "",
+                                            notes=notes.value or "",
+                                        )
+                                    except ValueError as exc:
+                                        ui.notify(str(exc), type="warning")
                                         return
-                                    test_id_val, first_name_val, last_name_val, dob_val = parts
-                                    payload = "|".join(parts)
-                                    sample_id = hashlib.md5(
-                                        payload.encode("utf-8")
-                                    ).hexdigest()
-                                    result_input.value = sample_id
-                                    result_label.set_text(f"MD5 of: {payload!r}")
+
+                                    result_input.value = registration.sample_id
+                                    result_label.set_text(registration.preview)
                                     result_label.set_visibility(True)
-                                    nhs_val = (nhs_number.value or "").strip()
-                                    success, msg = self._save_sample_identifier_manifest(
-                                        sample_id,
-                                        test_id_val,
-                                        first_name_val,
-                                        last_name_val,
-                                        dob_val,
-                                        nhs_number=nhs_val,
+
+                                    success, msg = save_sample_registration(
+                                        self.monitored_directory,
+                                        registration,
                                     )
                                     if success:
                                         ui.notify(
-                                            f"Sample ID generated. {msg}",
+                                            f"Sample ID registered. {msg}",
                                             type="positive",
                                         )
                                     else:
                                         ui.notify(
-                                            f"Sample ID generated. {msg}",
+                                            f"Sample ID ready, but not saved: {msg}",
                                             type="warning",
                                         )
 
-                                def copy_to_clipboard():
+                                def copy_to_clipboard() -> None:
                                     if result_input.value:
                                         ui.run_javascript(
                                             f"navigator.clipboard.writeText({json.dumps(result_input.value)})"
                                         )
-                                        ui.notify("Copied to clipboard", type="positive")
+                                        ui.notify(
+                                            "Copied to clipboard", type="positive"
+                                        )
                                     else:
-                                        ui.notify("Generate an ID first.", type="warning")
+                                        ui.notify(
+                                            "Register a sample ID first.",
+                                            type="warning",
+                                        )
 
                                 with ui.row().classes(
                                     "w-full gap-2 mt-2 flex-wrap"
                                 ):
                                     ui.button(
-                                        "Generate sample ID",
-                                        on_click=generate_sample_id,
+                                        "Register sample ID",
+                                        on_click=register_sample_id,
                                         icon="fingerprint",
                                     ).props("color=primary no-caps")
                                     ui.button(

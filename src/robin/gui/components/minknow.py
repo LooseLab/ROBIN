@@ -26,7 +26,10 @@ from robin.minknow.run import (
     start_protocol_run,
     stop_protocol_run,
 )
-from robin.minknow.sample_id import generate_sample_id_md5
+from robin.minknow.sample_id import (
+    build_sample_registration,
+    save_sample_registration,
+)
 from robin.minknow.stream_monitor import acquire_stream_monitor
 from robin.minknow.toml_config import MinKnowWorkflowConfig, load_minknow_toml
 from robin.minknow.workflow_refs import (
@@ -115,6 +118,7 @@ def add_minknow_sequencer_section(
     initial_settings: Optional[MinKnowSettings] = None,
     workflow_runner: Any = None,
     workflow_toml: Optional[Path] = None,
+    work_directory: str = "",
 ) -> None:
     """Add a live MinKNOW status card driven by manager/activity streams."""
     runner_reference, runner_panel = workflow_context_from_runner(workflow_runner)
@@ -395,48 +399,121 @@ def add_minknow_sequencer_section(
                                 )
 
                         sample_id_input = ui.input(
-                            "Sample ID",
-                            placeholder="MD5 from Sample ID generator",
+                            "Sample ID / MinKNOW RUN ID",
+                            placeholder="Registered MD5 or MinKNOW RUN ID",
                         ).props("outlined dense").classes("w-full")
 
                         with ui.expansion(
-                            "Generate sample ID",
+                            "Register sample identifiers",
                             icon="fingerprint",
+                            value=True,
                         ).classes("w-full"):
-                            gen_test_id = ui.input("Test ID (required)").props(
+                            ui.label(
+                                "Enter a MinKNOW RUN ID or generate an MD5 ID, "
+                                "optionally with encrypted name/hospital number/notes. "
+                                "ROBIN stores the manifest under the work directory and "
+                                "links it when this run is detected. Date of birth is "
+                                "required when storing encrypted fields."
+                            ).classes(
+                                "text-xs text-slate-600 dark:text-slate-400 w-full mb-2"
+                            )
+
+                            id_mode = ui.toggle(
+                                {
+                                    "custom": "Use my sample ID",
+                                    "md5": "Generate MD5 ID",
+                                },
+                                value="custom",
+                            ).props("no-caps dense").classes("w-full")
+
+                            md5_fields = ui.column().classes("w-full min-w-0 gap-2")
+                            with md5_fields:
+                                gen_test_id = ui.input(
+                                    "Test ID (required for MD5)"
+                                ).props("outlined dense").classes("w-full")
+                            md5_fields.set_visibility(False)
+
+                            custom_fields = ui.column().classes("w-full min-w-0 gap-2")
+                            with custom_fields:
+                                custom_run_id = ui.input(
+                                    "MinKNOW RUN ID (required)",
+                                    placeholder="e.g. HOSP-2024-8841",
+                                ).props("outlined dense").classes("w-full font-mono")
+                                custom_test_id = ui.input(
+                                    "Test ID (optional)"
+                                ).props("outlined dense").classes("w-full")
+
+                            gen_first = ui.input("First name (optional)").props(
                                 "outlined dense"
                             ).classes("w-full")
-                            gen_first = ui.input("First name").props(
-                                "outlined dense"
-                            ).classes("w-full")
-                            gen_last = ui.input("Last name").props(
+                            gen_last = ui.input("Last name (optional)").props(
                                 "outlined dense"
                             ).classes("w-full")
                             gen_dob = ui.input(
-                                "Date of birth (YYYY-MM-DD)"
+                                "Date of birth (YYYY-MM-DD; required when encrypting)"
                             ).props("outlined dense").classes("w-full")
+                            gen_nhs = ui.input(
+                                "Hospital number (optional)"
+                            ).props("outlined dense").classes("w-full")
+                            gen_notes = ui.textarea(
+                                "Notes (optional)",
+                                placeholder="Free-text notes stored encrypted with identifiers",
+                            ).props("outlined dense autogrow").classes("w-full")
 
-                            def _generate_sample_id() -> None:
+                            def _sync_id_mode() -> None:
+                                is_md5 = id_mode.value == "md5"
+                                md5_fields.set_visibility(is_md5)
+                                custom_fields.set_visibility(not is_md5)
+                                sample_id_input.value = ""
+
+                            id_mode.on_value_change(lambda _: _sync_id_mode())
+
+                            def _register_identifiers() -> None:
                                 try:
-                                    sample_id_input.value = generate_sample_id_md5(
-                                        gen_test_id.value or "",
+                                    registration = build_sample_registration(
+                                        mode=id_mode.value or "custom",
+                                        custom_sample_id=custom_run_id.value or "",
+                                        test_id=(
+                                            (gen_test_id.value or "").strip()
+                                            if id_mode.value == "md5"
+                                            else (custom_test_id.value or "").strip()
+                                        ),
                                         first_name=gen_first.value or "",
                                         last_name=gen_last.value or "",
-                                        date_of_birth=gen_dob.value or "",
+                                        dob=gen_dob.value or "",
+                                        nhs_number=gen_nhs.value or "",
+                                        notes=gen_notes.value or "",
                                     )
-                                    _notify("Sample ID generated.", kind="positive")
                                 except ValueError as exc:
                                     _notify(str(exc), kind="warning")
+                                    return
 
-                            ui.button(
-                                "Generate",
-                                icon="fingerprint",
-                                on_click=_generate_sample_id,
-                            ).props("flat dense no-caps outline")
-                            ui.link(
-                                "Open full Sample ID generator",
-                                "/sample_id_generator",
-                            ).classes("text-xs")
+                                sample_id_input.value = registration.sample_id
+                                success, msg = save_sample_registration(
+                                    work_directory,
+                                    registration,
+                                )
+                                if success:
+                                    _notify(
+                                        f"Sample ID registered. {msg}",
+                                        kind="positive",
+                                    )
+                                else:
+                                    _notify(
+                                        f"Sample ID set, but not saved: {msg}",
+                                        kind="warning",
+                                    )
+
+                            with ui.row().classes("w-full gap-2 flex-wrap"):
+                                ui.button(
+                                    "Register sample ID",
+                                    icon="fingerprint",
+                                    on_click=_register_identifiers,
+                                ).props("flat dense no-caps outline")
+                                ui.link(
+                                    "Open Sample ID generator page",
+                                    "/sample_id_generator",
+                                ).classes("text-xs self-center")
 
                         start_button = ui.button(
                             "Start run…",
@@ -447,6 +524,15 @@ def add_minknow_sequencer_section(
                             {
                                 "preset_input": preset_input,
                                 "sample_id_input": sample_id_input,
+                                "id_mode": id_mode,
+                                "custom_run_id": custom_run_id,
+                                "custom_test_id": custom_test_id,
+                                "gen_test_id": gen_test_id,
+                                "gen_first": gen_first,
+                                "gen_last": gen_last,
+                                "gen_dob": gen_dob,
+                                "gen_nhs": gen_nhs,
+                                "gen_notes": gen_notes,
                                 "experiment_group_input": experiment_group_input,
                                 "duration_input": duration_input,
                                 "kit_input": kit_input,
@@ -870,10 +956,47 @@ def add_minknow_sequencer_section(
             )
             return
 
-        sample_id = (start_controls["sample_id_input"].value or "").strip()
-        if not sample_id:
-            _notify("Enter or generate a sample ID.", kind="warning")
+        mode = (start_controls.get("id_mode").value if start_controls.get("id_mode") else None) or "custom"
+        sample_id_field = (start_controls["sample_id_input"].value or "").strip()
+        custom_run = (
+            (start_controls["custom_run_id"].value or "").strip()
+            if start_controls.get("custom_run_id") is not None
+            else ""
+        )
+        try:
+            if mode == "md5":
+                registration = build_sample_registration(
+                    mode="md5",
+                    test_id=(start_controls["gen_test_id"].value or ""),
+                    first_name=(start_controls["gen_first"].value or ""),
+                    last_name=(start_controls["gen_last"].value or ""),
+                    dob=(start_controls["gen_dob"].value or ""),
+                    nhs_number=(start_controls["gen_nhs"].value or ""),
+                    notes=(start_controls["gen_notes"].value or ""),
+                )
+            else:
+                registration = build_sample_registration(
+                    mode="custom",
+                    custom_sample_id=sample_id_field or custom_run,
+                    test_id=(start_controls["custom_test_id"].value or ""),
+                    first_name=(start_controls["gen_first"].value or ""),
+                    last_name=(start_controls["gen_last"].value or ""),
+                    dob=(start_controls["gen_dob"].value or ""),
+                    nhs_number=(start_controls["gen_nhs"].value or ""),
+                    notes=(start_controls["gen_notes"].value or ""),
+                )
+        except ValueError as exc:
+            _notify(str(exc), kind="warning")
             return
+
+        sample_id = registration.sample_id
+        start_controls["sample_id_input"].value = sample_id
+
+        ok, msg = save_sample_registration(work_directory, registration)
+        if ok:
+            _notify(f"Identifiers registered. {msg}", kind="positive")
+        else:
+            _notify(f"Starting without saved manifest: {msg}", kind="warning")
 
         preset_for_run = _build_preset_from_form(preset_base)
         position = _resolve_start_position(preset_for_run)
