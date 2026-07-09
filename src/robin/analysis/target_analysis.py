@@ -34,6 +34,7 @@ import pandas as pd
 import pysam
 from robin.logging_config import get_job_logger
 from robin.analysis.snp_processing import build_snp_display_data
+from robin.utils.docker_fs import chown_tree_to_host_user, docker_host_user_spec
 
 # Optional import for Docker functionality
 try:
@@ -3548,6 +3549,19 @@ def run_snp_analysis(
             logger.info("All input files verified in their directories")
 
             host_config = client.api.create_host_config(binds=volume_bindings)
+            clair3_user = docker_host_user_spec()
+            if os.environ.get("ROBIN_DOCKER_CLAIR3_AS_ROOT", "").strip().lower() in (
+                "1",
+                "true",
+                "yes",
+                "on",
+            ):
+                clair3_user = None
+                logger.info(
+                    "ROBIN_DOCKER_CLAIR3_AS_ROOT is set; Clair3 containers will run as root"
+                )
+            elif clair3_user:
+                logger.info("Clair3 containers will run as host user %s", clair3_user)
 
             # Function to split BED file into manageable chunks.
             # Chunks can include multiple chromosomes, constrained by covered genomic span.
@@ -3789,12 +3803,15 @@ def run_snp_analysis(
 
                 # Create and start container for this region
                 logger.info(f"Creating Clair3 container for region {i+1}...")
-                container = client.api.create_container(
-                    image="hkubal/clairs-to:latest",
-                    command=command,
-                    volumes=list(volume_bindings.keys()),
-                    host_config=host_config,
-                )
+                container_kwargs = {
+                    "image": "hkubal/clairs-to:latest",
+                    "command": command,
+                    "volumes": list(volume_bindings.keys()),
+                    "host_config": host_config,
+                }
+                if clair3_user:
+                    container_kwargs["user"] = clair3_user
+                container = client.api.create_container(**container_kwargs)
                 logger.info(f"Container created with ID: {container.get('Id')}")
 
                 # Start container
@@ -3932,6 +3949,23 @@ def run_snp_analysis(
                 else:
                     logger.warning(f"Single-pass INDEL output not found: {single_indel}")
                 logger.info("Clair3 pipeline completed successfully in single-pass mode")
+
+            try:
+                if chown_tree_to_host_user(Path(clair_dir)):
+                    logger.info("Clair3 output ownership normalized under %s", clair_dir)
+                else:
+                    logger.warning(
+                        "Clair3 outputs under %s may include root-owned files "
+                        "(Docker ownership fixup unavailable or incomplete). "
+                        "Sample delete/archive may require Docker to clean up.",
+                        clair_dir,
+                    )
+            except Exception as chown_exc:
+                logger.warning(
+                    "Could not normalize Clair3 output ownership under %s: %s",
+                    clair_dir,
+                    chown_exc,
+                )
 
 
         if annotation_only:

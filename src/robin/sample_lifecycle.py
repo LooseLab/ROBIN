@@ -1,8 +1,7 @@
-"""Sample delete and archive helpers for admin GUI operations."""
+src/robin/sample_lifecycle.py"""Sample delete and archive helpers for admin GUI operations."""
 
 from __future__ import annotations
 
-import shutil
 import tarfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -13,6 +12,7 @@ from robin.minknow.sample_id import (
     SAMPLE_IDENTIFIER_MANIFEST_FILENAME,
     validate_custom_sample_id,
 )
+from robin.utils.docker_fs import chown_tree_to_host_user, remove_tree
 
 # Directories excluded from archives (housekeeping / staging).
 HOUSEKEEPING_DIR_NAMES = frozenset({"_locks", "_fusion_staging"})
@@ -158,11 +158,19 @@ def archive_sample_data(
     if not sample_dir.is_dir():
         raise FileNotFoundError(f"Sample folder not found: {sample_dir}")
 
-    dest = validate_archive_destination(destination_dir, work_dir)
+    if not chown_tree_to_host_user(sample_dir):
+        raise PermissionError(
+            f"Cannot read all files under {sample_dir} for archiving. "
+            "Root-owned Docker outputs (for example Clair3) could not be "
+            "reassigned to the current user. Ensure Docker is available and "
+            "retry, or fix ownership manually."
+        )
+
     members = list(iter_archive_members(sample_dir))
     if not members:
         raise ValueError(f"No archivable files found for sample {sample_id!r}.")
 
+    dest = validate_archive_destination(destination_dir, work_dir)
     bytes_before = _directory_size(path for path, _ in members)
     archive_path = dest / _archive_filename(sample_id)
 
@@ -191,7 +199,7 @@ def archive_sample_data(
                     f"Archive verification failed: missing {SAMPLE_IDENTIFIER_MANIFEST_FILENAME}."
                 )
 
-    shutil.rmtree(sample_dir)
+    remove_tree(sample_dir)
     return SampleLifecycleResult(
         sample_id=sample_id,
         action="archive",
@@ -214,7 +222,7 @@ def delete_sample_data(work_dir: Path, sample_id: str) -> SampleLifecycleResult:
             except OSError:
                 pass
 
-    shutil.rmtree(sample_dir)
+    remove_tree(sample_dir)
     return SampleLifecycleResult(
         sample_id=sample_id,
         action="delete",
