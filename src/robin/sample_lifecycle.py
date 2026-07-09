@@ -1,4 +1,4 @@
-src/robin/sample_lifecycle.py"""Sample delete and archive helpers for admin GUI operations."""
+"""Sample delete and archive helpers for admin GUI operations."""
 
 from __future__ import annotations
 
