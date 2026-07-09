@@ -200,6 +200,14 @@ class ReportSection(ABC):
         table.setStyle(self.MODERN_TABLE_STYLE)
         return table
 
+    def col_widths_for_page(self, relative_weights) -> list[float]:
+        """Scale column weight ratios to the printable page width."""
+        total = float(sum(relative_weights))
+        if total <= 0:
+            raise ValueError("relative_weights must sum to a positive value")
+        page_width = self.report.doc.width
+        return [page_width * float(weight) / total for weight in relative_weights]
+
     def add_figure(self, img, caption=None, width=None, height=None):
         """Add a figure with optional caption."""
         self.elements.append(Spacer(1, 4))

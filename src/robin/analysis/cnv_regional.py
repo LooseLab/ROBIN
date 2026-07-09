@@ -59,7 +59,7 @@ def load_panel_gene_bed(output_dir: str) -> tuple[str | None, pd.DataFrame]:
 
 
 def load_target_coverage_df(output_dir: str) -> pd.DataFrame:
-    """Load per-target coverage for panel gene lollipop plots."""
+    """Load per-target coverage for panel gene coverage overlays."""
     path = os.path.join(output_dir, "target_coverage.csv")
     empty = pd.DataFrame(
         columns=["chrom", "startpos", "endpos", "name", "length", "coverage", "bases"]

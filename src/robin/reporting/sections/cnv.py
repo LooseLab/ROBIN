@@ -15,7 +15,15 @@ from reportlab.lib.units import inch
 from reportlab.platypus import PageBreak, Paragraph, Image, Spacer, Table, TableStyle
 from reportlab.lib.styles import ParagraphStyle
 from ..sections.base import ReportSection
-from ..plotting import create_CNV_plot, create_CNV_plot_per_chromosome
+from ..plotting import (
+    create_CNV_plot,
+    create_CNV_plot_per_chromosome,
+    cnv_chromosome_fig_height_for_page,
+    cnv_chromosome_fig_width_for_page,
+    CNV_CHROMOSOME_PLOT_SPACER_PT,
+    CNV_CHROMOSOME_PLOTS_PER_PAGE,
+    CNV_REPORT_FRAME_PADDING_PT,
+)
 
 # from robin.subpages.CNVObjectClass import (
 #    CNVAnalysis
@@ -123,7 +131,24 @@ class CNVSection(ReportSection):
     """Section containing the CNV analysis."""
 
     FULL_PLOT_WIDTH = inch * 7.5
-    FULL_PLOT_HEIGHT = inch * 2.5
+    CHROMOSOME_PLOTS_PER_PAGE = CNV_CHROMOSOME_PLOTS_PER_PAGE
+    CHROMOSOME_PLOT_SPACER = CNV_CHROMOSOME_PLOT_SPACER_PT
+
+    def _chromosome_pdf_plot_height(self) -> float:
+        """Height in inches for one per-chromosome plot (four per PDF page)."""
+        return cnv_chromosome_fig_height_for_page(
+            self.report.doc.height / inch,
+            plots_per_page=self.CHROMOSOME_PLOTS_PER_PAGE,
+            spacer_pt=self.CHROMOSOME_PLOT_SPACER,
+            frame_padding_pt=CNV_REPORT_FRAME_PADDING_PT,
+        )
+
+    def _chromosome_pdf_plot_width(self) -> float:
+        """Width in inches for one per-chromosome plot within the PDF frame."""
+        return cnv_chromosome_fig_width_for_page(
+            self.report.doc.width / inch,
+            frame_padding_pt=CNV_REPORT_FRAME_PADDING_PT,
+        )
 
     def add_content(self):
         """Add the CNV analysis content to the report."""
@@ -636,19 +661,18 @@ class CNVSection(ReportSection):
                     whole_chr_data,
                     repeat_rows=1,
                     auto_col_width=False,
-                    col_widths=[inch * x for x in [0.4, 0.8, 0.8]],
+                    col_widths=self.col_widths_for_page([1.0, 2.0, 2.0]),
                     compact=True,
-                    font_size=9,
                 )
                 whole_chr_table.setStyle(
                     TableStyle(
                         [
-                            *self.MODERN_TABLE_STYLE._cmds,
-                            ("FONTSIZE", (0, 0), (-1, -1), 9),
                             ("ALIGN", (2, 1), (2, -1), "RIGHT"),
                             ("ALIGN", (1, 1), (1, -1), "CENTER"),
-                            ("TOPPADDING", (0, 0), (-1, -1), 4),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                            ("TOPPADDING", (0, 0), (-1, -1), 2),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
                         ]
                     )
                 )
@@ -658,10 +682,8 @@ class CNVSection(ReportSection):
             # Build arm and regional event tables. Always stack vertically (never nested
             # side-by-side) so each table can split across pages. Nested tables
             # cannot split and cause LayoutError when content exceeds frame height.
-            arm_col_widths = [inch * x for x in [0.35, 0.55, 0.5, 0.5, 0.8]]
-            regional_col_widths = [
-                inch * x for x in [0.35, 1.1, 0.55, 0.55, 0.55, 0.55, 0.55, 1.35]
-            ]
+            arm_col_weights = [1.0, 1.55, 1.5, 1.55, 2.2]
+            regional_col_weights = [1.0, 3.0, 1.55, 1.55, 1.55, 1.55, 1.5, 3.9]
 
             arm_header = None
             arm_table = None
@@ -695,19 +717,18 @@ class CNVSection(ReportSection):
                     regional_data,
                     repeat_rows=1,
                     auto_col_width=False,
-                    col_widths=regional_col_widths,
+                    col_widths=self.col_widths_for_page(regional_col_weights),
                     compact=True,
-                    font_size=9,
                 )
                 regional_table.setStyle(
                     TableStyle(
                         [
-                            *self.MODERN_TABLE_STYLE._cmds,
-                            ("FONTSIZE", (0, 0), (-1, -1), 9),
                             ("ALIGN", (2, 1), (5, -1), "RIGHT"),
                             ("ALIGN", (6, 1), (6, -1), "CENTER"),
-                            ("TOPPADDING", (0, 0), (-1, -1), 4),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                            ("TOPPADDING", (0, 0), (-1, -1), 2),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
                         ]
                     )
                 )
@@ -732,20 +753,19 @@ class CNVSection(ReportSection):
                     arm_data,
                     repeat_rows=1,
                     auto_col_width=False,
-                    col_widths=arm_col_widths,
+                    col_widths=self.col_widths_for_page(arm_col_weights),
                     compact=True,
-                    font_size=9,
                 )
                 arm_table.setStyle(
                     TableStyle(
                         [
-                            *self.MODERN_TABLE_STYLE._cmds,
-                            ("FONTSIZE", (0, 0), (-1, -1), 9),
                             ("ALIGN", (3, 1), (3, -1), "RIGHT"),
                             ("ALIGN", (2, 1), (2, -1), "CENTER"),
                             ("ALIGN", (4, 1), (4, -1), "RIGHT"),
-                            ("TOPPADDING", (0, 0), (-1, -1), 4),
-                            ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
+                            ("TOPPADDING", (0, 0), (-1, -1), 2),
+                            ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+                            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
                         ]
                     )
                 )
@@ -805,24 +825,27 @@ class CNVSection(ReportSection):
                 if panel_name and not panel_genes_df.empty:
                     panel_plot_blurb = (
                         "Scatter points show bin-level log2(ploidy / expected copy number); "
-                        "the dark trace is a rolling median. Panel target lollipops (right axis) show "
-                        "per-target sequencing coverage from 0 to the chromosome maximum."
+                        "the dark trace is a rolling median. Panel target points (right axis) show "
+                        "significantly altered genes at sequencing coverage depth; dashed line = "
+                        "mean panel coverage."
                         if use_normalized_summary
                         else (
                             "Scatter points show bin-level copy number; the dark "
-                            "trace is a rolling median. Panel target lollipops (right axis) show "
-                            "per-target sequencing coverage from 0 to the chromosome maximum."
+                            "trace is a rolling median. Panel target points (right axis) show "
+                            "significantly altered genes at sequencing coverage depth; dashed line = "
+                            "mean panel coverage."
                         )
                     )
                     self.elements.append(
                         Paragraph(
                             (
-                                f"Individual chromosome plots include lollipop markers for "
+                                f"Individual chromosome plots include coverage-scaled markers for "
                                 f"genes in the <b>{panel_name}</b> target panel "
                                 f"({len(panel_genes_df)} genes). "
                                 f"{panel_plot_blurb} "
-                                "Panel targets are lollipops; "
-                                "genes are labelled when >3 SD from the chromosome mean."
+                                "Genes are labelled when >3 SD from the chromosome mean; "
+                                "the right-hand coverage axis appears only on chromosomes "
+                                "with such outlier targets."
                             ),
                             ParagraphStyle(
                                 "PanelGeneLegend",
@@ -840,6 +863,8 @@ class CNVSection(ReportSection):
                     "Generating individual chromosome plots for %d chromosomes",
                     len(reportable_chromosomes),
                 )
+                chromosome_plot_height_inch = self._chromosome_pdf_plot_height()
+                chromosome_plot_width_inch = self._chromosome_pdf_plot_width()
                 chromosome_plots = create_CNV_plot_per_chromosome(
                     CNVresult,
                     cnv_dict,
@@ -850,30 +875,37 @@ class CNVSection(ReportSection):
                     normalized_cnv=log2_cnv,
                     target_coverage_df=target_coverage_df,
                     use_log2_ratio=use_normalized_summary,
+                    sex_estimate=str(XYestimate),
+                    fig_height=chromosome_plot_height_inch,
+                    fig_width=chromosome_plot_width_inch,
                 )
                 plot_lookup = dict(chromosome_plots)
                 plotted_chromosomes = [
                     chrom for chrom in reportable_chromosomes if chrom in plot_lookup
                 ]
+                chromosome_plot_height = inch * chromosome_plot_height_inch
+                chromosome_plot_width = inch * chromosome_plot_width_inch
 
-                for chrom in plotted_chromosomes:
+                for plot_idx, chrom in enumerate(plotted_chromosomes):
                     img_buf = plot_lookup[chrom]
                     self.elements.append(
                         Image(
                             img_buf,
-                            width=self.FULL_PLOT_WIDTH,
-                            height=self.FULL_PLOT_HEIGHT,
+                            width=chromosome_plot_width,
+                            height=chromosome_plot_height,
                         )
                     )
-                    self.elements.append(Spacer(1, 10))
+                    last_on_page = (
+                        (plot_idx + 1) % self.CHROMOSOME_PLOTS_PER_PAGE == 0
+                    )
+                    if (
+                        plot_idx < len(plotted_chromosomes) - 1
+                        and not last_on_page
+                    ):
+                        self.elements.append(Spacer(1, self.CHROMOSOME_PLOT_SPACER))
 
-                # Add detailed CNV table
-                self.elements.append(Spacer(1, 6))
-                self.elements.append(
-                    Paragraph("Detailed CNV Events", self.styles.styles["Heading3"])
-                )
-
-                # Create detailed table from regional and arm/whole-chromosome events
+                # Combined event list for CSV export only (tables above already
+                # show whole-chromosome, regional, and arm events separately).
                 all_cnv_events = []
                 for event in regional_cnv_events:
                     all_cnv_events.append([
@@ -909,202 +941,102 @@ class CNVSection(ReportSection):
                         format_panel_genes_for_table(panel_genes),
                     ])
 
-                if all_cnv_events:
-                    # Convert all data to Paragraphs with proper styling
-                    formatted_events = []
-                    for event in all_cnv_events:
-                        formatted_events.append(
+                try:
+                    # Whole chromosome events
+                    if summary_whole_chr_events or whole_chr_events:
+                        # whole_chr_events is already a list of lists
+                        df_whole = pd.DataFrame(
+                            whole_chr_events, columns=["Chr", "State", "Mean CNV"]
+                        )
+                        if not df_whole.empty:
+                            df_whole["Mean CNV"] = pd.to_numeric(
+                                df_whole["Mean CNV"], errors="coerce"
+                            )
+                        self.export_frames["cnv_whole_chromosome_events"] = df_whole
+
+                    # Chromosome arm events
+                    if arm_events:
+                        df_arm = pd.DataFrame(
+                            arm_events,
+                            columns=[
+                                "Chr",
+                                "Arm",
+                                "State",
+                                "Mean CNV",
+                                "Proportion Affected",
+                            ],
+                        )
+                        if not df_arm.empty:
+                            df_arm["Mean CNV"] = pd.to_numeric(
+                                df_arm["Mean CNV"], errors="coerce"
+                            )
+                            # Convert percentage strings like "70%" to 0.7
+                            df_arm["Proportion Affected"] = (
+                                df_arm["Proportion Affected"]
+                                .astype(str)
+                                .str.rstrip("%")
+                            )
+                            df_arm["Proportion Affected"] = (
+                                pd.to_numeric(
+                                    df_arm["Proportion Affected"], errors="coerce"
+                                )
+                                / 100.0
+                            )
+                        self.export_frames["cnv_arm_events"] = df_arm
+
+                    # Regional CNV events
+                    if regional_cnv_events:
+                        df_regional = pd.DataFrame(
                             [
-                                Paragraph(
-                                    event[0], self.styles.styles["Normal"]
-                                ),  # Chr
-                                Paragraph(
-                                    event[1], self.styles.styles["Normal"]
-                                ),  # Region
-                                Paragraph(
-                                    event[2], self.styles.styles["Normal"]
-                                ),  # Start
-                                Paragraph(
-                                    event[3], self.styles.styles["Normal"]
-                                ),  # End
-                                Paragraph(
-                                    event[4], self.styles.styles["Normal"]
-                                ),  # Length
-                                Paragraph(
-                                    event[5], self.styles.styles["Normal"]
-                                ),  # Mean CNV
-                                Paragraph(
-                                    event[6], self.styles.styles["Normal"]
-                                ),  # State
-                                Paragraph(
-                                    event[7],
-                                    ParagraphStyle(
-                                        "GeneList",
-                                        parent=self.styles.styles["Normal"],
-                                        leading=10,  # Adjust line spacing
-                                        spaceBefore=1,
-                                        spaceAfter=1,
-                                        wordWrap="LTR",  # Left to right word wrap
+                                {
+                                    "Chr": event["chrom"],
+                                    "Region": event["region"],
+                                    "Start (Mb)": event["start_mb"],
+                                    "End (Mb)": event["end_mb"],
+                                    "Length (Mb)": event["length_mb"],
+                                    "Mean CNV": event["mean_cnv"],
+                                    "State": event["state"],
+                                    "Panel genes": format_panel_genes_for_table(
+                                        event["panel_genes"]
                                     ),
-                                ),  # Panel genes
+                                }
+                                for event in regional_cnv_events
                             ]
                         )
+                        self.export_frames["cnv_regional_events"] = df_regional
 
-                    # Format detailed CNV table data
-                    detailed_data = [
-                        [
-                            "Chr",
-                            "Region",
-                            "Start (Mb)",
-                            "End (Mb)",
-                            "Length (Mb)",
-                            "Mean CNV",
-                            "State",
-                            "Panel genes",
-                        ]
-                    ]
-
-                    for row in formatted_events:
-                        detailed_data.append(
-                            [
-                                row[0].text if hasattr(row[0], "text") else str(row[0]),
-                                row[1].text if hasattr(row[1], "text") else str(row[1]),
-                                row[2].text if hasattr(row[2], "text") else str(row[2]),
-                                row[3].text if hasattr(row[3], "text") else str(row[3]),
-                                row[4].text if hasattr(row[4], "text") else str(row[4]),
-                                row[5].text if hasattr(row[5], "text") else str(row[5]),
-                                row[6].text if hasattr(row[6], "text") else str(row[6]),
-                                row[7].text if hasattr(row[7], "text") else str(row[7]),
-                            ]
+                    # Combined detailed export (same rows as the separate tables above)
+                    if all_cnv_events:
+                        df_detail = pd.DataFrame(
+                            all_cnv_events,
+                            columns=[
+                                "Chr",
+                                "Region",
+                                "Start (Mb)",
+                                "End (Mb)",
+                                "Length (Mb)",
+                                "Mean CNV",
+                                "State",
+                                "Panel genes",
+                            ],
                         )
-
-                    # Create detailed table (compact)
-                    detailed_table = self.create_table(
-                        detailed_data,
-                        repeat_rows=1,
-                        auto_col_width=False,
-                        col_widths=[
-                            inch * x for x in [0.4, 1.0, 0.6, 0.6, 0.6, 0.6, 0.6, 3.0]
-                        ],
-                        compact=True,
-                        font_size=9,
+                        if not df_detail.empty:
+                            for col in [
+                                "Start (Mb)",
+                                "End (Mb)",
+                                "Length (Mb)",
+                                "Mean CNV",
+                            ]:
+                                df_detail[col] = pd.to_numeric(
+                                    df_detail[col], errors="coerce"
+                                )
+                        self.export_frames["cnv_detailed_events"] = df_detail
+                except Exception as ex:
+                    logger.error(
+                        "Error building CNV export DataFrames: %s",
+                        str(ex),
+                        exc_info=True,
                     )
-
-                    # Add specific styling while preserving modern table style
-                    detailed_table.setStyle(
-                        TableStyle(
-                            [
-                                *self.MODERN_TABLE_STYLE._cmds,
-                                ("ALIGN", (2, 1), (5, -1), "RIGHT"),
-                                ("ALIGN", (6, 1), (6, -1), "CENTER"),
-                                ("ALIGN", (0, 1), (1, -1), "LEFT"),
-                                ("ALIGN", (7, 1), (7, -1), "LEFT"),
-                                ("FONTSIZE", (0, 0), (-1, -1), 9),
-                                ("TOPPADDING", (0, 0), (-1, -1), 4),
-                                ("BOTTOMPADDING", (0, 0), (-1, -1), 4),
-                            ]
-                        )
-                    )
-
-                    self.elements.append(detailed_table)
-
-                    # Build export DataFrames for CSVs
-                    try:
-                        # Whole chromosome events
-                        if summary_whole_chr_events or whole_chr_events:
-                            # whole_chr_events is already a list of lists
-                            df_whole = pd.DataFrame(
-                                whole_chr_events, columns=["Chr", "State", "Mean CNV"]
-                            )
-                            if not df_whole.empty:
-                                df_whole["Mean CNV"] = pd.to_numeric(
-                                    df_whole["Mean CNV"], errors="coerce"
-                                )
-                            self.export_frames["cnv_whole_chromosome_events"] = df_whole
-
-                        # Chromosome arm events
-                        if arm_events:
-                            df_arm = pd.DataFrame(
-                                arm_events,
-                                columns=[
-                                    "Chr",
-                                    "Arm",
-                                    "State",
-                                    "Mean CNV",
-                                    "Proportion Affected",
-                                ],
-                            )
-                            if not df_arm.empty:
-                                df_arm["Mean CNV"] = pd.to_numeric(
-                                    df_arm["Mean CNV"], errors="coerce"
-                                )
-                                # Convert percentage strings like "70%" to 0.7
-                                df_arm["Proportion Affected"] = (
-                                    df_arm["Proportion Affected"]
-                                    .astype(str)
-                                    .str.rstrip("%")
-                                )
-                                df_arm["Proportion Affected"] = (
-                                    pd.to_numeric(
-                                        df_arm["Proportion Affected"], errors="coerce"
-                                    )
-                                    / 100.0
-                                )
-                            self.export_frames["cnv_arm_events"] = df_arm
-
-                        # Regional CNV events
-                        if regional_cnv_events:
-                            df_regional = pd.DataFrame(
-                                [
-                                    {
-                                        "Chr": event["chrom"],
-                                        "Region": event["region"],
-                                        "Start (Mb)": event["start_mb"],
-                                        "End (Mb)": event["end_mb"],
-                                        "Length (Mb)": event["length_mb"],
-                                        "Mean CNV": event["mean_cnv"],
-                                        "State": event["state"],
-                                        "Panel genes": format_panel_genes_for_table(
-                                            event["panel_genes"]
-                                        ),
-                                    }
-                                    for event in regional_cnv_events
-                                ]
-                            )
-                            self.export_frames["cnv_regional_events"] = df_regional
-
-                        # Detailed CNV events
-                        if all_cnv_events:
-                            df_detail = pd.DataFrame(
-                                all_cnv_events,
-                                columns=[
-                                    "Chr",
-                                    "Region",
-                                    "Start (Mb)",
-                                    "End (Mb)",
-                                    "Length (Mb)",
-                                    "Mean CNV",
-                                    "State",
-                                    "Panel genes",
-                                ],
-                            )
-                            if not df_detail.empty:
-                                for col in [
-                                    "Start (Mb)",
-                                    "End (Mb)",
-                                    "Length (Mb)",
-                                    "Mean CNV",
-                                ]:
-                                    df_detail[col] = pd.to_numeric(
-                                        df_detail[col], errors="coerce"
-                                    )
-                            self.export_frames["cnv_detailed_events"] = df_detail
-                    except Exception as ex:
-                        logger.error(
-                            "Error building CNV export DataFrames: %s",
-                            str(ex),
-                            exc_info=True,
-                        )
 
             except Exception as e:
                 logger.error(
