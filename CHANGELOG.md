@@ -27,6 +27,7 @@ and this project (almost) adheres to [Semantic Versioning](https://semver.org/sp
 - **Report exports:** Individual and bulk report dialogs can produce PDF reports, CSV ZIP bundles, and sample-tracking TSV exports. MNP-Flex summary, hierarchy, and score data are included in export artifacts when available.
 - **Watched folders:** The folder picker supports selecting and adding multiple watch directories in one operation.
 - **Large result tables:** Added server-side pagination, search, and filtering for large SNP, coverage, and fusion tables to reduce browser memory use.
+- **Admin sample management:** The **Administration** page adds a **Sample management** tab (admin only) to permanently delete completed sample output folders or archive them as `tar.gz` files to a server-side destination outside the work directory. Live runs and samples with active or pending jobs are blocked. Archives include analysis outputs and `sample_identifier_manifest.json` but exclude housekeeping folders (for example `_locks` and `_fusion_staging`). Successful archive removes the sample from live tracking; delete and archive actions are audit-logged (`sample.deleted`, `sample.archived`).
 
 ### Changed
 - **GUI authentication:** Replaced the shared single-password gate with multi-user accounts. Legacy `gui_password_hash` is used only to bootstrap the first `admin` user when no accounts exist (`robin users bootstrap-admin`).

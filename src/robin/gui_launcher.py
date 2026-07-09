@@ -1144,6 +1144,29 @@ class GUILauncher:
             "pending_jobs": wp,
         }
 
+    def _evict_sample_from_gui_state(self, sample_id: str) -> None:
+        """Remove a sample from in-memory GUI tracking after delete or archive."""
+        with self._samples_record_lock:
+            self._samples_master_record.pop(sample_id, None)
+        self._finalized_samples.discard(sample_id)
+        self._selected_sample_ids.discard(sample_id)
+        if self._selected_sample_id == sample_id:
+            self._selected_sample_id = None
+        if self._snp_analysis_running_sample == sample_id:
+            self._snp_analysis_running_sample = None
+        try:
+            from robin.gui.report_progress import progress_manager
+
+            progress_manager._remove_report(sample_id)
+        except Exception:
+            pass
+        self._save_master_record_cache()
+        try:
+            if hasattr(self, "samples_table"):
+                self._refresh_table_from_master()
+        except Exception:
+            pass
+
     def _is_target_bam_finalize_redundant(self, sample_id: str) -> bool:
         """
         True when target.bam is already merged/indexed and no batch_*.bam remain.

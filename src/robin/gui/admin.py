@@ -119,6 +119,7 @@ def create_admin_page(launcher: "GUILauncher") -> None:
                 with ui.tabs().classes("w-full") as tabs:
                     users_tab = ui.tab("users", label="Users")
                     audit_tab = ui.tab("audit", label="Audit log")
+                    samples_tab = ui.tab("samples", label="Sample management")
                     display_tab = ui.tab("display", label="Sample display")
                     plotting_tab = ui.tab("plotting", label="Plotting")
 
@@ -127,6 +128,12 @@ def create_admin_page(launcher: "GUILauncher") -> None:
                         _build_users_panel(launcher, consent_version)
                     with ui.tab_panel(audit_tab):
                         _build_audit_panel(launcher, audit_filters)
+                    with ui.tab_panel(samples_tab):
+                        from robin.gui.admin_sample_lifecycle import (
+                            build_sample_lifecycle_panel,
+                        )
+
+                        build_sample_lifecycle_panel(launcher)
                     with ui.tab_panel(display_tab):
                         _build_sample_display_panel(launcher)
                     with ui.tab_panel(plotting_tab):
