@@ -419,21 +419,48 @@ def _iter_mgmt_bams(root: Path, recursive: bool) -> Iterable[Path]:
 
 @main.group()
 def password() -> None:
-    """Manage the GUI login password (stored as a hash)."""
+    """Manage the default admin password for GUI sign-in."""
     pass
 
 
 @password.command("set")
-def password_set() -> None:
-    """Set or replace the GUI password. Prompts twice for confirmation; input is never echoed."""
+@click.option(
+    "--username",
+    default="admin",
+    show_default=True,
+    help="Admin account to create or update.",
+)
+def password_set(username: str) -> None:
+    """Set or replace the default admin password. Prompts twice; input is never echoed."""
     try:
-        from robin.gui_launcher import set_gui_password_interactive
+        from robin.gui_launcher import set_default_admin_password_interactive
+
+        store, auth, audit = _get_security_services()
     except ImportError as e:
-        click.echo(f"GUI password module not available: {e}", err=True)
+        click.echo(f"Security module not available: {e}", err=True)
         sys.exit(1)
-    if not set_gui_password_interactive():
+
+    username = username.strip()
+    if not username:
+        click.echo("Username cannot be empty.", err=True)
         sys.exit(1)
-    click.echo("GUI password set successfully.")
+
+    had_user = store.get_user_by_username(username) is not None
+    if not set_default_admin_password_interactive(auth, username=username):
+        sys.exit(1)
+
+    audit.log_event(
+        event_type=(
+            "admin.user.password_reset" if had_user else "admin.user.bootstrap"
+        ),
+        target_type="user",
+        target_id=username,
+        details={
+            "username": username,
+            "source": "robin password set",
+            "must_change_password": False,
+        },
+    )
 
 
 @main.group()
@@ -454,7 +481,7 @@ def _get_security_services():
 @click.option(
     "--from-legacy-hash",
     is_flag=True,
-    help="Use the existing GUI password hash file (password unchanged).",
+    help="Import the legacy GUI password hash file (password unchanged).",
 )
 def users_bootstrap_admin(username: str, from_legacy_hash: bool) -> None:
     """Create the first admin account for a new ROBIN install."""
@@ -489,8 +516,8 @@ def users_bootstrap_admin(username: str, from_legacy_hash: bool) -> None:
         legacy_path = _get_gui_password_hash_path()
         if not auth.bootstrap_admin_from_legacy_hash(legacy_path):
             click.echo(
-                f"No users created. Set a GUI password first (`robin password set`) "
-                f"or run without --from-legacy-hash.",
+                "No users created. Create a legacy hash with an older ROBIN release, "
+                "run `robin password set`, or run without --from-legacy-hash.",
                 err=True,
             )
             sys.exit(1)

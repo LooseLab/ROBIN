@@ -1,7 +1,7 @@
 # What happens when you start ROBIN
 
 !!! abstract "What this page covers"
-    The usual order of checks and prompts when you run **`robin workflow`**: models, reference, **research disclaimer** (`I agree`), optional **large-BAM** warning, **Ray vs threads**, **NiceGUI** URL, **GUI password**, then **watching BAMs**.  
+    The usual order of checks and prompts when you run **`robin workflow`**: models, reference, **research disclaimer** (`I agree`), optional **large-BAM** warning, **Ray vs threads**, **NiceGUI** URL, **default admin password**, then **watching BAMs**.  
     Install: [Installation](installation.md). Flags: [`robin workflow`](../cli/workflow.md). Always confirm behaviour with **`robin workflow --help`** on your install.
 
 ---
@@ -17,7 +17,7 @@
 | 5 | **Configuration summary** printed (paths, `--center`, steps, logging, Ray, etc.). |
 | 6 | **Execution engine** — Ray (default) or `--no-use-ray` (threaded). |
 | 7 | **NiceGUI** — if `--with-gui` (default); on **Ray**, GUI usually needs **`--work-dir`** — see [NiceGUI](#nicegui-workflow-monitor-default-on). |
-| 8 | **GUI password** — set or verify (terminal prompts). |
+| 8 | **Default admin password** — set in the terminal when no GUI users exist yet. |
 | 9 | **Watch** input directory for `*.bam` and schedule jobs. |
 
 ---
@@ -90,38 +90,32 @@ robin workflow ... --no-gui
 
 ---
 
-## 8. GUI password (terminal)
+## 8. Default admin password (terminal)
 
-Access to the web UI is password-protected (**`argon2-cffi`**). Passwords are **not** echoed.
+GUI sign-in uses **username + password** accounts in `security.db` (**`argon2-cffi`**). Passwords are **not** echoed.
 
-### First run (no password yet)
+### First run (no GUI users yet)
 
-If stdin is a **TTY**, you are prompted:
+If the workflow starts with the GUI enabled and **no users** exist in the security database, and stdin is a **TTY**, you are prompted:
 
 ```text
-Set GUI password:
-Confirm GUI password:
+Set default admin password:
+Confirm default admin password:
 ```
 
-Enter the same password twice. If **no TTY** (some automation), startup **fails** with a message to run from an interactive terminal first.
+ROBIN creates the default **`admin`** account with that password. If **no TTY** (some automation), startup **fails** with a message to run from an interactive terminal first.
 
 ### Later runs
 
-If stdin is a **TTY**:
+Once at least one user exists, **no terminal password prompt** runs at workflow startup. Sign in through the browser at `/login`.
 
-```text
-GUI password:
-```
-
-Wrong password → **Invalid password.** and the GUI does not start.
-
-### Change password without a full workflow
+### Set or change the admin password without a full workflow
 
 ```bash
 robin password set
 ```
 
-See [GUI password](../cli/password.md).
+See [Default admin password](../cli/password.md).
 
 ---
 
@@ -142,8 +136,8 @@ The runner **watches** the input directory for **`*.bam`** files (subject to `--
 1. Model check  
 2. (If `-r`) Reference validation  
 3. Type **`I agree`**  
-4. (If GUI) **GUI password** — set twice first time, or single verify later  
-5. Open the printed URL in a browser  
+4. (If GUI and no users yet) **default admin password** — set twice in the terminal  
+5. Open the printed URL in a browser and sign in  
 
 ---
 
@@ -151,5 +145,5 @@ The runner **watches** the input directory for **`*.bam`** files (subject to `--
 
 - [Quickstart](quickstart.md)  
 - [`robin workflow`](../cli/workflow.md)  
-- [GUI password](../cli/password.md)  
+- [Default admin password](../cli/password.md)  
 - [CLI overview](../cli/index.md)  

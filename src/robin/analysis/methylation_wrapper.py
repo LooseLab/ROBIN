@@ -546,6 +546,31 @@ def locus_figure(
 
 
 # --- Optional: persistence helpers (same-Python/Matplotlib only) ---
+def figure_is_renderable(fig: Figure) -> bool:
+    """
+    Return True if *fig* can be drawn/saved with the current matplotlib.
+
+    Pickled figures often unpickle successfully but fail at render time after a
+    matplotlib upgrade (e.g. missing ``_axis_map`` on Axes).
+    """
+    if fig is None:
+        return False
+    try:
+        axes = fig.get_axes()
+        if not axes:
+            return False
+        for ax in axes:
+            if not hasattr(ax, "_axis_map"):
+                return False
+        import io
+
+        buf = io.BytesIO()
+        fig.savefig(buf, format="svg")
+        return True
+    except Exception:
+        return False
+
+
 def save_figure_pickle(fig: Figure, path: str) -> None:
     """Save a Matplotlib Figure object for later re-use (not portable across versions)."""
     import pickle
@@ -560,6 +585,41 @@ def load_figure_pickle(path: str) -> Figure:
 
     with open(path, "rb") as f:
         return pickle.load(f)
+
+
+def try_load_figure_pickle(path: str, *, remove_if_invalid: bool = True) -> Optional[Figure]:
+    """
+    Load a pickled figure when it is renderable in the current matplotlib.
+
+    Returns None if unpickling fails, axes are incompatible, or savefig would fail.
+    """
+    import logging
+    import matplotlib.pyplot as plt
+
+    try:
+        fig = load_figure_pickle(path)
+    except Exception as exc:
+        logging.debug(f"[MGMT] Could not unpickle figure from {path}: {exc}")
+        return None
+
+    if figure_is_renderable(fig):
+        return fig
+
+    logging.warning(
+        f"[MGMT] Pickled figure at {path} is not renderable in the current "
+        "matplotlib environment (often a version mismatch after upgrade); "
+        "will regenerate from BAM"
+    )
+    try:
+        plt.close(fig)
+    except Exception:
+        pass
+    if remove_if_invalid:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+    return None
 
 
 # --- Optional: portable-ish JSON via mpld3 (fidelity may vary) ---

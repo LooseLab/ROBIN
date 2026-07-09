@@ -86,7 +86,7 @@ nav:
     - Job types: cli/jobs.md
     - Panel commands: cli/panels.md
     - Utilities (utils): cli/utils.md
-    - GUI password: cli/password.md
+    - Default admin password: cli/password.md
     - GUI users: cli/users.md
     - Audit log: cli/audit.md
   - Using ROBIN:

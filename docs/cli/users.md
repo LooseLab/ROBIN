@@ -9,13 +9,18 @@ User and audit data are stored in SQLite at `~/.config/robin/security.db` (or `%
 Create the first admin account explicitly:
 
 ```bash
+robin password set
+```
+
+Or:
+
+```bash
 robin users bootstrap-admin
 ```
 
 Or import the existing single-password hash from a prior ROBIN install:
 
 ```bash
-robin password set          # if not already set
 robin users bootstrap-admin --from-legacy-hash
 ```
 
@@ -57,5 +62,5 @@ When the version changes, each user must accept again on next login. Acceptance 
 ## Related
 
 - [`robin audit`](audit.md) — query and export audit events  
-- [`robin password set`](password.md) — legacy GUI password file (used for bootstrap import)  
+- [`robin password set`](password.md) — create or replace the default `admin` password  
 - [First steps and navigation](../using-robin/authentication-and-layout.md)

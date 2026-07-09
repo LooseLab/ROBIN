@@ -2,7 +2,7 @@
 
 !!! abstract "What this page covers"
     Run **`robin workflow`** after [installation](installation.md): what ROBIN expects from **MinKNOW/BAMs**, how to stage **reference + panel BEDs**, example commands, and **panels**.  
-    For **disclaimer, GUI password, and startup order**, see **[What happens at startup](startup.md)**. For the **web UI**, see **[Using ROBIN](../using-robin/index.md)**. For every flag, see **[CLI reference](../cli/index.md)** and the **[README](https://github.com/LooseLab/ROBIN/blob/main/README.md)**.
+    For **disclaimer, default admin password, and startup order**, see **[What happens at startup](startup.md)**. For the **web UI**, see **[Using ROBIN](../using-robin/index.md)**. For every flag, see **[CLI reference](../cli/index.md)** and the **[README](https://github.com/LooseLab/ROBIN/blob/main/README.md)**.
 
 ---
 

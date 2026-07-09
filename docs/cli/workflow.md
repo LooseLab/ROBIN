@@ -6,7 +6,7 @@
 Run the **Little John** orchestrated pipeline on BAM files under a watched directory: preprocessing, optional BED conversion, analyses (MGMT, CNV, target, fusion), classifiers (Sturgeon, NanoDX, PanNanoDX, random forest), and optional **NiceGUI** monitoring.
 
 !!! info "Startup sequence"
-    When you run this command, ROBIN checks models, optionally validates `--reference`, asks you to type **`I agree`** to the research disclaimer, then (with the GUI enabled) may prompt for the **GUI password**. On the default **Ray** path, the browser UI is only started if **`--work-dir`** is set. Details: **[What happens at startup](../getting-started/startup.md)**.
+    When you run this command, ROBIN checks models, optionally validates `--reference`, asks you to type **`I agree`** to the research disclaimer, then (with the GUI enabled) may prompt for the **default admin password** when no GUI users exist. On the default **Ray** path, the browser UI is only started if **`--work-dir`** is set. Details: **[What happens at startup](../getting-started/startup.md)**.
 
 ## Synopsis
 

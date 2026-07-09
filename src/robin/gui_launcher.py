@@ -158,6 +158,9 @@ def _get_gui_password_hash_path() -> Path:
     return base / "robin" / "gui_password_hash"
 
 
+DEFAULT_ADMIN_USERNAME = "admin"
+
+
 def ensure_gui_password_set() -> bool:
     """Prompt for GUI password at startup: set (twice) if no hash exists, else verify once.
 
@@ -258,18 +261,23 @@ def ensure_default_admin_password_set(auth_service: "AuthService") -> bool:
         print("Password cannot be empty.", file=sys.stderr)
         return False
 
-    if not auth_service.bootstrap_default_admin("".join(pwd1), username="admin"):
+    if not auth_service.bootstrap_default_admin("".join(pwd1), username=DEFAULT_ADMIN_USERNAME):
         logging.error("Could not create the default admin user.")
         return False
     logging.info("Bootstrapped default admin user 'admin'")
     return True
 
 
-def set_gui_password_interactive() -> bool:
-    """Interactive prompt to set or replace the GUI password (e.g. from `robin password set`).
+def set_default_admin_password_interactive(
+    auth_service: "AuthService",
+    *,
+    username: str = DEFAULT_ADMIN_USERNAME,
+) -> bool:
+    """Interactive prompt to set or replace the default admin GUI password.
 
-    Uses getpass for all password input; nothing is echoed. If a password already exists,
-    asks whether to replace it (no existing password required). Returns True on success.
+    Uses getpass for all password input; nothing is echoed. Creates the initial
+    ``admin`` account when no users exist, or replaces that user's password when
+    requested. Returns True on success.
     """
     if PasswordHasher is None:
         print(
@@ -298,26 +306,46 @@ def set_gui_password_interactive() -> bool:
         else:
             print(message)
 
-    path = _get_gui_password_hash_path()
-    hasher = PasswordHasher()
+    username = str(username or "").strip()
+    if not username:
+        _echo("Username cannot be empty.", style="bold red")
+        return False
 
-    if path.exists():
+    store = auth_service.store
+    existing = store.get_user_by_username(username)
+    if existing is None and store.has_users():
+        _echo(
+            f"No user '{username}' found. Use 'robin users set-password <username>' instead.",
+            style="bold red",
+        )
+        return False
+
+    if existing is not None:
         try:
             if rich_confirm is not None:
                 replace = rich_confirm.ask(
-                    "A password is already set. Replace it?", default=False
+                    f"Replace password for user '{username}'?", default=False
                 )
             else:
-                reply = input("A password is already set. Replace it? [y/N]: ").strip().lower()
+                reply = (
+                    input(f"Replace password for user '{username}'? [y/N]: ")
+                    .strip()
+                    .lower()
+                )
                 replace = reply in ("y", "yes")
         except (EOFError, KeyboardInterrupt):
             return False
         if not replace:
             return False
 
+    first_time = existing is None
     try:
-        pwd1 = getpass.getpass("New GUI password: ")
-        pwd2 = getpass.getpass("Confirm new GUI password: ")
+        if first_time:
+            pwd1 = getpass.getpass("Set default admin password: ")
+            pwd2 = getpass.getpass("Confirm default admin password: ")
+        else:
+            pwd1 = getpass.getpass("New admin password: ")
+            pwd2 = getpass.getpass("Confirm new admin password: ")
     except (EOFError, KeyboardInterrupt):
         return False
 
@@ -328,14 +356,25 @@ def set_gui_password_interactive() -> bool:
         _echo("Password cannot be empty.", style="bold red")
         return False
 
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(hasher.hash(pwd1), encoding="utf-8")
-    except OSError as e:
-        _echo(f"Could not write password file: {e}", style="bold red")
+    if first_time:
+        if not auth_service.bootstrap_default_admin(pwd1, username=username):
+            _echo("Could not create the default admin user.", style="bold red")
+            return False
+        _echo(
+            f"Default admin user '{username}' created successfully.",
+            style="bold green",
+        )
+        return True
+
+    if not store.set_user_password_hash(
+        username,
+        auth_service.hash_password(pwd1),
+        must_change_password=False,
+    ):
+        _echo(f"Could not update password for user '{username}'.", style="bold red")
         return False
 
-    _echo("GUI password updated successfully.", style="bold green")
+    _echo(f"Password updated for user '{username}'.", style="bold green")
     return True
 
 

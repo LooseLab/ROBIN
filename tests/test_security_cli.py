@@ -60,6 +60,35 @@ def test_cli_bootstrap_admin(security_db: Path) -> None:
     assert store.user_has_role(user.id, "admin")
 
 
+
+def test_cli_password_set_creates_admin(security_db: Path) -> None:
+    runner = CliRunner()
+    result = runner.invoke(main, ["password", "set"], input="s3cret\ns3cret\n")
+    assert result.exit_code == 0, result.output
+
+    store = SecurityStore(db_path=security_db)
+    auth = AuthService(store)
+    user = auth.verify_login("admin", "s3cret")
+    assert user is not None
+    assert store.user_has_role(user.id, "admin")
+
+
+def test_cli_password_set_replaces_admin_password(security_db: Path) -> None:
+    store = SecurityStore(db_path=security_db)
+    auth = AuthService(store)
+    auth.create_user("admin", "old-pass", role="admin", must_change_password=False)
+
+    runner = CliRunner()
+    result = runner.invoke(
+        main,
+        ["password", "set"],
+        input="y\nnew-pass\nnew-pass\n",
+    )
+    assert result.exit_code == 0, result.output
+    assert auth.verify_login("admin", "new-pass") is not None
+    assert auth.verify_login("admin", "old-pass") is None
+
+
 def test_cli_bootstrap_admin_refuses_when_users_exist(security_db: Path) -> None:
     store = SecurityStore(db_path=security_db)
     store.create_user("existing", "hash")

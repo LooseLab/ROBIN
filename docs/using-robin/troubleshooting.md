@@ -22,7 +22,7 @@
 - Use the **same password** as for the web UI (often set at first **GUI password** prompt in the terminal).  
 - **Caps Lock** off; retry after a short wait.  
 - If no password was ever set, run ROBIN **from a terminal** once — [At startup](../getting-started/startup.md).  
-- Ask an admin to reset: **`robin password set`**.  
+- Ask an admin to reset: **`robin password set`** or **`robin users set-password <username>`**.  
 
 ---
 

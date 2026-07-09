@@ -1,7 +1,7 @@
 # Command-line reference
 
 !!! abstract "What this section covers"
-    The **`robin`** CLI (Click): **`workflow`**, **job types**, **panels**, **utilities**, and **GUI password**. For a first run, see [Installation](../getting-started/installation.md) and [Quickstart](../getting-started/quickstart.md).
+    The **`robin`** CLI (Click): **`workflow`**, **job types**, **panels**, **utilities**, and **default admin password**. For a first run, see [Installation](../getting-started/installation.md) and [Quickstart](../getting-started/quickstart.md).
 
 Run **`robin --help`** and **`robin <command> --help`** for options in your build.
 
@@ -33,7 +33,7 @@ Models, ClinVar, `sequencing-files`, `mgmt`, and more.
 
 <div class="robin-feature-card" markdown>
 ### [`robin password`](password.md)
-Set or replace the NiceGUI login password.
+Set or replace the default admin password for GUI sign-in.
 </div>
 
 </div>
@@ -58,7 +58,7 @@ Commands that start processing or change protected state usually show a **resear
 
 ## Startup behaviour
 
-**`robin workflow`** runs model checks, optional reference validation, **`I agree`**, and (if the GUI is on) **GUI password** prompts — see **[What happens at startup](../getting-started/startup.md)**.
+**`robin workflow`** runs model checks, optional reference validation, **`I agree`**, and (if the GUI is on) may prompt for the **default admin password** when no GUI users exist — see **[What happens at startup](../getting-started/startup.md)**.
 
 ---
 

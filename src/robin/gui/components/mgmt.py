@@ -504,21 +504,15 @@ def add_mgmt_section(launcher: Any, sample_dir: Path) -> None:
                     from robin.analysis.methylation_wrapper import (
                         has_bam_index,
                         locus_figure,
-                        load_figure_pickle,
                         save_figure_pickle,
+                        try_load_figure_pickle,
                     )
 
                     fig = None
                     use_pickle = False
-                    if pickle_path.exists():
-                        try:
-                            if pickle_mtime >= bam_mtime:
-                                fig = load_figure_pickle(str(pickle_path))
-                                use_pickle = True
-                        except Exception as e:
-                            logging.warning(
-                                f"[MGMT] Failed to load pickle file {pickle_path}: {e}"
-                            )
+                    if pickle_path.exists() and pickle_mtime >= bam_mtime:
+                        fig = try_load_figure_pickle(str(pickle_path))
+                        use_pickle = fig is not None
 
                     if fig is None:
                         if not has_bam_index(str(bam_path)):
@@ -820,25 +814,21 @@ def add_mgmt_section(launcher: Any, sample_dir: Path) -> None:
                     from robin.analysis.methylation_wrapper import (
                         has_bam_index,
                         locus_figure,
-                        load_figure_pickle,
+                        try_load_figure_pickle,
                     )
                     
                     # Check if pickle file exists and is newer than BAM file
                     fig = None
                     use_pickle = False
                     if pickle_path.exists():
-                        try:
-                            # Use pickle if it's newer than or equal to BAM modification time
-                            if pickle_mtime >= bam_mtime:
-                                logging.debug(f"[MGMT] Loading figure from pickle: {pickle_path}")
-                                fig = load_figure_pickle(str(pickle_path))
-                                use_pickle = True
+                        if pickle_mtime >= bam_mtime:
+                            logging.debug(f"[MGMT] Loading figure from pickle: {pickle_path}")
+                            fig = try_load_figure_pickle(str(pickle_path))
+                            use_pickle = fig is not None
+                            if use_pickle:
                                 logging.debug(f"[MGMT] Successfully loaded figure from pickle")
-                            else:
-                                logging.debug(f"[MGMT] Pickle file is older than BAM, regenerating figure")
-                        except Exception as e:
-                            logging.warning(f"[MGMT] Failed to load pickle file {pickle_path}: {e}")
-                            # Continue to generate new figure
+                        else:
+                            logging.debug(f"[MGMT] Pickle file is older than BAM, regenerating figure")
                     
                     # If pickle doesn't exist or failed to load, generate new figure
                     # Skip locus_figure if BAM has no index (avoids "fetch on bamfile without index")
