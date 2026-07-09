@@ -221,6 +221,50 @@ def ensure_gui_password_set() -> bool:
     return True
 
 
+def ensure_default_admin_password_set(auth_service: "AuthService") -> bool:
+    """Prompt for the initial default-admin password and create the account."""
+    if PasswordHasher is None:
+        logging.error(
+            "argon2-cffi is required for GUI password hashing. Install it with: pip install argon2-cffi"
+        )
+        return False
+
+    if auth_service.store.has_users():
+        return True
+
+    legacy_path = _get_gui_password_hash_path()
+    if auth_service.bootstrap_admin_from_legacy_hash(legacy_path):
+        logging.info("Bootstrapped default admin user from legacy GUI password hash")
+        return True
+
+    if not sys.stdin.isatty():
+        print(
+            "No default admin password has been set. Run ROBIN from a terminal to "
+            "set the initial password for the 'admin' account (you will be prompted twice).",
+            file=sys.stderr,
+        )
+        return False
+
+    try:
+        pwd1 = getpass.getpass("Set default admin password: ")
+        pwd2 = getpass.getpass("Confirm default admin password: ")
+    except (EOFError, KeyboardInterrupt):
+        return False
+
+    if pwd1 != pwd2:
+        print("Passwords do not match.", file=sys.stderr)
+        return False
+    if not pwd1:
+        print("Password cannot be empty.", file=sys.stderr)
+        return False
+
+    if not auth_service.bootstrap_default_admin("".join(pwd1), username="admin"):
+        logging.error("Could not create the default admin user.")
+        return False
+    logging.info("Bootstrapped default admin user 'admin'")
+    return True
+
+
 def set_gui_password_interactive() -> bool:
     """Interactive prompt to set or replace the GUI password (e.g. from `robin password set`).
 
@@ -481,6 +525,15 @@ class GUILauncher:
 
     @property
     def minknow_gui_enabled(self) -> bool:
+        """True when MinKNOW is configured and the optional API is installed."""
+        if self._minknow_workflow_config is None:
+            return False
+        from robin.minknow._deps import minknow_api_available
+
+        return minknow_api_available()
+
+    @property
+    def minknow_gui_configured(self) -> bool:
         """True when MinKNOW was configured via workflow TOML or env at launch."""
         return self._minknow_workflow_config is not None
 
@@ -1472,11 +1525,8 @@ class GUILauncher:
             return False
 
         if not self.security_store.has_users():
-            if not ensure_gui_password_set():
-                logging.error("GUI password check failed. Cannot start GUI.")
-                return False
-            if not self._bootstrap_security_from_legacy_password():
-                logging.error("Could not bootstrap admin user from legacy password hash.")
+            if not ensure_default_admin_password_set(self.auth_service):
+                logging.error("Default admin password setup failed. Cannot start GUI.")
                 return False
 
         self.workflow_runner = workflow_runner
@@ -1502,6 +1552,10 @@ class GUILauncher:
                 "MinKNOW GUI enabled (host=%s)",
                 self._minknow_workflow_config.settings.host,
             )
+            if not self.minknow_gui_enabled:
+                logging.info(
+                    "MinKNOW GUI hidden: optional dependency minknow_api is not installed"
+                )
         elif self.workflow_toml_path is not None:
             logging.info(
                 "MinKNOW GUI disabled: no [minknow] section in %s",
@@ -2442,8 +2496,11 @@ class GUILauncher:
             def minknow_control():
                 """Dedicated MinKNOW sequencer monitoring and run control page."""
                 _setup_global_resources()
-                if not self.minknow_gui_enabled:
+                if not self.minknow_gui_configured:
                     self._render_minknow_not_configured_page()
+                    return
+                if not self.minknow_gui_enabled:
+                    self._render_minknow_unavailable_page()
                     return
                 if not self._current_user_can_remote_control_minknow():
                     self._audit_log(
@@ -7623,6 +7680,30 @@ title="View in IGV"
                     "Add a [minknow] section to your workflow TOML, set MINKNOW_HOST "
                     "or MINKNOW_ENABLED, or point MINKNOW_PRESET at a preset file, "
                     "then restart robin workflow."
+                ).classes("classification-insight-foot")
+                ui.button(
+                    "Back to samples",
+                    icon="arrow_back",
+                    on_click=lambda: ui.navigate.to("/live_data"),
+                ).props("color=primary no-caps outline")
+
+    def _render_minknow_unavailable_page(self) -> None:
+        """Explain that MinKNOW UI is unavailable without the optional API."""
+        with theme.frame(
+            "R.O.B.I.N - Sequencer (MinKNOW)",
+            smalltitle="Sequencer",
+            batphone=False,
+            center=self.center,
+            setup_notifications=self._setup_notification_system,
+        ):
+            with ui.column().classes("w-full max-w-2xl mx-auto p-4 md:p-6 gap-3"):
+                ui.label("MinKNOW API not installed").classes(
+                    "classification-insight-heading text-headline-small"
+                )
+                ui.label(
+                    "This ROBIN installation does not include the optional MinKNOW "
+                    "API, so sequencer control is unavailable. Install ROBIN with "
+                    "`pip install 'robin[minknow]'` and restart the workflow GUI."
                 ).classes("classification-insight-foot")
                 ui.button(
                     "Back to samples",

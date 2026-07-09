@@ -103,3 +103,25 @@ class AuthService:
         )
         self.store.assign_role(user_id, "admin")
         return True
+
+    def bootstrap_default_admin(
+        self,
+        password: str,
+        *,
+        username: str = "admin",
+        must_change_password: bool = False,
+    ) -> bool:
+        """Create the initial admin user from a plain-text password."""
+        if self.store.has_users():
+            return True
+        password = str(password or "")
+        username = str(username or "").strip()
+        if not username or not password:
+            return False
+        self.create_user(
+            username,
+            password,
+            role="admin",
+            must_change_password=must_change_password,
+        )
+        return True

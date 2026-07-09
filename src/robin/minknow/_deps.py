@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import importlib.util
 from typing import Any
+
+
+def minknow_api_available() -> bool:
+    """Return whether ``minknow_api`` can be imported in this environment."""
+    return importlib.util.find_spec("minknow_api") is not None
 
 
 def require_minknow_api() -> Any:

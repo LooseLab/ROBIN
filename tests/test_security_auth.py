@@ -88,3 +88,15 @@ def test_bootstrap_admin_explicit_no_must_change(tmp_path: Path) -> None:
     user = store.get_user_by_id(user_id)
     assert user is not None
     assert not user.must_change_password
+
+
+def test_bootstrap_default_admin_from_password(tmp_path: Path) -> None:
+    store, auth = _store_and_auth(tmp_path)
+
+    created = auth.bootstrap_default_admin("setup-pass")
+
+    assert created
+    user = auth.verify_login("admin", "setup-pass")
+    assert user is not None
+    assert store.user_has_role(user.id, "admin")
+    assert not user.must_change_password

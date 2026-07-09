@@ -151,7 +151,7 @@ def resolve_minknow_gui_config(
 
 
 def minknow_gui_available() -> bool:
-    """Return whether the running GUI was started with MinKNOW configured."""
+    """Return whether the running GUI can expose the MinKNOW page."""
     try:
         from robin.gui.app import get_gui_launcher
 
@@ -162,7 +162,7 @@ def minknow_gui_available() -> bool:
 
 
 def minknow_gui_accessible() -> bool:
-    """Return whether MinKNOW is configured and allowed for the signed-in user."""
+    """Return whether MinKNOW is available and allowed for the signed-in user."""
     try:
         from robin.gui.app import get_gui_launcher
 
