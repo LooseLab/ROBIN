@@ -222,6 +222,7 @@ def delete_sample_data(work_dir: Path, sample_id: str) -> SampleLifecycleResult:
             except OSError:
                 pass
 
+    chown_tree_to_host_user(sample_dir)
     remove_tree(sample_dir)
     return SampleLifecycleResult(
         sample_id=sample_id,

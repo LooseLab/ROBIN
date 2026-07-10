@@ -290,6 +290,7 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
                                 )
                     progress_dialog.open()
 
+                    launcher._prepare_sample_removal(sample_id)
                     try:
                         if kind == "delete":
                             progress_label.set_text(f"Deleting {sample_id}…")
@@ -339,6 +340,7 @@ def build_sample_lifecycle_panel(launcher: "GUILauncher") -> None:
                         )
                         ui.notify(str(exc), type="negative")
                     finally:
+                        launcher._finish_sample_removal(sample_id)
                         progress_dialog.close()
                         confirm_typed.value = ""
                         confirm_typed.set_visibility(False)

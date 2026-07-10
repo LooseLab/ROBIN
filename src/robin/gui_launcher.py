@@ -531,6 +531,7 @@ class GUILauncher:
 
         # Master record system - centralized source of truth for samples
         self._samples_master_record: Dict[str, SampleRecord] = {}
+        self._samples_pending_removal: set[str] = set()
         # Per-GUI-process snapshot of on-disk totals from master.csv at first use per sample.
         # Coordinator stats are session-only; merged display = baseline + session counters.
         self._samples_job_baseline: Dict[str, Dict[str, int]] = {}
@@ -1144,9 +1145,10 @@ class GUILauncher:
             "pending_jobs": wp,
         }
 
-    def _evict_sample_from_gui_state(self, sample_id: str) -> None:
-        """Remove a sample from in-memory GUI tracking after delete or archive."""
+    def _prepare_sample_removal(self, sample_id: str) -> None:
+        """Block GUI rescans from rewriting a sample folder while delete/archive runs."""
         with self._samples_record_lock:
+            self._samples_pending_removal.add(sample_id)
             self._samples_master_record.pop(sample_id, None)
         self._finalized_samples.discard(sample_id)
         self._selected_sample_ids.discard(sample_id)
@@ -1161,6 +1163,15 @@ class GUILauncher:
         except Exception:
             pass
         self._save_master_record_cache()
+
+    def _finish_sample_removal(self, sample_id: str) -> None:
+        """Clear the delete/archive guard so background scans can resume."""
+        with self._samples_record_lock:
+            self._samples_pending_removal.discard(sample_id)
+
+    def _evict_sample_from_gui_state(self, sample_id: str) -> None:
+        """Remove a sample from in-memory GUI tracking after delete or archive."""
+        self._finish_sample_removal(sample_id)
         try:
             if hasattr(self, "samples_table"):
                 self._refresh_table_from_master()
@@ -1291,6 +1302,8 @@ class GUILauncher:
                         continue
 
                     sid = sample_dir.name
+                    if sid in self._samples_pending_removal:
+                        continue
                     seen_sample_ids.add(sid)
                     master_csv = sample_dir / "master.csv"
 
