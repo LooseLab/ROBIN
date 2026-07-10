@@ -1287,6 +1287,18 @@ def generate_master_bed(
                         coverage_data=coverage_data,
                     )
                 log.info(f"Generated master BED file: {master_bed_path} with {len(sorted_df)} regions")
+                try:
+                    from robin.readfish.live_updater import notify_readfish_live_targets
+
+                    notify_readfish_live_targets(
+                        sample_id=sample_id,
+                        master_bed_path=master_bed_path,
+                    )
+                except Exception:
+                    log.debug(
+                        "readfish live target update skipped or failed",
+                        exc_info=True,
+                    )
                 return master_bed_path
 
         log.warning(
