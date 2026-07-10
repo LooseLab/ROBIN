@@ -87,6 +87,9 @@ minknow = [
     # Install a minor version matching MinKNOW Core, e.g. pip install 'minknow_api>=6.8.0,<6.9.0'
     "minknow_api>=6.8.0,<7.0.0",
 ]
+readfish = [
+    "readfish[all]",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

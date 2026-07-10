@@ -48,11 +48,21 @@ Example config name (verify against your MinKNOW / kit release):
 
 ## Adaptive sampling
 
-If you use adaptive sampling:
+ROBIN supports two adaptive sampling backends, selected in `[minknow.preset]`:
+
+| Backend | TOML | Behaviour |
+|---------|------|-----------|
+| **MinKNOW native** (default) | `adaptive_sampling_backend = "minknow"` + `read_until_filter` | Configures Read Until when starting the protocol |
+| **readfish** | `adaptive_sampling_backend = "readfish"` + `read_until_filter` | Starts MinKNOW **without** native Read Until; launches `readfish targets` after protocol start |
+| **Off** | `adaptive_sampling_backend = "none"` | No adaptive sampling |
+
+For **readfish**, add a `[readfish]` table (see `examples/minknow.readfish.example.toml`). Install with `pip install 'robin[readfish]'`. readfish needs Dorado server access and panel/reference paths on the sequencer or GPU host.
+
+If you use adaptive sampling (either backend):
 
 - Use the **BED** for your ROBIN / panel build (e.g. panel BED from resources — confirm path for your install).  
 - Use the **same reference** as ROBIN and MinKNOW alignment.  
-- Mode is typically **enrich** per your assay design.  
+- Mode is typically **enrich** per your assay design (`read_until_filter = "enrich"`).  
 
 ---
 

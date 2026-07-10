@@ -15,6 +15,7 @@ from robin.minknow.workflow_refs import (
     apply_workflow_refs_to_preset,
     extract_workflow_ref_keys,
 )
+from robin.readfish.config import ReadfishConfig
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class MinKnowWorkflowConfig:
 
     settings: MinKnowSettings
     preset: Optional[RobinRunPreset] = None
+    readfish: Optional[ReadfishConfig] = None
 
 
 def load_minknow_toml(
@@ -60,6 +62,14 @@ def load_minknow_toml(
         host = str(raw.get("host") or "localhost").strip()
         settings = MinKnowSettings.from_host(host)
         config = MinKnowWorkflowConfig(settings=settings, preset=preset)
+
+    readfish = ReadfishConfig.from_mapping(raw.get("readfish"))
+    if readfish is not None:
+        config = MinKnowWorkflowConfig(
+            settings=config.settings,
+            preset=config.preset,
+            readfish=readfish,
+        )
 
     if config.preset is None:
         return config

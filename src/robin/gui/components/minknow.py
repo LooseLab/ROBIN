@@ -150,6 +150,7 @@ def add_minknow_sequencer_section(
         "runner_reference": runner_reference,
         "runner_panel": runner_panel,
         "cached_preset": None,
+        "cached_readfish": None,
         "pending_stop": None,
         "selected_position": "",
         "last_position_names": [],
@@ -201,12 +202,14 @@ def add_minknow_sequencer_section(
             )
             preset = config.preset
             state["cached_preset"] = preset
+            state["cached_readfish"] = config.readfish
             if config.settings.host:
                 state["host"] = config.settings.host
             state["auto_watch"] = config.settings.auto_add_paths
             return preset
         except Exception as exc:
             state["cached_preset"] = None
+            state["cached_readfish"] = None
             LOGGER.debug("Failed to load MinKNOW preset", exc_info=True)
             _notify(f"Preset error: {exc}", kind="negative")
             return None
@@ -1028,6 +1031,7 @@ def add_minknow_sequencer_section(
             "position": position,
             "sample_id": sample_id,
             "experiment_group": experiment_group,
+            "readfish": state.get("cached_readfish"),
         }
         start_confirm_text.set_text("\n".join(lines))
         start_dialog.open()
@@ -1044,6 +1048,7 @@ def add_minknow_sequencer_section(
             position=pending["position"],
             sample_id=pending["sample_id"],
             experiment_group=pending.get("experiment_group"),
+            readfish=pending.get("readfish"),
         )
         try:
             result = await run.io_bound(
@@ -1060,10 +1065,15 @@ def add_minknow_sequencer_section(
             _notify(str(exc), kind="negative")
             return
 
+        message = f"Started run {result.run_id} on {result.position}"
+        if result.readfish_pid is not None:
+            message += f" (readfish pid {result.readfish_pid})"
         _notify(
-            f"Started run {result.run_id} on {result.position}",
+            message,
             kind="positive",
         )
+        if result.readfish_log_file:
+            _notify(f"readfish log: {result.readfish_log_file}", kind="info")
         for warning in result.warnings:
             _notify(warning, kind="warning")
         await _refresh_snapshot()

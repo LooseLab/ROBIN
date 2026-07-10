@@ -465,6 +465,7 @@ def start(
         position=resolved_position,
         sample_id=sample_id,
         experiment_group=experiment_group,
+        readfish=workflow_config_loaded.readfish,
     )
 
     try:
@@ -488,6 +489,11 @@ def start(
     click.echo(f"  experiment_group: {result.experiment_group}")
     for warning in result.warnings:
         click.echo(f"Warning: {warning}")
+    if result.readfish_pid is not None:
+        click.echo("Started readfish:")
+        click.echo(f"  pid: {result.readfish_pid}")
+        click.echo(f"  log_file: {result.readfish_log_file}")
+        click.echo(f"  toml: {result.readfish_toml_path}")
 
 
 @minknow.command("stop")

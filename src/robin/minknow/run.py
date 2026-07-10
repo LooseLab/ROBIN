@@ -18,6 +18,7 @@ from robin.minknow.model_resolve import (
     resolve_preset_simplex_model,
 )
 from robin.minknow.preset import RobinRunPreset
+from robin.readfish.config import ReadfishConfig
 
 LOGGER = logging.getLogger(__name__)
 
@@ -42,6 +43,9 @@ class StartRunResult:
     sample_id: str
     experiment_group: str
     warnings: tuple[str, ...] = ()
+    readfish_pid: Optional[int] = None
+    readfish_log_file: Optional[str] = None
+    readfish_toml_path: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -52,6 +56,7 @@ class StartRunRequest:
     position: str
     sample_id: str
     experiment_group: Optional[str] = None
+    readfish: Optional[ReadfishConfig] = None
 
 
 class MinKnowStartError(RuntimeError):
@@ -230,7 +235,7 @@ def start_protocol_run(
             )
 
         read_until_args = None
-        if preset.adaptive_sampling_enabled():
+        if preset.minknow_adaptive_sampling_enabled():
             read_until_args = protocols.ReadUntilArgs(
                 filter_type=preset.read_until_filter,
                 reference_files=[preset.effective_read_until_reference()],
@@ -277,6 +282,31 @@ def start_protocol_run(
         except Exception:
             LOGGER.debug("Error closing MinKNOW manager", exc_info=True)
 
+    readfish_pid: Optional[int] = None
+    readfish_log_file: Optional[str] = None
+    readfish_toml_path: Optional[str] = None
+    if preset.readfish_adaptive_sampling_enabled():
+        from robin.readfish.config import ReadfishConfig
+        from robin.readfish.runner import ReadfishStartError, start_readfish_targets
+
+        readfish_config = request.readfish if request.readfish is not None else ReadfishConfig()
+        try:
+            readfish_result = start_readfish_targets(
+                preset=preset,
+                config=readfish_config,
+                auth=auth,
+                position=position.name,
+                sample_id=request.sample_id,
+                experiment_group=experiment_group,
+            )
+        except ReadfishStartError as exc:
+            raise MinKnowStartError(
+                f"MinKNOW protocol started (run_id={run_id}) but readfish failed: {exc}"
+            ) from exc
+        readfish_pid = readfish_result.pid
+        readfish_log_file = readfish_result.log_file
+        readfish_toml_path = readfish_result.toml_path
+
     return StartRunResult(
         run_id=run_id,
         position=position.name,
@@ -285,6 +315,9 @@ def start_protocol_run(
         sample_id=request.sample_id,
         experiment_group=experiment_group,
         warnings=tuple(model_warnings),
+        readfish_pid=readfish_pid,
+        readfish_log_file=readfish_log_file,
+        readfish_toml_path=readfish_toml_path,
     )
 
 
