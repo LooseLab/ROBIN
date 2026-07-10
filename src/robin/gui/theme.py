@@ -1,3 +1,4 @@
+src/robin/gui/theme.py
 """
 Module: theme
 
@@ -205,6 +206,31 @@ def _sync_dom_dark_classes(is_dark: bool) -> None:
         ui.run_javascript(js, timeout=2.0)
     except Exception:
         pass
+
+
+def _sync_dom_batman_classes(enabled: bool) -> None:
+    """Toggle BATMAN mode page chrome on ``document.body``."""
+    js_flag = "true" if bool(enabled) else "false"
+    js = f"""
+        (() => {{
+            const enabled = {js_flag};
+            const body = document.body;
+            if (body) {{
+                body.classList.toggle('batman-mode', enabled);
+            }}
+        }})();
+    """
+    try:
+        ui.run_javascript(js, timeout=2.0)
+    except Exception:
+        pass
+
+
+def _batman_mode_active() -> bool:
+    try:
+        return bool(app.storage.general.get("batman_mode", False))
+    except Exception:
+        return False
 
 
 def get_imagefile():
@@ -711,10 +737,33 @@ def frame(
     global quitdialog
     if batphone:
         navtitle = f"BATMAN & {navtitle}"
+        try:
+            app.storage.general["batman_mode"] = True
+        except Exception:
+            pass
+        _sync_dom_batman_classes(True)
+    else:
+        try:
+            app.storage.general["batman_mode"] = False
+        except Exception:
+            pass
+        _sync_dom_batman_classes(False)
 
     # Store center in app storage if provided
     if center:
         app.storage.general["center"] = center
+
+    # Quasar brand colors — BATMAN: black primary surfaces, yellow accent
+    if batphone:
+        ui.colors(
+            primary="#000000",
+            secondary="#FDE311",
+            accent="#FDE311",
+            dark="#000000",
+            positive="#FDE311",
+        )
+    else:
+        ui.colors(primary="#16A34A")
 
     # Add custom HTML and CSS to the head of the page
     ui.add_head_html(
@@ -1104,9 +1153,11 @@ def frame(
     def _sync_dark_mode_client_classes(*, force: bool = False) -> None:
         cur = get_user_dark_mode(default=False)
         if not force and _last_dark_mode_sig[0] == cur:
+            _sync_dom_batman_classes(_batman_mode_active())
             return
         _last_dark_mode_sig[0] = cur
         _sync_dom_dark_classes(cur)
+        _sync_dom_batman_classes(_batman_mode_active())
 
     def _on_dark_mode_toggle(e: Any) -> None:
         raw_value = getattr(e, "value", None)
@@ -1362,7 +1413,6 @@ def frame(
 
             # Center: Buttons with proper spacing
             with ui.row().classes("items-center gap-2 flex-shrink-0"):
-                ui.colors(primary="#16A34A")  # Emerald 600 (Editorial Bioinformatics primary)
                 ui.button("Links", on_click=dialog.open).classes("rounded-md mobile-button text-xs px-2 py-1")
 
                 with ui.button(icon="info").classes("rounded-md mobile-button px-2 py-1"):

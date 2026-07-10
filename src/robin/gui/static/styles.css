@@ -567,30 +567,305 @@ pre,
   color: var(--md-on-primary) !important;
 }
 
-/* BATMAN mode styling - Keep original styling */
-.q-header.batphone {
-  color: #FDE311 !important;
+/* BATMAN mode — LEGO Batman: black chrome, yellow accents, strict contrast */
+.batman-mode {
+  --batman-yellow: #FDE311;
+  --batman-black: #000000;
+  --batman-on-yellow: #000000;
+  --batman-on-black: #FDE311;
+  --md-primary-rgb: 0, 0, 0;
+  --md-primary: #000000;
+  --md-primary-container: #FFF9C4;
+  --md-on-primary: #FDE311;
+  --md-on-primary-container: #000000;
+  --md-inverse-primary: #FDE311;
+  --semantic-positive: #000000;
+  --shell-chrome-top: #000000;
+  --shell-chrome-bottom: #000000;
+  --shell-chrome-edge: #FDE311;
+  --app-bg-top: #FFF9E6;
+  --app-bg-bottom: #FFFCF0;
+  --sample-card-gradient-light: linear-gradient(
+    to bottom,
+    rgb(255 249 230) 0%,
+    rgb(255 255 255) 45%,
+    rgb(255 255 255) 100%
+  );
+}
+
+.body--dark.batman-mode,
+.batman-mode.body--dark {
+  --shell-page-top: #0a0a0a;
+  --shell-page-bottom: #141414;
+  --md-primary: #000000;
+  --md-on-primary: #FDE311;
+  --app-bg-top: #0a0a0a;
+  --app-bg-bottom: #141414;
+  --sample-card-gradient-dark: linear-gradient(
+    to bottom,
+    rgba(253, 227, 17, 0.08) 0%,
+    rgba(15, 23, 42, 0.4) 100%
+  );
+}
+
+.batman-mode::before {
+  background: radial-gradient(
+    ellipse 120% 50% at 50% -10%,
+    rgba(253, 227, 17, 0.12),
+    transparent 58%
+  ) !important;
+}
+
+/* Black chrome — header & footer (yellow ink on black only) */
+.batman-mode .q-header,
+.batman-mode .q-footer,
+.q-header.batphone,
+.q-footer.batphone,
+.body--dark .q-header.batphone,
+.body--dark .q-footer.batphone {
+  color: var(--batman-on-black) !important;
+  background: var(--batman-black) !important;
+  background-image: none !important;
+  border-color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-header,
+.q-header.batphone,
+.body--dark .q-header.batphone {
   height: 64px;
-  background-color: #000000;
-  border-bottom: 1px solid #FDE311;
+  border-bottom: 3px solid var(--batman-yellow) !important;
+  box-shadow: 0 2px 12px rgba(253, 227, 17, 0.25);
 }
 
-.q-header.batphone.fade {
-  color: #FDE311 !important;
-  background-color: rgba(0, 0, 0, 0.9);
+.batman-mode .q-footer,
+.q-footer.batphone,
+.body--dark .q-footer.batphone {
+  border-top: 3px solid var(--batman-yellow) !important;
+  box-shadow: 0 -2px 12px rgba(253, 227, 17, 0.2);
+}
+
+.batman-mode .q-header .q-btn,
+.batman-mode .q-header .q-icon,
+.batman-mode .q-header .q-toolbar__title,
+.batman-mode .q-header .text-headline-medium,
+.batman-mode .q-header strong,
+.batman-mode .q-header .q-label,
+.batman-mode .q-header .q-circular-progress__text,
+.q-header.batphone .q-btn,
+.q-header.batphone .q-icon,
+.q-header.batphone .q-toolbar__title,
+.q-header.batphone .text-headline-medium,
+.q-header.batphone strong,
+.q-header.batphone .q-label,
+.q-header.batphone .q-circular-progress__text {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header .q-circular-progress__circle,
+.q-header.batphone .q-circular-progress__circle {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header a:link:not(.browser-window *),
+.batman-mode .q-header a:visited:not(.browser-window *),
+.q-header.batphone a:link:not(.browser-window *),
+.q-header.batphone a:visited:not(.browser-window *) {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header a:hover:not(.browser-window *),
+.q-header.batphone a:hover:not(.browser-window *) {
+  color: var(--batman-black) !important;
+  background-color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-footer .q-btn,
+.batman-mode .q-footer .q-label,
+.batman-mode .q-footer .q-icon,
+.batman-mode .q-footer .text-body-small,
+.batman-mode .q-footer .text-xs,
+.q-footer.batphone .q-btn,
+.q-footer.batphone .q-label,
+.q-footer.batphone .q-icon,
+.q-footer.batphone .text-body-small,
+.q-footer.batphone .text-xs {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .q-header.fade,
+.batman-mode .q-footer.fade,
+.q-header.batphone.fade,
+.q-footer.batphone.fade,
+.body--dark .q-header.batphone.fade,
+.body--dark .q-footer.batphone.fade {
+  background: rgba(0, 0, 0, 0.94) !important;
   backdrop-filter: blur(20px);
 }
 
-.q-footer.batphone {
-  color: #FDE311 !important;
-  background-color: #000000;
-  border-top: 1px solid #FDE311;
+/* Primary actions: black field, yellow label (never yellow fill + white text) */
+.batman-mode .q-btn.bg-primary,
+.batman-mode .q-btn--standard.bg-primary,
+.batman-mode .q-btn.bg-primary.text-white,
+.batman-mode .q-btn.bg-primary .q-btn__content,
+.batman-mode .q-btn.bg-primary .q-icon,
+.batman-mode .q-btn.bg-primary .block,
+.batman-mode .q-footer .q-btn--standard,
+.q-footer.batphone .q-btn--standard {
+  background-color: var(--batman-black) !important;
+  color: var(--batman-on-black) !important;
+  border: 2px solid var(--batman-yellow) !important;
 }
 
-.q-footer.batphone.fade {
-  color: #FDE311 !important;
-  background-color: rgba(0, 0, 0, 0.9);
-  backdrop-filter: blur(20px);
+/* Yellow-filled controls → black ink */
+.batman-mode .q-btn.bg-secondary,
+.batman-mode .q-btn.bg-accent,
+.batman-mode .q-btn.bg-positive,
+.batman-mode .q-btn.bg-warning {
+  color: var(--batman-on-yellow) !important;
+}
+
+/* Menu chrome (white panel): destructive actions stay readable */
+.batman-mode .q-menu .q-btn.bg-error,
+.batman-mode .q-menu .q-btn.bg-error .q-btn__content,
+.batman-mode .q-menu .q-btn.bg-error .q-icon {
+  background-color: var(--batman-black) !important;
+  color: var(--batman-on-black) !important;
+  border: 1px solid var(--batman-yellow) !important;
+}
+
+/* Page content: no yellow type on pale surfaces */
+.batman-mode .q-page .text-primary,
+.batman-mode .q-page .q-btn--flat.text-primary,
+.batman-mode .q-page .q-btn--outline.text-primary,
+.batman-mode .q-card .text-primary,
+.batman-mode .classification-insight-shell .text-primary {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .q-page .text-primary,
+.body--dark.batman-mode .q-card .text-primary {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .classification-insight-shell {
+  border-color: rgba(253, 227, 17, 0.55);
+  box-shadow: 0 1px 0 rgba(253, 227, 17, 0.15);
+}
+
+.batman-mode .classification-insight-heading {
+  color: var(--batman-black);
+}
+
+.body--dark.batman-mode .classification-insight-heading {
+  color: var(--batman-on-black);
+}
+
+.batman-mode .classification-insight-card {
+  border: 1px solid rgba(253, 227, 17, 0.35);
+}
+
+.batman-mode .classification-insight-icon.q-icon,
+.batman-mode .classification-insight-icon {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .classification-insight-icon.q-icon,
+.body--dark.batman-mode .classification-insight-icon {
+  color: var(--batman-on-black) !important;
+}
+
+/* Confidence bar: yellow fill is OK; label beside it must be black on white cards */
+.batman-mode .classification-insight-bar--high {
+  background-color: var(--batman-yellow) !important;
+}
+
+.batman-mode .classification-insight-level--high {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .classification-insight-level--high {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .text-primary {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .text-primary {
+  color: var(--batman-on-black) !important;
+}
+
+.batman-mode .run-summary-shell {
+  border-color: rgba(253, 227, 17, 0.5);
+}
+
+.batman-mode .run-summary-shell .run-summary-title.q-label,
+.batman-mode .run-summary-shell .run-summary-title {
+  border-bottom-color: rgba(253, 227, 17, 0.35);
+}
+
+.batman-mode .run-summary-icon.q-icon,
+.batman-mode .run-summary-icon {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .run-summary-icon.q-icon,
+.body--dark.batman-mode .run-summary-icon {
+  color: var(--batman-on-black) !important;
+}
+
+/* Threshold pills on cards: yellow tint + black text */
+.batman-mode .analysis-insight-pill--emerald {
+  background-color: var(--batman-yellow) !important;
+  color: var(--batman-on-yellow) !important;
+}
+
+.batman-mode .analysis-insight-pill--sky,
+.batman-mode .analysis-insight-pill--amber,
+.batman-mode .analysis-insight-pill--rose,
+.batman-mode .analysis-insight-pill--violet {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .analysis-insight-pill--emerald {
+  background-color: var(--batman-black) !important;
+  color: var(--batman-on-black) !important;
+  border: 1px solid var(--batman-yellow);
+}
+
+/* Tailwind green accents on light cards → black for contrast */
+.batman-mode .classification-insight-shell .text-green-600,
+.batman-mode .classification-insight-shell .text-green-800,
+.batman-mode .classification-insight-shell .text-emerald-700,
+.batman-mode #analysis-detail-coverage .text-green-500,
+.batman-mode #analysis-detail-coverage .text-green-600,
+.batman-mode #analysis-detail-coverage .text-green-800 {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .classification-insight-shell .text-green-600,
+.body--dark.batman-mode #analysis-detail-coverage .text-green-500,
+.body--dark.batman-mode #analysis-detail-coverage .text-green-600 {
+  color: var(--batman-on-black) !important;
+}
+
+/* Spinners / progress rings outside chrome still need visible yellow */
+.batman-mode .q-page .q-spinner.text-primary,
+.batman-mode .q-page .q-circular-progress.text-primary,
+.batman-mode .q-page .q-linear-progress.text-primary {
+  color: var(--batman-black) !important;
+}
+
+.body--dark.batman-mode .q-page .q-spinner.text-primary,
+.body--dark.batman-mode .q-page .q-circular-progress.text-primary {
+  color: var(--batman-yellow) !important;
+}
+
+.batman-mode .q-header .q-btn--flat,
+.batman-mode .q-header .q-btn--flat .q-icon,
+.q-header.batphone .q-btn--flat,
+.q-header.batphone .q-btn--flat .q-icon {
+  color: var(--batman-on-black) !important;
 }
 
 .q-page,

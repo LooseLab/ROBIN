@@ -582,6 +582,13 @@ class GUILauncher:
         """Resolved ``[minknow]`` settings for the GUI, if configured."""
         return self._minknow_workflow_config
 
+    @property
+    def batman_mode(self) -> bool:
+        """True when readfish adaptive sampling with live target updates is configured."""
+        from robin.readfish.batman import is_batman_workflow_config
+
+        return is_batman_workflow_config(self._minknow_workflow_config)
+
     def _get_selected_sample_ids(self) -> set[str]:
         """Return per-client export selections, with instance fallback for non-UI contexts."""
         fallback = set(getattr(self, "_selected_sample_ids", set()) or set())
@@ -686,7 +693,7 @@ class GUILauncher:
         with theme.frame(
             navtitle,
             smalltitle=smalltitle,
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -755,7 +762,7 @@ class GUILauncher:
         with theme.frame(
             navtitle,
             smalltitle=smalltitle,
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -776,7 +783,7 @@ class GUILauncher:
         with theme.frame(
             "R.O.B.I.N - Sequencer (MinKNOW)",
             smalltitle="Approval required",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -1642,6 +1649,9 @@ class GUILauncher:
                 "or set ROBIN_WORKFLOW_TOML / MINKNOW_HOST"
             )
 
+        if self.batman_mode:
+            logging.info("BATMAN mode enabled (readfish + live target updates)")
+
         # Store absolute monitored directory to avoid relative path issues
         try:
             self.monitored_directory = (
@@ -2447,7 +2457,7 @@ class GUILauncher:
                 with theme.frame(
                     "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>",
                     smalltitle="<strong>R.O.B.I.N</strong>",
-                    batphone=False,
+                    batphone=self.batman_mode,
                     center=self.center,
                 ):
                     with ui.element("div").classes("w-full min-w-0").props(
@@ -2946,7 +2956,7 @@ class GUILauncher:
         with theme.frame(
             "<strong>R</strong>apid nanop<strong>O</strong>re <strong>B</strong>rain intraoperat<strong>I</strong>ve classificatio<strong>N</strong>",
             smalltitle="<strong>R.O.B.I.N</strong>",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -3045,7 +3055,7 @@ class GUILauncher:
         with theme.frame(
             "R.O.B.I.N - Sample Tracking Overview",
             smalltitle="Samples",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -5635,7 +5645,7 @@ class GUILauncher:
         with theme.frame(
             f"R.O.B.I.N - Sample {sample_id}{title_suffix}",
             smalltitle=f"{sample_id}{title_suffix}".strip(),
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -6374,7 +6384,7 @@ class GUILauncher:
             with theme.frame(
                 f"R.O.B.I.N - Sample Details",
                 smalltitle="Details",
-                batphone=False,
+                batphone=self.batman_mode,
                 center=self.center,
                 setup_notifications=self._setup_notification_system,
             ):
@@ -6409,7 +6419,7 @@ class GUILauncher:
         with theme.frame(
             f"R.O.B.I.N - Sample Details: {sample_id}{title_suffix}",
             smalltitle=f"{sample_id} Details{title_suffix}".strip(),
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -7742,7 +7752,7 @@ title="View in IGV"
         with theme.frame(
             "R.O.B.I.N - Sequencer (MinKNOW)",
             smalltitle="Sequencer",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -7767,7 +7777,7 @@ title="View in IGV"
         with theme.frame(
             "R.O.B.I.N - Sequencer (MinKNOW)",
             smalltitle="Sequencer",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -7794,7 +7804,7 @@ title="View in IGV"
         with theme.frame(
             "R.O.B.I.N - Sequencer (MinKNOW)",
             smalltitle="Sequencer",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -7829,7 +7839,7 @@ title="View in IGV"
         with theme.frame(
             "R.O.B.I.N - Workflow Monitor",
             smalltitle="Samples",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -10235,7 +10245,7 @@ title="View in IGV"
             with theme.frame(
                 "R.O.B.I.N - Watched Folders",
                 smalltitle="Watched Folders",
-                batphone=False,
+                batphone=self.batman_mode,
                 center=self.center,
                 setup_notifications=self._setup_notification_system,
             ):
@@ -10270,7 +10280,7 @@ title="View in IGV"
         with theme.frame(
             "R.O.B.I.N - Watched Folders",
             smalltitle="Watched Folders",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
@@ -10588,7 +10598,7 @@ title="View in IGV"
         with theme.frame(
             "R.O.B.I.N - Generate Sample Identifier",
             smalltitle="Sample ID Generator",
-            batphone=False,
+            batphone=self.batman_mode,
             center=self.center,
             setup_notifications=self._setup_notification_system,
         ):
