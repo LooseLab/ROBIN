@@ -1290,13 +1290,25 @@ def generate_master_bed(
                 try:
                     from robin.readfish.live_updater import notify_readfish_live_targets
 
-                    notify_readfish_live_targets(
+                    live_path = notify_readfish_live_targets(
                         sample_id=sample_id,
                         master_bed_path=master_bed_path,
                     )
+                    if live_path is not None:
+                        log.info(
+                            "readfish live TOML written after master BED: %s",
+                            live_path,
+                        )
+                    else:
+                        log.info(
+                            "readfish live TOML not written for sample %s "
+                            "(no session, unchanged master BED, or notify skipped)",
+                            sample_id,
+                        )
                 except Exception:
-                    log.debug(
-                        "readfish live target update skipped or failed",
+                    log.warning(
+                        "readfish live target update failed for sample %s",
+                        sample_id,
                         exc_info=True,
                     )
                 return master_bed_path

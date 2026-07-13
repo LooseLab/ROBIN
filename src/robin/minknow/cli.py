@@ -1,4 +1,4 @@
-"""CLI commands for MinKNOW integration."""
+src/robin/minknow/cli.py"""CLI commands for MinKNOW integration."""
 
 from __future__ import annotations
 
@@ -497,12 +497,108 @@ def start(
         click.echo(f"  dorado_config: {result.readfish_dorado_config}")
         click.echo(f"  log_file: {result.readfish_log_file}")
         click.echo(f"  toml: {result.readfish_toml_path}")
+        click.echo(f"  live toml: {result.readfish_toml_path}_live")
+        click.echo(
+            "  verify live: robin minknow readfish-live "
+            f"--sample-id {result.sample_id} --list"
+        )
         click.echo(f"  check process: ps -p {result.readfish_pid} -o pid,etime,cmd")
         click.echo(f"  follow log:    tail -f {result.readfish_log_file}")
     elif preset.readfish_adaptive_sampling_enabled():
         click.echo(
             "Warning: readfish backend was configured but no readfish pid was returned."
         )
+
+
+@minknow.command("readfish-live")
+@click.option(
+    "--sample-id",
+    default=None,
+    help="Sample ID whose readfish live session should be inspected or notified.",
+)
+@click.option(
+    "--master-bed",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Master BED path to apply (writes {toml}_live when a session is registered).",
+)
+@click.option(
+    "--work-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Workflow work directory; used to find the latest master_NNN.bed.",
+)
+@click.option(
+    "--list",
+    "list_sessions",
+    is_flag=True,
+    help="List registered readfish live sessions (memory + disk).",
+)
+def readfish_live(
+    sample_id: Optional[str],
+    master_bed: Optional[Path],
+    work_dir: Optional[Path],
+    list_sessions: bool,
+) -> None:
+    """Verify / trigger readfish ``*_live`` TOML updates from master BED files."""
+    from robin.readfish.live_updater import (
+        ReadfishLiveRegistry,
+        live_toml_path,
+        notify_readfish_live_targets,
+    )
+
+    if list_sessions or (sample_id is None and master_bed is None and work_dir is None):
+        sessions = ReadfishLiveRegistry.list_sessions()
+        if not sessions:
+            click.echo("No registered readfish live sessions.")
+        else:
+            click.echo(f"Registered readfish live sessions ({len(sessions)}):")
+            for session in sessions:
+                live_path = live_toml_path(session.base_toml_path)
+                stamp = Path(f"{live_path}.stamp")
+                click.echo(f"  sample_id: {session.sample_id}")
+                click.echo(f"    base_toml: {session.base_toml_path}")
+                click.echo(f"    live_toml: {live_path}")
+                click.echo(f"    live_exists: {live_path.is_file()}")
+                click.echo(f"    stamp_exists: {stamp.is_file()}")
+                click.echo(f"    region: {session.region_name}")
+                click.echo(
+                    f"    last_master_bed: {session.last_master_bed_path or '(none)'}"
+                )
+        if sample_id is None and master_bed is None and work_dir is None:
+            return
+
+    if sample_id is None:
+        raise click.UsageError("--sample-id is required unless only listing sessions")
+
+    if master_bed is None and work_dir is None:
+        session = ReadfishLiveRegistry.get(sample_id)
+        if session is None:
+            click.echo(f"No live session registered for sample {sample_id!r}.")
+            sys.exit(1)
+        live_path = live_toml_path(session.base_toml_path)
+        stamp = Path(f"{live_path}.stamp")
+        click.echo(f"sample_id: {sample_id}")
+        click.echo(f"base_toml: {session.base_toml_path}")
+        click.echo(f"live_toml: {live_path} (exists={live_path.is_file()})")
+        click.echo(f"stamp: {stamp} (exists={stamp.is_file()})")
+        if stamp.is_file():
+            click.echo(stamp.read_text(encoding="utf-8").rstrip())
+        return
+
+    live_path = notify_readfish_live_targets(
+        sample_id=sample_id,
+        master_bed_path=master_bed,
+        work_dir=work_dir,
+    )
+    if live_path is None:
+        click.echo("No live TOML was written (see [readfish] messages above).")
+        sys.exit(1)
+
+    stamp = Path(f"{live_path}.stamp")
+    click.echo(f"OK: wrote {live_path}")
+    if stamp.is_file():
+        click.echo(f"stamp:\n{stamp.read_text(encoding='utf-8').rstrip()}")
 
 
 @minknow.command("stop")
