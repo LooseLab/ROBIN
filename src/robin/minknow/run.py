@@ -18,6 +18,7 @@ from robin.minknow.model_resolve import (
     resolve_preset_simplex_model,
 )
 from robin.minknow.preset import RobinRunPreset
+from robin.minknow.watch import protocol_state_is_inactive
 from robin.readfish.config import ReadfishConfig
 
 LOGGER = logging.getLogger(__name__)
@@ -181,6 +182,8 @@ def start_protocol_run(
             raise MinKnowStartError(
                 f"No flow cell present in position {request.position}"
             )
+
+        _ensure_position_idle(connection, request.position)
 
         product_code = (
             preset.product_code
@@ -404,6 +407,50 @@ def _enum_name(enum_type: Any, value: Any) -> Optional[str]:
         return enum_type.Name(value).lower()
     except Exception:
         return str(value)
+
+
+def _ensure_position_idle(connection: Any, position_name: str) -> None:
+    """Refuse to start when the position already has a protocol run in progress."""
+    try:
+        run = connection.protocol.get_current_protocol_run()
+    except grpc.RpcError as exc:
+        if exc.code() == grpc.StatusCode.FAILED_PRECONDITION:
+            return
+        raise MinKnowStartError(_format_grpc_error(exc)) from exc
+    except Exception as exc:
+        raise MinKnowStartError(
+            f"Could not check for an active run on {position_name}: {exc}"
+        ) from exc
+
+    run_id = getattr(run, "run_id", None)
+    run_id_text = str(run_id).strip() if run_id is not None else ""
+    if not run_id_text:
+        return
+
+    state = _enum_name(
+        getattr(getattr(connection.protocol, "_pb", None), "ProtocolState", None),
+        getattr(run, "state", None),
+    )
+    if protocol_state_is_inactive(state):
+        return
+
+    sample_id = None
+    user_info = getattr(run, "user_info", None)
+    if user_info is not None:
+        sample_wrapper = getattr(user_info, "sample_id", None)
+        sample_id = getattr(sample_wrapper, "value", None) or sample_wrapper
+        if sample_id is not None:
+            sample_id = str(sample_id).strip() or None
+
+    detail = f"run_id={run_id_text}"
+    if sample_id:
+        detail += f", sample_id={sample_id}"
+    if state:
+        detail += f", protocol_state={state}"
+    raise MinKnowStartError(
+        f"Position {position_name} already has a run in progress ({detail}). "
+        "Stop the current run before starting another."
+    )
 
 
 def _simulation_start_kwargs(preset: RobinRunPreset) -> dict[str, Any]:

@@ -81,7 +81,11 @@ def load_minknow_toml(
         target_panel=target_panel,
         prefer_workflow=prefer_workflow,
     )
-    return MinKnowWorkflowConfig(settings=config.settings, preset=preset)
+    return MinKnowWorkflowConfig(
+        settings=config.settings,
+        preset=preset,
+        readfish=config.readfish,
+    )
 
 
 def extract_minknow_config(raw: Mapping[str, Any]) -> MinKnowWorkflowConfig:

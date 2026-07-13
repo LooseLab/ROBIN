@@ -1,3 +1,4 @@
+src/robin/gui/components/minknow.py
 """MinKNOW sequencer status and run control for the ROBIN GUI."""
 
 from __future__ import annotations
@@ -523,6 +524,9 @@ def add_minknow_sequencer_section(
                             "Start run…",
                             icon="play_arrow",
                         ).props("color=primary dense no-caps")
+                        start_busy_hint = ui.label("").classes(
+                            "text-xs text-amber-700 dark:text-amber-300"
+                        )
 
                         start_controls.update(
                             {
@@ -545,6 +549,7 @@ def add_minknow_sequencer_section(
                                 "bam_reads_input": bam_reads_input,
                                 "simulation_input": simulation_input,
                                 "start_button": start_button,
+                                "start_busy_hint": start_busy_hint,
                             }
                         )
 
@@ -558,6 +563,50 @@ def add_minknow_sequencer_section(
                         radio.value = name
                     if position_fallback_input is not None:
                         position_fallback_input.value = name
+                    _sync_start_controls_for_position()
+
+                def _position_has_active_run(name: str) -> bool:
+                    name = (name or "").strip()
+                    if not name:
+                        return False
+                    result = state.get("last_result")
+                    status = getattr(result, "status", None) if result is not None else None
+                    if status is not None:
+                        from robin.minknow.watch import position_has_active_run as _row_active
+
+                        for position in status.positions:
+                            if position.name == name:
+                                return _row_active(position)
+                        return False
+                    try:
+                        rows = positions_table.rows or []
+                    except NameError:
+                        return False
+                    for row in rows:
+                        if row.get("position") == name and row.get("can_stop"):
+                            return True
+                    return False
+
+                def _sync_start_controls_for_position() -> None:
+                    if compact or not start_controls:
+                        return
+                    button = start_controls.get("start_button")
+                    hint = start_controls.get("start_busy_hint")
+                    position = (state.get("selected_position") or "").strip()
+                    busy = _position_has_active_run(position)
+                    if button is not None:
+                        if busy:
+                            button.disable()
+                        else:
+                            button.enable()
+                    if hint is not None:
+                        if busy:
+                            hint.set_text(
+                                f"{position} already has a run in progress. "
+                                "Stop it before starting another."
+                            )
+                        else:
+                            hint.set_text("")
 
                 def _sync_position_options() -> None:
                     if position_picker_row is None:
@@ -765,6 +814,8 @@ def add_minknow_sequencer_section(
             warning_label.set_text("")
             stream_indicator.set_visibility(False)
             positions_table.rows = []
+            if not compact:
+                _sync_start_controls_for_position()
             return
 
         error_label.set_text("")
@@ -791,6 +842,7 @@ def add_minknow_sequencer_section(
         positions_table.rows = position_table_rows(status)
         if not compact:
             _sync_position_options()
+            _sync_start_controls_for_position()
 
         _maybe_auto_watch(result)
 
@@ -1007,6 +1059,13 @@ def add_minknow_sequencer_section(
         if not position:
             _notify(
                 "Select a flow cell position (or wait for the monitor to list positions).",
+                kind="warning",
+            )
+            return
+        if _position_has_active_run(position):
+            _notify(
+                f"{position} already has a run in progress. "
+                "Stop it before starting another.",
                 kind="warning",
             )
             return

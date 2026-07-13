@@ -22,7 +22,7 @@ def build_readfish_toml_document(
 
     dorado_model = config.dorado_config or dorado_config_name(preset.basecall_simplex_model)
     region = _region_for_filter(
-        name="robin_panel",
+        name=config.live_region_name,
         filter_mode=preset.read_until_filter,
         targets_bed=str(Path(targets_bed).expanduser()),
         min_chunks=config.min_chunks,
