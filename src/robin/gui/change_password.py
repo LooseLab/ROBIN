@@ -1,4 +1,4 @@
-src/robin/gui/change_password.py"""Change-password page for first-login and voluntary password updates."""
+"""Change-password page for first-login and voluntary password updates."""
 
 from __future__ import annotations
 
