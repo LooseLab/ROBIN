@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -22,6 +23,10 @@ from robin.minknow.watch import protocol_state_is_inactive
 from robin.readfish.config import ReadfishConfig
 
 LOGGER = logging.getLogger(__name__)
+
+# Acquisition must be running before readfish attaches to the device.
+_READY_ACQUISITION_STATES = frozenset({"acquisition_running"})
+_TERMINAL_ACQUISITION_STATES = frozenset({"acquisition_completed"})
 
 
 @dataclass(frozen=True)
@@ -282,73 +287,87 @@ def start_protocol_run(
             bam_arguments=bam_arguments,
             **start_kwargs,
         )
+
+        readfish_pid: Optional[int] = None
+        readfish_log_file: Optional[str] = None
+        readfish_toml_path: Optional[str] = None
+        readfish_command: Optional[str] = None
+        readfish_dorado_address: Optional[str] = None
+        readfish_dorado_config: Optional[str] = None
+        if preset.readfish_adaptive_sampling_enabled():
+            from robin.readfish.config import ReadfishConfig
+            from robin.readfish.runner import ReadfishStartError, start_readfish_targets
+
+            readfish_config = (
+                request.readfish if request.readfish is not None else ReadfishConfig()
+            )
+            print(
+                "[readfish] MinKNOW protocol started "
+                f"(run_id={run_id}); waiting for acquisition to run…",
+                flush=True,
+            )
+            wait_for_acquisition_running(
+                connection,
+                protocol_run_id=run_id,
+                position_name=position.name,
+                timeout_seconds=readfish_config.start_wait_timeout_seconds,
+                poll_seconds=readfish_config.start_wait_poll_seconds,
+            )
+            print(
+                "[readfish] Acquisition running; launching readfish adaptive sampling…",
+                flush=True,
+            )
+            try:
+                readfish_result = start_readfish_targets(
+                    preset=preset,
+                    config=readfish_config,
+                    auth=auth,
+                    position=position.name,
+                    sample_id=request.sample_id,
+                    experiment_group=experiment_group,
+                )
+            except ReadfishStartError as exc:
+                raise MinKnowStartError(
+                    f"MinKNOW protocol started (run_id={run_id}) but readfish failed: {exc}"
+                ) from exc
+            readfish_pid = readfish_result.pid
+            readfish_log_file = readfish_result.log_file
+            readfish_toml_path = readfish_result.toml_path
+            readfish_command = " ".join(readfish_result.command)
+            readfish_dorado_address = readfish_result.dorado_address
+            readfish_dorado_config = readfish_result.dorado_config
+        elif preset.minknow_adaptive_sampling_enabled():
+            print(
+                "[readfish] Adaptive sampling backend is minknow (native Read Until); "
+                "readfish will not be launched.",
+                flush=True,
+            )
+        else:
+            print(
+                "[readfish] Adaptive sampling is off; readfish will not be launched.",
+                flush=True,
+            )
+
+        return StartRunResult(
+            run_id=run_id,
+            position=position.name,
+            flow_cell_id=getattr(flow_cell, "flow_cell_id", None),
+            protocol_id=protocol.identifier,
+            sample_id=request.sample_id,
+            experiment_group=experiment_group,
+            warnings=tuple(model_warnings),
+            readfish_pid=readfish_pid,
+            readfish_log_file=readfish_log_file,
+            readfish_toml_path=readfish_toml_path,
+            readfish_command=readfish_command,
+            readfish_dorado_address=readfish_dorado_address,
+            readfish_dorado_config=readfish_dorado_config,
+        )
     finally:
         try:
             manager.close()
         except Exception:
             LOGGER.debug("Error closing MinKNOW manager", exc_info=True)
-
-    readfish_pid: Optional[int] = None
-    readfish_log_file: Optional[str] = None
-    readfish_toml_path: Optional[str] = None
-    readfish_command: Optional[str] = None
-    readfish_dorado_address: Optional[str] = None
-    readfish_dorado_config: Optional[str] = None
-    if preset.readfish_adaptive_sampling_enabled():
-        from robin.readfish.config import ReadfishConfig
-        from robin.readfish.runner import ReadfishStartError, start_readfish_targets
-
-        readfish_config = request.readfish if request.readfish is not None else ReadfishConfig()
-        print(
-            "[readfish] MinKNOW protocol started; launching readfish adaptive sampling…",
-            flush=True,
-        )
-        try:
-            readfish_result = start_readfish_targets(
-                preset=preset,
-                config=readfish_config,
-                auth=auth,
-                position=position.name,
-                sample_id=request.sample_id,
-                experiment_group=experiment_group,
-            )
-        except ReadfishStartError as exc:
-            raise MinKnowStartError(
-                f"MinKNOW protocol started (run_id={run_id}) but readfish failed: {exc}"
-            ) from exc
-        readfish_pid = readfish_result.pid
-        readfish_log_file = readfish_result.log_file
-        readfish_toml_path = readfish_result.toml_path
-        readfish_command = " ".join(readfish_result.command)
-        readfish_dorado_address = readfish_result.dorado_address
-        readfish_dorado_config = readfish_result.dorado_config
-    elif preset.minknow_adaptive_sampling_enabled():
-        print(
-            "[readfish] Adaptive sampling backend is minknow (native Read Until); "
-            "readfish will not be launched.",
-            flush=True,
-        )
-    else:
-        print(
-            "[readfish] Adaptive sampling is off; readfish will not be launched.",
-            flush=True,
-        )
-
-    return StartRunResult(
-        run_id=run_id,
-        position=position.name,
-        flow_cell_id=getattr(flow_cell, "flow_cell_id", None),
-        protocol_id=protocol.identifier,
-        sample_id=request.sample_id,
-        experiment_group=experiment_group,
-        warnings=tuple(model_warnings),
-        readfish_pid=readfish_pid,
-        readfish_log_file=readfish_log_file,
-        readfish_toml_path=readfish_toml_path,
-        readfish_command=readfish_command,
-        readfish_dorado_address=readfish_dorado_address,
-        readfish_dorado_config=readfish_dorado_config,
-    )
 
 
 @dataclass(frozen=True)
@@ -425,6 +444,113 @@ def stop_protocol_run(
         protocol_state=protocol_state,
         waited=wait,
     )
+
+
+def wait_for_acquisition_running(
+    connection: Any,
+    *,
+    protocol_run_id: str,
+    position_name: str,
+    timeout_seconds: float = 600.0,
+    poll_seconds: float = 10.0,
+) -> str:
+    """Block until MinKNOW reports ``ACQUISITION_RUNNING`` for the position.
+
+    readfish must attach after acquisition has actually started; launching during
+    temperature wait / mux scan / protocol setup causes connection failures.
+    """
+    timeout = max(1.0, float(timeout_seconds))
+    poll = max(0.2, float(poll_seconds))
+    deadline = time.monotonic() + timeout
+    last_acq_state: Optional[str] = None
+    last_protocol_state: Optional[str] = None
+
+    while True:
+        protocol_state = _current_protocol_state(connection)
+        last_protocol_state = protocol_state or last_protocol_state
+        if protocol_state_is_inactive(protocol_state):
+            raise MinKnowStartError(
+                f"Protocol on {position_name} ended before acquisition started "
+                f"(run_id={protocol_run_id}, protocol_state={protocol_state})."
+            )
+
+        acq_state = _current_acquisition_state(connection)
+        if acq_state:
+            last_acq_state = acq_state
+        if acq_state in _READY_ACQUISITION_STATES:
+            print(
+                f"[readfish] Acquisition ready on {position_name} "
+                f"(state={acq_state}).",
+                flush=True,
+            )
+            return acq_state
+        if acq_state in _TERMINAL_ACQUISITION_STATES:
+            raise MinKnowStartError(
+                f"Acquisition on {position_name} finished before readfish could start "
+                f"(run_id={protocol_run_id}, acquisition_state={acq_state})."
+            )
+
+        if time.monotonic() >= deadline:
+            detail = f"run_id={protocol_run_id}"
+            if last_protocol_state:
+                detail += f", protocol_state={last_protocol_state}"
+            if last_acq_state:
+                detail += f", acquisition_state={last_acq_state}"
+            else:
+                detail += ", acquisition_state=none"
+            raise MinKnowStartError(
+                f"Timed out after {timeout:.0f}s waiting for acquisition on "
+                f"{position_name} ({detail})."
+            )
+
+        print(
+            "[readfish] Waiting for acquisition…"
+            f" protocol={last_protocol_state or 'unknown'}"
+            f" acquisition={last_acq_state or 'none'}",
+            flush=True,
+        )
+        time.sleep(poll)
+
+
+def _current_protocol_state(connection: Any) -> Optional[str]:
+    try:
+        run = connection.protocol.get_current_protocol_run()
+    except grpc.RpcError as exc:
+        if exc.code() == grpc.StatusCode.FAILED_PRECONDITION:
+            return None
+        raise MinKnowStartError(_format_grpc_error(exc)) from exc
+    except Exception as exc:
+        raise MinKnowStartError(f"Could not read current protocol state: {exc}") from exc
+
+    return _enum_name(
+        getattr(getattr(connection.protocol, "_pb", None), "ProtocolState", None),
+        getattr(run, "state", None),
+    )
+
+
+def _current_acquisition_state(connection: Any) -> Optional[str]:
+    try:
+        run = connection.acquisition.get_current_acquisition_run()
+    except grpc.RpcError as exc:
+        if exc.code() == grpc.StatusCode.FAILED_PRECONDITION:
+            return None
+        raise MinKnowStartError(_format_grpc_error(exc)) from exc
+    except Exception as exc:
+        raise MinKnowStartError(
+            f"Could not read current acquisition state: {exc}"
+        ) from exc
+
+    state_enum = getattr(
+        getattr(connection.acquisition, "_pb", None), "AcquisitionState", None
+    )
+    if state_enum is None:
+        try:
+            import minknow_api.acquisition_pb2 as acquisition_pb2
+
+            state_enum = acquisition_pb2.AcquisitionState
+        except Exception:
+            state_enum = None
+    return _enum_name(state_enum, getattr(run, "state", None))
 
 
 def _enum_name(enum_type: Any, value: Any) -> Optional[str]:

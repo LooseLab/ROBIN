@@ -26,6 +26,9 @@ class ReadfishConfig:
     readfish_executable: str = "readfish"
     live_updates_enabled: bool = True
     live_region_name: str = "robin_panel"
+    # Wait for MinKNOW acquisition before launching readfish.
+    start_wait_timeout_seconds: float = 600.0
+    start_wait_poll_seconds: float = 10.0
 
     @classmethod
     def from_mapping(cls, data: Optional[Mapping[str, Any]]) -> Optional[ReadfishConfig]:
@@ -56,6 +59,10 @@ class ReadfishConfig:
             readfish_executable=readfish_executable,
             live_updates_enabled=bool(data.get("live_updates_enabled", True)),
             live_region_name=live_region_name,
+            start_wait_timeout_seconds=float(
+                data.get("start_wait_timeout_seconds", 600.0)
+            ),
+            start_wait_poll_seconds=float(data.get("start_wait_poll_seconds", 10.0)),
         )
 
     def resolve_log_file(self, *, sample_id: str, output_dir: Path) -> Path:
