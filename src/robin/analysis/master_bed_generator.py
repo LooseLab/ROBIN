@@ -1293,6 +1293,7 @@ def generate_master_bed(
                     live_path = notify_readfish_live_targets(
                         sample_id=sample_id,
                         master_bed_path=master_bed_path,
+                        work_dir=work_dir,
                     )
                     if live_path is not None:
                         log.info(

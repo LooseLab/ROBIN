@@ -34,6 +34,69 @@ def live_toml_path(base_toml: str | Path) -> Path:
     return Path(f"{Path(base_toml).expanduser()}{'_live'}")
 
 
+def expected_readfish_toml_name(sample_id: str) -> str:
+    """Return the default experiment TOML filename for a sample."""
+    safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in sample_id)
+    return f"readfish_{safe or 'run'}.toml"
+
+
+def discover_readfish_toml(
+    sample_id: str,
+    *,
+    work_dir: str | Path | None = None,
+    master_bed_path: str | Path | None = None,
+    region_name: str = "robin_panel",
+) -> Optional[Path]:
+    """Locate ``readfish_<sample>.toml`` near the run without a live session.
+
+    Searches cwd, optional work_dir / sample dirs, parents of the master BED, and
+    ``ROBIN_READFISH_TOML_DIR``. This covers the common case where MinKNOW/readfish
+    wrote the TOML in the process cwd but master BED generation runs elsewhere.
+    """
+    toml_name = expected_readfish_toml_name(sample_id)
+    roots: list[Path] = []
+
+    env_dir = os.environ.get("ROBIN_READFISH_TOML_DIR")
+    if env_dir:
+        roots.append(Path(env_dir).expanduser())
+
+    roots.append(Path.cwd())
+
+    if work_dir is not None:
+        work = Path(work_dir).expanduser()
+        roots.extend([work, work / sample_id, work.parent])
+
+    if master_bed_path is not None:
+        master = Path(master_bed_path).expanduser()
+        # bed_files -> sample -> work_dir -> repo/cwd-ish parent
+        roots.extend(
+            [
+                master.parent,
+                master.parent.parent,
+                master.parent.parent.parent,
+                master.parent.parent.parent.parent,
+            ]
+        )
+
+    seen: set[str] = set()
+    for root in roots:
+        try:
+            resolved_root = root.resolve()
+        except OSError:
+            resolved_root = root
+        key = str(resolved_root)
+        if key in seen:
+            continue
+        seen.add(key)
+        candidate = resolved_root / toml_name
+        if candidate.is_file():
+            _announce(
+                f"Discovered base TOML for sample {sample_id!r} via fallback: {candidate}"
+            )
+            return candidate
+    return None
+
+
 def live_session_dir() -> Path:
     """Directory used to persist live-update sessions across processes."""
     override = os.environ.get("ROBIN_READFISH_LIVE_DIR")
@@ -200,8 +263,10 @@ class ReadfishLiveRegistry:
         *,
         sample_id: str,
         master_bed_path: str | Path,
+        work_dir: str | Path | None = None,
+        region_name: str = "robin_panel",
     ) -> Optional[Path]:
-        """Write a live TOML when a new master BED is available for a registered sample."""
+        """Write a live TOML when a new master BED is available for a sample."""
         master_path = Path(master_bed_path).expanduser()
         if not master_path.is_file():
             _announce(
@@ -213,12 +278,33 @@ class ReadfishLiveRegistry:
         with cls._lock:
             session = cls._sessions.get(sample_id) or _read_session_file(sample_id)
             if session is None:
-                _announce(
-                    f"Live update skipped for sample {sample_id!r}: "
-                    "no registered readfish session "
-                    f"(looked for {live_session_path(sample_id)})"
+                discovered = discover_readfish_toml(
+                    sample_id,
+                    work_dir=work_dir,
+                    master_bed_path=master_path,
+                    region_name=region_name,
                 )
-                return None
+                if discovered is None:
+                    _announce(
+                        f"Live update skipped for sample {sample_id!r}: "
+                        "no registered readfish session and could not find "
+                        f"{expected_readfish_toml_name(sample_id)} "
+                        f"(looked for {live_session_path(sample_id)}; "
+                        f"cwd={Path.cwd()})"
+                    )
+                    return None
+                session = ReadfishLiveSession(
+                    sample_id=sample_id,
+                    base_toml_path=str(discovered),
+                    region_name=region_name,
+                )
+                cls._sessions[sample_id] = session
+                _write_session_file(session)
+                _announce(
+                    f"Auto-registered live session for sample {sample_id!r} "
+                    f"from discovered TOML {discovered}"
+                )
+
             if session.last_master_bed_path == str(master_path):
                 _announce(
                     f"Live update skipped for sample {sample_id!r}: "
@@ -267,6 +353,10 @@ def notify_readfish_live_targets(
 
     When ``master_bed_path`` is omitted and ``work_dir`` is provided, the latest
     ``master_NNN.bed`` for the sample is resolved automatically.
+
+    If no live session was registered (common when master BED generation runs in
+    a Ray worker), falls back to discovering ``readfish_<sample>.toml`` near the
+    cwd / work_dir / master BED path.
     """
     if master_bed_path in (None, ""):
         if work_dir is None:
@@ -283,6 +373,7 @@ def notify_readfish_live_targets(
     return ReadfishLiveRegistry.notify_master_bed(
         sample_id=sample_id,
         master_bed_path=master_bed_path,
+        work_dir=work_dir,
     )
 
 

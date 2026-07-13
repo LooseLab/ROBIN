@@ -1,4 +1,4 @@
-src/robin/minknow/cli.py"""CLI commands for MinKNOW integration."""
+"""CLI commands for MinKNOW integration."""
 
 from __future__ import annotations
 
@@ -508,6 +508,138 @@ def start(
         click.echo(
             "Warning: readfish backend was configured but no readfish pid was returned."
         )
+
+
+@minknow.command("readfish-prepare")
+@click.option(
+    "--preset",
+    "preset_path",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    required=True,
+    help="TOML file with [minknow.preset] / [readfish], or ROBIN workflow TOML.",
+)
+@click.option(
+    "--workflow-toml",
+    "workflow_toml",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="ROBIN workflow TOML for reference and target_panel (defaults to --preset).",
+)
+@click.option(
+    "--sample-id",
+    required=True,
+    help="Sample ID used to name the readfish TOML and live session.",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Directory for readfish_<sample>.toml (default: current directory).",
+)
+@click.option(
+    "--master-bed",
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+    default=None,
+    help="Optional master BED to apply immediately (writes {toml}_live).",
+)
+@click.option(
+    "--work-dir",
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    default=None,
+    help="Optional workflow work dir; uses latest master_NNN.bed for this sample.",
+)
+@click.option(
+    "--register-live/--no-register-live",
+    default=True,
+    help="Register a live-update session on disk (default: on).",
+)
+@click.option(
+    "--validate/--no-validate",
+    default=False,
+    help="Run `readfish validate` on the written TOML (needs readfish on PATH).",
+)
+@click.option(
+    "--check-paths",
+    is_flag=True,
+    help="Verify reference/BED paths exist on this machine.",
+)
+def readfish_prepare(
+    preset_path: Path,
+    workflow_toml: Optional[Path],
+    sample_id: str,
+    output_dir: Optional[Path],
+    master_bed: Optional[Path],
+    work_dir: Optional[Path],
+    register_live: bool,
+    validate: bool,
+    check_paths: bool,
+) -> None:
+    """Write a readfish TOML offline (no MinKNOW connection) for live-update testing."""
+    from robin.readfish.config import ReadfishConfig
+    from robin.readfish.runner import ReadfishStartError, prepare_readfish_toml
+
+    workflow_config = None
+    workflow_path = workflow_toml or preset_path
+    try:
+        workflow_config = load_workflow_toml(workflow_path)
+    except click.BadParameter:
+        workflow_config = None
+
+    try:
+        workflow_config_loaded = load_minknow_toml(
+            preset_path,
+            workflow_config=workflow_config,
+            prefer_workflow=True,
+        )
+    except click.BadParameter as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    preset = workflow_config_loaded.preset
+    if preset is None:
+        raise click.ClickException(
+            f"No [minknow.preset] section found in {preset_path}"
+        )
+    if not preset.readfish_adaptive_sampling_enabled():
+        raise click.ClickException(
+            "Preset adaptive_sampling_backend must be 'readfish' "
+            "(set under [minknow.preset])."
+        )
+
+    validation_errors = preset.validate(check_paths=check_paths)
+    if validation_errors:
+        raise click.ClickException("; ".join(validation_errors))
+
+    readfish_config = workflow_config_loaded.readfish or ReadfishConfig()
+    try:
+        result = prepare_readfish_toml(
+            preset=preset,
+            config=readfish_config,
+            sample_id=sample_id,
+            output_dir=output_dir,
+            register_live=register_live,
+            master_bed_path=master_bed,
+            work_dir=work_dir,
+            validate=validate,
+        )
+    except ReadfishStartError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo("Prepared readfish TOML (offline):")
+    click.echo(f"  toml: {result.toml_path}")
+    click.echo(f"  targets_bed: {result.targets_bed}")
+    click.echo(f"  dorado_config: {result.dorado_config}")
+    click.echo(f"  dorado_address: {result.dorado_address}")
+    click.echo(f"  live_registered: {result.live_updates_registered}")
+    if result.live_toml_path:
+        live_path = Path(result.live_toml_path)
+        click.echo(f"  live_toml: {live_path} (exists={live_path.is_file()})")
+        stamp = Path(f"{live_path}.stamp")
+        if stamp.is_file():
+            click.echo(f"  stamp:\n{stamp.read_text(encoding='utf-8').rstrip()}")
+    click.echo(
+        "Next: robin minknow readfish-live "
+        f"--sample-id {sample_id} --master-bed /path/to/master_001.bed"
+    )
 
 
 @minknow.command("readfish-live")

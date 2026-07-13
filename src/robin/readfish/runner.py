@@ -40,11 +40,141 @@ class ReadfishStartResult:
     live_updates_enabled: bool
 
 
+@dataclass(frozen=True)
+class ReadfishPrepareResult:
+    """Outcome of writing a readfish experiment TOML without launching."""
+
+    toml_path: str
+    live_toml_path: Optional[str]
+    targets_bed: str
+    minimap2_index: str
+    dorado_address: str
+    dorado_config: str
+    live_updates_registered: bool
+
+
 def _announce(message: str) -> None:
     """Surface readfish progress on stdout and in logs (CLI / workflow terminal)."""
     text = f"[readfish] {message}"
     print(text, flush=True)
     LOGGER.info("%s", text)
+
+
+def prepare_readfish_toml(
+    *,
+    preset: RobinRunPreset,
+    config: ReadfishConfig,
+    sample_id: str,
+    output_dir: Optional[Path] = None,
+    register_live: bool = True,
+    master_bed_path: Optional[Path] = None,
+    work_dir: Optional[Path] = None,
+    validate: bool = False,
+) -> ReadfishPrepareResult:
+    """Write a readfish experiment TOML without connecting to MinKNOW.
+
+    Useful for offline testing of TOML generation and master-BED → ``*_live`` updates.
+    """
+    if not preset.readfish_adaptive_sampling_enabled():
+        raise ReadfishStartError("Preset is not configured for readfish adaptive sampling")
+
+    targets_bed = preset.effective_read_until_bed_file()
+    reference = preset.effective_read_until_reference()
+    if not targets_bed or not reference:
+        raise ReadfishStartError(
+            "readfish requires panel BED and alignment reference "
+            "(set alignment_reference / bed_file or workflow reference / target_panel)"
+        )
+
+    minimap2_index = resolve_minimap2_index(
+        alignment_reference=reference,
+        explicit_index=config.minimap2_index,
+    )
+    document = build_readfish_toml_document(
+        preset=preset,
+        targets_bed=targets_bed,
+        minimap2_index=minimap2_index,
+        config=config,
+    )
+    dorado = document["caller_settings"]["dorado"]
+    dorado_address = str(dorado["address"])
+    dorado_config = str(dorado["config"])
+
+    run_output_dir = (output_dir or Path.cwd()).expanduser()
+    run_output_dir.mkdir(parents=True, exist_ok=True)
+    toml_path = run_output_dir / f"readfish_{_safe_name(sample_id)}.toml"
+
+    with toml_path.open("wb") as handle:
+        tomli_w.dump(document, handle)
+
+    _announce(f"Wrote experiment TOML (offline): {toml_path}")
+    _announce(f"Dorado address: {dorado_address}")
+    _announce(f"Dorado config:  {dorado_config}")
+    _announce(f"Targets BED:    {targets_bed}")
+    _announce(f"Mapper index:   {minimap2_index}")
+
+    if validate:
+        executable = shutil.which(config.readfish_executable)
+        if not executable:
+            raise ReadfishStartError(
+                f"readfish executable {config.readfish_executable!r} not found on PATH"
+            )
+        _announce(f"Running: {executable} validate {toml_path}")
+        _validate_readfish_toml(
+            executable=executable,
+            toml_path=toml_path,
+            prom=config.prom,
+        )
+        _announce("Validate succeeded")
+
+    live_registered = False
+    live_path: Optional[Path] = None
+    should_register = register_live and config.live_updates_enabled
+    if should_register:
+        from robin.readfish.live_updater import (
+            ReadfishLiveRegistry,
+            ReadfishLiveSession,
+            live_toml_path,
+            notify_readfish_live_targets,
+        )
+
+        ReadfishLiveRegistry.register(
+            ReadfishLiveSession(
+                sample_id=sample_id,
+                base_toml_path=str(toml_path),
+                region_name=config.live_region_name,
+            )
+        )
+        live_registered = True
+        _announce(
+            f"Registered live target updates for sample {sample_id!r} "
+            f"(no MinKNOW connection required)"
+        )
+
+        if master_bed_path is not None or work_dir is not None:
+            live_path = notify_readfish_live_targets(
+                sample_id=sample_id,
+                master_bed_path=master_bed_path,
+                work_dir=work_dir,
+            )
+        else:
+            live_path = live_toml_path(toml_path)
+            _announce(
+                f"Live TOML will appear at: {live_path} "
+                "(after master BED notify / generate_master_bed)"
+            )
+    elif not config.live_updates_enabled:
+        _announce("Live updates disabled in [readfish] (live_updates_enabled=false)")
+
+    return ReadfishPrepareResult(
+        toml_path=str(toml_path),
+        live_toml_path=str(live_path) if live_path is not None else None,
+        targets_bed=str(targets_bed),
+        minimap2_index=str(minimap2_index),
+        dorado_address=dorado_address,
+        dorado_config=dorado_config,
+        live_updates_registered=live_registered,
+    )
 
 
 def start_readfish_targets(
