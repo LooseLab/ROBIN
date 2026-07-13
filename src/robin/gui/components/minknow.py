@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -170,10 +171,26 @@ def add_minknow_sequencer_section(
         return datetime.now().strftime("%H:%M:%S")
 
     def _notify(message: str, *, kind: str = "info") -> None:
+        """Show a GUI toast and mirror the message to the workflow CLI terminal."""
+        label = {
+            "negative": "ERROR",
+            "warning": "WARNING",
+            "positive": "OK",
+            "info": "INFO",
+        }.get(kind, kind.upper())
+        text = f"[MinKNOW {label}] {message}"
+        stream = sys.stderr if kind in {"negative", "warning"} else sys.stdout
+        print(text, file=stream, flush=True)
+        if kind == "negative":
+            LOGGER.error("%s", message)
+        elif kind == "warning":
+            LOGGER.warning("%s", message)
+        else:
+            LOGGER.info("%s", message)
         try:
             ui.notify(message, type=kind)
         except Exception:
-            LOGGER.info("MinKNOW: %s", message)
+            pass
 
     def _preset_toml_path() -> Optional[Path]:
         workflow_path = Path(str(state.get("workflow_toml") or "")).expanduser()
