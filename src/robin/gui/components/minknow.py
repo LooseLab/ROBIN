@@ -1,4 +1,3 @@
-src/robin/gui/components/minknow.py
 """MinKNOW sequencer status and run control for the ROBIN GUI."""
 
 from __future__ import annotations
@@ -302,6 +301,21 @@ def add_minknow_sequencer_section(
             )
 
             start_controls: dict[str, Any] = {}
+
+            def _position_has_active_run(name: str) -> bool:
+                return False
+
+            def _sync_start_controls_for_position() -> None:
+                return None
+
+            def _sync_position_options() -> None:
+                return None
+
+            def _apply_selected_position(name: str) -> None:
+                name = (name or "").strip()
+                if name:
+                    state["selected_position"] = name
+
             if not compact:
                 with ui.expansion(
                     "Start ROBIN run",

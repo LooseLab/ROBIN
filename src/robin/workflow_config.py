@@ -151,11 +151,14 @@ def load_minknow_from_workflow_toml(path: Path) -> Optional[MinKnowWorkflowConfi
     minknow_raw = config.get("minknow")
     if not isinstance(minknow_raw, Mapping):
         return None
-    return load_minknow_toml(
-        path,
-        workflow_config=config,
-        prefer_workflow=True,
-    )
+    try:
+        return load_minknow_toml(
+            path,
+            workflow_config=config,
+            prefer_workflow=True,
+        )
+    except click.BadParameter:
+        return None
 
 
 def _parameter_from_commandline(ctx: click.Context, param_name: str) -> bool:
