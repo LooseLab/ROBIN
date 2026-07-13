@@ -1,4 +1,3 @@
-src/robin/workflow_ray.py
 """
 Ray Core implementation of the robin workflow engine
 - Specialized per-queue actors (preprocessing, bed_conversion, mgmt, cnv, target, fusion, classification, slow)
