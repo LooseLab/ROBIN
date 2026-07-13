@@ -1,3 +1,4 @@
+src/robin/workflow_ray.py
 """
 Ray Core implementation of the robin workflow engine
 - Specialized per-queue actors (preprocessing, bed_conversion, mgmt, cnv, target, fusion, classification, slow)
@@ -5829,6 +5830,19 @@ async def run(
 
     os.environ["RAY_DISABLE_IMPORT_WARNING"] = "1"
     os.environ["RAY_DISABLE_DEPRECATION_WARNING"] = "1"
+    if workflow_toml:
+        try:
+            from robin.readfish.analysis_hook import write_workflow_toml_pointer
+
+            resolved_toml = str(Path(workflow_toml).expanduser().resolve())
+            os.environ["ROBIN_WORKFLOW_TOML"] = resolved_toml
+            if work_dir:
+                write_workflow_toml_pointer(work_dir, resolved_toml)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "Could not publish ROBIN_WORKFLOW_TOML for readfish analysis hook",
+                exc_info=True,
+            )
     _warn_if_ray_temp_disk_is_full()
 
     # Reference genome status (minimal logging)

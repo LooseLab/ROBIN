@@ -34,10 +34,59 @@ def live_toml_path(base_toml: str | Path) -> Path:
     return Path(f"{Path(base_toml).expanduser()}{'_live'}")
 
 
+SAMPLE_READFISH_TOML_NAME = "readfish.toml"
+
+
 def expected_readfish_toml_name(sample_id: str) -> str:
-    """Return the default experiment TOML filename for a sample."""
+    """Return the legacy experiment TOML filename for a sample (cwd layout)."""
     safe = "".join(ch if ch.isalnum() or ch in "-_" else "_" for ch in sample_id)
     return f"readfish_{safe or 'run'}.toml"
+
+
+def resolve_sample_readfish_dir(
+    *,
+    sample_id: str,
+    work_directory: str | Path | None = None,
+    output_dir: str | Path | None = None,
+) -> Path:
+    """Return the directory where readfish TOML/logs should live.
+
+    Preference order:
+    1. Explicit ``output_dir``
+    2. ``{work_directory}/{sample_id}`` (ROBIN sample output folder)
+    3. Current working directory (legacy fallback)
+    """
+    if output_dir is not None and str(output_dir).strip():
+        return Path(output_dir).expanduser()
+    if work_directory is not None and str(work_directory).strip():
+        return Path(work_directory).expanduser() / sample_id
+    return Path.cwd()
+
+
+def resolve_readfish_toml_path(
+    *,
+    sample_id: str,
+    work_directory: str | Path | None = None,
+    output_dir: str | Path | None = None,
+) -> Path:
+    """Return the path for the base readfish experiment TOML."""
+    directory = resolve_sample_readfish_dir(
+        sample_id=sample_id,
+        work_directory=work_directory,
+        output_dir=output_dir,
+    )
+    using_sample_folder = bool(
+        work_directory is not None
+        and str(work_directory).strip()
+        and (output_dir is None or not str(output_dir).strip())
+    ) or (
+        output_dir is not None
+        and str(output_dir).strip()
+        and directory.name == sample_id
+    )
+    if using_sample_folder:
+        return directory / SAMPLE_READFISH_TOML_NAME
+    return directory / expected_readfish_toml_name(sample_id)
 
 
 def discover_readfish_toml(
@@ -47,13 +96,14 @@ def discover_readfish_toml(
     master_bed_path: str | Path | None = None,
     region_name: str = "robin_panel",
 ) -> Optional[Path]:
-    """Locate ``readfish_<sample>.toml`` near the run without a live session.
+    """Locate the base readfish TOML near the run without a live session.
 
-    Searches cwd, optional work_dir / sample dirs, parents of the master BED, and
-    ``ROBIN_READFISH_TOML_DIR``. This covers the common case where MinKNOW/readfish
-    wrote the TOML in the process cwd but master BED generation runs elsewhere.
+    Prefers ``{work_dir}/{sample}/readfish.toml``, then legacy
+    ``readfish_<sample>.toml`` under cwd / parents of the master BED.
     """
-    toml_name = expected_readfish_toml_name(sample_id)
+    del region_name  # reserved for future region-aware discovery
+    legacy_name = expected_readfish_toml_name(sample_id)
+    names = (SAMPLE_READFISH_TOML_NAME, legacy_name)
     roots: list[Path] = []
 
     env_dir = os.environ.get("ROBIN_READFISH_TOML_DIR")
@@ -64,16 +114,15 @@ def discover_readfish_toml(
 
     if work_dir is not None:
         work = Path(work_dir).expanduser()
-        roots.extend([work, work / sample_id, work.parent])
+        roots.extend([work / sample_id, work, work.parent])
 
     if master_bed_path is not None:
         master = Path(master_bed_path).expanduser()
-        # bed_files -> sample -> work_dir -> repo/cwd-ish parent
         roots.extend(
             [
-                master.parent,
-                master.parent.parent,
-                master.parent.parent.parent,
+                master.parent.parent,  # sample dir
+                master.parent,  # bed_files
+                master.parent.parent.parent,  # work_dir
                 master.parent.parent.parent.parent,
             ]
         )
@@ -88,12 +137,14 @@ def discover_readfish_toml(
         if key in seen:
             continue
         seen.add(key)
-        candidate = resolved_root / toml_name
-        if candidate.is_file():
-            _announce(
-                f"Discovered base TOML for sample {sample_id!r} via fallback: {candidate}"
-            )
-            return candidate
+        for name in names:
+            candidate = resolved_root / name
+            if candidate.is_file():
+                _announce(
+                    f"Discovered base TOML for sample {sample_id!r} via fallback: "
+                    f"{candidate}"
+                )
+                return candidate
     return None
 
 
@@ -288,6 +339,7 @@ class ReadfishLiveRegistry:
                     _announce(
                         f"Live update skipped for sample {sample_id!r}: "
                         "no registered readfish session and could not find "
+                        f"{SAMPLE_READFISH_TOML_NAME} or "
                         f"{expected_readfish_toml_name(sample_id)} "
                         f"(looked for {live_session_path(sample_id)}; "
                         f"cwd={Path.cwd()})"

@@ -3152,6 +3152,21 @@ def workflow(
                 f"Choose from: {', '.join(available_panels)}"
             )
 
+        if toml_config is not None:
+            try:
+                from robin.readfish.analysis_hook import write_workflow_toml_pointer
+
+                resolved_toml = str(Path(toml_config).expanduser().resolve())
+                os.environ["ROBIN_WORKFLOW_TOML"] = resolved_toml
+                if work_dir is not None:
+                    write_workflow_toml_pointer(work_dir, resolved_toml)
+            except Exception:
+                LOGGER = logging.getLogger(__name__)
+                LOGGER.debug(
+                    "Could not publish ROBIN_WORKFLOW_TOML for readfish analysis",
+                    exc_info=True,
+                )
+
         # Check for required model files first
         _check_models_or_exit()
         

@@ -1288,22 +1288,26 @@ def generate_master_bed(
                     )
                 log.info(f"Generated master BED file: {master_bed_path} with {len(sorted_df)} regions")
                 try:
-                    from robin.readfish.live_updater import notify_readfish_live_targets
+                    from robin.readfish.analysis_hook import (
+                        ensure_readfish_toml_for_sample_analysis,
+                    )
 
-                    live_path = notify_readfish_live_targets(
+                    live_path = ensure_readfish_toml_for_sample_analysis(
                         sample_id=sample_id,
-                        master_bed_path=master_bed_path,
                         work_dir=work_dir,
+                        master_bed_path=master_bed_path,
+                        target_panel=target_panel,
+                        reference=reference,
                     )
                     if live_path is not None:
                         log.info(
-                            "readfish live TOML written after master BED: %s",
+                            "readfish TOML synced after master BED: %s",
                             live_path,
                         )
                     else:
-                        log.info(
-                            "readfish live TOML not written for sample %s "
-                            "(no session, unchanged master BED, or notify skipped)",
+                        log.debug(
+                            "readfish TOML not written for sample %s "
+                            "(backend not readfish, missing workflow TOML, or skipped)",
                             sample_id,
                         )
                 except Exception:

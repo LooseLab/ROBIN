@@ -1139,6 +1139,7 @@ def add_minknow_sequencer_section(
             sample_id=pending["sample_id"],
             experiment_group=pending.get("experiment_group"),
             readfish=pending.get("readfish"),
+            work_directory=work_directory or None,
         )
         try:
             _notify(

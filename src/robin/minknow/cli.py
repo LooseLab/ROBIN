@@ -1,4 +1,4 @@
-"""CLI commands for MinKNOW integration."""
+src/robin/minknow/cli.py"""CLI commands for MinKNOW integration."""
 
 from __future__ import annotations
 
@@ -371,6 +371,13 @@ def models(
     default=None,
     help="Bulk FAST5 for simulated playback (overrides [minknow.preset].simulation_bulk_file).",
 )
+@click.option(
+    "--work-dir",
+    "work_directory",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="ROBIN work directory; readfish TOML/logs go under {work-dir}/{sample-id}/.",
+)
 @auth_click_options()
 def start(
     host: Optional[str],
@@ -383,6 +390,7 @@ def start(
     check_paths: bool,
     skip_model_check: bool,
     simulation_bulk_file: Optional[Path],
+    work_directory: Optional[Path],
     port: Optional[int],
     api_token: Optional[str],
     client_cert_chain: Optional[Path],
@@ -446,6 +454,16 @@ def start(
     click.echo(f"Sample ID: {sample_id}")
     resolved_experiment_group = preset.resolve_experiment_group(experiment_group)
     click.echo(f"Experiment group: {resolved_experiment_group}")
+
+    resolved_work_directory = work_directory
+    if resolved_work_directory is None and isinstance(workflow_config, dict):
+        raw_work = workflow_config.get("work_dir")
+        if raw_work:
+            resolved_work_directory = Path(str(raw_work)).expanduser()
+    if resolved_work_directory is not None:
+        click.echo(
+            f"Readfish output dir: {resolved_work_directory / sample_id}"
+        )
     click.echo("Preset:")
     for line in preset.summary_lines():
         click.echo(f"  {line}")
@@ -466,6 +484,9 @@ def start(
         sample_id=sample_id,
         experiment_group=experiment_group,
         readfish=workflow_config_loaded.readfish,
+        work_directory=(
+            str(resolved_work_directory) if resolved_work_directory is not None else None
+        ),
     )
 
     try:
@@ -534,7 +555,7 @@ def start(
     "--output-dir",
     type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Directory for readfish_<sample>.toml (default: current directory).",
+    help="Exact directory for readfish.toml (overrides --work-dir/{sample-id}).",
 )
 @click.option(
     "--master-bed",
@@ -544,9 +565,10 @@ def start(
 )
 @click.option(
     "--work-dir",
-    type=click.Path(exists=True, file_okay=False, path_type=Path),
+    type=click.Path(file_okay=False, path_type=Path),
     default=None,
-    help="Optional workflow work dir; uses latest master_NNN.bed for this sample.",
+    help="ROBIN work directory; writes under {work-dir}/{sample-id}/readfish.toml "
+    "and can resolve the latest master_NNN.bed.",
 )
 @click.option(
     "--register-live/--no-register-live",
@@ -610,15 +632,21 @@ def readfish_prepare(
         raise click.ClickException("; ".join(validation_errors))
 
     readfish_config = workflow_config_loaded.readfish or ReadfishConfig()
+    resolved_work_dir = work_dir
+    if resolved_work_dir is None and isinstance(workflow_config, dict):
+        raw_work = workflow_config.get("work_dir")
+        if raw_work:
+            resolved_work_dir = Path(str(raw_work)).expanduser()
     try:
         result = prepare_readfish_toml(
             preset=preset,
             config=readfish_config,
             sample_id=sample_id,
             output_dir=output_dir,
+            work_directory=resolved_work_dir,
             register_live=register_live,
             master_bed_path=master_bed,
-            work_dir=work_dir,
+            work_dir=resolved_work_dir,
             validate=validate,
         )
     except ReadfishStartError as exc:

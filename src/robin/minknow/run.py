@@ -66,6 +66,7 @@ class StartRunRequest:
     sample_id: str
     experiment_group: Optional[str] = None
     readfish: Optional[ReadfishConfig] = None
+    work_directory: Optional[str] = None
 
 
 class MinKnowStartError(RuntimeError):
@@ -325,6 +326,11 @@ def start_protocol_run(
                     position=position.name,
                     sample_id=request.sample_id,
                     experiment_group=experiment_group,
+                    work_directory=(
+                        Path(request.work_directory)
+                        if request.work_directory
+                        else None
+                    ),
                 )
             except ReadfishStartError as exc:
                 raise MinKnowStartError(

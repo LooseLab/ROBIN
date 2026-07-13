@@ -66,6 +66,7 @@ def prepare_readfish_toml(
     config: ReadfishConfig,
     sample_id: str,
     output_dir: Optional[Path] = None,
+    work_directory: Optional[Path] = None,
     register_live: bool = True,
     master_bed_path: Optional[Path] = None,
     work_dir: Optional[Path] = None,
@@ -74,6 +75,7 @@ def prepare_readfish_toml(
     """Write a readfish experiment TOML without connecting to MinKNOW.
 
     Useful for offline testing of TOML generation and master-BED → ``*_live`` updates.
+    When ``work_directory`` is set, files go under ``{work_directory}/{sample_id}/``.
     """
     if not preset.readfish_adaptive_sampling_enabled():
         raise ReadfishStartError("Preset is not configured for readfish adaptive sampling")
@@ -85,6 +87,11 @@ def prepare_readfish_toml(
             "readfish requires panel BED and alignment reference "
             "(set alignment_reference / bed_file or workflow reference / target_panel)"
         )
+
+    from robin.readfish.live_updater import (
+        resolve_readfish_toml_path,
+        resolve_sample_readfish_dir,
+    )
 
     minimap2_index = resolve_minimap2_index(
         alignment_reference=reference,
@@ -100,9 +107,18 @@ def prepare_readfish_toml(
     dorado_address = str(dorado["address"])
     dorado_config = str(dorado["config"])
 
-    run_output_dir = (output_dir or Path.cwd()).expanduser()
+    effective_work = work_directory if work_directory is not None else work_dir
+    run_output_dir = resolve_sample_readfish_dir(
+        sample_id=sample_id,
+        work_directory=effective_work,
+        output_dir=output_dir,
+    )
     run_output_dir.mkdir(parents=True, exist_ok=True)
-    toml_path = run_output_dir / f"readfish_{_safe_name(sample_id)}.toml"
+    toml_path = resolve_readfish_toml_path(
+        sample_id=sample_id,
+        work_directory=effective_work,
+        output_dir=output_dir,
+    )
 
     with toml_path.open("wb") as handle:
         tomli_w.dump(document, handle)
@@ -186,6 +202,7 @@ def start_readfish_targets(
     sample_id: str,
     experiment_group: str,
     output_dir: Optional[Path] = None,
+    work_directory: Optional[Path] = None,
 ) -> ReadfishStartResult:
     """Generate readfish TOML and start ``readfish targets`` in the background."""
     if not preset.readfish_adaptive_sampling_enabled():
@@ -207,6 +224,11 @@ def start_readfish_targets(
             "readfish requires panel BED and alignment reference on the readfish host"
         )
 
+    from robin.readfish.live_updater import (
+        resolve_readfish_toml_path,
+        resolve_sample_readfish_dir,
+    )
+
     minimap2_index = resolve_minimap2_index(
         alignment_reference=reference,
         explicit_index=config.minimap2_index,
@@ -221,9 +243,17 @@ def start_readfish_targets(
     dorado_address = str(dorado["address"])
     dorado_config = str(dorado["config"])
 
-    run_output_dir = (output_dir or Path.cwd()).expanduser()
+    run_output_dir = resolve_sample_readfish_dir(
+        sample_id=sample_id,
+        work_directory=work_directory,
+        output_dir=output_dir,
+    )
     run_output_dir.mkdir(parents=True, exist_ok=True)
-    toml_path = run_output_dir / f"readfish_{_safe_name(sample_id)}.toml"
+    toml_path = resolve_readfish_toml_path(
+        sample_id=sample_id,
+        work_directory=work_directory,
+        output_dir=output_dir,
+    )
     log_file = config.resolve_log_file(sample_id=sample_id, output_dir=run_output_dir)
 
     with toml_path.open("wb") as handle:
