@@ -1,4 +1,4 @@
-src/robin/minknow/cli.py"""CLI commands for MinKNOW integration."""
+"""CLI commands for MinKNOW integration."""
 
 from __future__ import annotations
 
