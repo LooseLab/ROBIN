@@ -1,4 +1,3 @@
-src/robin/minknow/run.py
 """Start MinKNOW protocol runs from ROBIN presets."""
 
 from __future__ import annotations
