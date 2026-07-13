@@ -1141,6 +1141,11 @@ def add_minknow_sequencer_section(
             readfish=pending.get("readfish"),
         )
         try:
+            _notify(
+                f"Starting MinKNOW run on {request.position} "
+                f"(sample {request.sample_id})…",
+                kind="info",
+            )
             result = await run.io_bound(
                 start_protocol_run,
                 settings.auth,
@@ -1153,6 +1158,15 @@ def add_minknow_sequencer_section(
             return
         except Exception as exc:
             _notify(str(exc), kind="negative")
+            return
+
+        if result is None:
+            _notify(
+                "Start run returned no result (the background task was cancelled "
+                "or the app is shutting down). Check the terminal for [readfish] "
+                "or MinKNOW messages — the protocol may already have started.",
+                kind="negative",
+            )
             return
 
         message = f"Started run {result.run_id} on {result.position}"

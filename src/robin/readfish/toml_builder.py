@@ -20,7 +20,11 @@ def build_readfish_toml_document(
     if not preset.read_until_filter:
         raise ValueError("read_until_filter is required for readfish adaptive sampling")
 
-    dorado_model = config.dorado_config or dorado_config_name(preset.basecall_simplex_model)
+    # Explicit override keeps the user's accuracy tier; derived names prefer fast.
+    if config.dorado_config:
+        dorado_model = dorado_config_name(config.dorado_config, prefer_fast=False)
+    else:
+        dorado_model = dorado_config_name(preset.basecall_simplex_model, prefer_fast=True)
     region = _region_for_filter(
         name=config.live_region_name,
         filter_mode=preset.read_until_filter,
@@ -35,8 +39,9 @@ def build_readfish_toml_document(
             "fn_idx_in": str(Path(minimap2_index).expanduser()),
         }
     }
-    if config.prom:
-        mapper_settings[mapper_key]["n_threads"] = config.mappy_rs_threads
+    if mapper_key == "mappy_rs":
+        # PromethION requires mappy_rs with n_threads >= 4.
+        mapper_settings[mapper_key]["n_threads"] = max(4, int(config.mappy_rs_threads))
 
     return {
         "caller_settings": {

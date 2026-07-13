@@ -17,7 +17,8 @@ class ReadfishConfig:
     dorado_config: Optional[str] = None
     minimap2_index: Optional[str] = None
     log_dir: Optional[str] = None
-    prom: bool = False
+    # Default True: PromethION / ROBIN runs require mapper_settings.mappy_rs.
+    prom: bool = True
     mappy_rs_threads: int = 4
     min_chunks: int = 1
     max_chunks: int = 4
@@ -40,14 +41,15 @@ class ReadfishConfig:
         dorado_config = _optional_str(data.get("dorado_config"))
         readfish_executable = _optional_str(data.get("readfish_executable")) or "readfish"
         live_region_name = _optional_str(data.get("live_region_name")) or "robin_panel"
+        mappy_rs_threads = max(4, int(data.get("mappy_rs_threads", 4)))
 
         return cls(
             dorado_address=dorado_address,
             dorado_config=dorado_config,
             minimap2_index=minimap2_index,
             log_dir=log_dir,
-            prom=bool(data.get("prom", False)),
-            mappy_rs_threads=int(data.get("mappy_rs_threads", 4)),
+            prom=bool(data.get("prom", True)),
+            mappy_rs_threads=mappy_rs_threads,
             min_chunks=int(data.get("min_chunks", 1)),
             max_chunks=int(data.get("max_chunks", 4)),
             validate_on_start=bool(data.get("validate_on_start", True)),
@@ -81,9 +83,35 @@ def resolve_minimap2_index(
     return str(reference)
 
 
-def dorado_config_name(basecall_simplex_model: str) -> str:
-    """Strip the Dorado version suffix from a MinKNOW simplex model name."""
-    return basecall_simplex_model.split("@", 1)[0].strip()
+DEFAULT_DORADO_VERSION = "v5.2.0"
+
+
+def dorado_config_name(
+    basecall_simplex_model: str,
+    *,
+    prefer_fast: bool = True,
+) -> str:
+    """Normalize a Dorado model name for readfish ``caller_settings.dorado.config``.
+
+    Dorado servers expect the full model id including ``@version`` and a trailing
+    ``||`` (e.g. ``dna_r10.4.1_e8.2_400bps_fast@v5.2.0||``). When deriving from a
+    MinKNOW HAC/SUP simplex preset, prefer the matching fast model for adaptive
+    decisions unless ``prefer_fast`` is false.
+    """
+    text = basecall_simplex_model.strip().rstrip("|").strip()
+    if not text:
+        raise ValueError("Dorado config model name is empty")
+
+    if prefer_fast:
+        for tier in ("_sup", "_hac"):
+            if tier in text:
+                text = text.replace(tier, "_fast", 1)
+                break
+
+    if "@" not in text:
+        text = f"{text}@{DEFAULT_DORADO_VERSION}"
+
+    return f"{text}||"
 
 
 def _optional_str(value: Any) -> Optional[str]:
