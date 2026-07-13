@@ -1,3 +1,4 @@
+src/robin/minknow/run.py
 """Start MinKNOW protocol runs from ROBIN presets."""
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ class StartRunResult:
     readfish_pid: Optional[int] = None
     readfish_log_file: Optional[str] = None
     readfish_toml_path: Optional[str] = None
+    readfish_command: Optional[str] = None
+    readfish_dorado_address: Optional[str] = None
+    readfish_dorado_config: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -288,11 +292,18 @@ def start_protocol_run(
     readfish_pid: Optional[int] = None
     readfish_log_file: Optional[str] = None
     readfish_toml_path: Optional[str] = None
+    readfish_command: Optional[str] = None
+    readfish_dorado_address: Optional[str] = None
+    readfish_dorado_config: Optional[str] = None
     if preset.readfish_adaptive_sampling_enabled():
         from robin.readfish.config import ReadfishConfig
         from robin.readfish.runner import ReadfishStartError, start_readfish_targets
 
         readfish_config = request.readfish if request.readfish is not None else ReadfishConfig()
+        print(
+            "[readfish] MinKNOW protocol started; launching readfish adaptive sampling…",
+            flush=True,
+        )
         try:
             readfish_result = start_readfish_targets(
                 preset=preset,
@@ -309,6 +320,20 @@ def start_protocol_run(
         readfish_pid = readfish_result.pid
         readfish_log_file = readfish_result.log_file
         readfish_toml_path = readfish_result.toml_path
+        readfish_command = " ".join(readfish_result.command)
+        readfish_dorado_address = readfish_result.dorado_address
+        readfish_dorado_config = readfish_result.dorado_config
+    elif preset.minknow_adaptive_sampling_enabled():
+        print(
+            "[readfish] Adaptive sampling backend is minknow (native Read Until); "
+            "readfish will not be launched.",
+            flush=True,
+        )
+    else:
+        print(
+            "[readfish] Adaptive sampling is off; readfish will not be launched.",
+            flush=True,
+        )
 
     return StartRunResult(
         run_id=run_id,
@@ -321,6 +346,9 @@ def start_protocol_run(
         readfish_pid=readfish_pid,
         readfish_log_file=readfish_log_file,
         readfish_toml_path=readfish_toml_path,
+        readfish_command=readfish_command,
+        readfish_dorado_address=readfish_dorado_address,
+        readfish_dorado_config=readfish_dorado_config,
     )
 
 

@@ -492,8 +492,17 @@ def start(
     if result.readfish_pid is not None:
         click.echo("Started readfish:")
         click.echo(f"  pid: {result.readfish_pid}")
+        click.echo(f"  command: {result.readfish_command}")
+        click.echo(f"  dorado_address: {result.readfish_dorado_address}")
+        click.echo(f"  dorado_config: {result.readfish_dorado_config}")
         click.echo(f"  log_file: {result.readfish_log_file}")
         click.echo(f"  toml: {result.readfish_toml_path}")
+        click.echo(f"  check process: ps -p {result.readfish_pid} -o pid,etime,cmd")
+        click.echo(f"  follow log:    tail -f {result.readfish_log_file}")
+    elif preset.readfish_adaptive_sampling_enabled():
+        click.echo(
+            "Warning: readfish backend was configured but no readfish pid was returned."
+        )
 
 
 @minknow.command("stop")

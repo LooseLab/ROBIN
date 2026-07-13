@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -17,6 +18,9 @@ from robin.readfish.config import ReadfishConfig, resolve_minimap2_index
 from robin.readfish.toml_builder import build_readfish_toml_document
 
 LOGGER = logging.getLogger(__name__)
+
+# Brief wait after Popen so immediate crashes are reported instead of silent failure.
+_POST_START_CHECK_SECONDS = 1.5
 
 
 class ReadfishStartError(RuntimeError):
@@ -31,6 +35,16 @@ class ReadfishStartResult:
     toml_path: str
     log_file: str
     command: tuple[str, ...]
+    dorado_address: str
+    dorado_config: str
+    live_updates_enabled: bool
+
+
+def _announce(message: str) -> None:
+    """Surface readfish progress on stdout and in logs (CLI / workflow terminal)."""
+    text = f"[readfish] {message}"
+    print(text, flush=True)
+    LOGGER.info("%s", text)
 
 
 def start_readfish_targets(
@@ -47,11 +61,14 @@ def start_readfish_targets(
     if not preset.readfish_adaptive_sampling_enabled():
         raise ReadfishStartError("Preset is not configured for readfish adaptive sampling")
 
+    _announce("Adaptive sampling backend is readfish — preparing launch")
+
     executable = shutil.which(config.readfish_executable)
     if not executable:
         raise ReadfishStartError(
             f"readfish executable {config.readfish_executable!r} not found on PATH"
         )
+    _announce(f"Executable: {executable}")
 
     targets_bed = preset.effective_read_until_bed_file()
     reference = preset.effective_read_until_reference()
@@ -70,6 +87,9 @@ def start_readfish_targets(
         minimap2_index=minimap2_index,
         config=config,
     )
+    dorado = document["caller_settings"]["dorado"]
+    dorado_address = str(dorado["address"])
+    dorado_config = str(dorado["config"])
 
     run_output_dir = (output_dir or Path.cwd()).expanduser()
     run_output_dir.mkdir(parents=True, exist_ok=True)
@@ -79,12 +99,29 @@ def start_readfish_targets(
     with toml_path.open("wb") as handle:
         tomli_w.dump(document, handle)
 
+    _announce(f"Wrote experiment TOML: {toml_path}")
+    _announce(f"Dorado address: {dorado_address}")
+    _announce(f"Dorado config:  {dorado_config}")
+    _announce(f"Targets BED:    {targets_bed}")
+    _announce(f"Mapper index:   {minimap2_index}")
+    _announce(f"Position:       {position}")
+    _announce(f"Experiment:     {experiment_group}")
+    _announce(f"Log file:       {log_file}")
+    _announce(
+        "Live updates:   "
+        + ("enabled" if config.live_updates_enabled else "disabled")
+    )
+
     if config.validate_on_start:
+        _announce(f"Running: {executable} validate {toml_path}")
         _validate_readfish_toml(
             executable=executable,
             toml_path=toml_path,
             prom=config.prom,
         )
+        _announce("Validate succeeded")
+    else:
+        _announce("Skipping validate (validate_on_start=false)")
 
     command = _build_readfish_command(
         executable=executable,
@@ -95,8 +132,9 @@ def start_readfish_targets(
         auth=auth,
         prom=config.prom,
     )
+    command_text = " ".join(command)
+    _announce(f"Launching: {command_text}")
 
-    LOGGER.info("Starting readfish: %s", " ".join(command))
     try:
         process = subprocess.Popen(
             command,
@@ -106,6 +144,10 @@ def start_readfish_targets(
         )
     except OSError as exc:
         raise ReadfishStartError(f"Failed to start readfish: {exc}") from exc
+
+    _announce(f"Spawned process pid={process.pid}")
+    _wait_for_startup(process, log_file=log_file)
+    _announce(f"Process pid={process.pid} is still running after startup check")
 
     if config.live_updates_enabled:
         from robin.readfish.live_updater import ReadfishLiveRegistry, ReadfishLiveSession
@@ -117,13 +159,56 @@ def start_readfish_targets(
                 region_name=config.live_region_name,
             )
         )
+        _announce(
+            f"Registered live target updates for sample {sample_id!r} "
+            f"(region={config.live_region_name!r})"
+        )
 
+    _announce(
+        f"Ready — follow logs with: tail -f {log_file}"
+    )
     return ReadfishStartResult(
         pid=process.pid,
         toml_path=str(toml_path),
         log_file=str(log_file),
         command=command,
+        dorado_address=dorado_address,
+        dorado_config=dorado_config,
+        live_updates_enabled=config.live_updates_enabled,
     )
+
+
+def _wait_for_startup(process: subprocess.Popen, *, log_file: Path) -> None:
+    """Fail fast if readfish exits immediately after launch."""
+    time.sleep(_POST_START_CHECK_SECONDS)
+    exit_code = process.poll()
+    if exit_code is None:
+        return
+    detail = _tail_log(log_file)
+    message = (
+        f"readfish exited immediately after start "
+        f"(pid={process.pid}, exit_code={exit_code})"
+    )
+    if detail:
+        message += f"\n--- {log_file} (tail) ---\n{detail}"
+    else:
+        message += (
+            f"\nLog file empty or missing ({log_file}). "
+            "Check Dorado address/config and MinKNOW device name."
+        )
+    raise ReadfishStartError(message)
+
+
+def _tail_log(log_file: Path, *, max_chars: int = 4000) -> str:
+    try:
+        if not log_file.is_file():
+            return ""
+        text = log_file.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
 
 
 def _validate_readfish_toml(

@@ -1,4 +1,4 @@
-"""MinKNOW sequencer status and run control for the ROBIN GUI."""
+gi"""MinKNOW sequencer status and run control for the ROBIN GUI."""
 
 from __future__ import annotations
 
@@ -1145,8 +1145,20 @@ def add_minknow_sequencer_section(
             message,
             kind="positive",
         )
+        if result.readfish_pid is not None:
+            _notify(
+                f"readfish command: {result.readfish_command}",
+                kind="info",
+            )
+            _notify(
+                f"readfish dorado: {result.readfish_dorado_config} @ "
+                f"{result.readfish_dorado_address}",
+                kind="info",
+            )
         if result.readfish_log_file:
             _notify(f"readfish log: {result.readfish_log_file}", kind="info")
+        if result.readfish_toml_path:
+            _notify(f"readfish toml: {result.readfish_toml_path}", kind="info")
         for warning in result.warnings:
             _notify(warning, kind="warning")
         await _refresh_snapshot()
