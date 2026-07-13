@@ -130,9 +130,7 @@ try:
         UpdateType as _GUIUpdateType,
         launch_gui as _gui_launch,
     )
-except Exception as e:
-    raise Exception(f"GUI not available: {e}")
-
+except Exception:
     def _gui_send_update(*args, **kwargs):
         return None
 

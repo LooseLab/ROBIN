@@ -1,4 +1,3 @@
-src/robin/gui/theme.py
 """
 Module: theme
 
