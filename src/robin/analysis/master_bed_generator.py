@@ -680,12 +680,33 @@ def _sort_bed_regions(df: pd.DataFrame) -> pd.DataFrame:
 
 def _get_reference_path() -> Optional[str]:
     """
-    Get the reference genome path from config or environment variable.
-    
+    Get the reference genome path from workflow TOML, config, or environment.
+
+    Resolution order:
+    1. ``ROBIN_WORKFLOW_TOML`` / workflow ``reference`` key
+    2. ``config.yaml`` locations
+    3. ``ROBIN_REFERENCE`` or ``robin_REFERENCE`` environment variable
+
     Returns:
         Path to reference FASTA file (expanded), or None if not found
     """
-    # Try to load from config file first
+    # Prefer the workflow TOML used to start ``robin workflow --toml``
+    try:
+        from robin.minknow.config import workflow_toml_from_environ
+        from robin.workflow_config import load_workflow_toml
+
+        toml_path = workflow_toml_from_environ()
+        if toml_path is not None and toml_path.is_file():
+            config = load_workflow_toml(toml_path)
+            reference = config.get("reference")
+            if reference:
+                reference = os.path.expanduser(str(reference))
+                if os.path.exists(reference):
+                    return reference
+    except Exception:
+        pass
+
+    # Try to load from config file
     try:
         import yaml  # type: ignore
         config_paths = [
@@ -701,19 +722,19 @@ def _get_reference_path() -> Optional[str]:
                         reference = config.get("reference")
                         if reference:
                             # Expand user home directory if present
-                            reference = os.path.expanduser(reference)
+                            reference = os.path.expanduser(str(reference))
                             if os.path.exists(reference):
                                 return reference
     except (ImportError, Exception):
         pass
     
-    # Check environment variable
-    reference_env = os.environ.get("robin_REFERENCE")
-    if reference_env:
-        # Expand user home directory if present
-        reference_env = os.path.expanduser(reference_env)
-        if os.path.exists(reference_env):
-            return reference_env
+    # Environment variables (prefer ROBIN_REFERENCE; keep robin_REFERENCE for compat)
+    for env_key in ("ROBIN_REFERENCE", "robin_REFERENCE"):
+        reference_env = os.environ.get(env_key)
+        if reference_env:
+            reference_env = os.path.expanduser(reference_env)
+            if os.path.exists(reference_env):
+                return reference_env
     
     return None
 
@@ -762,14 +783,15 @@ def _find_fai_file(reference: Optional[str] = None) -> Optional[str]:
         else:
             logger.debug(f"Reference file does not exist: {reference}")
     
-    # Check environment variable directly (fallback)
-    reference_env = os.environ.get("robin_REFERENCE")
-    if reference_env:
-        # Expand user home directory if present
-        reference_env = os.path.expanduser(reference_env)
-        fai_path = f"{reference_env}.fai"
-        if os.path.exists(fai_path):
-            return fai_path
+    # Check environment variables directly (fallback)
+    for env_key in ("ROBIN_REFERENCE", "robin_REFERENCE"):
+        reference_env = os.environ.get(env_key)
+        if reference_env:
+            # Expand user home directory if present
+            reference_env = os.path.expanduser(reference_env)
+            fai_path = f"{reference_env}.fai"
+            if os.path.exists(fai_path):
+                return fai_path
     
     # Common locations to check
     common_paths = [
