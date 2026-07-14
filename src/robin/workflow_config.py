@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import tomllib
 from pathlib import Path
 from typing import Any, Mapping, MutableMapping, Optional, Sequence
@@ -12,6 +13,13 @@ from click.core import ParameterSource
 from robin.minknow.toml_config import MinKnowWorkflowConfig, extract_minknow_config, load_minknow_toml
 
 WORKFLOW_REQUIRED_KEYS = ("path", "workflow", "center", "target_panel")
+
+# Default ruptures KernelCPD penalty for CNV breakpoint detection.
+DEFAULT_CNV_PENALTY_VALUE = 10
+# Minimum adjacent same-sign bins for a gain/loss region (|CNV| > 0.5).
+DEFAULT_CNV_MIN_CONTIGUOUS_BINS = 1
+
+_logger = logging.getLogger("robin.workflow_config")
 
 _PATH_KEYS = frozenset({"path", "work_dir", "reference", "toml"})
 _LIST_KEYS = frozenset(
@@ -60,6 +68,11 @@ reference = "~/references/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
 # preset = "standard"
 # with_gui = true
 # use_ray = true
+
+# Optional CNV settings. Defaults: penalty_value=10, min_contiguous_bins=1.
+# [cnv]
+# penalty_value = 10
+# min_contiguous_bins = 3
 """
 
 
@@ -159,6 +172,140 @@ def load_minknow_from_workflow_toml(path: Path) -> Optional[MinKnowWorkflowConfi
         )
     except click.BadParameter:
         return None
+
+
+def parse_cnv_penalty_value(
+    value: Any,
+    *,
+    default: int = DEFAULT_CNV_PENALTY_VALUE,
+) -> int:
+    """Coerce a CNV ruptures penalty to a positive integer, or return ``default``."""
+    return _parse_positive_int(
+        value,
+        default=default,
+        setting_name="penalty_value",
+    )
+
+
+def parse_cnv_min_contiguous_bins(
+    value: Any,
+    *,
+    default: int = DEFAULT_CNV_MIN_CONTIGUOUS_BINS,
+) -> int:
+    """Coerce min contiguous CNV bins to a positive integer, or return ``default``."""
+    return _parse_positive_int(
+        value,
+        default=default,
+        setting_name="min_contiguous_bins",
+    )
+
+
+def _parse_positive_int(
+    value: Any,
+    *,
+    default: int,
+    setting_name: str,
+) -> int:
+    if value is None:
+        return int(default)
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        _logger.warning(
+            "Invalid [cnv] %s %r; using default %s",
+            setting_name,
+            value,
+            default,
+        )
+        return int(default)
+    if parsed <= 0:
+        _logger.warning(
+            "Invalid [cnv] %s %s (must be > 0); using default %s",
+            setting_name,
+            parsed,
+            default,
+        )
+        return int(default)
+    return parsed
+
+
+def _load_cnv_section(
+    workflow_config: Optional[Mapping[str, Any]] = None,
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+) -> Optional[Mapping[str, Any]]:
+    config = workflow_config
+    if config is None:
+        from robin.minknow.config import workflow_toml_from_environ
+
+        toml_path = workflow_toml_from_environ(environ)
+        if toml_path is not None and toml_path.is_file():
+            try:
+                config = load_workflow_toml(toml_path)
+            except click.BadParameter as exc:
+                _logger.warning(
+                    "Could not load workflow TOML for [cnv] settings (%s): %s",
+                    toml_path,
+                    exc,
+                )
+                config = None
+
+    if not isinstance(config, Mapping):
+        return None
+    cnv_section = config.get("cnv")
+    if not isinstance(cnv_section, Mapping):
+        return None
+    return cnv_section
+
+
+def get_cnv_penalty_value(
+    workflow_config: Optional[Mapping[str, Any]] = None,
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+    default: int = DEFAULT_CNV_PENALTY_VALUE,
+) -> int:
+    """
+    Resolve CNV breakpoint ``penalty_value`` from workflow config.
+
+    Looks for::
+
+        [cnv]
+        penalty_value = 10
+
+    If ``workflow_config`` is omitted, loads the TOML referenced by
+    ``ROBIN_WORKFLOW_TOML`` when set. Returns ``default`` (10) when unset
+    or invalid.
+    """
+    cnv_section = _load_cnv_section(workflow_config, environ=environ)
+    if cnv_section is None:
+        return int(default)
+    return parse_cnv_penalty_value(cnv_section.get("penalty_value"), default=default)
+
+
+def get_cnv_min_contiguous_bins(
+    workflow_config: Optional[Mapping[str, Any]] = None,
+    *,
+    environ: Optional[Mapping[str, str]] = None,
+    default: int = DEFAULT_CNV_MIN_CONTIGUOUS_BINS,
+) -> int:
+    """
+    Resolve minimum contiguous significant bins for CNV gain/loss regions.
+
+    Looks for::
+
+        [cnv]
+        min_contiguous_bins = 3
+
+    Default is 1 (any single significant bin counts). Used when writing
+    ``new_file_*.bed`` gain/loss regions from the normalized CNV track.
+    """
+    cnv_section = _load_cnv_section(workflow_config, environ=environ)
+    if cnv_section is None:
+        return int(default)
+    return parse_cnv_min_contiguous_bins(
+        cnv_section.get("min_contiguous_bins"),
+        default=default,
+    )
 
 
 def _parameter_from_commandline(ctx: click.Context, param_name: str) -> bool:

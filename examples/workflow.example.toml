@@ -16,3 +16,8 @@ reference = "~/references/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
 # preset = "standard"
 # with_gui = true
 # use_ray = true
+
+# Optional CNV settings. Defaults: penalty_value=10, min_contiguous_bins=1.
+# [cnv]
+# penalty_value = 10
+# min_contiguous_bins = 3
