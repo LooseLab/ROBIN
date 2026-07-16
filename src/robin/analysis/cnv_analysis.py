@@ -990,6 +990,18 @@ def calculate_chromosome_stats_from_cnv(cnv_data: Dict, logger) -> Dict:
         return {}
 
 
+def _read_analysis_counter_from_disk(sample_id: str, work_dir: str) -> int:
+    """Read the analysis counter directly from disk (no cache)."""
+    counter_file = os.path.join(work_dir, sample_id, "cnv_analysis_counter.txt")
+    if not os.path.exists(counter_file):
+        return 0
+    try:
+        with open(counter_file, "r") as f:
+            return int(f.read().strip())
+    except (ValueError, IOError):
+        return 0
+
+
 def load_analysis_counter(sample_id: str, work_dir: str, logger) -> int:
     """Load the analysis counter for a sample from disk with caching"""
     # Check cache first
@@ -999,14 +1011,7 @@ def load_analysis_counter(sample_id: str, work_dir: str, logger) -> int:
         return cache['analysis_counter']
     
     # Load from disk
-    counter_file = os.path.join(work_dir, sample_id, "cnv_analysis_counter.txt")
-    result = 0
-    if os.path.exists(counter_file):
-        try:
-            with open(counter_file, "r") as f:
-                result = int(f.read().strip())
-        except (ValueError, IOError) as e:
-            logger.warning(f"Error loading counter for {sample_id}: {e}")
+    result = _read_analysis_counter_from_disk(sample_id, work_dir)
     
     # Cache the result
     cache['analysis_counter'] = result
@@ -1028,6 +1033,39 @@ def save_analysis_counter(sample_id: str, counter: int, work_dir: str, logger) -
         logger.debug(f"Saved and cached analysis counter for {sample_id}: {counter}")
     except IOError as e:
         logger.error(f"Error saving counter for {sample_id}: {e}")
+
+
+def allocate_next_analysis_counter(
+    sample_id: str, work_dir: str, logger=None
+) -> int:
+    """
+    Atomically increment the shared BED/CNV analysis counter and return the new value.
+
+    Every BED content update (CNV regions, breakpoints, fusion beds, master BED)
+    should call this so each write gets a new ``*_NNN.bed`` filename instead of
+    overwriting a previous version.
+    """
+    from robin.analysis.master_bed_generator import FileLock
+
+    log = logger or logging.getLogger("robin.cnv")
+    sample_dir = os.path.join(work_dir, sample_id)
+    lock_file = os.path.join(sample_dir, "_locks", "analysis_counter.lock")
+    counter_file = os.path.join(sample_dir, "cnv_analysis_counter.txt")
+
+    with FileLock(lock_file, timeout=60.0):
+        current = _read_analysis_counter_from_disk(sample_id, work_dir)
+        new_counter = current + 1
+        os.makedirs(sample_dir, exist_ok=True)
+        with open(counter_file, "w") as f:
+            f.write(str(new_counter))
+        update_sample_cache(sample_id, analysis_counter=new_counter)
+        log.debug(
+            "Allocated analysis counter %s for %s (was %s)",
+            new_counter,
+            sample_id,
+            current,
+        )
+        return new_counter
 
 
 def find_significant_regions(
@@ -1568,8 +1606,8 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         analysis_result["chromosome_stats"] = chromosome_stats
         analysis_result["processing_steps"].append("chromosome_stats_calculated")
 
-        # Save CNV data in the specified format
-        analysis_counter += 1
+        # Allocate a new counter for this CNV BED write (never overwrite prior versions)
+        analysis_counter = allocate_next_analysis_counter(sample_id, work_dir, logger)
 
         # Save CNV data files as specified in the documentation
         # Don't generate master BED here - it should only be generated once per batch
@@ -1595,11 +1633,8 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
             sample_output_dir, f"{analysis_counter}_cnv_data.json"
         )
         analysis_result["processing_steps"].append("cnv_data_saved")
-
-        # Save updated analysis counter to disk
-        save_analysis_counter(sample_id, analysis_counter, work_dir, logger)
         analysis_result["analysis_counter"] = analysis_counter
-        logger.debug(f"Saved analysis counter: {analysis_counter}")
+        logger.debug(f"Allocated analysis counter for CNV outputs: {analysis_counter}")
 
         # Force garbage collection
         gc.collect()
@@ -1950,8 +1985,8 @@ def process_multiple_bams(
         analysis_result["chromosome_stats"] = chromosome_stats
         analysis_result["processing_steps"].append("chromosome_stats_calculated")
 
-        # Save CNV data in the specified format
-        analysis_counter += 1
+        # Allocate a new counter for this CNV BED write (never overwrite prior versions)
+        analysis_counter = allocate_next_analysis_counter(sample_id, work_dir, logger)
 
         # Save CNV data files as specified in the documentation
         # Generate master BED here since this is batch processing (all BAMs processed)
@@ -1979,13 +2014,11 @@ def process_multiple_bams(
             sample_output_dir, f"{analysis_counter}_cnv_data.json"
         )
         analysis_result["processing_steps"].append("cnv_data_saved")
-
-        # Save updated analysis counter to disk
-        t0 = time.time()
-        save_analysis_counter(sample_id, analysis_counter, work_dir, logger)
+        # Master BED allocation (if any) may have advanced the counter further; record CNV's number
         analysis_result["analysis_counter"] = analysis_counter
+        t0 = time.time()
         gc.collect()
-        logger.info(f"[cnv] Save analysis counter + gc completed in {time.time() - t0:.2f}s")
+        logger.info(f"[cnv] gc completed in {time.time() - t0:.2f}s")
 
         analysis_result["processing_steps"].append("cnv_analysis_complete")
 
