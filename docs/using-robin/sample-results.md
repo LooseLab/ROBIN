@@ -29,7 +29,7 @@ Long values (e.g. a full basecall model name) may wrap across the full width so 
 
 ## Classification details {#classification-details}
 
-**Classification details** shows how different **classifiers** (for example Sturgeon, NanoDX, PanNanoDX, Random Forest) rank possible tumour classes or methylation-based groups.
+**Classification details** shows how different **classifiers** (for example Sturgeon, NanoDX, PanNanoDX, Random Forest, MARLIN, Lamprey) rank possible tumour classes or methylation-based groups.
 
 **How to read it:**
 
@@ -63,7 +63,7 @@ Below the **Classification details** and **Analysis details** cards, the sample 
 
 ### Classification
 
-The heading **Classification** groups **Sturgeon**, **NanoDX**, **PanNanoDX**, and **Random Forest** in separate **expandable rows** (click to open).
+The heading **Classification** groups **Sturgeon**, **NanoDX**, **PanNanoDX**, **Random Forest**, **MARLIN**, and **Lamprey (research)** in separate **expandable rows** (click to open). Lamprey is research/evaluation use only.
 
 ![Classification section: summary row, expanded Sturgeon with top-classes bar chart and confidence over time](../images/Classification.png)
 

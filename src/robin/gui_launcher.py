@@ -92,6 +92,13 @@ COMPLETION_JOB_PATTERNS: Dict[str, List[str]] = {
         "random_forest_results.csv",
         "random_forest_summary.csv",
     ],
+    "marlin": [
+        "marlin_scores.csv",
+        "MarlinBed.bed",
+    ],
+    "lamprey": [
+        "lamprey_scores.csv",
+    ],
 }
 
 from robin.minknow.sample_id import (
@@ -8720,7 +8727,14 @@ title="View in IGV"
                 "unmapped_reads",
                 "bam_batches",
             ]
-            classification_models = ["sturgeon", "nanodx", "pannanodx", "random_forest"]
+            classification_models = [
+                "sturgeon",
+                "nanodx",
+                "pannanodx",
+                "random_forest",
+                "marlin",
+                "lamprey",
+            ]
             analysis_fields = {
                 "coverage": ["quality", "global_coverage", "target_coverage", "enrichment"],
                 "cnv": [

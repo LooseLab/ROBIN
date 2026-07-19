@@ -87,6 +87,22 @@ minknow = [
     # Install a minor version matching MinKNOW Core, e.g. pip install 'minknow_api>=6.8.0,<6.9.0'
     "minknow_api>=6.8.0,<7.0.0",
 ]
+marlin = [
+    # TensorFlow required to load marlin_v1.model.hdf5 (downloaded on first use).
+    # Python 3.12+ only has TF >=2.16 wheels; those default to Keras 3, which does
+    # not reliably load the MARLIN Keras-2 HDF5 checkpoint. tf-keras provides the
+    # Keras 2 API used at inference time.
+    "tensorflow>=2.16",
+    "tf-keras>=2.16",
+]
+lamprey = [
+    # Lamprey package itself is NOT listed here (evaluation license; install
+    # separately from https://github.com/princessmaximacenter/Lamprey).
+    # These deps support ROBIN's Lamprey wrapper + HuggingFace model download.
+    "onnxruntime>=1.16",
+    "huggingface_hub>=0.20",
+    "pyyaml>=6.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
@@ -106,6 +122,9 @@ Issues = "https://github.com/yourusername/robin/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/robin"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/robin/resources/marlin" = "robin/resources/marlin"
 
 [tool.hatch.metadata]
 allow-direct-references = true

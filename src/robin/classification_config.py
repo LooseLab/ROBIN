@@ -29,6 +29,17 @@ CLASSIFIER_CONFIDENCE_THRESHOLDS: Dict[str, Dict[str, float]] = {
         "medium": 65.0,
         "low": 0.0,
     },
+    "marlin": {
+        "high": 80.0,
+        "medium": 50.0,
+        "low": 0.0,
+    },
+    "lamprey": {
+        # Same tiers as Sturgeon (research/evaluation classifier)
+        "high": 95.0,
+        "medium": 80.0,
+        "low": 0.0,
+    },
 }
 
 # Default thresholds (fallback)

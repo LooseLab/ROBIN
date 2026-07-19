@@ -221,6 +221,16 @@ try:
 except Exception:
     _random_forest_handler = None
 
+try:
+    from robin.analysis.marlin_analysis import marlin_handler as _marlin_handler
+except Exception:
+    _marlin_handler = None
+
+try:
+    from robin.analysis.lamprey_analysis import lamprey_handler as _lamprey_handler
+except Exception:
+    _lamprey_handler = None
+
 # Optional logging helper
 try:
     from robin.logging_config import (
@@ -295,6 +305,16 @@ BATCH_CONFIG: Dict[str, Dict[str, Any]] = {
         "timeout_seconds_busy": 30,
     },
     "random_forest": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
+    "marlin": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
+    "lamprey": {
         "max_batch_size": 20,
         "timeout_seconds": 2,
         "timeout_seconds_busy": 30,
@@ -462,14 +482,14 @@ QUEUE_TO_TYPES: Dict[str, Set[str]] = {
     "target": {"target"},
     "fusion": {"fusion"},
     "classification": {"sturgeon", "nanodx", "pannanodx"},
-    "slow": {"random_forest", "igv_bam", "snp_analysis", "target_bam_finalize"},
+    "slow": {"random_forest", "marlin", "lamprey", "igv_bam", "snp_analysis", "target_bam_finalize"},
 }
 
 TRIGGERS: Dict[str, List[str]] = {
     # preprocessing -> analyses
     "preprocessing": ["bed_conversion", "mgmt", "cnv", "target", "fusion"],
     # bed_conversion -> classifiers
-    "bed_conversion": ["sturgeon", "nanodx", "pannanodx", "random_forest"],
+    "bed_conversion": ["sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey"],
     # Build IGV-ready BAM after target analysis
     "target": ["igv_bam"],
 }
@@ -495,6 +515,8 @@ DEDUP_TYPES: Set[str] = {
     "nanodx",
     "pannanodx",
     "random_forest",
+    "marlin",
+    "lamprey",
     "snp_analysis",
 }
 
@@ -503,7 +525,14 @@ DEDUP_TYPES: Set[str] = {
 SERIALIZE_BY_TYPE_PER_SAMPLE: Set[str] = set()
 
 # Classification job types (single global pipeline per type)
-CLASSIFICATION_TYPES: Set[str] = {"sturgeon", "nanodx", "pannanodx", "random_forest"}
+CLASSIFICATION_TYPES: Set[str] = {
+    "sturgeon",
+    "nanodx",
+    "pannanodx",
+    "random_forest",
+    "marlin",
+    "lamprey",
+}
 
 # Handlers record errors under analysis-specific keys; Pool must treat those as failures.
 _HANDLER_ERROR_ALIASES: Dict[str, Tuple[str, ...]] = {
@@ -515,6 +544,8 @@ _HANDLER_ERROR_ALIASES: Dict[str, Tuple[str, ...]] = {
     "target": ("target_analysis",),
     "fusion": ("fusion_analysis",),
     "random_forest": ("random_forest_analysis",),
+    "marlin": ("marlin_analysis",),
+    "lamprey": ("lamprey_analysis",),
 }
 
 # Job types that must be serialized per sample (no overlap across these types)
@@ -525,6 +556,8 @@ _GB = 1024 * 1024 * 1024
 _DEFAULT_MEMORY = 1 * _GB
 _FUSION_MEMORY = 8 * _GB
 _SNP_ANALYSIS_MEMORY = 8 * _GB
+_MARLIN_MEMORY = 4 * _GB
+_LAMPREY_MEMORY = 8 * _GB
 RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
     # Tune these to your cluster
     "preprocessing": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
@@ -544,6 +577,8 @@ RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
     "nanodx": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "pannanodx": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "random_forest": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
+    "marlin": {"num_cpus": 1, "memory": _MARLIN_MEMORY},
+    "lamprey": {"num_cpus": 1, "memory": _LAMPREY_MEMORY},
     "igv_bam": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "snp_analysis": {
         "num_cpus": 1,
@@ -887,6 +922,8 @@ NEEDS_WORK_DIR: Set[str] = {
     "nanodx",
     "pannanodx",
     "random_forest",
+    "marlin",
+    "lamprey",
 }
 
 
@@ -1193,6 +1230,8 @@ pannanodx_handler_remote = ray.remote(
 random_forest_handler_remote = ray.remote(
     _wrap_real_handler(_random_forest_handler, "random_forest")
 )
+marlin_handler_remote = ray.remote(_wrap_real_handler(_marlin_handler, "marlin"))
+lamprey_handler_remote = ray.remote(_wrap_real_handler(_lamprey_handler, "lamprey"))
 
 
 # ---------- TypeProcessor & Coordinator Actors ----------
@@ -1891,6 +1930,8 @@ class Coordinator:
             ("nanodx", nanodx_handler_remote),
             ("pannanodx", pannanodx_handler_remote),
             ("random_forest", random_forest_handler_remote),
+            ("marlin", marlin_handler_remote),
+            ("lamprey", lamprey_handler_remote),
             ("igv_bam", ray.remote(_wrap_real_handler(_igv_bam_handler, "igv_bam"))),
             (
                 "snp_analysis",
@@ -1956,6 +1997,12 @@ class Coordinator:
                 "rf": [
                     "random_forest"
                 ],  # Random forest needs its own actor (slow/blocking)
+                "marlin": [
+                    "marlin"
+                ],  # MARLIN (TensorFlow) needs its own actor
+                "lamprey": [
+                    "lamprey"
+                ],  # Lamprey ONNX model is large; dedicated actor
                 "slow": [
                     "igv_bam",
                     "snp_analysis",
@@ -1980,6 +2027,12 @@ class Coordinator:
                     return max(1, int(self.analysis_workers))
                 if name == "rf":
                     # Random forest gets its own concurrency (slow/blocking)
+                    return max(1, int(self.analysis_workers))
+                if name == "marlin":
+                    # MARLIN gets its own concurrency (TF model load is heavy)
+                    return max(1, int(self.analysis_workers))
+                if name == "lamprey":
+                    # Lamprey gets its own concurrency (large ONNX model)
                     return max(1, int(self.analysis_workers))
                 if name == "prep":
                     return self.preprocessing_workers
@@ -5501,6 +5554,10 @@ def _scan_watch_folder_for_sample_dirs(
             ).exists():
                 return True
             if (sample_dir / "random_forest_scores.csv").exists():
+                return True
+            if (sample_dir / "marlin_scores.csv").exists():
+                return True
+            if (sample_dir / "lamprey_scores.csv").exists():
                 return True
 
             # Common analysis directories

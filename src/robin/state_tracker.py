@@ -66,6 +66,8 @@ DEFAULT_STAGES: Dict[str, Stage] = {
     "igv_bam": Stage("igv_bam", 11),
     "snp_analysis": Stage("snp_analysis", 12),
     "target_bam_finalize": Stage("target_bam_finalize", 13),
+    "marlin": Stage("marlin", 14),
+    "lamprey": Stage("lamprey", 15),
 }
 
 

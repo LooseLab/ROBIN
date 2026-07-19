@@ -61,6 +61,8 @@ try:
     from robin.analysis.sturgeon_analysis import sturgeon_handler
     from robin.analysis.nanodx_analysis import nanodx_handler, pannanodx_handler
     from robin.analysis.random_forest_analysis import random_forest_handler
+    from robin.analysis.marlin_analysis import marlin_handler
+    from robin.analysis.lamprey_analysis import lamprey_handler
     from robin.analysis.target_analysis import target_handler
     from robin.analysis.fusion_analysis import fusion_handler
     from robin.analysis.utilities.matkit import run_matkit
@@ -75,6 +77,8 @@ except Exception as e:
     nanodx_handler = None  # type: ignore[assignment]
     pannanodx_handler = None  # type: ignore[assignment]
     random_forest_handler = None  # type: ignore[assignment]
+    marlin_handler = None  # type: ignore[assignment]
+    lamprey_handler = None  # type: ignore[assignment]
     target_handler = None  # type: ignore[assignment]
     fusion_handler = None  # type: ignore[assignment]
     run_matkit = None  # type: ignore[assignment]
@@ -259,6 +263,8 @@ VALID_JOB_TYPES = {
     "nanodx",
     "pannanodx",
     "random_forest",
+    "marlin",
+    "lamprey",
 }
 DEFAULT_LOG_LEVEL = "ERROR"
 DEFAULT_ANALYSIS_WORKERS = 1
@@ -276,10 +282,19 @@ QUEUE_MAPPING = {
     "nanodx": "classification",
     "pannanodx": "classification",
     "random_forest": "slow",
+    "marlin": "slow",
+    "lamprey": "slow",
 }
 
 # Jobs that require bed_conversion as a dependency
-JOBS_REQUIRING_BED_CONVERSION = {"sturgeon", "nanodx", "pannanodx", "random_forest"}
+JOBS_REQUIRING_BED_CONVERSION = {
+    "sturgeon",
+    "nanodx",
+    "pannanodx",
+    "random_forest",
+    "marlin",
+    "lamprey",
+}
 
 from robin.reporting.sections.disclaimer_text import EXTENDED_DISCLAIMER_TEXT
 
@@ -327,6 +342,8 @@ HANDLER_CONFIGS = [
     ("classification", "nanodx", nanodx_handler, None, True),
     ("classification", "pannanodx", pannanodx_handler, None, True),
     ("slow", "random_forest", random_forest_handler, None, True),
+    ("slow", "marlin", marlin_handler, None, True),
+    ("slow", "lamprey", lamprey_handler, None, True),
 ]
 
 
@@ -1491,7 +1508,11 @@ def list_job_types() -> None:
             "nanodx - NanoDX analysis",
             "pannanodx - PanNanoDX analysis",
         ],
-        "slow": ["random_forest - Random Forest analysis"],
+        "slow": [
+            "random_forest - Random Forest analysis",
+            "marlin - MARLIN leukemia methylation classification",
+            "lamprey - Lamprey hematological classification (research/evaluation only)",
+        ],
     }
 
     click.echo("Available job types in robin:\n")
@@ -1507,7 +1528,7 @@ def list_job_types() -> None:
         "  • Simplified format (recommended): 'mgmt,sturgeon' (bed_conversion auto-added)"
     )
     click.echo(
-        "  • Full pipeline (simplified): 'mgmt,cnv,target,fusion,sturgeon,nanodx,pannanodx,random_forest' (bed_conversion auto-added)"
+        "  • Full pipeline (simplified): 'mgmt,cnv,target,fusion,sturgeon,nanodx,pannanodx,random_forest,marlin,lamprey' (bed_conversion auto-added)"
     )
     click.echo(
         "  • Legacy format with queue prefixes: 'preprocessing:bed_conversion,mgmt:mgmt,classification:sturgeon'"
@@ -1516,7 +1537,11 @@ def list_job_types() -> None:
         "\nNote: 'preprocessing' is automatically added as the first step if not specified."
     )
     click.echo(
-        "Note: 'bed_conversion' is automatically added when needed for sturgeon, nanodx, pannanodx, or random_forest jobs."
+        "Note: 'bed_conversion' is automatically added when needed for sturgeon, nanodx, pannanodx, random_forest, marlin, or lamprey jobs."
+    )
+    click.echo(
+        "Note: 'lamprey' is research/evaluation use only (not for clinical decision-making); "
+        "install Lamprey separately and set ROBIN_LAMPREY_RESEARCH_ACK=1."
     )
     click.echo(
         "Note: Each analysis type (mgmt, cnv, target, fusion) has its own queue for parallel processing."

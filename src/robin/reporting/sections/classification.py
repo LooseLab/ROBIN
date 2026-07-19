@@ -337,6 +337,8 @@ class ClassificationSection(ReportSection):
             "NanoDX": "nanodx_scores.csv",
             "PanNanoDX": "pannanodx_scores.csv",
             "Random Forest": "random_forest_scores.csv",
+            "MARLIN": "marlin_scores.csv",
+            "Lamprey (research)": "lamprey_scores.csv",
         }
 
         # Add summary table of all classifications
@@ -377,6 +379,14 @@ class ClassificationSection(ReportSection):
                         if "number_probes" in df.columns
                         else df
                     )
+                    df = (
+                        df.drop(columns=["covered_cpgs"])
+                        if "covered_cpgs" in df.columns
+                        else df
+                    )
+                    for meta_col in ("temperature", "diagnostic"):
+                        if meta_col in df.columns:
+                            df = df.drop(columns=[meta_col])
 
                     # Get the last row and find top prediction
                     last_row = df.iloc[-1]
@@ -392,7 +402,17 @@ class ClassificationSection(ReportSection):
                     )
 
                     # Determine confidence level based on classifier using centralized config
-                    confidence_status, status_color = get_confidence_status(name.lower(), confidence_value)
+                    classifier_key = {
+                        "Sturgeon": "sturgeon",
+                        "NanoDX": "nanodx",
+                        "PanNanoDX": "pannanodx",
+                        "Random Forest": "random_forest",
+                        "MARLIN": "marlin",
+                        "Lamprey (research)": "lamprey",
+                    }.get(name, name.lower().replace(" ", "_"))
+                    confidence_status, status_color = get_confidence_status(
+                        classifier_key, confidence_value
+                    )
 
                     # Add to summary table with HTML-like color formatting
                     summary_data.append(
