@@ -1729,7 +1729,15 @@ def classification_plot(df, title, threshold):
 
     # Reshape the data to long format
     df_melted = df.melt(id_vars=["timestamp"], var_name="Condition", value_name="Value")
-    df_melted = df_melted[df_melted["Condition"].ne("number_probes")]
+    meta_conditions = {
+        "number_probes",
+        "covered_cpgs",
+        "temperature",
+        "diagnostic",
+    }
+    df_melted = df_melted[
+        ~df_melted["Condition"].astype(str).str.strip().str.lower().isin(meta_conditions)
+    ]
 
     # Filter conditions that cross the threshold
     top_conditions = df_melted.groupby("Condition")["Value"].max().nlargest(10).index

@@ -31,6 +31,32 @@ from robin.reporting.mnpflex_hierarchy import (
 
 logger = logging.getLogger(__name__)
 
+# Score CSV columns that are run statistics / metadata, not predicted classes.
+# Kept as a set of lowercase names so case variants are also excluded.
+CLASSIFIER_SCORE_META_COLUMNS = frozenset(
+    {
+        "timestamp",
+        "number_probes",
+        "covered_cpgs",
+        "temperature",
+        "diagnostic",
+    }
+)
+
+
+def drop_classifier_score_meta_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove non-class columns from a classifier scores DataFrame."""
+    if df is None or getattr(df, "empty", True):
+        return df
+    drop_cols = [
+        col
+        for col in df.columns
+        if str(col).strip().lower() in CLASSIFIER_SCORE_META_COLUMNS
+    ]
+    if not drop_cols:
+        return df
+    return df.drop(columns=drop_cols)
+
 
 class ClassificationSection(ReportSection):
     """Section containing the methylation classification results."""
@@ -78,8 +104,8 @@ class ClassificationSection(ReportSection):
             BytesIO object containing the plot image
         """
         try:
-            # Drop non-classification columns
-            df = df.drop(columns=["number_probes"]) if "number_probes" in df.columns else df
+            # Drop non-classification columns (covered_cpgs, diagnostic, etc.)
+            df = drop_classifier_score_meta_columns(df)
 
             # Check if dataframe is empty or has no data
             if df.empty or len(df) == 0:
@@ -369,24 +395,7 @@ class ClassificationSection(ReportSection):
                         )
 
                     # Continue with existing classification processing
-                    df = (
-                        df.drop(columns=["timestamp"])
-                        if "timestamp" in df.columns
-                        else df
-                    )
-                    df = (
-                        df.drop(columns=["number_probes"])
-                        if "number_probes" in df.columns
-                        else df
-                    )
-                    df = (
-                        df.drop(columns=["covered_cpgs"])
-                        if "covered_cpgs" in df.columns
-                        else df
-                    )
-                    for meta_col in ("temperature", "diagnostic"):
-                        if meta_col in df.columns:
-                            df = df.drop(columns=[meta_col])
+                    df = drop_classifier_score_meta_columns(df)
 
                     # Get the last row and find top prediction
                     last_row = df.iloc[-1]
@@ -542,16 +551,7 @@ class ClassificationSection(ReportSection):
 
                 if file_path and os.path.exists(file_path):
                     df = pd.read_csv(file_path)
-                    df = (
-                        df.drop(columns=["timestamp"])
-                        if "timestamp" in df.columns
-                        else df
-                    )
-                    df = (
-                        df.drop(columns=["number_probes"])
-                        if "number_probes" in df.columns
-                        else df
-                    )
+                    df = drop_classifier_score_meta_columns(df)
 
                     last_row = df.iloc[-1]
                     top_predictions = last_row.sort_values(ascending=False).head(10)
