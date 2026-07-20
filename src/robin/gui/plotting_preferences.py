@@ -5,8 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
+from robin.reference_contigs import (
+    DEFAULT_REFERENCE_CONTIG_SCOPE,
+    REFERENCE_CONTIG_SCOPE_LABELS,
+    REFERENCE_CONTIG_SCOPES,
+    resolve_reference_contig_scope,
+)
+
 PLOTTING_PREFERENCES_KEY = "plotting_preferences"
-PLOTTING_PREFERENCES_SCHEMA_VERSION = 1
+PLOTTING_PREFERENCES_SCHEMA_VERSION = 2
 
 CNV_REPORT_SCALE_PLOIDY = "ploidy"
 CNV_REPORT_SCALE_NORMALIZED_DIFFERENCE = "normalized_difference"
@@ -32,6 +39,7 @@ class PlottingPreferencesConfig:
 
     schema_version: int = PLOTTING_PREFERENCES_SCHEMA_VERSION
     cnv_report_scale: str = DEFAULT_CNV_REPORT_SCALE
+    reference_contig_scope: str = DEFAULT_REFERENCE_CONTIG_SCOPE
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
 
@@ -39,6 +47,7 @@ class PlottingPreferencesConfig:
         out: Dict[str, Any] = {
             "schema_version": self.schema_version,
             "cnv_report_scale": self.cnv_report_scale,
+            "reference_contig_scope": self.reference_contig_scope,
         }
         if self.updated_at:
             out["updated_at"] = self.updated_at
@@ -54,9 +63,16 @@ class PlottingPreferencesConfig:
         scale = _LEGACY_CNV_SCALE_ALIASES.get(scale, scale)
         if scale not in CNV_REPORT_SCALES:
             scale = DEFAULT_CNV_REPORT_SCALE
+        contig_scope = resolve_reference_contig_scope(
+            data.get("reference_contig_scope")
+        )
+        schema_version = int(data.get("schema_version") or 1)
+        if schema_version < PLOTTING_PREFERENCES_SCHEMA_VERSION:
+            schema_version = PLOTTING_PREFERENCES_SCHEMA_VERSION
         return cls(
-            schema_version=int(data.get("schema_version") or 1),
+            schema_version=schema_version,
             cnv_report_scale=scale,
+            reference_contig_scope=contig_scope,
             updated_at=data.get("updated_at"),
             updated_by=data.get("updated_by"),
         )
@@ -65,6 +81,7 @@ class PlottingPreferencesConfig:
         self,
         *,
         cnv_report_scale: Optional[str] = None,
+        reference_contig_scope: Optional[str] = None,
         updated_at: Optional[str] = None,
         updated_by: Optional[str] = None,
     ) -> "PlottingPreferencesConfig":
@@ -72,9 +89,13 @@ class PlottingPreferencesConfig:
         scale = _LEGACY_CNV_SCALE_ALIASES.get(scale, scale)
         if scale not in CNV_REPORT_SCALES:
             scale = DEFAULT_CNV_REPORT_SCALE
+        contig_scope = resolve_reference_contig_scope(
+            reference_contig_scope or self.reference_contig_scope
+        )
         return PlottingPreferencesConfig(
             schema_version=PLOTTING_PREFERENCES_SCHEMA_VERSION,
             cnv_report_scale=scale,
+            reference_contig_scope=contig_scope,
             updated_at=updated_at or self.updated_at,
             updated_by=updated_by or self.updated_by,
         )
@@ -120,6 +141,14 @@ def resolve_cnv_summary_normalized(
         return bool(explicit)
     prefs = plotting_preferences or load_plotting_preferences()
     return cnv_summary_normalized_from_scale(prefs.cnv_report_scale)
+
+
+def resolve_plotting_reference_contig_scope(
+    plotting_preferences: Optional[PlottingPreferencesConfig] = None,
+) -> str:
+    """Resolve the contig scope used for coverage and CNV plots."""
+    prefs = plotting_preferences or load_plotting_preferences()
+    return resolve_reference_contig_scope(prefs.reference_contig_scope)
 
 
 def cnv_report_ylabel(scale: str) -> str:

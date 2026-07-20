@@ -50,6 +50,7 @@ from robin.analysis.cnv_regional import (
     load_target_coverage_df,
     panel_genes_in_region,
 )
+from robin.reference_contigs import is_visible_contig
 from robin.classification_config import get_cnv_thresholds, is_resolution_sufficient
 
 from robin import resources
@@ -340,10 +341,11 @@ class CNVSection(ReportSection):
 
             panel_name, panel_genes_df = load_panel_gene_bed(self.report.output)
             target_coverage_df = load_target_coverage_df(self.report.output)
+            scope = getattr(self.report, "reference_contig_scope", None)
             reportable_chromosomes = [
                 chrom
                 for chrom in natsort.natsorted(result3.cnv.keys())
-                if is_reportable_chromosome(chrom)
+                if is_visible_contig(chrom, scope)
             ]
             cytoband_analysis_by_chrom: dict[str, pd.DataFrame] = {}
             regional_cnv_events: list[dict] = []
@@ -593,6 +595,7 @@ class CNVSection(ReportSection):
                 panel_genes_df=panel_genes_df,
                 target_coverage_df=target_coverage_df,
                 significant_regions=significant_regions,
+                reference_contig_scope=scope,
             )
             summary_caption_scale = (
                 "normalized_difference" if use_normalized_summary else "ploidy"

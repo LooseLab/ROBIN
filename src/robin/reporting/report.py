@@ -72,11 +72,21 @@ class RobinReport:
         self.sample_identifiers = sample_identifiers
         self.generated_by = (str(generated_by).strip() if generated_by else None) or None
         self.generated_at = (str(generated_at).strip() if generated_at else None) or None
-        from robin.gui.plotting_preferences import resolve_cnv_summary_normalized
+        from robin.gui.plotting_preferences import (
+            PlottingPreferencesConfig,
+            resolve_cnv_summary_normalized,
+            resolve_plotting_reference_contig_scope,
+        )
 
+        self.plotting_preferences = (
+            plotting_preferences or PlottingPreferencesConfig()
+        )
         self.cnv_summary_normalized = resolve_cnv_summary_normalized(
             cnv_summary_normalized,
-            plotting_preferences=plotting_preferences,
+            plotting_preferences=self.plotting_preferences,
+        )
+        self.reference_contig_scope = resolve_plotting_reference_contig_scope(
+            self.plotting_preferences
         )
         self.robin_commit = get_git_commit()
         self.clinvar_metadata = load_sample_clinvar_provenance(self.output)

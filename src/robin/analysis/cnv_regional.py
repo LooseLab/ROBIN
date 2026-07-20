@@ -15,13 +15,15 @@ from robin.utils.sequencing_files import panel_bed_filename
 
 logger = logging.getLogger(__name__)
 
-REPORTABLE_CHROMOSOME_RE = re.compile(r"^chr(\d+|X|Y)$")
+from robin.reference_contigs import CANONICAL_CONTIG_RE, is_canonical_contig
+
+REPORTABLE_CHROMOSOME_RE = CANONICAL_CONTIG_RE
 SIGNIFICANT_CNV_STATES = {"GAIN", "LOSS", "HIGH_GAIN", "DEEP_LOSS"}
 
 
 def is_reportable_chromosome(chromosome: str) -> bool:
     """Return True for standard autosomes/sex chromosomes used in CNV reporting."""
-    return chromosome != "chrM" and bool(REPORTABLE_CHROMOSOME_RE.match(chromosome))
+    return is_canonical_contig(chromosome)
 
 
 def load_panel_gene_bed(output_dir: str) -> tuple[str | None, pd.DataFrame]:

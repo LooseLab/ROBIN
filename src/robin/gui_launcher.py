@@ -10580,7 +10580,10 @@ title="View in IGV"
             user_id=user_id,
             target_type="setting",
             target_id=PLOTTING_PREFERENCES_KEY,
-            details={"cnv_report_scale": config.cnv_report_scale},
+            details={
+                "cnv_report_scale": config.cnv_report_scale,
+                "reference_contig_scope": config.reference_contig_scope,
+            },
         )
 
     def _create_sample_id_generator_page(self):
