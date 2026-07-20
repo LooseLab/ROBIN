@@ -23,6 +23,8 @@ from typing import List, Optional, Tuple, Dict, Any
 
 logger = logging.getLogger(__name__)
 
+from robin.reference_contigs import is_visible_contig
+
 # Define consistent color scheme and style
 MODERN_COLORS = {
     "primary": "#2C3E50",  # Dark blue-grey (matching report text)
@@ -1091,6 +1093,7 @@ def create_CNV_plot(
     panel_genes_df: Optional[pd.DataFrame] = None,
     target_coverage_df: Optional[pd.DataFrame] = None,
     significant_regions: Optional[Dict[str, List[Dict[str, Any]]]] = None,
+    reference_contig_scope: Optional[str] = None,
 ):
     """
     Creates a CNV plot.
@@ -1156,9 +1159,10 @@ def create_CNV_plot(
         contig_boundaries = []
         chrom_start_offsets: Dict[str, float] = {}
         log2_values_for_limits: List[float] = []
-        reportable = ["chr" + str(i) for i in range(0, 23)] + ["chrX", "chrY"]
         ordered_contigs = [
-            contig for contig in natsort.natsorted(cnv_source.keys()) if contig in reportable
+            contig
+            for contig in natsort.natsorted(cnv_source.keys())
+            if is_visible_contig(contig, reference_contig_scope)
         ]
 
         for contig in ordered_contigs:
@@ -1488,6 +1492,7 @@ def create_CNV_plot_per_chromosome(
     sex_estimate: str = "Unknown",
     fig_height: Optional[float] = None,
     fig_width: Optional[float] = None,
+    reference_contig_scope: Optional[str] = None,
 ):
     """Creates CNV plots per chromosome.
 
@@ -1538,7 +1543,7 @@ def create_CNV_plot_per_chromosome(
             chromosomes = [
                 contig
                 for contig in natsort.natsorted(cnv_source.keys())
-                if contig in REPORTABLE_CHROMOSOMES
+                if is_visible_contig(contig, reference_contig_scope)
             ]
 
         scale = "normalized_difference" if plot_log2 else "ploidy"
@@ -1556,8 +1561,6 @@ def create_CNV_plot_per_chromosome(
             if contig not in cnv_source:
                 continue
             values = cnv_source[contig]
-            if contig not in REPORTABLE_CHROMOSOMES:
-                continue
 
             values_array = np.asarray(values, dtype=float)
             finite_values = values_array[np.isfinite(values_array)]

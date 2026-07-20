@@ -21,6 +21,8 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+from robin.reference_contigs import is_visible_contig
+
 
 class CoverageSection(ReportSection):
     """Section containing the coverage analysis results."""
@@ -47,6 +49,7 @@ class CoverageSection(ReportSection):
     def _initialize_data(self):
         """Initialize coverage data from CSV files."""
         output_dir = self.report.output
+        scope = getattr(self.report, "reference_contig_scope", None)
         # Initialize coverage data
         self.coverage_data = {}
         self.chromosome_data = []
@@ -65,6 +68,27 @@ class CoverageSection(ReportSection):
                 os.path.join(output_dir, "target_coverage.csv")
             )
 
+            # Apply the configured reference contig scope consistently across all
+            # coverage plots and summary statistics.
+            if "#rname" in self.cov_df_main.columns:
+                self.cov_df_main = self.cov_df_main[
+                    self.cov_df_main["#rname"]
+                    .astype(str)
+                    .map(lambda v: is_visible_contig(v, scope))
+                ].copy()
+            if "chrom" in self.bedcov_df_main.columns:
+                self.bedcov_df_main = self.bedcov_df_main[
+                    self.bedcov_df_main["chrom"]
+                    .astype(str)
+                    .map(lambda v: is_visible_contig(v, scope))
+                ].copy()
+            if "chrom" in self.target_coverage_df.columns:
+                self.target_coverage_df = self.target_coverage_df[
+                    self.target_coverage_df["chrom"]
+                    .astype(str)
+                    .map(lambda v: is_visible_contig(v, scope))
+                ].copy()
+
             # Calculate global and target coverage
             global_coverage = (
                 self.cov_df_main["covbases"].sum() / self.cov_df_main["endpos"].sum()
@@ -81,7 +105,7 @@ class CoverageSection(ReportSection):
 
             # Process chromosome-level data
             for _, row in self.cov_df_main.iterrows():
-                if str(row["#rname"]).startswith("chr"):  # Only process chromosome data
+                if is_visible_contig(str(row["#rname"]), scope):
                     self.chromosome_data.append(
                         {
                             "name": row["#rname"],
@@ -128,10 +152,8 @@ class CoverageSection(ReportSection):
                 plt.axis('off')
             else:
                 plt.figure(figsize=(8, 4))  # Reduced from default size
-                # Filter out chrM and get data
-                filtered_data = [d for d in self.chromosome_data if d["name"] != "chrM"]
-                chromosomes = [d["name"] for d in filtered_data]
-                coverages = [d["mean_coverage"] for d in filtered_data]
+                chromosomes = [d["name"] for d in self.chromosome_data]
+                coverages = [d["mean_coverage"] for d in self.chromosome_data]
 
                 # Convert reportlab color to matplotlib color (hex string)
                 plot_color = (
@@ -188,17 +210,13 @@ class CoverageSection(ReportSection):
                     by="chrom",
                     key=lambda x: np.argsort(natsort.index_natsorted(grouped["chrom"])),
                 )
-                groupeddf = groupeddf[groupeddf["chrom"] != "chrM"]
                 groupeddf["meandepth"] = groupeddf["bases"] / groupeddf["length"]
 
                 # Filter and sort chromosomes for off-target data
-                pattern = r"^chr([0-9]+|X|Y)$"
-                temp_covdf = self.cov_df_main[self.cov_df_main["#rname"].str.match(pattern)]
-                sorteddf = temp_covdf.sort_values(
+                sorteddf = self.cov_df_main.sort_values(
                     by="#rname",
-                    key=lambda x: np.argsort(natsort.index_natsorted(temp_covdf["#rname"])),
+                    key=lambda x: np.argsort(natsort.index_natsorted(x)),
                 )
-                sorteddf = sorteddf[sorteddf["#rname"] != "chrM"]
 
                 # Create the plot
                 plt.figure(figsize=(8, 4))  # Reduced size

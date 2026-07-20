@@ -25,6 +25,8 @@ from robin.gui.theme import (
     get_user_dark_mode,
 )
 
+from robin.reference_contigs import is_visible_contig
+
 # Shared paged table renderer to avoid materializing full row lists for large DataFrames.
 def _render_paged_df_table(
     df: pd.DataFrame,
@@ -2014,7 +2016,9 @@ def _echarts_option_to_json(obj: Any) -> Any:
 
 
 def _compute_target_cov_series_data(
-    cov_df: pd.DataFrame, bed_df: pd.DataFrame
+    cov_df: pd.DataFrame,
+    bed_df: pd.DataFrame,
+    reference_contig_scope: str,
 ) -> Dict[str, Any]:
     """Pandas work for on/off target bar chart (no UI). Safe for asyncio.to_thread."""
 
@@ -2037,10 +2041,12 @@ def _compute_target_cov_series_data(
             .reset_index()
         )
         grouped["meandepth"] = grouped["bases"] / grouped["length"]
-        pattern = r"^chr([0-9]+|X|Y)$"
         name_col = "#rname" if "#rname" in cov_df.columns else "rname"
-        temp_df = cov_df[cov_df[name_col].astype(str).str.match(pattern)]
-        temp_df = temp_df[temp_df[name_col] != "chrM"]
+        temp_df = cov_df[
+            cov_df[name_col]
+            .astype(str)
+            .map(lambda v: is_visible_contig(v, reference_contig_scope))
+        ]
         names = sorted(temp_df[name_col].astype(str).unique(), key=chr_key)
 
         if not names:
@@ -2076,7 +2082,9 @@ def _compute_target_cov_series_data(
 
 
 def _compute_boxplot_chart_data(
-    bed_df: pd.DataFrame, panel_display_name: str
+    bed_df: pd.DataFrame,
+    panel_display_name: str,
+    reference_contig_scope: str,
 ) -> Dict[str, Any]:
     """Pandas work for target coverage boxplot (no UI). Safe for asyncio.to_thread."""
     try:
@@ -2086,7 +2094,17 @@ def _compute_boxplot_chart_data(
             df["coverage"] = df["bases"] / df["length"]
         chrom_str = df["chrom"].astype(str).str.strip()
         df["chrom"] = chrom_str.where(chrom_str.str.startswith("chr"), "chr" + chrom_str)
+        df = df[
+            df["chrom"]
+            .astype(str)
+            .map(lambda v: is_visible_contig(v, reference_contig_scope))
+        ]
         chroms = natsort.natsorted(df["chrom"].unique())
+        if not chroms:
+            return {
+                "ok": False,
+                "error": "No visible chromosome data found for target coverage chart",
+            }
         chrom_lookup = {chrom: idx for idx, chrom in enumerate(chroms)}
         df["chrom_index"] = df["chrom"].map(chrom_lookup)
         agg = (
@@ -2139,7 +2157,10 @@ def _compute_boxplot_chart_data(
         return {"ok": False, "error": str(e)}
 
 
-def _compute_target_cov_table_rows(df: pd.DataFrame) -> Dict[str, Any]:
+def _compute_target_cov_table_rows(
+    df: pd.DataFrame,
+    reference_contig_scope: str,
+) -> Dict[str, Any]:
     """Pandas work for target coverage table (no UI). Safe for asyncio.to_thread."""
     try:
         dfx = df.copy()
@@ -2147,6 +2168,12 @@ def _compute_target_cov_table_rows(df: pd.DataFrame) -> Dict[str, Any]:
             dfx["length"] = (dfx["endpos"] - dfx["startpos"] + 1).astype(float)
             dfx["coverage"] = dfx["bases"] / dfx["length"]
         dfx["coverage"] = dfx["coverage"].astype(float).round(2)
+        if "chrom" in dfx.columns:
+            dfx = dfx[
+                dfx["chrom"]
+                .astype(str)
+                .map(lambda v: is_visible_contig(v, reference_contig_scope))
+            ]
 
         outlier_status: List[str] = []
         if len(dfx) >= 3:
@@ -2467,6 +2494,12 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
     """
     # Check for development environment variable to show/hide testing features
     is_development_mode = os.environ.get("ROBIN_DEV_MODE", "").lower() in ("1", "true", "yes", "on")
+
+    from robin.gui.plotting_preferences import resolve_plotting_reference_contig_scope
+
+    reference_contig_scope = resolve_plotting_reference_contig_scope(
+        getattr(launcher, "plotting_preferences", None)
+    )
 
     with ui.card().classes("w-full").props("id=analysis-detail-coverage"):
         ui.label("Coverage").classes("text-lg font-semibold mb-2")
@@ -3397,7 +3430,9 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
                         if bed_cov.exists():
                             df = pd.read_csv(bed_cov)
                             _apply_boxplot_payload(
-                                _compute_boxplot_chart_data(df, panel_display_name)
+                                _compute_boxplot_chart_data(
+                                    df, panel_display_name, reference_contig_scope
+                                )
                             )
                             try:
                                 target_coverage_back_button.classes("hidden")
@@ -6993,7 +7028,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         cov_df: pd.DataFrame, bed_df: pd.DataFrame
     ) -> None:
         r = await asyncio.to_thread(
-            _compute_target_cov_series_data, cov_df.copy(), bed_df.copy()
+            _compute_target_cov_series_data,
+            cov_df.copy(),
+            bed_df.copy(),
+            reference_contig_scope,
         )
         _apply_target_cov_payload(r)
 
@@ -7002,7 +7040,9 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             asyncio.get_running_loop()
         except RuntimeError:
             _apply_target_cov_payload(
-                _compute_target_cov_series_data(cov_df, bed_df)
+                _compute_target_cov_series_data(
+                    cov_df, bed_df, reference_contig_scope
+                )
             )
             return
         asyncio.create_task(_apply_target_cov_async(cov_df, bed_df))
@@ -7114,7 +7154,10 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         bed_df: pd.DataFrame, panel_display_name: str = "Target Coverage"
     ) -> None:
         r = await asyncio.to_thread(
-            _compute_boxplot_chart_data, bed_df.copy(), panel_display_name
+            _compute_boxplot_chart_data,
+            bed_df.copy(),
+            panel_display_name,
+            reference_contig_scope,
         )
         _apply_boxplot_payload(r)
 
@@ -7125,7 +7168,9 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
             asyncio.get_running_loop()
         except RuntimeError:
             _apply_boxplot_payload(
-                _compute_boxplot_chart_data(bed_df, panel_display_name)
+                _compute_boxplot_chart_data(
+                    bed_df, panel_display_name, reference_contig_scope
+                )
             )
             return
         asyncio.create_task(_apply_boxplot_async(bed_df, panel_display_name))
@@ -7157,7 +7202,9 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         asyncio.create_task(_apply_time_series_async(npy_path))
 
     async def _apply_target_table_async(df: pd.DataFrame) -> None:
-        r = await asyncio.to_thread(_compute_target_cov_table_rows, df.copy())
+        r = await asyncio.to_thread(
+            _compute_target_cov_table_rows, df.copy(), reference_contig_scope
+        )
         if not r.get("ok"):
             err = r.get("error")
             if err:
@@ -7174,7 +7221,7 @@ def add_coverage_section(launcher: Any, sample_dir: Path) -> None:
         try:
             asyncio.get_running_loop()
         except RuntimeError:
-            r = _compute_target_cov_table_rows(df)
+            r = _compute_target_cov_table_rows(df, reference_contig_scope)
             if not r.get("ok"):
                 err = r.get("error")
                 if err:

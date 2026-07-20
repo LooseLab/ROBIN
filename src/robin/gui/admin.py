@@ -455,6 +455,10 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
         CNV_REPORT_SCALES,
         PlottingPreferencesConfig,
     )
+    from robin.reference_contigs import (
+        REFERENCE_CONTIG_SCOPE_LABELS,
+        REFERENCE_CONTIG_SCOPES,
+    )
 
     current = (
         launcher.plotting_preferences
@@ -483,6 +487,22 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
                 value=current.cnv_report_scale,
             ).classes("w-full")
 
+            ui.label("Reference contigs in plots").classes(
+                "classification-insight-meta font-medium mt-2"
+            )
+            ui.label(
+                "Controls which chromosomes and contigs appear in coverage and CNV "
+                "figures in the GUI and PDF reports."
+            ).classes("classification-insight-foot mb-2")
+            contig_scope_select = ui.select(
+                {
+                    scope: REFERENCE_CONTIG_SCOPE_LABELS[scope]
+                    for scope in REFERENCE_CONTIG_SCOPES
+                },
+                value=current.reference_contig_scope,
+                label="Contigs shown in plots",
+            ).classes("w-full").props("dense outlined")
+
             status_label = ui.label("").classes("classification-insight-meta")
 
             def _save() -> None:
@@ -490,7 +510,13 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
                 scale = str(scale_toggle.value or current.cnv_report_scale)
                 if scale not in CNV_REPORT_SCALES:
                     scale = current.cnv_report_scale
-                updated = current.with_updates(cnv_report_scale=scale)
+                contig_scope = str(
+                    contig_scope_select.value or current.reference_contig_scope
+                )
+                updated = current.with_updates(
+                    cnv_report_scale=scale,
+                    reference_contig_scope=contig_scope,
+                )
                 launcher.save_plotting_preferences(
                     updated,
                     user_id=launcher._get_current_user_id(),
