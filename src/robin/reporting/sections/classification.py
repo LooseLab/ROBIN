@@ -40,6 +40,7 @@ CLASSIFIER_SCORE_META_COLUMNS = frozenset(
         "covered_cpgs",
         "temperature",
         "diagnostic",
+        "probes",
     }
 )
 
@@ -365,6 +366,7 @@ class ClassificationSection(ReportSection):
             "Random Forest": "random_forest_scores.csv",
             "MARLIN": "marlin_scores.csv",
             "Lamprey (research)": "lamprey_scores.csv",
+            "Tucan": "tucan_scores.csv",
         }
 
         # Add summary table of all classifications
@@ -418,6 +420,7 @@ class ClassificationSection(ReportSection):
                         "Random Forest": "random_forest",
                         "MARLIN": "marlin",
                         "Lamprey (research)": "lamprey",
+                        "Tucan": "tucan",
                     }.get(name, name.lower().replace(" ", "_"))
                     confidence_status, status_color = get_confidence_status(
                         classifier_key, confidence_value

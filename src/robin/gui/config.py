@@ -36,6 +36,7 @@ WORKFLOW_STEP_TO_SECTION = {
     "pannanodx": "pannanodx",
     "marlin": "marlin",
     "lamprey": "lamprey",
+    "tucan": "tucan",
 }
 
 # Map workflow steps to their display names in classification section
@@ -46,6 +47,7 @@ CLASSIFICATION_STEPS = {
     "pannanodx": "PanNanoDX",
     "marlin": "MARLIN",
     "lamprey": "Lamprey (research)",
+    "tucan": "Tucan",
 }
 
 

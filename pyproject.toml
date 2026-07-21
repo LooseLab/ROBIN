@@ -103,6 +103,14 @@ lamprey = [
     "huggingface_hub>=0.20",
     "pyyaml>=6.0",
 ]
+tucan = [
+    # Tucan pediatric solid tumor / lymphoma classifier (UMCUGenetics).
+    # Model weights download from Hugging Face on first use.
+    "tucan@git+https://github.com/UMCUGenetics/tucan.git",
+    "huggingface_hub>=0.20",
+    "omegaconf>=2.3.0",
+    "pyyaml>=6.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",

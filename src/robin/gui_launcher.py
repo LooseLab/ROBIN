@@ -99,6 +99,9 @@ COMPLETION_JOB_PATTERNS: Dict[str, List[str]] = {
     "lamprey": [
         "lamprey_scores.csv",
     ],
+    "tucan": [
+        "tucan_scores.csv",
+    ],
 }
 
 from robin.minknow.sample_id import (
@@ -8734,6 +8737,7 @@ title="View in IGV"
                 "random_forest",
                 "marlin",
                 "lamprey",
+                "tucan",
             ]
             analysis_fields = {
                 "coverage": ["quality", "global_coverage", "target_coverage", "enrichment"],

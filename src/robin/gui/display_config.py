@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, FrozenSet, List, Optional, Set
 
 CLASSIFICATION_STEP_IDS = frozenset(
-    {"sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey"}
+    {"sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey", "tucan"}
 )
 
 SAMPLE_DISPLAY_KEY = "sample_display"
@@ -60,6 +60,12 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
         "Lamprey (research)",
         "classification",
         workflow_step="lamprey",
+    ),
+    "tucan": DisplaySection(
+        "tucan",
+        "Tucan",
+        "classification",
+        workflow_step="tucan",
     ),
     "target": DisplaySection(
         "target",

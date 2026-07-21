@@ -231,6 +231,11 @@ try:
 except Exception:
     _lamprey_handler = None
 
+try:
+    from robin.analysis.tucan_analysis import tucan_handler as _tucan_handler
+except Exception:
+    _tucan_handler = None
+
 # Optional logging helper
 try:
     from robin.logging_config import (
@@ -315,6 +320,11 @@ BATCH_CONFIG: Dict[str, Dict[str, Any]] = {
         "timeout_seconds_busy": 30,
     },
     "lamprey": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
+    "tucan": {
         "max_batch_size": 20,
         "timeout_seconds": 2,
         "timeout_seconds_busy": 30,
@@ -482,14 +492,14 @@ QUEUE_TO_TYPES: Dict[str, Set[str]] = {
     "target": {"target"},
     "fusion": {"fusion"},
     "classification": {"sturgeon", "nanodx", "pannanodx"},
-    "slow": {"random_forest", "marlin", "lamprey", "igv_bam", "snp_analysis", "target_bam_finalize"},
+    "slow": {"random_forest", "marlin", "lamprey", "tucan", "igv_bam", "snp_analysis", "target_bam_finalize"},
 }
 
 TRIGGERS: Dict[str, List[str]] = {
     # preprocessing -> analyses
     "preprocessing": ["bed_conversion", "mgmt", "cnv", "target", "fusion"],
     # bed_conversion -> classifiers
-    "bed_conversion": ["sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey"],
+    "bed_conversion": ["sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey", "tucan"],
     # Build IGV-ready BAM after target analysis
     "target": ["igv_bam"],
 }
@@ -517,6 +527,7 @@ DEDUP_TYPES: Set[str] = {
     "random_forest",
     "marlin",
     "lamprey",
+    "tucan",
     "snp_analysis",
 }
 
@@ -532,6 +543,7 @@ CLASSIFICATION_TYPES: Set[str] = {
     "random_forest",
     "marlin",
     "lamprey",
+    "tucan",
 }
 
 # Handlers record errors under analysis-specific keys; Pool must treat those as failures.
@@ -546,6 +558,7 @@ _HANDLER_ERROR_ALIASES: Dict[str, Tuple[str, ...]] = {
     "random_forest": ("random_forest_analysis",),
     "marlin": ("marlin_analysis",),
     "lamprey": ("lamprey_analysis",),
+    "tucan": ("tucan_analysis",),
 }
 
 # Job types that must be serialized per sample (no overlap across these types)
@@ -558,6 +571,7 @@ _FUSION_MEMORY = 8 * _GB
 _SNP_ANALYSIS_MEMORY = 8 * _GB
 _MARLIN_MEMORY = 4 * _GB
 _LAMPREY_MEMORY = 8 * _GB
+_TUCAN_MEMORY = 4 * _GB
 RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
     # Tune these to your cluster
     "preprocessing": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
@@ -579,6 +593,7 @@ RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
     "random_forest": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "marlin": {"num_cpus": 1, "memory": _MARLIN_MEMORY},
     "lamprey": {"num_cpus": 1, "memory": _LAMPREY_MEMORY},
+    "tucan": {"num_cpus": 1, "memory": _TUCAN_MEMORY},
     "igv_bam": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "snp_analysis": {
         "num_cpus": 1,
@@ -924,6 +939,7 @@ NEEDS_WORK_DIR: Set[str] = {
     "random_forest",
     "marlin",
     "lamprey",
+    "tucan",
 }
 
 
@@ -1232,6 +1248,7 @@ random_forest_handler_remote = ray.remote(
 )
 marlin_handler_remote = ray.remote(_wrap_real_handler(_marlin_handler, "marlin"))
 lamprey_handler_remote = ray.remote(_wrap_real_handler(_lamprey_handler, "lamprey"))
+tucan_handler_remote = ray.remote(_wrap_real_handler(_tucan_handler, "tucan"))
 
 
 # ---------- TypeProcessor & Coordinator Actors ----------
@@ -1932,6 +1949,7 @@ class Coordinator:
             ("random_forest", random_forest_handler_remote),
             ("marlin", marlin_handler_remote),
             ("lamprey", lamprey_handler_remote),
+            ("tucan", tucan_handler_remote),
             ("igv_bam", ray.remote(_wrap_real_handler(_igv_bam_handler, "igv_bam"))),
             (
                 "snp_analysis",
@@ -2003,6 +2021,9 @@ class Coordinator:
                 "lamprey": [
                     "lamprey"
                 ],  # Lamprey ONNX model is large; dedicated actor
+                "tucan": [
+                    "tucan"
+                ],  # Tucan PyTorch ensemble; dedicated actor
                 "slow": [
                     "igv_bam",
                     "snp_analysis",
@@ -2033,6 +2054,9 @@ class Coordinator:
                     return max(1, int(self.analysis_workers))
                 if name == "lamprey":
                     # Lamprey gets its own concurrency (large ONNX model)
+                    return max(1, int(self.analysis_workers))
+                if name == "tucan":
+                    # Tucan gets its own concurrency (PyTorch ensemble)
                     return max(1, int(self.analysis_workers))
                 if name == "prep":
                     return self.preprocessing_workers
@@ -5558,6 +5582,8 @@ def _scan_watch_folder_for_sample_dirs(
             if (sample_dir / "marlin_scores.csv").exists():
                 return True
             if (sample_dir / "lamprey_scores.csv").exists():
+                return True
+            if (sample_dir / "tucan_scores.csv").exists():
                 return True
 
             # Common analysis directories

@@ -60,6 +60,7 @@ BATCH_CONFIG: Dict[str, Dict[str, Any]] = {
     "random_forest": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "marlin": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "lamprey": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "tucan": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "igv_bam": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "snp_analysis": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
 }
@@ -230,6 +231,7 @@ class Job:
             "random_forest": {"bed_conversion"},
             "marlin": {"bed_conversion"},
             "lamprey": {"bed_conversion"},
+            "tucan": {"bed_conversion"},
         }
 
         # Get the original workflow plan to check what jobs are actually requested
@@ -588,6 +590,7 @@ class WorkflowManager:
             "random_forest",
             "marlin",
             "lamprey",
+            "tucan",
         }
         # Track running and pending jobs by sample ID for deduplication
         # Allow max 2 jobs per sample: 1 running + 1 pending
@@ -683,6 +686,7 @@ class WorkflowManager:
                 "random_forest": "slow",
                 "marlin": "slow",
                 "lamprey": "slow",
+                "tucan": "slow",
                 "sleep": "slow",
                 "echo": "slow",
             }
@@ -710,6 +714,7 @@ class WorkflowManager:
                 "random_forest": "slow",
                 "marlin": "slow",
                 "lamprey": "slow",
+                "tucan": "slow",
                 "sleep": "slow",
                 "echo": "slow",
             }
@@ -1969,6 +1974,7 @@ def default_file_classifier(filepath: str, workflow_plan: List[str], target_pane
         "random_forest": {"bed_conversion"},
         "marlin": {"bed_conversion"},
         "lamprey": {"bed_conversion"},
+        "tucan": {"bed_conversion"},
     }
 
     # Create preprocessing job if it's the first step
