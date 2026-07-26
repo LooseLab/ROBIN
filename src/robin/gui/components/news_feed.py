@@ -10,7 +10,9 @@ import requests
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
-from nicegui import ui, run, background_tasks
+from nicegui import ui, run
+
+from robin.gui.theme import client_timer, stop_timer, ui_element_exists
 
 
 @dataclass
@@ -177,9 +179,15 @@ class NewsFeed:
                     "text-xl font-bold text-negative"
                 )
 
+    def _news_container_alive(self) -> bool:
+        """Return True if the news container still belongs to a live client."""
+        return bool(self._news_container) and ui_element_exists(self._news_container)
+
     def _update_news_display(self) -> None:
         """Update the news display with current items."""
-        if not self._news_container:
+        # Timer callbacks can outlive the page (navigation / disconnect). Never
+        # touch UI after the container's client has been deleted.
+        if not self._news_container_alive():
             return
 
         try:
@@ -292,8 +300,21 @@ class NewsFeed:
                                         "text-label-small text-slate-500 dark:text-slate-400 font-mono"
                                     )
 
+        except RuntimeError as e:
+            # Client/slot torn down mid-update (navigation or disconnect).
+            if "deleted" in str(e).lower() or "slot stack" in str(e).lower():
+                return
+            logging.error(f"Error updating news display: {e}")
+            self._show_update_error()
         except Exception as e:
-            logging.error(f"Error updating news display: {str(e)}")
+            logging.error(f"Error updating news display: {e}")
+            self._show_update_error()
+
+    def _show_update_error(self) -> None:
+        """Show an in-feed error card only if the container is still usable."""
+        if not self._news_container_alive():
+            return
+        try:
             with self._news_container:
                 with ui.card().classes(
                     "w-full rounded-lg p-4 border border-[color:var(--md-error)]/30 bg-[color:var(--md-error-container)]"
@@ -303,6 +324,10 @@ class NewsFeed:
                         ui.label("Error updating news feed").classes(
                             "text-body-medium text-[color:var(--md-on-error-container)]"
                         )
+        except RuntimeError as e:
+            if "deleted" in str(e).lower() or "slot stack" in str(e).lower():
+                return
+            logging.debug(f"Could not show news update error UI: {e}")
 
     async def _check_and_update_news(self) -> None:
         """Check if update is needed and fetch news if necessary."""
@@ -311,17 +336,24 @@ class NewsFeed:
                 self._update_news_display()
 
     def start_update_timer(self) -> None:
-        """Start the periodic update timer using ui.timer."""
-        # Only create a new timer if one doesn't exist
-        if self._update_timer is None:
-            def _schedule_update() -> None:
-                background_tasks.create(
-                    self._check_and_update_news(),
-                    name="news-feed-update",
-                )
+        """Start a client-scoped hourly update timer.
 
-            # Update immediately on start
-            _schedule_update()
-            # Then set up hourly updates
-            self._update_timer = ui.timer(3600, _schedule_update)
-            logging.info("News feed update timer initialized")
+        Uses ``client_timer`` (app.timer + disconnect/delete cleanup) so navigation
+        or tab close cannot leave a callback updating a deleted client. UI updates
+        are also guarded by ``_news_container_alive``.
+        """
+        if self._update_timer is not None:
+            return
+
+        self._update_timer = client_timer(
+            3600,
+            self._check_and_update_news,
+            immediate=True,
+            active=True,
+        )
+        logging.info("News feed update timer initialized")
+
+    def stop_update_timer(self) -> None:
+        """Stop the periodic update timer if running."""
+        stop_timer(self._update_timer)
+        self._update_timer = None

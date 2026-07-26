@@ -95,6 +95,115 @@ def ui_element_exists(element: Any) -> bool:
         return False
 
 
+def stop_timer(timer: Any) -> None:
+    """Deactivate and cancel a NiceGUI timer if possible."""
+    if timer is None:
+        return
+    try:
+        timer.deactivate()
+    except Exception:
+        pass
+    try:
+        timer.cancel()
+    except Exception:
+        pass
+
+
+def client_timer(
+    interval: float,
+    callback: Callable[..., Any],
+    *,
+    once: bool = False,
+    immediate: bool = True,
+    active: bool = True,
+) -> Any:
+    """
+    Create an app-scoped timer tied to the current client lifecycle.
+
+    Prefer this over ``ui.timer`` for page-scoped repeating work. ``ui.timer`` is
+    a UI element whose parent slot can be garbage-collected after navigation or
+    ``container.clear()``, which raises::
+
+        RuntimeError: The parent slot of the element has been deleted.
+
+    ``app.timer`` is not parent-slot-bound. We cancel it on disconnect/delete, and
+    re-enter the client/slot context for each callback so UI updates still work
+    (``app.timer`` otherwise runs with an empty slot stack).
+    """
+    try:
+        client = ui.context.client
+    except Exception:
+        client = None
+    try:
+        # Element that owns the current slot — re-entering it restores placement.
+        anchor = ui.context.slot.parent
+    except Exception:
+        anchor = None
+
+    timer_box: Dict[str, Any] = {"timer": None}
+
+    def _stop() -> None:
+        stop_timer(timer_box.get("timer"))
+
+    def _context_target() -> Any:
+        if anchor is not None and ui_element_exists(anchor):
+            return anchor
+        return client
+
+    def _should_abort() -> bool:
+        if client is None:
+            return False
+        try:
+            if getattr(client, "is_deleted", False):
+                return True
+            from nicegui.client import Client as _NgClient
+
+            return client.id not in _NgClient.instances
+        except Exception:
+            return True
+
+    def _wrapped(*args: Any, **kwargs: Any) -> Any:
+        if _should_abort():
+            _stop()
+            return None
+
+        target = _context_target()
+        if target is None:
+            return callback(*args, **kwargs)
+
+        try:
+            if asyncio.iscoroutinefunction(callback):
+
+                async def _async_wrapped() -> Any:
+                    with target:
+                        return await callback(*args, **kwargs)
+
+                return _async_wrapped()
+
+            with target:
+                return callback(*args, **kwargs)
+        except RuntimeError as exc:
+            msg = str(exc).lower()
+            if "deleted" in msg or "slot stack" in msg:
+                _stop()
+                return None
+            raise
+
+    timer = app.timer(
+        interval, _wrapped, once=once, immediate=immediate, active=active
+    )
+    timer_box["timer"] = timer
+
+    if client is not None:
+        try:
+            client.on_disconnect(_stop)
+            client.on_delete(_stop)
+        except Exception:
+            pass
+
+    return timer
+
+
 def register_theme_sync_callback(
     callback: Callable[[], None],
     *,
@@ -126,19 +235,12 @@ def register_theme_sync_callback(
         if not state.get("active", False):
             return
         state["active"] = False
-        t = state.get("timer")
-        if t is not None:
-            try:
-                t.deactivate()
-            except Exception:
-                pass
-            try:
-                t.cancel()
-            except Exception:
-                pass
+        stop_timer(state.get("timer"))
 
     try:
-        state["timer"] = ui.timer(interval_s, _invoke, active=True)
+        # Use app.timer so theme sync survives container clears without the
+        # "parent slot has been deleted" race that ui.timer hits.
+        state["timer"] = app.timer(interval_s, _invoke, active=True)
     except Exception:
         state["timer"] = None
 
@@ -146,7 +248,9 @@ def register_theme_sync_callback(
         _invoke()
 
     try:
-        ui.context.client.on_disconnect(_unregister)
+        client = ui.context.client
+        client.on_disconnect(_unregister)
+        client.on_delete(_unregister)
     except Exception:
         pass
 
@@ -634,19 +738,26 @@ class GlobalSystemMetrics:
 
     _instance = None
     _timer_active = False
+    _timer = None
 
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance.cpu = 0
             cls._instance.ram = 0
+            cls._instance._timer = None
         return cls._instance
 
     def start_timer(self):
-        """Start the global metrics timer if not already running."""
+        """Start the global metrics timer if not already running.
+
+        Uses ``app.timer`` (not ``ui.timer``) so the callback is not bound to the
+        page that first opened the header frame. A page-scoped ``ui.timer`` would
+        raise ``parent slot has been deleted`` after navigation.
+        """
         if not self._timer_active:
             self._timer_active = True
-            ui.timer(1.0, self.update_metrics)
+            self._timer = app.timer(1.0, self.update_metrics)
 
     def update_metrics(self):
         """Update CPU and RAM metrics."""
@@ -1125,14 +1236,9 @@ def frame(
         _sync_dark_mode_client_classes(force=True)
 
     # One-shot sync after initial paint + low-frequency drift guard.
-    ui.timer(0.1, lambda: _sync_dark_mode_client_classes(force=True), once=True)
-    dark_mode_dom_sync_timer = ui.timer(
-        1.0, _sync_dark_mode_client_classes, active=True
-    )
-    try:
-        ui.context.client.on_disconnect(lambda: dark_mode_dom_sync_timer.deactivate())
-    except Exception:
-        pass
+    # Use client_timer (app-scoped) so navigation/clear does not orphan a ui.timer.
+    client_timer(0.1, lambda: _sync_dark_mode_client_classes(force=True), once=True)
+    client_timer(1.0, _sync_dark_mode_client_classes, active=True)
 
     # Create a header with navigation title and menu using M3 styling
     header_classes = "items-center duration-200 p-0 px-2 no-wrap elevation-1"

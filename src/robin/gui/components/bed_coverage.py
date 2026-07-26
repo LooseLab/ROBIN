@@ -9,7 +9,7 @@ from datetime import datetime
 import threading
 import queue
 
-from robin.gui.theme import get_user_dark_mode
+from robin.gui.theme import get_user_dark_mode, client_timer, stop_timer
 
 try:
     from nicegui import ui
@@ -403,7 +403,7 @@ def add_bed_coverage_section(launcher: Any, sample_dir: Path) -> None:
         except Exception as e:
             logger.exception(f"[BED Coverage] Error processing result: {e}")
 
-    result_timer = ui.timer(0.5, check_result_queue, active=True)
+    result_timer = client_timer(0.5, check_result_queue, active=True)
 
     def _sync_bed_cov_echarts_theme_if_needed() -> None:
         """Re-apply axis/tooltip/title colours when the user toggles light/dark mode."""
@@ -438,7 +438,7 @@ def add_bed_coverage_section(launcher: Any, sample_dir: Path) -> None:
         except Exception as e:
             logger.exception(f"[BED Coverage] Initial load failed: {e}")
 
-    ui.timer(0.1, initial_load, once=True)
+    client_timer(0.1, initial_load, once=True)
 
     # Set up refresh timer (every 30 seconds)
     def refresh_coverage() -> None:
@@ -448,12 +448,12 @@ def add_bed_coverage_section(launcher: Any, sample_dir: Path) -> None:
         except Exception as e:
             logger.exception(f"[BED Coverage] Refresh failed: {e}")
 
-    refresh_timer = ui.timer(30.0, refresh_coverage, active=True)
+    refresh_timer = client_timer(30.0, refresh_coverage, active=True)
     try:
         ui.context.client.on_disconnect(
             lambda: (
-                result_timer.deactivate(),
-                refresh_timer.deactivate(),
+                stop_timer(result_timer),
+                stop_timer(refresh_timer),
                 unregister_bed_cov_theme_sync(),
             )
         )

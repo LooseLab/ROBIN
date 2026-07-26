@@ -651,7 +651,11 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             except Exception:
                 pass
 
-    from robin.gui.theme import register_theme_sync_callback
+    from robin.gui.theme import (
+        register_theme_sync_callback,
+        client_timer,
+        stop_timer,
+    )
 
     unregister_classification_theme_sync = register_theme_sync_callback(
         _sync_classification_theme,
@@ -1168,12 +1172,12 @@ def add_classification_section(sample_dir: Path, launcher: Any = None) -> None:
             pass
 
     # Start the refresh timer (every 30 seconds)
-    refresh_timer = ui.timer(30.0, _refresh_classification, active=True, immediate=False)
+    refresh_timer = client_timer(30.0, _refresh_classification, active=True, immediate=False)
     # Initial refresh after the page is rendered
-    ui.timer(0.5, _refresh_classification, once=True)
+    client_timer(0.5, _refresh_classification, once=True)
     try:
         ui.context.client.on_disconnect(
-            lambda: (refresh_timer.deactivate(), unregister_classification_theme_sync())
+            lambda: (stop_timer(refresh_timer), unregister_classification_theme_sync())
         )
     except Exception:
         pass

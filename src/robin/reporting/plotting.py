@@ -1734,6 +1734,7 @@ def classification_plot(df, title, threshold):
         "covered_cpgs",
         "temperature",
         "diagnostic",
+        "probes",
     }
     df_melted = df_melted[
         ~df_melted["Condition"].astype(str).str.strip().str.lower().isin(meta_conditions)

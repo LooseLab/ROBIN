@@ -29,6 +29,7 @@ WORKFLOW_STEP_TO_SECTION = {
     "target": "target",
     "mgmt": "mgmt",
     "fusion": "fusion",
+    "itd": "itd",
     "cnv": "cnv",
     "sturgeon": "sturgeon",
     "nanodx": "nanodx",

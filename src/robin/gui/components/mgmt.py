@@ -18,6 +18,8 @@ from robin.gui.theme import (
     styled_table,
     register_theme_sync_callback,
     get_user_dark_mode,
+    client_timer,
+    stop_timer,
 )
 
 
@@ -948,8 +950,8 @@ def add_mgmt_section(launcher: Any, sample_dir: Path) -> None:
             raise Exception(f"Failed to refresh MGMT section: {e}")
 
     # Start the refresh timer (every 30 seconds)
-    refresh_timer = ui.timer(30.0, _refresh_mgmt, active=True, immediate=False)
-    ui.timer(0.5, _refresh_mgmt, once=True)
+    refresh_timer = client_timer(30.0, _refresh_mgmt, active=True, immediate=False)
+    client_timer(0.5, _refresh_mgmt, once=True)
 
     def _sync_mgmt_plot_theme_if_needed() -> None:
         """Re-tint matplotlib locus figure when the user toggles light/dark mode."""
@@ -980,7 +982,7 @@ def add_mgmt_section(launcher: Any, sample_dir: Path) -> None:
     )
     try:
         ui.context.client.on_disconnect(
-            lambda: (refresh_timer.deactivate(), unregister_mgmt_theme_sync())
+            lambda: (stop_timer(refresh_timer), unregister_mgmt_theme_sync())
         )
     except Exception:
         pass

@@ -236,6 +236,12 @@ try:
 except Exception:
     _tucan_handler = None
 
+try:
+    from robin.analysis.itd_analysis import itd_handler as _itd_handler
+except Exception as exc:
+    _itd_handler = None
+    _HANDLER_IMPORT_ERRORS["itd"] = str(exc)
+
 # Optional logging helper
 try:
     from robin.logging_config import (
@@ -325,6 +331,11 @@ BATCH_CONFIG: Dict[str, Dict[str, Any]] = {
         "timeout_seconds_busy": 30,
     },
     "tucan": {
+        "max_batch_size": 20,
+        "timeout_seconds": 2,
+        "timeout_seconds_busy": 30,
+    },
+    "itd": {
         "max_batch_size": 20,
         "timeout_seconds": 2,
         "timeout_seconds_busy": 30,
@@ -491,13 +502,14 @@ QUEUE_TO_TYPES: Dict[str, Set[str]] = {
     "cnv": {"cnv"},
     "target": {"target"},
     "fusion": {"fusion"},
+    "itd": {"itd"},
     "classification": {"sturgeon", "nanodx", "pannanodx"},
     "slow": {"random_forest", "marlin", "lamprey", "tucan", "igv_bam", "snp_analysis", "target_bam_finalize"},
 }
 
 TRIGGERS: Dict[str, List[str]] = {
     # preprocessing -> analyses
-    "preprocessing": ["bed_conversion", "mgmt", "cnv", "target", "fusion"],
+    "preprocessing": ["bed_conversion", "mgmt", "cnv", "target", "fusion", "itd"],
     # bed_conversion -> classifiers
     "bed_conversion": ["sturgeon", "nanodx", "pannanodx", "random_forest", "marlin", "lamprey", "tucan"],
     # Build IGV-ready BAM after target analysis
@@ -555,6 +567,7 @@ _HANDLER_ERROR_ALIASES: Dict[str, Tuple[str, ...]] = {
     "mgmt": ("mgmt_analysis",),
     "target": ("target_analysis",),
     "fusion": ("fusion_analysis",),
+    "itd": ("itd_analysis",),
     "random_forest": ("random_forest_analysis",),
     "marlin": ("marlin_analysis",),
     "lamprey": ("lamprey_analysis",),
@@ -586,6 +599,10 @@ RESOURCE_HINTS: Dict[str, Dict[str, Any]] = {
         "num_cpus": 1,
         "memory": _FUSION_MEMORY,
     },  # Fusion needs 8 GiB (BAM scan, breakpoint aggregation)
+    "itd": {
+        "num_cpus": 1,
+        "memory": _DEFAULT_MEMORY,
+    },  # Hotspot CIGAR indel scan; lighter than fusion
     # Classifiers do not require GPU by default (CPU-only)
     "sturgeon": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
     "nanodx": {"num_cpus": 1, "memory": _DEFAULT_MEMORY},
@@ -933,6 +950,7 @@ NEEDS_WORK_DIR: Set[str] = {
     "cnv",
     "target",
     "fusion",
+    "itd",
     "sturgeon",
     "nanodx",
     "pannanodx",
@@ -972,9 +990,9 @@ def _wrap_real_handler(
         if MemoryManager is not None and not DISABLE_MEMORY_MANAGER:
             try:
                 # Configure memory management based on job type
-                gc_every = 10 if job_type in {"mgmt", "cnv", "target", "fusion"} else 25
+                gc_every = 10 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 25
                 rss_trigger = (
-                    1024 if job_type in {"mgmt", "cnv", "target", "fusion"} else 1024
+                    1024 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 1024
                 )
                 memory_manager = MemoryManager(
                     gc_every=gc_every,
@@ -1060,7 +1078,7 @@ def _wrap_real_handler(
                         accepts_reference
                         and reference
                         and accepts_target_panel
-                        and job_type in ["fusion", "target", "cnv"]
+                        and job_type in ["fusion", "target", "cnv", "itd"]
                     ):
                         py_handler(
                             job,
@@ -1078,6 +1096,7 @@ def _wrap_real_handler(
                         "fusion",
                         "target",
                         "cnv",
+                        "itd",
                     ]:
                         py_handler(job, work_dir=work_dir, target_panel=target_panel)
                     else:
@@ -1086,12 +1105,12 @@ def _wrap_real_handler(
                     accepts_reference
                     and reference
                     and accepts_target_panel
-                    and job_type in ["fusion", "target", "cnv"]
+                    and job_type in ["fusion", "target", "cnv", "itd"]
                 ):
                     py_handler(job, reference=reference, target_panel=target_panel)
                 elif accepts_reference and reference and job_type in ["mgmt", "target"]:
                     py_handler(job, reference=reference)
-                elif accepts_target_panel and job_type in ["fusion", "target", "cnv"]:
+                elif accepts_target_panel and job_type in ["fusion", "target", "cnv", "itd"]:
                     py_handler(job, target_panel=target_panel)
                 else:
                     py_handler(job)
@@ -1238,6 +1257,7 @@ mgmt_handler_remote = ray.remote(_wrap_real_handler(_mgmt_handler, "mgmt"))
 cnv_handler_remote = ray.remote(_wrap_real_handler(_cnv_handler, "cnv"))
 target_handler_remote = ray.remote(_wrap_real_handler(_target_handler, "target"))
 fusion_handler_remote = ray.remote(_wrap_real_handler(_fusion_handler, "fusion"))
+itd_handler_remote = ray.remote(_wrap_real_handler(_itd_handler, "itd"))
 sturgeon_handler_remote = ray.remote(_wrap_real_handler(_sturgeon_handler, "sturgeon"))
 nanodx_handler_remote = ray.remote(_wrap_real_handler(_nanodx_handler, "nanodx"))
 pannanodx_handler_remote = ray.remote(
@@ -1264,15 +1284,15 @@ class TypeProcessor:
         if MemoryManager is not None and not DISABLE_MEMORY_MANAGER:
             try:
                 # Configure memory management based on job type
-                gc_every = 25 if job_type in {"mgmt", "cnv", "target", "fusion"} else 50
+                gc_every = 25 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 50
                 rss_trigger = (
-                    1024 if job_type in {"mgmt", "cnv", "target", "fusion"} else 2048
+                    1024 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 2048
                 )
                 restart_every = (
-                    5000 if job_type in {"mgmt", "cnv", "target", "fusion"} else 10000
+                    5000 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 10000
                 )
                 restart_rss_trigger = (
-                    2048 if job_type in {"mgmt", "cnv", "target", "fusion"} else 4096
+                    2048 if job_type in {"mgmt", "cnv", "target", "fusion", "itd"} else 4096
                 )
                 self.memory_manager = MemoryManager(
                     gc_every=gc_every,
@@ -1943,6 +1963,7 @@ class Coordinator:
             ("cnv", cnv_handler_remote),
             ("target", target_handler_remote),
             ("fusion", fusion_handler_remote),
+            ("itd", itd_handler_remote),
             ("sturgeon", sturgeon_handler_remote),
             ("nanodx", nanodx_handler_remote),
             ("pannanodx", pannanodx_handler_remote),
@@ -2006,6 +2027,7 @@ class Coordinator:
                     "mgmt",
                     "target",
                     "fusion",
+                    "itd",
                 ],  # Lightweight analysis types share a CPU
                 "classif": [
                     "sturgeon",
@@ -2108,7 +2130,7 @@ class Coordinator:
             for jt, rf in registrations:
                 opts = RESOURCE_HINTS.get(jt, {})
                 max_conc = 1
-                if jt in {"mgmt", "cnv", "target", "fusion"}:
+                if jt in {"mgmt", "cnv", "target", "fusion", "itd"}:
                     max_conc = max(1, int(self.analysis_workers))
                 elif jt == "preprocessing":
                     max_conc = self.preprocessing_workers
@@ -2131,7 +2153,7 @@ class Coordinator:
                 opts = RESOURCE_HINTS.get(jt, {})
                 # Set actor concurrency via .options on the actor itself
                 max_conc = 1
-                if jt in {"mgmt", "cnv", "target", "fusion"}:
+                if jt in {"mgmt", "cnv", "target", "fusion", "itd"}:
                     max_conc = max(1, int(self.analysis_workers))
                 elif jt == "preprocessing":
                     max_conc = self.preprocessing_workers
@@ -4240,7 +4262,7 @@ class Coordinator:
         def _cat_of(jt: str) -> str:
             if jt == "preprocessing":
                 return "preprocessing"
-            if jt in {"mgmt", "cnv", "target", "fusion"}:
+            if jt in {"mgmt", "cnv", "target", "fusion", "itd"}:
                 return jt
             if jt in CLASSIFICATION_TYPES:
                 return "classification"
@@ -4252,6 +4274,7 @@ class Coordinator:
             "cnv": 0,
             "target": 0,
             "fusion": 0,
+            "itd": 0,
             "classification": 0,
             "other": 0,
         }
@@ -4261,6 +4284,7 @@ class Coordinator:
             "cnv": 0,
             "target": 0,
             "fusion": 0,
+            "itd": 0,
             "classification": 0,
             "other": 0,
         }
@@ -4346,6 +4370,7 @@ class Coordinator:
             "cnv": total_work_by_queue.get("cnv", 0),
             "target": total_work_by_queue.get("target", 0),
             "fusion": total_work_by_queue.get("fusion", 0),
+            "itd": total_work_by_queue.get("itd", 0),
             "classification": total_work_by_queue.get("classification", 0),
             "other": (
                 total_work_by_queue.get("bed_conversion", 0)
@@ -4960,6 +4985,17 @@ async def submit_existing_paths(
     )
 
     seed_jobs: List[Job] = []
+    itd_config: Optional[Dict[str, Any]] = None
+    if work_dir:
+        try:
+            from robin.analysis.itd_analysis import _load_itd_config_file
+
+            loaded = _load_itd_config_file(work_dir)
+            if loaded:
+                itd_config = loaded
+        except Exception:
+            itd_config = None
+
     for p in paths:
         pth = Path(p)
         if pth.is_file():
@@ -4970,6 +5006,9 @@ async def submit_existing_paths(
                 if work_dir:
                     for j in jobs:
                         j.context.add_metadata("work_dir", work_dir)
+                if itd_config:
+                    for j in jobs:
+                        j.context.add_metadata("itd", dict(itd_config))
                 # If this submission is fail-only BAMs, downstream errors are expected/noisy.
                 if fail_only_bam_submission and _is_bam_path(pth):
                     for j in jobs:
@@ -4998,6 +5037,9 @@ async def submit_existing_paths(
                 if work_dir:
                     for j in jobs:
                         j.context.add_metadata("work_dir", work_dir)
+                if itd_config:
+                    for j in jobs:
+                        j.context.add_metadata("itd", dict(itd_config))
                 if fail_only_bam_submission and _is_bam_path(f):
                     for j in jobs:
                         j.context.add_metadata("fail_only_bam_submission", True)
@@ -5058,12 +5100,13 @@ async def tqdm_monitor(coord, continuous: bool = False) -> None:
         "cnv",
         "target",
         "fusion",
+        "itd",
         "classification",
         "slow",
     ]
     bars = {
         q: tqdm(
-            desc=q.title(),
+            desc={"itd": "ITD"}.get(q, q.title()),
             unit="jobs",
             position=i,
             leave=True,
@@ -5214,6 +5257,7 @@ async def rich_monitor(coord, continuous: bool = False) -> None:
         "cnv",
         "target",
         "fusion",
+        "itd",
         "classification",
         "slow",
     ]
@@ -5227,7 +5271,10 @@ async def rich_monitor(coord, continuous: bool = False) -> None:
         TextColumn("{task.fields[detail]}"),
         refresh_per_second=8,
     )
-    task_ids = {q: progress.add_task(q.title(), total=None, detail="") for q in order}
+    task_ids = {
+        q: progress.add_task({"itd": "ITD"}.get(q, q.title()), total=None, detail="")
+        for q in order
+    }
     overall_id = progress.add_task("Overall Progress", total=None, detail="")
 
     if _RICH_CONSOLE:
@@ -5405,6 +5452,15 @@ class RayFileWatcher(FileSystemEventHandler):
         if self.work_dir:
             for j in jobs:
                 j.context.add_metadata("work_dir", self.work_dir)
+            try:
+                from robin.analysis.itd_analysis import _load_itd_config_file
+
+                itd_config = _load_itd_config_file(self.work_dir)
+                if itd_config:
+                    for j in jobs:
+                        j.context.add_metadata("itd", dict(itd_config))
+            except Exception:
+                pass
         # Tag fail-only BAM submissions for this watch session.
         # If we've seen a pass BAM, do not suppress errors.
         try:
@@ -6057,6 +6113,7 @@ async def run(
                                 "cnv": 0,
                                 "target": 0,
                                 "fusion": 0,
+                                "itd": 0,
                                 "classification": 0,
                                 "other": 0,
                             }
@@ -6069,6 +6126,7 @@ async def run(
                                     "cnv",
                                     "target",
                                     "fusion",
+                                    "itd",
                                     "classification",
                                 }:
                                     ru[qname] += n
@@ -6083,6 +6141,7 @@ async def run(
                                 "cnv": 0,
                                 "target": 0,
                                 "fusion": 0,
+                                "itd": 0,
                                 "classification": 0,
                                 "other": 0,
                             }
@@ -6092,7 +6151,7 @@ async def run(
                             def _cat_of_local(jt: str) -> str:
                                 if jt == "preprocessing":
                                     return "preprocessing"
-                                if jt in {"mgmt", "cnv", "target", "fusion"}:
+                                if jt in {"mgmt", "cnv", "target", "fusion", "itd"}:
                                     return jt
                                 if jt in CLASSIFICATION_TYPES:
                                     return "classification"
@@ -6112,6 +6171,7 @@ async def run(
                                     "cnv",
                                     "target",
                                     "fusion",
+                                    "itd",
                                     "classification",
                                 }:
                                     tu[qname] += n
@@ -6139,6 +6199,10 @@ async def run(
                                 "running": int(ru.get("fusion", 0) or 0),
                                 "total": int(tu.get("fusion", 0) or 0),
                             },
+                            "itd": {
+                                "running": int(ru.get("itd", 0) or 0),
+                                "total": int(tu.get("itd", 0) or 0),
+                            },
                             "classification": {
                                 "running": int(ru.get("classification", 0) or 0),
                                 "total": int(tu.get("classification", 0) or 0),
@@ -6156,11 +6220,11 @@ async def run(
                             pre = queue_payload["preprocessing"]
                             an_run = sum(
                                 int(queue_payload[q]["running"])
-                                for q in ["mgmt", "cnv", "target", "fusion"]
+                                for q in ["mgmt", "cnv", "target", "fusion", "itd"]
                             )
                             an_tot = sum(
                                 int(queue_payload[q]["total"])
-                                for q in ["mgmt", "cnv", "target", "fusion"]
+                                for q in ["mgmt", "cnv", "target", "fusion", "itd"]
                             )
                             cl = queue_payload["classification"]
                             ot = queue_payload["other"]

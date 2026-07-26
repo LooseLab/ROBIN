@@ -83,6 +83,12 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
         workflow_step="fusion",
         surfaces=frozenset({"sample_page", "sample_details", "report"}),
     ),
+    "itd": DisplaySection(
+        "itd",
+        "ITDs / insertions",
+        "analysis",
+        workflow_step="itd",
+    ),
     "fusion_target": DisplaySection(
         "fusion_target",
         "Fusion — target panel",

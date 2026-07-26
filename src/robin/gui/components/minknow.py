@@ -10,6 +10,7 @@ from typing import Any, Optional
 
 from nicegui import run, ui
 
+from robin.gui.theme import client_timer, stop_timer
 from robin.minknow.config import MinKnowSettings, preset_path_from_environ, workflow_toml_from_environ
 from robin.minknow.monitor import (
     MinKnowPollResult,
@@ -1081,11 +1082,11 @@ def add_minknow_sequencer_section(
     if not compact and start_controls:
         start_controls["start_button"].on_click(_open_start_dialog)
 
-    stream_drain_timer = ui.timer(0.25, _drain_stream_updates, active=True)
-    ui.timer(0.2, lambda: _attach_stream() if state["enabled"] else None, once=True)
+    stream_drain_timer = client_timer(0.25, _drain_stream_updates, active=True)
+    client_timer(0.2, lambda: _attach_stream() if state["enabled"] else None, once=True)
 
     def _on_disconnect_cleanup() -> None:
-        stream_drain_timer.deactivate()
+        stop_timer(stream_drain_timer)
         _detach_stream()
 
     try:

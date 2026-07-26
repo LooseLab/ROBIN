@@ -60,6 +60,13 @@ reference = "~/references/GCA_000001405.15_GRCh38_no_alt_analysis_set.fna"
 # preset = "standard"
 # with_gui = true
 # use_ray = true
+
+# Optional ITD / insertion scan settings
+# [itd]
+# region_mode = "hotspots"   # hotspots | panel | both
+# panel_min_length = 4
+# panel_min_frequency = 0.05
+# panel_min_supporting_reads = 3
 """
 
 

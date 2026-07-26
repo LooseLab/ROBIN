@@ -497,14 +497,16 @@ def add_summary_section(sample_dir: Path, sample_id: str, launcher: Any = None) 
             _analysis_section.refresh()
 
     # Initial async load shortly after page render
-    ui.timer(0.2, _refresh_summary_cache_async, once=True)
+    from robin.gui.theme import client_timer, stop_timer
+
+    client_timer(0.2, _refresh_summary_cache_async, once=True)
     # Periodic refresh timer (every 30 seconds)
-    refresh_timer = ui.timer(
+    refresh_timer = client_timer(
         30.0, _refresh_summary_cache_async, active=True, immediate=False
     )
     try:
         def _on_disconnect_cleanup() -> None:
-            refresh_timer.deactivate()
+            stop_timer(refresh_timer)
             _clear_summary_cache(sample_dir)
 
         ui.context.client.on_disconnect(_on_disconnect_cleanup)

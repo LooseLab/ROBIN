@@ -54,6 +54,7 @@ BATCH_CONFIG: Dict[str, Dict[str, Any]] = {
     "cnv": {"max_batch_size": 50, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "target": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "fusion": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
+    "itd": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "sturgeon": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "nanodx": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
     "pannanodx": {"max_batch_size": 20, "timeout_seconds": 2, "timeout_seconds_busy": 30},
@@ -224,6 +225,7 @@ class Job:
             "cnv": {"preprocessing"},
             "target": {"preprocessing"},
             "fusion": {"preprocessing"},
+            "itd": {"preprocessing"},
             # Jobs that depend on bed_conversion
             "sturgeon": {"bed_conversion"},
             "nanodx": {"bed_conversion"},
@@ -290,6 +292,7 @@ class Job:
             "cnv": "cnv",
             "target": "target",
             "fusion": "fusion",
+            "itd": "fusion",
             "sturgeon": "classification",
             "nanodx": "classification",
             "pannanodx": "classification",
@@ -672,6 +675,7 @@ class WorkflowManager:
                 "cnv": "cnv",
                 "target": "target",
                 "fusion": "fusion",
+                "itd": "fusion",
                 "test": "mgmt",  # For testing purposes - map to mgmt queue
                 "long": "cnv",  # For testing purposes - map to cnv queue
                 "quick": "target",  # For testing purposes - map to target queue
@@ -701,6 +705,7 @@ class WorkflowManager:
                 "cnv": "analysis",
                 "target": "analysis",
                 "fusion": "analysis",
+                "itd": "analysis",
                 "test": "analysis",  # For testing purposes
                 "long": "analysis",  # For testing purposes
                 "quick": "analysis",  # For testing purposes
@@ -1968,6 +1973,7 @@ def default_file_classifier(filepath: str, workflow_plan: List[str], target_pane
         "cnv": {"preprocessing"},
         "target": {"preprocessing"},
         "fusion": {"preprocessing"},
+        "itd": {"preprocessing"},
         "sturgeon": {"bed_conversion"},
         "nanodx": {"bed_conversion"},
         "pannanodx": {"bed_conversion"},
