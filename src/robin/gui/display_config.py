@@ -85,9 +85,10 @@ DISPLAY_SECTIONS: Dict[str, DisplaySection] = {
     ),
     "itd": DisplaySection(
         "itd",
-        "ITDs / insertions",
+        "ITDs / insertions (+ IGV on More details)",
         "analysis",
         workflow_step="itd",
+        surfaces=frozenset({"sample_page", "sample_details", "report"}),
     ),
     "fusion_target": DisplaySection(
         "fusion_target",

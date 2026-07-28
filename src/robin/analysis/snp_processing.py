@@ -29,6 +29,7 @@ def _process_annotations(record: Dict[str, Any]) -> Tuple[Dict[int, Dict[str, An
         "is_pathogenic": significance.is_pathogenic,
         "is_clinvar_significant": significance.is_clinvar_significant,
         "is_oncogenic": significance.is_oncogenic,
+        "is_vus": significance.is_vus,
         "is_somatic_significant": significance.is_somatic_significant,
     }
     ann_dict: Dict[int, Dict[str, Any]] = {}
@@ -182,6 +183,7 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
         "SCIDN",
         "is_pathogenic",
         "is_clinvar_significant",
+        "is_vus",
     ]
 
     added_fields: set[str] = set()
@@ -193,6 +195,7 @@ def build_snp_display_data(vcf_path: Path) -> Optional[Dict[str, Any]]:
         label_overrides = {
             "is_clinvar_significant": "ClinVar significant",
             "is_pathogenic": "Germline pathogenic",
+            "is_vus": "VUS",
             "ONCDN": "Oncogenic disease",
             "SCIDN": "Somatic disease",
             "CLNDN": "Germline disease",

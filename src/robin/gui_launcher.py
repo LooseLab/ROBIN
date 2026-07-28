@@ -6471,6 +6471,17 @@ class GUILauncher:
                 surface=details_surface,
                 viewer_role=viewer_role,
             )
+            show_details_itd = is_section_visible(
+                "itd",
+                workflow_steps=workflow_steps,
+                display_config=display_config,
+                surface=details_surface,
+                viewer_role=viewer_role,
+            )
+            if show_details_itd and sample_dir is not None:
+                show_details_itd = (sample_dir / "itd_events.csv").is_file() or (
+                    sample_dir / "itd_summary.csv"
+                ).is_file()
             show_fusion_target = is_section_visible(
                 "fusion_target",
                 workflow_steps=workflow_steps,
@@ -6517,6 +6528,8 @@ class GUILauncher:
                                 details_blurbs.append("IGV browser")
                             if show_details_snp:
                                 details_blurbs.append("SNP tables")
+                            if show_details_itd:
+                                details_blurbs.append("ITDs / insertions")
                             if show_details_fusion_pairs:
                                 details_blurbs.append("fusion pairs")
                             if show_details_target_genes:
@@ -6635,6 +6648,18 @@ class GUILauncher:
                             "sample_details", sample_id, "snp"
                         ):
                             add_snp_section(self, sample_dir)
+
+                    # ITD / insertion events (with IGV links)
+                    if sample_dir and sample_dir.exists() and show_details_itd:
+                        try:
+                            from robin.gui.components.itd import add_itd_section
+                        except ImportError:
+                            from .gui.components.itd import add_itd_section  # type: ignore
+
+                        with _sample_page_section_timer(
+                            "sample_details", sample_id, "itd"
+                        ):
+                            add_itd_section(self, sample_dir)
 
                     # Fusion Pairs Table section
                     if sample_dir and sample_dir.exists() and show_details_fusion_pairs:
