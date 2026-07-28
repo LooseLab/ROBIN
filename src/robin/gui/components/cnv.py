@@ -599,10 +599,25 @@ def add_cnv_section(launcher: Any, sample_dir: Path) -> None:
                     value="chromosome",
                 ).classes("mt-1")
                 ui.label("Y-axis").classes("classification-insight-meta ml-2")
+                from robin.gui.plotting_preferences import resolve_cnv_summary_normalized
+
+                default_y_scale = (
+                    "log"
+                    if resolve_cnv_summary_normalized(
+                        None,
+                        plotting_preferences=getattr(
+                            launcher, "plotting_preferences", None
+                        ),
+                    )
+                    else "linear"
+                )
                 cnv_scale = ui.toggle(
                     options={"linear": "Linear", "log": "Log2 ratio"},
-                    value="linear",
+                    value=default_y_scale,
                 ).classes("mt-1")
+                launcher._cnv_state.setdefault(str(sample_dir), {}).setdefault(
+                    "y_scale", default_y_scale
+                )
                 ui.label("Plot bin").classes("classification-insight-meta ml-2")
                 cnv_plot_bin = ui.select(
                     options=_CNV_PLOT_BIN_OPTIONS,

@@ -470,7 +470,7 @@ def _build_plotting_preferences_panel(launcher: "GUILauncher") -> None:
         with ui.column().classes("w-full min-w-0 gap-3 p-2 md:p-3"):
             ui.label("Report plotting").classes("classification-insight-model")
             ui.label(
-                "Global defaults for figures in generated PDF reports. "
+                "Global defaults for CNV figures in the live GUI and generated PDF reports. "
                 "CNV plots can use absolute ploidy or log2(ploidy / expected copy number). "
                 "Reports from the GUI and reporting CLI "
                 "use this setting unless --cnv-normalized-difference is passed on the CLI."

@@ -5474,6 +5474,7 @@ class GUILauncher:
                         sample_identifiers=state.get("sample_identifiers"),
                         generated_by=report_meta["generated_by"] or None,
                         generated_at=report_meta["generated_at"],
+                        plotting_preferences=self.plotting_preferences,
                     )
 
                     # Mark report as completed
@@ -5593,6 +5594,7 @@ class GUILauncher:
                     viewer_role=resolve_viewer_role(self),
                     generated_by=report_meta["generated_by"] or None,
                     generated_at=report_meta["generated_at"],
+                    plotting_preferences=self.plotting_preferences,
                 )
 
                 # Mark report as completed

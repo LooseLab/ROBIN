@@ -58,6 +58,7 @@ class RobinReport:
                 log2(ploidy / expected copy number). When None (default), uses the admin
                 Plotting preference.
             plotting_preferences: Optional pre-loaded plotting preferences (GUI).
+                When None, loads persisted admin preferences from the security store.
         """
         self.filename = filename
         self.output = output
@@ -73,13 +74,16 @@ class RobinReport:
         self.generated_by = (str(generated_by).strip() if generated_by else None) or None
         self.generated_at = (str(generated_at).strip() if generated_at else None) or None
         from robin.gui.plotting_preferences import (
-            PlottingPreferencesConfig,
+            load_plotting_preferences,
             resolve_cnv_summary_normalized,
             resolve_plotting_reference_contig_scope,
         )
 
+        # When omitted, load persisted admin defaults (not an empty in-memory config).
         self.plotting_preferences = (
-            plotting_preferences or PlottingPreferencesConfig()
+            plotting_preferences
+            if plotting_preferences is not None
+            else load_plotting_preferences()
         )
         self.cnv_summary_normalized = resolve_cnv_summary_normalized(
             cnv_summary_normalized,
@@ -604,8 +608,8 @@ def create_pdf(
         cnv_summary_normalized: When True, genome-wide CNV summary uses
             log2(ploidy / expected copy number). When None (default), uses the admin
             Plotting preference.
-            When None (default), uses the admin Plotting preference.
         plotting_preferences: Optional pre-loaded plotting preferences (GUI).
+            When None, loads persisted admin preferences from the security store.
 
     Returns:
         Path to the generated PDF file
