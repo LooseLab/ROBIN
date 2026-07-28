@@ -206,8 +206,13 @@ def _wire_events_igv(table: Any, rows: List[Dict[str, Any]]) -> None:
         pass
 
 
-def add_itd_section(launcher: Any, sample_dir: Path) -> None:
-    """Render the ITDs pane for a sample directory (sample page or More details)."""
+def add_itd_section(
+    launcher: Any, sample_dir: Path, *, include_igv: bool = False
+) -> None:
+    """Render the ITDs pane for a sample directory (sample page or More details).
+
+    IGV navigation links are only shown when ``include_igv`` is True (More details).
+    """
     sample_dir = Path(sample_dir)
     events_available = (sample_dir / "itd_events.csv").is_file() or (
         sample_dir / "itd_summary.csv"
@@ -222,17 +227,22 @@ def add_itd_section(launcher: Any, sample_dir: Path) -> None:
             ).classes("classification-insight-meta")
         return
 
+    blurb = (
+        "CIGAR insertion calls in curated hotspots and/or panel gene "
+        "intervals (see workflow [itd] region_mode). Restricted to the "
+        "active target panel. Coverage is mean gene depth when available "
+        "(else local hotspot depth) and is the VAF denominator."
+    )
+    if include_igv:
+        blurb += (
+            " Use View in IGV (or click a called-event row) to inspect the locus."
+        )
+
     with ui.element("div").classes("classification-insight-shell w-full min-w-0"):
         ui.label("ITDs / insertions").classes(
             "classification-insight-heading text-headline-small"
         )
-        ui.label(
-            "CIGAR insertion calls in curated hotspots and/or panel gene "
-            "intervals (see workflow [itd] region_mode). Restricted to the "
-            "active target panel. Coverage is mean gene depth when available "
-            "(else local hotspot depth) and is the VAF denominator. "
-            "Use View in IGV (or click a called-event row) to inspect the locus."
-        ).classes("classification-insight-meta")
+        ui.label(blurb).classes("classification-insight-meta")
 
         status = ui.label("Loading…").classes("classification-insight-meta")
         with ui.row().classes("w-full items-center q-gutter-sm q-mt-sm"):
@@ -308,20 +318,25 @@ def add_itd_section(launcher: Any, sample_dir: Path) -> None:
                         else events
                     )
                     event_rows = _format_event_rows(ordered)
+                    igv_columns = (
+                        [
+                            {
+                                "name": "action",
+                                "label": "View in IGV",
+                                "field": "action",
+                                "sortable": False,
+                                "align": "center",
+                            }
+                        ]
+                        if include_igv
+                        else None
+                    )
                     _, events_table = styled_table(
                         columns=_columns_from_df(
                             ordered,
                             labels=ITD_EVENT_COLUMN_LABELS,
                             preferred=ITD_EVENT_DISPLAY_COLUMNS,
-                            extra_columns=[
-                                {
-                                    "name": "action",
-                                    "label": "View in IGV",
-                                    "field": "action",
-                                    "sortable": False,
-                                    "align": "center",
-                                }
-                            ],
+                            extra_columns=igv_columns,
                         ),
                         rows=event_rows,
                         pagination=_EVENTS_PAGE_SIZE,
@@ -329,7 +344,8 @@ def add_itd_section(launcher: Any, sample_dir: Path) -> None:
                         row_key="__row_key",
                     )
                     _add_table_search(events_table, "Search events…")
-                    _wire_events_igv(events_table, event_rows)
+                    if include_igv:
+                        _wire_events_igv(events_table, event_rows)
                 elif n_events == 0:
                     ui.label(
                         "No insertions passed length / support / VAF filters."

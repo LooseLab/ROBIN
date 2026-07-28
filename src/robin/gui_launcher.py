@@ -6671,7 +6671,7 @@ class GUILauncher:
                         with _sample_page_section_timer(
                             "sample_details", sample_id, "itd"
                         ):
-                            add_itd_section(self, sample_dir)
+                            add_itd_section(self, sample_dir, include_igv=True)
 
                     # Fusion Pairs Table section
                     if sample_dir and sample_dir.exists() and show_details_fusion_pairs:
