@@ -2671,25 +2671,56 @@ def _register_handlers(
                     handler_func, work_dir, reference
                 )
             elif job_type in ("fusion", "itd"):
-                # Special handling for fusion / ITD analysis with target panel
+                # Special handling for fusion / ITD analysis with target panel + reference
                 def create_fusion_handler_with_work_dir(
-                    handler, work_dir_path, panel_param
+                    handler, work_dir_path, panel_param, ref_path
                 ):
-                    return lambda job: handler(
-                        job, work_dir=str(work_dir_path), target_panel=job.context.metadata.get("target_panel", panel_param)
-                    )
+                    def _fusion_handler(job):
+                        # Prefer job metadata; fall back to workflow reference
+                        reference = job.context.metadata.get("reference") or (
+                            str(ref_path) if ref_path else None
+                        )
+                        if reference and not job.context.metadata.get("reference"):
+                            job.context.add_metadata("reference", str(reference))
+                        return handler(
+                            job,
+                            work_dir=str(work_dir_path),
+                            target_panel=job.context.metadata.get(
+                                "target_panel", panel_param
+                            ),
+                        )
+
+                    return _fusion_handler
 
                 final_handler = create_fusion_handler_with_work_dir(
-                    handler_func, work_dir, target_panel
+                    handler_func, work_dir, target_panel, reference
                 )
             else:
                 # Standard work directory handling
                 if job_type in ["target", "cnv"]:
-                    # Analysis with work_dir and target_panel
-                    def create_analysis_handler_with_work_dir(handler, work_dir_path, panel_param):
-                        return lambda job: handler(job, work_dir=str(work_dir_path), target_panel=job.context.metadata.get("target_panel", panel_param))
-                    
-                    final_handler = create_analysis_handler_with_work_dir(handler_func, work_dir, target_panel)
+                    # Analysis with work_dir and target_panel (+ reference for CNV master BED)
+                    def create_analysis_handler_with_work_dir(
+                        handler, work_dir_path, panel_param, ref_path
+                    ):
+                        def _analysis_handler(job):
+                            reference = job.context.metadata.get("reference") or (
+                                str(ref_path) if ref_path else None
+                            )
+                            if reference and not job.context.metadata.get("reference"):
+                                job.context.add_metadata("reference", str(reference))
+                            return handler(
+                                job,
+                                work_dir=str(work_dir_path),
+                                target_panel=job.context.metadata.get(
+                                    "target_panel", panel_param
+                                ),
+                            )
+
+                        return _analysis_handler
+
+                    final_handler = create_analysis_handler_with_work_dir(
+                        handler_func, work_dir, target_panel, reference
+                    )
                 else:
                     # Standard work directory handling for other job types
                     def create_handler_with_work_dir(handler, work_dir_path, center_param):
@@ -3214,6 +3245,21 @@ def workflow(
                 )
             except Exception:
                 pass
+
+        if toml_config is not None:
+            try:
+                from robin.readfish.analysis_hook import write_workflow_toml_pointer
+
+                resolved_toml = str(Path(toml_config).expanduser().resolve())
+                os.environ["ROBIN_WORKFLOW_TOML"] = resolved_toml
+                if work_dir is not None:
+                    write_workflow_toml_pointer(work_dir, resolved_toml)
+            except Exception:
+                LOGGER = logging.getLogger(__name__)
+                LOGGER.debug(
+                    "Could not publish ROBIN_WORKFLOW_TOML for readfish analysis",
+                    exc_info=True,
+                )
 
         # Check for required model files first
         _check_models_or_exit()

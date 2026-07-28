@@ -101,7 +101,7 @@ def create_admin_page(launcher: "GUILauncher") -> None:
     with theme.frame(
         "R.O.B.I.N - Administration",
         smalltitle="Admin",
-        batphone=False,
+        batphone=launcher.batman_mode,
         center=launcher.center,
         setup_notifications=launcher._setup_notification_system,
     ):

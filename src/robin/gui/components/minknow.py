@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import queue
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
@@ -151,6 +152,7 @@ def add_minknow_sequencer_section(
         "runner_reference": runner_reference,
         "runner_panel": runner_panel,
         "cached_preset": None,
+        "cached_readfish": None,
         "pending_stop": None,
         "selected_position": "",
         "last_position_names": [],
@@ -170,10 +172,26 @@ def add_minknow_sequencer_section(
         return datetime.now().strftime("%H:%M:%S")
 
     def _notify(message: str, *, kind: str = "info") -> None:
+        """Show a GUI toast and mirror the message to the workflow CLI terminal."""
+        label = {
+            "negative": "ERROR",
+            "warning": "WARNING",
+            "positive": "OK",
+            "info": "INFO",
+        }.get(kind, kind.upper())
+        text = f"[MinKNOW {label}] {message}"
+        stream = sys.stderr if kind in {"negative", "warning"} else sys.stdout
+        print(text, file=stream, flush=True)
+        if kind == "negative":
+            LOGGER.error("%s", message)
+        elif kind == "warning":
+            LOGGER.warning("%s", message)
+        else:
+            LOGGER.info("%s", message)
         try:
             ui.notify(message, type=kind)
         except Exception:
-            LOGGER.info("MinKNOW: %s", message)
+            pass
 
     def _preset_toml_path() -> Optional[Path]:
         workflow_path = Path(str(state.get("workflow_toml") or "")).expanduser()
@@ -202,12 +220,14 @@ def add_minknow_sequencer_section(
             )
             preset = config.preset
             state["cached_preset"] = preset
+            state["cached_readfish"] = config.readfish
             if config.settings.host:
                 state["host"] = config.settings.host
             state["auto_watch"] = config.settings.auto_add_paths
             return preset
         except Exception as exc:
             state["cached_preset"] = None
+            state["cached_readfish"] = None
             LOGGER.debug("Failed to load MinKNOW preset", exc_info=True)
             _notify(f"Preset error: {exc}", kind="negative")
             return None
@@ -299,6 +319,21 @@ def add_minknow_sequencer_section(
             )
 
             start_controls: dict[str, Any] = {}
+
+            def _position_has_active_run(name: str) -> bool:
+                return False
+
+            def _sync_start_controls_for_position() -> None:
+                return None
+
+            def _sync_position_options() -> None:
+                return None
+
+            def _apply_selected_position(name: str) -> None:
+                name = (name or "").strip()
+                if name:
+                    state["selected_position"] = name
+
             if not compact:
                 with ui.expansion(
                     "Start ROBIN run",
@@ -521,6 +556,9 @@ def add_minknow_sequencer_section(
                             "Start run…",
                             icon="play_arrow",
                         ).props("color=primary dense no-caps")
+                        start_busy_hint = ui.label("").classes(
+                            "text-xs text-amber-700 dark:text-amber-300"
+                        )
 
                         start_controls.update(
                             {
@@ -543,6 +581,7 @@ def add_minknow_sequencer_section(
                                 "bam_reads_input": bam_reads_input,
                                 "simulation_input": simulation_input,
                                 "start_button": start_button,
+                                "start_busy_hint": start_busy_hint,
                             }
                         )
 
@@ -556,6 +595,50 @@ def add_minknow_sequencer_section(
                         radio.value = name
                     if position_fallback_input is not None:
                         position_fallback_input.value = name
+                    _sync_start_controls_for_position()
+
+                def _position_has_active_run(name: str) -> bool:
+                    name = (name or "").strip()
+                    if not name:
+                        return False
+                    result = state.get("last_result")
+                    status = getattr(result, "status", None) if result is not None else None
+                    if status is not None:
+                        from robin.minknow.watch import position_has_active_run as _row_active
+
+                        for position in status.positions:
+                            if position.name == name:
+                                return _row_active(position)
+                        return False
+                    try:
+                        rows = positions_table.rows or []
+                    except NameError:
+                        return False
+                    for row in rows:
+                        if row.get("position") == name and row.get("can_stop"):
+                            return True
+                    return False
+
+                def _sync_start_controls_for_position() -> None:
+                    if compact or not start_controls:
+                        return
+                    button = start_controls.get("start_button")
+                    hint = start_controls.get("start_busy_hint")
+                    position = (state.get("selected_position") or "").strip()
+                    busy = _position_has_active_run(position)
+                    if button is not None:
+                        if busy:
+                            button.disable()
+                        else:
+                            button.enable()
+                    if hint is not None:
+                        if busy:
+                            hint.set_text(
+                                f"{position} already has a run in progress. "
+                                "Stop it before starting another."
+                            )
+                        else:
+                            hint.set_text("")
 
                 def _sync_position_options() -> None:
                     if position_picker_row is None:
@@ -763,6 +846,8 @@ def add_minknow_sequencer_section(
             warning_label.set_text("")
             stream_indicator.set_visibility(False)
             positions_table.rows = []
+            if not compact:
+                _sync_start_controls_for_position()
             return
 
         error_label.set_text("")
@@ -789,6 +874,7 @@ def add_minknow_sequencer_section(
         positions_table.rows = position_table_rows(status)
         if not compact:
             _sync_position_options()
+            _sync_start_controls_for_position()
 
         _maybe_auto_watch(result)
 
@@ -1008,6 +1094,13 @@ def add_minknow_sequencer_section(
                 kind="warning",
             )
             return
+        if _position_has_active_run(position):
+            _notify(
+                f"{position} already has a run in progress. "
+                "Stop it before starting another.",
+                kind="warning",
+            )
+            return
 
         experiment_group = preset_for_run.resolve_experiment_group()
 
@@ -1029,6 +1122,7 @@ def add_minknow_sequencer_section(
             "position": position,
             "sample_id": sample_id,
             "experiment_group": experiment_group,
+            "readfish": state.get("cached_readfish"),
         }
         start_confirm_text.set_text("\n".join(lines))
         start_dialog.open()
@@ -1045,8 +1139,15 @@ def add_minknow_sequencer_section(
             position=pending["position"],
             sample_id=pending["sample_id"],
             experiment_group=pending.get("experiment_group"),
+            readfish=pending.get("readfish"),
+            work_directory=work_directory or None,
         )
         try:
+            _notify(
+                f"Starting MinKNOW run on {request.position} "
+                f"(sample {request.sample_id})…",
+                kind="info",
+            )
             result = await run.io_bound(
                 start_protocol_run,
                 settings.auth,
@@ -1061,10 +1162,36 @@ def add_minknow_sequencer_section(
             _notify(str(exc), kind="negative")
             return
 
+        if result is None:
+            _notify(
+                "Start run returned no result (the background task was cancelled "
+                "or the app is shutting down). Check the terminal for [readfish] "
+                "or MinKNOW messages — the protocol may already have started.",
+                kind="negative",
+            )
+            return
+
+        message = f"Started run {result.run_id} on {result.position}"
+        if result.readfish_pid is not None:
+            message += f" (readfish pid {result.readfish_pid})"
         _notify(
-            f"Started run {result.run_id} on {result.position}",
+            message,
             kind="positive",
         )
+        if result.readfish_pid is not None:
+            _notify(
+                f"readfish command: {result.readfish_command}",
+                kind="info",
+            )
+            _notify(
+                f"readfish dorado: {result.readfish_dorado_config} @ "
+                f"{result.readfish_dorado_address}",
+                kind="info",
+            )
+        if result.readfish_log_file:
+            _notify(f"readfish log: {result.readfish_log_file}", kind="info")
+        if result.readfish_toml_path:
+            _notify(f"readfish toml: {result.readfish_toml_path}", kind="info")
         for warning in result.warnings:
             _notify(warning, kind="warning")
         await _refresh_snapshot()

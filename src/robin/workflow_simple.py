@@ -2460,9 +2460,16 @@ class WorkflowRunner:
         """Run a complete workflow."""
 
         if classifier_func is None:
-            classifier_func = lambda filepath: default_file_classifier(
-                filepath, workflow_plan, self.target_panel
-            )
+            reference_str = str(self.reference) if self.reference else None
+
+            def classifier_func(filepath: str):
+                jobs = default_file_classifier(
+                    filepath, workflow_plan, self.target_panel
+                )
+                if reference_str:
+                    for job in jobs:
+                        job.context.add_metadata("reference", reference_str)
+                return jobs
 
         watcher = FileWatcher(
             watch_dir=watch_dir,

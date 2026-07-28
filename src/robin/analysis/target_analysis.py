@@ -824,8 +824,7 @@ class TargetAnalysis:
         """
         logger = logging.getLogger("robin.target")
         try:
-            import glob
-            from robin.analysis.fusion_work import _load_analysis_counter
+            from robin.analysis.master_bed_generator import _get_latest_bed_file
             
             sample_dir = os.path.join(self.work_dir, sample_id)
             bed_dir = os.path.join(sample_dir, "bed_files")
@@ -833,19 +832,8 @@ class TargetAnalysis:
             if not os.path.exists(bed_dir):
                 return None
             
-            # Try to get analysis counter
-            analysis_counter = _load_analysis_counter(sample_id, self.work_dir)
-            master_bed_path = os.path.join(bed_dir, f"master_{analysis_counter:03d}.bed")
-            
-            if os.path.exists(master_bed_path):
-                return master_bed_path
-            
-            # Try to find the latest master BED file if counter-based doesn't exist
-            master_bed_files = glob.glob(os.path.join(bed_dir, "master_*.bed"))
-            if master_bed_files:
-                # Sort by modification time and return the latest
-                latest = max(master_bed_files, key=os.path.getmtime)
-                logger.debug(f"Using latest master BED file: {latest}")
+            latest = _get_latest_bed_file(bed_dir, "master_*.bed")
+            if latest:
                 return latest
         except Exception as e:
             logger.debug(f"Error finding master BED file: {e}")

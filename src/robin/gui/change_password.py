@@ -32,7 +32,7 @@ def create_change_password_page(
     with theme.frame(
         "R.O.B.I.N - Change password",
         smalltitle="Change password",
-        batphone=False,
+        batphone=launcher.batman_mode,
         center=launcher.center,
         setup_notifications=launcher._setup_notification_system,
     ):

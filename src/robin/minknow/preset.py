@@ -12,6 +12,11 @@ ROBIN_DEFAULT_BAM_READS_PER_FILE = 50_000
 ROBIN_DEFAULT_BAM_BATCH_DURATION = 0
 ROBIN_DEFAULT_EXPERIMENT_DURATION_HOURS = 24.0
 
+ADAPTIVE_SAMPLING_BACKENDS = frozenset({"minknow", "readfish", "none"})
+ADAPTIVE_SAMPLING_BACKEND_MINKNOW = "minknow"
+ADAPTIVE_SAMPLING_BACKEND_READFISH = "readfish"
+ADAPTIVE_SAMPLING_BACKEND_NONE = "none"
+
 _MONTH_ABBREV = (
     "JAN",
     "FEB",
@@ -63,6 +68,7 @@ class RobinRunPreset:
     read_until_filter: Optional[str] = None
     read_until_reference: Optional[str] = None
     read_until_bed_file: Optional[str] = None
+    adaptive_sampling_backend: str = ADAPTIVE_SAMPLING_BACKEND_MINKNOW
     bam_reads_per_file: int = ROBIN_DEFAULT_BAM_READS_PER_FILE
     bam_batch_duration: int = ROBIN_DEFAULT_BAM_BATCH_DURATION
     experiment_duration_hours: float = ROBIN_DEFAULT_EXPERIMENT_DURATION_HOURS
@@ -107,6 +113,9 @@ class RobinRunPreset:
             source.get("read_until_reference", source.get("read_until_ref"))
         )
         read_until_bed_file = _optional_str(source.get("read_until_bed_file"))
+        adaptive_sampling_backend = _normalize_adaptive_sampling_backend(
+            source.get("adaptive_sampling_backend")
+        )
         simulation_bulk_file = (
             _optional_str(source.get("simulation_bulk_file"))
             or _optional_str(source.get("simulation_path"))
@@ -129,6 +138,7 @@ class RobinRunPreset:
             read_until_filter=read_until_filter,
             read_until_reference=read_until_reference,
             read_until_bed_file=read_until_bed_file,
+            adaptive_sampling_backend=adaptive_sampling_backend,
             bam_reads_per_file=int(bam_reads),
             bam_batch_duration=int(bam_batch),
             experiment_duration_hours=float(duration),
@@ -178,6 +188,34 @@ class RobinRunPreset:
             errors.append("read_until_bed_file requires read_until_reference or alignment_reference")
         if self.read_until_filter and self.read_until_filter not in {"enrich", "deplete"}:
             errors.append("read_until_filter must be 'enrich' or 'deplete'")
+        if self.adaptive_sampling_backend not in ADAPTIVE_SAMPLING_BACKENDS:
+            errors.append(
+                "adaptive_sampling_backend must be one of: "
+                + ", ".join(sorted(ADAPTIVE_SAMPLING_BACKENDS))
+            )
+        if (
+            self.adaptive_sampling_backend == ADAPTIVE_SAMPLING_BACKEND_NONE
+            and self.read_until_filter
+        ):
+            errors.append(
+                "read_until_filter is set but adaptive_sampling_backend is 'none'"
+            )
+        if self.readfish_adaptive_sampling_enabled():
+            if not self.effective_read_until_bed_file():
+                errors.append(
+                    "readfish adaptive sampling requires bed_file "
+                    "(or target_panel with a stranded panel BED)"
+                )
+            if not self.effective_read_until_reference():
+                errors.append(
+                    "readfish adaptive sampling requires alignment_reference "
+                    "(or read_until_reference)"
+                )
+            if not self.read_until_filter:
+                errors.append(
+                    "readfish adaptive sampling requires read_until_filter "
+                    "('enrich' or 'deplete')"
+                )
         if self.bam_reads_per_file <= 0:
             errors.append("bam_reads_per_file must be positive")
         if self.bam_batch_duration < 0:
@@ -238,8 +276,19 @@ class RobinRunPreset:
     def simulation_enabled(self) -> bool:
         return bool(self.simulation_bulk_file)
 
-    def adaptive_sampling_enabled(self) -> bool:
+    def minknow_adaptive_sampling_enabled(self) -> bool:
+        """True when MinKNOW native Read Until should be configured at protocol start."""
+        if self.adaptive_sampling_backend != ADAPTIVE_SAMPLING_BACKEND_MINKNOW:
+            return False
         return bool(self.read_until_filter and self.effective_read_until_reference())
+
+    def readfish_adaptive_sampling_enabled(self) -> bool:
+        """True when readfish should run instead of MinKNOW native adaptive sampling."""
+        return self.adaptive_sampling_backend == ADAPTIVE_SAMPLING_BACKEND_READFISH
+
+    def adaptive_sampling_enabled(self) -> bool:
+        """Backward-compatible alias for MinKNOW native adaptive sampling."""
+        return self.minknow_adaptive_sampling_enabled()
 
     def resolve_experiment_group(
         self,
@@ -275,10 +324,16 @@ class RobinRunPreset:
                 "Experiment group date suffix: enabled "
                 f"(e.g. {self.experiment_group}{experiment_group_date_suffix()})"
             )
-        if self.adaptive_sampling_enabled():
+        if self.minknow_adaptive_sampling_enabled():
             lines.append(
-                f"Adaptive sampling: {self.read_until_filter} "
+                f"Adaptive sampling (MinKNOW): {self.read_until_filter} "
                 f"({self.effective_read_until_reference()})"
+            )
+        elif self.readfish_adaptive_sampling_enabled():
+            bed = self.effective_read_until_bed_file()
+            lines.append(
+                f"Adaptive sampling (readfish): {self.read_until_filter} "
+                f"({bed})"
             )
         if self.simulation_bulk_file:
             lines.append(f"Simulated playback: {self.simulation_bulk_file}")
@@ -303,6 +358,15 @@ def _optional_str(value: Any) -> Optional[str]:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _normalize_adaptive_sampling_backend(value: Any) -> str:
+    if value is None:
+        return ADAPTIVE_SAMPLING_BACKEND_MINKNOW
+    text = str(value).strip().lower()
+    if not text:
+        return ADAPTIVE_SAMPLING_BACKEND_MINKNOW
+    return text
 
 
 def _optional_str_list(value: Any) -> tuple[str, ...]:

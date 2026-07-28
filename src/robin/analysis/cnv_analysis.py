@@ -891,7 +891,12 @@ def estimate_sex_from_cnv(cnv_data: Dict, logger) -> str:
         return "Unknown"
 
 
-def detect_breakpoints_from_cnv(cnv_data: Dict, bin_width: int, logger) -> List[Dict]:
+def detect_breakpoints_from_cnv(
+    cnv_data: Dict,
+    bin_width: int,
+    logger,
+    penalty_value: Optional[int] = None,
+) -> List[Dict]:
     """
     Detect breakpoints in CNV data using change point detection.
 
@@ -899,21 +904,31 @@ def detect_breakpoints_from_cnv(cnv_data: Dict, bin_width: int, logger) -> List[
         cnv_data: Dictionary containing CNV data
         bin_width: Width of bins
         logger: Logger instance
+        penalty_value: ruptures KernelCPD penalty. When None, resolves from
+            workflow TOML ``[cnv] penalty_value`` (default 10).
 
     Returns:
         List of detected breakpoints
     """
     breakpoints = []
 
+    if penalty_value is None:
+        from robin.workflow_config import get_cnv_penalty_value
+
+        penalty_value = get_cnv_penalty_value()
+    penalty_value = int(penalty_value)
+
     try:
-        logger.debug("Detecting breakpoints in CNV data")
+        logger.debug(
+            "Detecting breakpoints in CNV data (penalty_value=%s)", penalty_value
+        )
 
         # Simple sequential processing for all datasets
         for key, data in cnv_data.items():
             if key != "chrM" and len(data) > 3:
                 try:
                     paired_changepoints = run_ruptures(
-                        data, penalty_value=10, bin_width=bin_width
+                        data, penalty_value=penalty_value, bin_width=bin_width
                     )
 
                     for start, end in paired_changepoints:
@@ -975,6 +990,18 @@ def calculate_chromosome_stats_from_cnv(cnv_data: Dict, logger) -> Dict:
         return {}
 
 
+def _read_analysis_counter_from_disk(sample_id: str, work_dir: str) -> int:
+    """Read the analysis counter directly from disk (no cache)."""
+    counter_file = os.path.join(work_dir, sample_id, "cnv_analysis_counter.txt")
+    if not os.path.exists(counter_file):
+        return 0
+    try:
+        with open(counter_file, "r") as f:
+            return int(f.read().strip())
+    except (ValueError, IOError):
+        return 0
+
+
 def load_analysis_counter(sample_id: str, work_dir: str, logger) -> int:
     """Load the analysis counter for a sample from disk with caching"""
     # Check cache first
@@ -984,14 +1011,7 @@ def load_analysis_counter(sample_id: str, work_dir: str, logger) -> int:
         return cache['analysis_counter']
     
     # Load from disk
-    counter_file = os.path.join(work_dir, sample_id, "cnv_analysis_counter.txt")
-    result = 0
-    if os.path.exists(counter_file):
-        try:
-            with open(counter_file, "r") as f:
-                result = int(f.read().strip())
-        except (ValueError, IOError) as e:
-            logger.warning(f"Error loading counter for {sample_id}: {e}")
+    result = _read_analysis_counter_from_disk(sample_id, work_dir)
     
     # Cache the result
     cache['analysis_counter'] = result
@@ -1015,7 +1035,45 @@ def save_analysis_counter(sample_id: str, counter: int, work_dir: str, logger) -
         logger.error(f"Error saving counter for {sample_id}: {e}")
 
 
-def find_significant_regions(values, chrom, bin_width):
+def allocate_next_analysis_counter(
+    sample_id: str, work_dir: str, logger=None
+) -> int:
+    """
+    Atomically increment the shared BED/CNV analysis counter and return the new value.
+
+    Every BED content update (CNV regions, breakpoints, fusion beds, master BED)
+    should call this so each write gets a new ``*_NNN.bed`` filename instead of
+    overwriting a previous version.
+    """
+    from robin.analysis.master_bed_generator import FileLock
+
+    log = logger or logging.getLogger("robin.cnv")
+    sample_dir = os.path.join(work_dir, sample_id)
+    lock_file = os.path.join(sample_dir, "_locks", "analysis_counter.lock")
+    counter_file = os.path.join(sample_dir, "cnv_analysis_counter.txt")
+
+    with FileLock(lock_file, timeout=60.0):
+        current = _read_analysis_counter_from_disk(sample_id, work_dir)
+        new_counter = current + 1
+        os.makedirs(sample_dir, exist_ok=True)
+        with open(counter_file, "w") as f:
+            f.write(str(new_counter))
+        update_sample_cache(sample_id, analysis_counter=new_counter)
+        log.debug(
+            "Allocated analysis counter %s for %s (was %s)",
+            new_counter,
+            sample_id,
+            current,
+        )
+        return new_counter
+
+
+def find_significant_regions(
+    values,
+    chrom,
+    bin_width,
+    min_contiguous_bins: int = 1,
+):
     """
     Find regions with significant CNV changes and merge adjacent regions.
 
@@ -1023,12 +1081,15 @@ def find_significant_regions(values, chrom, bin_width):
         values: CNV values for a chromosome
         chrom: Chromosome name
         bin_width: Width of bins in base pairs
+        min_contiguous_bins: Minimum length of a same-sign significant run
+            (in bins) required to emit a gain/loss region. Default 1.
 
     Returns:
         List of significant regions (merged adjacent regions)
     """
     regions = []
     threshold = 0.5  # CNV change threshold
+    min_bins = max(1, int(min_contiguous_bins))
 
     # Use numpy for better performance
     values_array = np.array(values)
@@ -1037,6 +1098,19 @@ def find_significant_regions(values, chrom, bin_width):
     # If no significant regions, return empty list
     if len(significant_indices) == 0:
         return regions
+
+    def _maybe_append(start_idx: int, end_idx: int, region_type: str) -> None:
+        n_bins = int(end_idx) - int(start_idx) + 1
+        if n_bins < min_bins:
+            return
+        regions.append(
+            {
+                "chromosome": chrom,
+                "start": start_idx * bin_width,
+                "end": (end_idx + 1) * bin_width,
+                "type": region_type,
+            }
+        )
 
     # Merge adjacent indices into continuous regions
     current_start_idx = significant_indices[0]
@@ -1051,33 +1125,26 @@ def find_significant_regions(values, chrom, bin_width):
         if idx == prev_idx + 1 and idx_type == current_type:
             continue
         else:
-            # Save the previous region
-            regions.append(
-                {
-                    "chromosome": chrom,
-                    "start": current_start_idx * bin_width,
-                    "end": (significant_indices[i - 1] + 1) * bin_width,
-                    "type": current_type,
-                }
-            )
+            _maybe_append(current_start_idx, significant_indices[i - 1], current_type)
             # Start new region
             current_start_idx = idx
             current_type = idx_type
 
     # Don't forget the last region
-    regions.append(
-        {
-            "chromosome": chrom,
-            "start": current_start_idx * bin_width,
-            "end": (significant_indices[-1] + 1) * bin_width,
-            "type": current_type,
-        }
-    )
+    _maybe_append(current_start_idx, significant_indices[-1], current_type)
 
     return regions
 
 
-def generate_bed_files(bed_dir, analysis_counter, breakpoints, cnv_data, bin_width, logger):
+def generate_bed_files(
+    bed_dir,
+    analysis_counter,
+    breakpoints,
+    cnv_data,
+    bin_width,
+    logger,
+    min_contiguous_bins: int = 1,
+):
     """
     Generate BED files for CNV regions and breakpoints.
 
@@ -1088,6 +1155,7 @@ def generate_bed_files(bed_dir, analysis_counter, breakpoints, cnv_data, bin_wid
         cnv_data: CNV data
         bin_width: Width of bins in base pairs
         logger: Logger instance
+        min_contiguous_bins: Minimum contiguous significant bins for gain/loss
     """
     try:
         # Generate BED file for CNV regions
@@ -1096,7 +1164,12 @@ def generate_bed_files(bed_dir, analysis_counter, breakpoints, cnv_data, bin_wid
             for chrom, values in cnv_data.items():
                 if len(values) > 0:
                     # Find regions with significant CNV changes
-                    significant_regions = find_significant_regions(values, chrom, bin_width)
+                    significant_regions = find_significant_regions(
+                        values,
+                        chrom,
+                        bin_width,
+                        min_contiguous_bins=min_contiguous_bins,
+                    )
                     for region in significant_regions:
                         f.write(
                             f"{chrom}\t{region['start']}\t{region['end']}\t{region['type']}\n"
@@ -1133,6 +1206,8 @@ def save_cnv_files(
     logger,
     reference: Optional[str] = None,
     generate_master_bed: bool = False,
+    penalty_value: Optional[int] = None,
+    min_contiguous_bins: Optional[int] = None,
 ):
     """
     Save CNV data files in the specified format from the documentation.
@@ -1149,6 +1224,10 @@ def save_cnv_files(
         sex_estimate: Sex estimation result
         copy_numbers: Updated copy numbers for this sample (saved separately by caller)
         logger: Logger instance
+        reference: Optional reference genome path
+        generate_master_bed: Whether to trigger master BED generation
+        penalty_value: ruptures penalty used for breakpoint detection (optional)
+        min_contiguous_bins: Minimum contiguous bins for gain/loss regions (optional)
     """
     try:
         # Save CNV data files as specified in documentation
@@ -1162,6 +1241,10 @@ def save_cnv_files(
             "variance": variance,
             "analysis_counter": analysis_counter,
         }
+        if penalty_value is not None:
+            cnv_dict["penalty_value"] = int(penalty_value)
+        if min_contiguous_bins is not None:
+            cnv_dict["min_contiguous_bins"] = int(min_contiguous_bins)
         np.save(os.path.join(sample_dir, "CNV_dict.npy"), cnv_dict)
 
         # Save breakpoint data as structured array
@@ -1200,6 +1283,10 @@ def save_cnv_files(
             "breakpoints_count": len(breakpoints),
             "sex_estimate": sex_estimate,
         }
+        if penalty_value is not None:
+            state_metadata["penalty_value"] = int(penalty_value)
+        if min_contiguous_bins is not None:
+            state_metadata["min_contiguous_bins"] = int(min_contiguous_bins)
         _atomic_pickle_dump(
             state_metadata, os.path.join(state_dir, "tracker_metadata.pkl")
         )
@@ -1209,7 +1296,18 @@ def save_cnv_files(
         os.makedirs(bed_dir, exist_ok=True)
 
         # Generate BED files for CNV regions and breakpoints
-        generate_bed_files(bed_dir, analysis_counter, breakpoints, result3_cnv, bin_width, logger)
+        resolved_min_bins = (
+            int(min_contiguous_bins) if min_contiguous_bins is not None else 1
+        )
+        generate_bed_files(
+            bed_dir,
+            analysis_counter,
+            breakpoints,
+            result3_cnv,
+            bin_width,
+            logger,
+            min_contiguous_bins=resolved_min_bins,
+        )
 
         # Generate master BED file only if requested (should only be done once per batch at the end)
         # Use async (non-blocking) generation to avoid blocking the analysis pipeline
@@ -1485,7 +1583,21 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         analysis_result["processing_steps"].append("sex_estimated")
 
         # Detect breakpoints
-        breakpoints = detect_breakpoints_from_cnv(r_cnv, r_bin, logger)
+        from robin.workflow_config import (
+            get_cnv_min_contiguous_bins,
+            get_cnv_penalty_value,
+        )
+
+        penalty_value = get_cnv_penalty_value()
+        min_contiguous_bins = get_cnv_min_contiguous_bins()
+        logger.debug(
+            "CNV settings: penalty_value=%s min_contiguous_bins=%s",
+            penalty_value,
+            min_contiguous_bins,
+        )
+        breakpoints = detect_breakpoints_from_cnv(
+            r_cnv, r_bin, logger, penalty_value=penalty_value
+        )
         analysis_result["breakpoints"] = breakpoints
         analysis_result["processing_steps"].append("breakpoints_detected")
 
@@ -1494,8 +1606,8 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
         analysis_result["chromosome_stats"] = chromosome_stats
         analysis_result["processing_steps"].append("chromosome_stats_calculated")
 
-        # Save CNV data in the specified format
-        analysis_counter += 1
+        # Allocate a new counter for this CNV BED write (never overwrite prior versions)
+        analysis_counter = allocate_next_analysis_counter(sample_id, work_dir, logger)
 
         # Save CNV data files as specified in the documentation
         # Don't generate master BED here - it should only be generated once per batch
@@ -1513,17 +1625,16 @@ def process_single_bam(bam_path, metadata, work_dir, logger, threads=2, referenc
             logger,
             reference=reference,
             generate_master_bed=False,  # Single BAM - master BED should be generated at batch end
+            penalty_value=penalty_value,
+            min_contiguous_bins=min_contiguous_bins,
         )
 
         analysis_result["cnv_data_path"] = os.path.join(
             sample_output_dir, f"{analysis_counter}_cnv_data.json"
         )
         analysis_result["processing_steps"].append("cnv_data_saved")
-
-        # Save updated analysis counter to disk
-        save_analysis_counter(sample_id, analysis_counter, work_dir, logger)
         analysis_result["analysis_counter"] = analysis_counter
-        logger.debug(f"Saved analysis counter: {analysis_counter}")
+        logger.debug(f"Allocated analysis counter for CNV outputs: {analysis_counter}")
 
         # Force garbage collection
         gc.collect()
@@ -1847,8 +1958,22 @@ def process_multiple_bams(
         analysis_result["processing_steps"].append("sex_estimated")
 
         # Detect breakpoints from aggregated CNV data
+        from robin.workflow_config import (
+            get_cnv_min_contiguous_bins,
+            get_cnv_penalty_value,
+        )
+
+        penalty_value = get_cnv_penalty_value()
+        min_contiguous_bins = get_cnv_min_contiguous_bins()
+        logger.info(
+            "[cnv] penalty_value=%s min_contiguous_bins=%s",
+            penalty_value,
+            min_contiguous_bins,
+        )
         t0 = time.time()
-        breakpoints = detect_breakpoints_from_cnv(r_cnv, r_bin, logger)
+        breakpoints = detect_breakpoints_from_cnv(
+            r_cnv, r_bin, logger, penalty_value=penalty_value
+        )
         logger.info(f"[cnv] Breakpoint detection completed in {time.time() - t0:.2f}s")
         analysis_result["breakpoints"] = breakpoints
         analysis_result["processing_steps"].append("breakpoints_detected")
@@ -1860,8 +1985,8 @@ def process_multiple_bams(
         analysis_result["chromosome_stats"] = chromosome_stats
         analysis_result["processing_steps"].append("chromosome_stats_calculated")
 
-        # Save CNV data in the specified format
-        analysis_counter += 1
+        # Allocate a new counter for this CNV BED write (never overwrite prior versions)
+        analysis_counter = allocate_next_analysis_counter(sample_id, work_dir, logger)
 
         # Save CNV data files as specified in the documentation
         # Generate master BED here since this is batch processing (all BAMs processed)
@@ -1880,6 +2005,8 @@ def process_multiple_bams(
             logger,
             reference=reference,
             generate_master_bed=True,  # Batch processing - generate master BED once at the end
+            penalty_value=penalty_value,
+            min_contiguous_bins=min_contiguous_bins,
         )
         logger.info(f"[cnv] save_cnv_files (incl. master BED) completed in {time.time() - t0:.2f}s")
 
@@ -1887,13 +2014,11 @@ def process_multiple_bams(
             sample_output_dir, f"{analysis_counter}_cnv_data.json"
         )
         analysis_result["processing_steps"].append("cnv_data_saved")
-
-        # Save updated analysis counter to disk
-        t0 = time.time()
-        save_analysis_counter(sample_id, analysis_counter, work_dir, logger)
+        # Master BED allocation (if any) may have advanced the counter further; record CNV's number
         analysis_result["analysis_counter"] = analysis_counter
+        t0 = time.time()
         gc.collect()
-        logger.info(f"[cnv] Save analysis counter + gc completed in {time.time() - t0:.2f}s")
+        logger.info(f"[cnv] gc completed in {time.time() - t0:.2f}s")
 
         analysis_result["processing_steps"].append("cnv_analysis_complete")
 

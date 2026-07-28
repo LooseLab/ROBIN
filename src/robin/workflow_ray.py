@@ -130,9 +130,7 @@ try:
         UpdateType as _GUIUpdateType,
         launch_gui as _gui_launch,
     )
-except Exception as e:
-    raise Exception(f"GUI not available: {e}")
-
+except Exception:
     def _gui_send_update(*args, **kwargs):
         return None
 
@@ -1525,7 +1523,7 @@ class Coordinator:
         self.using_pools: bool = False
 
         # Reference genome for SNP calling and other analyses
-        self.reference: Optional[str] = reference
+        self.reference: Optional[str] = str(reference) if reference else None
 
         # Reference genome status (logged at INFO level)
         if self.reference:
@@ -5015,8 +5013,9 @@ async def submit_existing_paths(
                         j.context.add_metadata("fail_only_bam_submission", True)
                 # Add reference genome to job metadata if available
                 if coord_reference:
+                    ref_str = str(coord_reference)
                     for j in jobs:
-                        j.context.add_metadata("reference", coord_reference)
+                        j.context.add_metadata("reference", ref_str)
                 # Add target panel to job metadata if available
                 if coord_target_panel:
                     for j in jobs:
@@ -5045,8 +5044,9 @@ async def submit_existing_paths(
                         j.context.add_metadata("fail_only_bam_submission", True)
                 # Add reference genome to job metadata if available
                 if coord_reference:
+                    ref_str = str(coord_reference)
                     for j in jobs:
-                        j.context.add_metadata("reference", coord_reference)
+                        j.context.add_metadata("reference", ref_str)
                 # Add target panel to job metadata if available
                 if coord_target_panel:
                     for j in jobs:
@@ -5386,6 +5386,7 @@ class RayFileWatcher(FileSystemEventHandler):
         ignore_patterns: Optional[List[str]] = None,
         recursive: bool = True,
         work_dir: Optional[str] = None,
+        reference: Optional[str] = None,
     ):
         self.coord = coord
         self.plan = plan
@@ -5394,6 +5395,7 @@ class RayFileWatcher(FileSystemEventHandler):
         self.ignore_patterns = ignore_patterns or []
         self.recursive = recursive
         self.work_dir = work_dir
+        self.reference = str(reference) if reference else None
         self.processed: set[str] = set()
         # Rate limiting / batching
         self._pending_jobs: List[Job] = []
@@ -5404,6 +5406,16 @@ class RayFileWatcher(FileSystemEventHandler):
         # If a pass BAM is present, we want fail-BAM errors to remain visible.
         self._watch_seen_bam: bool = False
         self._watch_seen_pass_bam: bool = False
+
+    def _annotate_jobs(self, jobs: List[Job]) -> None:
+        """Attach shared workflow metadata (work_dir, reference, target_panel)."""
+        for j in jobs:
+            if self.work_dir:
+                j.context.add_metadata("work_dir", self.work_dir)
+            if self.reference:
+                j.context.add_metadata("reference", self.reference)
+            if self.target_panel:
+                j.context.add_metadata("target_panel", self.target_panel)
 
     def _should_process(self, fp: str) -> bool:
         p = Path(fp)
@@ -5449,9 +5461,8 @@ class RayFileWatcher(FileSystemEventHandler):
         except Exception:
             pass
         jobs = default_file_classifier(fp, self.plan, self.target_panel)
+        self._annotate_jobs(jobs)
         if self.work_dir:
-            for j in jobs:
-                j.context.add_metadata("work_dir", self.work_dir)
             try:
                 from robin.analysis.itd_analysis import _load_itd_config_file
 
@@ -5477,7 +5488,6 @@ class RayFileWatcher(FileSystemEventHandler):
         # enqueue and flush under rate limiter
         self._pending_jobs.extend(jobs)
         self._flush_if_needed()
-
     def on_created(self, event):
         if not event.is_directory:
             self._handle(event.src_path)
@@ -5970,6 +5980,19 @@ async def run(
 
     os.environ["RAY_DISABLE_IMPORT_WARNING"] = "1"
     os.environ["RAY_DISABLE_DEPRECATION_WARNING"] = "1"
+    if workflow_toml:
+        try:
+            from robin.readfish.analysis_hook import write_workflow_toml_pointer
+
+            resolved_toml = str(Path(workflow_toml).expanduser().resolve())
+            os.environ["ROBIN_WORKFLOW_TOML"] = resolved_toml
+            if work_dir:
+                write_workflow_toml_pointer(work_dir, resolved_toml)
+        except Exception:
+            logging.getLogger(__name__).debug(
+                "Could not publish ROBIN_WORKFLOW_TOML for readfish analysis hook",
+                exc_info=True,
+            )
     _warn_if_ray_temp_disk_is_full()
 
     # Reference genome status (minimal logging)
@@ -6325,6 +6348,7 @@ async def run(
             ignore_patterns=ignore_patterns,
             recursive=recursive,
             work_dir=work_dir,
+            reference=str(reference) if reference else None,
         )
         for p in paths:
             if Path(p).is_dir():
@@ -6341,6 +6365,8 @@ async def run(
             "patterns": patterns,
             "ignore_patterns": ignore_patterns,
             "recursive": recursive,
+            "reference": str(reference) if reference else None,
+            "target_panel": target_panel,
         }
 
     try:

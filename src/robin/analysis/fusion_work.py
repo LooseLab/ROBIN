@@ -96,6 +96,53 @@ def _replace_file_if_changed(temporary_path: str, destination_path: str) -> bool
         raise
 
 
+def _bed_files_have_same_content(path_a: str, path_b: str) -> bool:
+    """Return True if both paths exist and have identical bytes."""
+    if not os.path.exists(path_a) or not os.path.exists(path_b):
+        return False
+    if os.path.getsize(path_a) != os.path.getsize(path_b):
+        return False
+    with open(path_a, "rb") as fa, open(path_b, "rb") as fb:
+        while True:
+            ca = fa.read(1024 * 1024)
+            cb = fb.read(1024 * 1024)
+            if ca != cb:
+                return False
+            if not ca:
+                return True
+
+
+def _commit_versioned_bed_if_changed(
+    temporary_path: str,
+    bed_dir: str,
+    file_prefix: str,
+    sample_id: str,
+    work_dir: str,
+) -> Tuple[bool, Optional[str]]:
+    """
+    If temporary_path differs from the latest ``{prefix}_*.bed``, allocate a new
+    analysis counter and write ``{prefix}_{counter:03d}.bed``.
+
+    Returns (changed, destination_path_or_latest_unchanged).
+    """
+    from robin.analysis.cnv_analysis import allocate_next_analysis_counter
+    from robin.analysis.master_bed_generator import _get_latest_bed_file
+
+    os.makedirs(bed_dir, exist_ok=True)
+    latest = _get_latest_bed_file(bed_dir, f"{file_prefix}_*.bed")
+    if latest and _bed_files_have_same_content(temporary_path, latest):
+        try:
+            os.remove(temporary_path)
+        except OSError:
+            pass
+        return False, latest
+
+    counter = allocate_next_analysis_counter(sample_id, work_dir, logger)
+    destination = os.path.join(bed_dir, f"{file_prefix}_{counter:03d}.bed")
+    os.replace(temporary_path, destination)
+    return True, destination
+
+
 @dataclass(slots=True)
 class FusionMetadata:
     """Container for fusion analysis metadata and results."""
@@ -810,22 +857,13 @@ def _get_master_bed_path(work_dir: str, sample_id: str) -> Optional[str]:
         Path to master BED file, or None if not found
     """
     try:
-        analysis_counter = _load_analysis_counter(sample_id, work_dir)
+        from robin.analysis.master_bed_generator import _get_latest_bed_file
+
         sample_dir = os.path.join(work_dir, sample_id)
         bed_dir = os.path.join(sample_dir, "bed_files")
-        master_bed_path = os.path.join(bed_dir, f"master_{analysis_counter:03d}.bed")
-        
-        if os.path.exists(master_bed_path):
-            return master_bed_path
-        
-        # Try to find the latest master BED file if counter-based doesn't exist
-        if os.path.exists(bed_dir):
-            master_bed_files = glob.glob(os.path.join(bed_dir, "master_*.bed"))
-            if master_bed_files:
-                # Sort by modification time and return the latest
-                latest = max(master_bed_files, key=os.path.getmtime)
-                logger.debug(f"Using latest master BED file: {latest}")
-                return latest
+        latest = _get_latest_bed_file(bed_dir, "master_*.bed")
+        if latest:
+            return latest
     except Exception as e:
         logger.debug(f"Error finding master BED file: {e}")
     
@@ -4251,15 +4289,16 @@ def _extract_master_bed_breakpoints_incremental(
     
     # Load existing breakpoints from the previous BED file (if it exists)
     existing_breakpoints = []
-    analysis_counter = _load_analysis_counter(sample_id, work_dir)
     sample_dir = os.path.join(work_dir, sample_id)
     bed_dir = os.path.join(sample_dir, "bed_files")
-    previous_bed_file = os.path.join(bed_dir, f"master_bed_breakpoints_{analysis_counter:03d}.bed")
+    from robin.analysis.master_bed_generator import _get_latest_bed_file
+
+    previous_bed_file = _get_latest_bed_file(bed_dir, "master_bed_breakpoints_*.bed")
     processed_reads_path = os.path.join(sample_dir, "master_bed_processed_read_ids.pkl")
     cluster_state_path = os.path.join(sample_dir, "master_bed_breakpoint_clusters.pkl")
     bin_size = 500
     
-    if os.path.exists(previous_bed_file):
+    if previous_bed_file and os.path.exists(previous_bed_file):
         # Parse existing BED file to get breakpoint coordinates
         # BED format: chrom, start, end, name, score, strand
         existing_start = time.time()
@@ -4636,15 +4675,10 @@ def _generate_master_bed_breakpoint_bed(
         # Get bin_width from CNV analysis if available, otherwise use default
         bin_width = _get_cnv_bin_width(work_dir, sample_id)
         
-        # Load analysis counter for consistent naming
-        analysis_counter = _load_analysis_counter(sample_id, work_dir)
-        
         # Create bed_files directory if it doesn't exist
         sample_dir = os.path.join(work_dir, sample_id)
         bed_dir = os.path.join(sample_dir, "bed_files")
         os.makedirs(bed_dir, exist_ok=True)
-        # Generate BED file for master BED breakpoints with counter-based naming
-        master_bed_bp_file = os.path.join(bed_dir, f"master_bed_breakpoints_{analysis_counter:03d}.bed")
         
         # Sort breakpoints by chromosome, then start position, then end position
         def sort_key(bp):
@@ -4681,7 +4715,7 @@ def _generate_master_bed_breakpoint_bed(
         )
 
         write_start = time.time()
-        temporary_path = f"{master_bed_bp_file}.tmp"
+        temporary_path = os.path.join(bed_dir, "master_bed_breakpoints.tmp")
         with open(temporary_path, "w") as f:
             for bp in sorted_breakpoints:
                 chrom = bp["chromosome"]
@@ -4698,7 +4732,9 @@ def _generate_master_bed_breakpoint_bed(
                 # Write BED entry: chrom, start, end, name (master_bed-breakpoint)
                 name = "master_bed-breakpoint"
                 f.write(f"{chrom}\t{region_start}\t{region_end}\t{name}\t0\t.\n")
-        changed = _replace_file_if_changed(temporary_path, master_bed_bp_file)
+        changed, master_bed_bp_file = _commit_versioned_bed_if_changed(
+            temporary_path, bed_dir, "master_bed_breakpoints", sample_id, work_dir
+        )
         logger.debug(
             "Checked master BED breakpoint BED in %.3fs (%s, changed=%s)",
             time.time() - write_start,
@@ -5176,15 +5212,9 @@ def _generate_fusion_breakpoint_bed(
         # Get bin_width from CNV analysis if available, otherwise use default
         bin_width = _get_cnv_bin_width(work_dir, sample_id)
         
-        # Load analysis counter for consistent naming
-        analysis_counter = _load_analysis_counter(sample_id, work_dir)
-        
         # Create bed_files directory if it doesn't exist
         bed_dir = os.path.join(sample_dir, "bed_files")
         os.makedirs(bed_dir, exist_ok=True)
-        
-        # Generate BED file for fusion breakpoints with counter-based naming
-        fusion_bed_file = os.path.join(bed_dir, f"fusion_breakpoints_{analysis_counter:03d}.bed")
         
         # Sort breakpoints by chromosome, then start position, then end position
         # Handle chromosome sorting (chr1, chr2, ..., chr10, chr11, ..., chrX, chrY, chrM)
@@ -5215,7 +5245,7 @@ def _generate_fusion_breakpoint_bed(
         
         sorted_breakpoints = sorted(fusion_breakpoints, key=sort_key)
         
-        temporary_path = f"{fusion_bed_file}.tmp"
+        temporary_path = os.path.join(bed_dir, "fusion_breakpoints.tmp")
         with open(temporary_path, "w") as f:
             for bp in sorted_breakpoints:
                 chrom = bp["chromosome"]
@@ -5234,7 +5264,9 @@ def _generate_fusion_breakpoint_bed(
                 # Write BED entry: chrom, start, end, name (gene-source)
                 name = f"{gene}-{source}"
                 f.write(f"{chrom}\t{region_start}\t{region_end}\t{name}\n")
-        changed = _replace_file_if_changed(temporary_path, fusion_bed_file)
+        changed, fusion_bed_file = _commit_versioned_bed_if_changed(
+            temporary_path, bed_dir, "fusion_breakpoints", sample_id, work_dir
+        )
         
         if changed:
             logger.info(f"Generated fusion breakpoint BED file: {fusion_bed_file} with {len(fusion_breakpoints)} breakpoints")

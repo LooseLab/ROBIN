@@ -29,12 +29,19 @@ _TERMINAL_ACQUISITION_STATES = frozenset(
 )
 
 
+def protocol_state_is_inactive(state: Optional[str]) -> bool:
+    """Return whether a MinKNOW protocol state means no run is in progress."""
+    if not state:
+        return False
+    return state.strip().lower() in _INACTIVE_PROTOCOL_STATES
+
+
 def position_has_active_run(position: PositionStatus) -> bool:
     """Return whether a sequencing protocol run is in progress on this position."""
     acquisition_state = (position.acquisition_state or "").strip().lower()
     if acquisition_state in _TERMINAL_ACQUISITION_STATES:
         return False
-    if position.protocol_state in _INACTIVE_PROTOCOL_STATES:
+    if protocol_state_is_inactive(position.protocol_state):
         return False
     if not position.sample_id or not position.protocol_run_id:
         return False
